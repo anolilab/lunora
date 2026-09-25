@@ -4,6 +4,7 @@ import type { RestCachePolicy, RestFunctionKind } from "../../../shared/rest-sur
 import { cacheControlValue, cacheVaryValue, restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
 import { GENERATED_HEADER } from "./emit";
 import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
+import renderJsonData from "./json-data";
 import sanitizeNamespace from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
@@ -438,14 +439,14 @@ const emitOpenApi = (input: OpenApiEmitInput): string => `${JSON.stringify(build
 /**
  * Emit the OpenAPI document as an importable TS module
  * (`_generated/openapi.ts`) the worker entry imports and passes to
- * `createWorker({ openApiSpec })`. The document object literal is inlined
- * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
- * `.json` are byte-identical content and regenerate together — closing the gap
- * where a Worker cannot read the JSON file at runtime. `document_` is the object
- * returned by {@link buildOpenApiDocument} (reused, never recomputed).
+ * `createWorker({ openApiSpec })`. The document is inlined as a `JSON.parse`
+ * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
+ * content and regenerate together — closing the gap where a Worker cannot read
+ * the JSON file at runtime. `document_` is the object returned by
+ * {@link buildOpenApiDocument} (reused, never recomputed).
  */
 const emitOpenApiModule = (document_: Record<string, unknown>): string =>
-    `${GENERATED_HEADER}export const openApiSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+    `${GENERATED_HEADER}export const openApiSpec = ${renderJsonData(document_, "Record<string, unknown>")};\n`;
 
 export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule };
 export type { OpenApiEmitInput };

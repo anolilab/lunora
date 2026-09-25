@@ -10,6 +10,7 @@ import type { CapabilityKey } from "../src/capabilities";
 import type { FeatureUsage } from "../src/discover/feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
+import emittedJsonData from "./emitted-json-data";
 
 const ALL_OFF: FeatureUsage = {
     access: false,
@@ -619,12 +620,13 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
 
         const result = codegen();
+        const studioFeatures = emittedJsonData(result.generated.shard, "LUNORA_STUDIO_FEATURES");
 
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
-        expect(result.generated.shard).toContain(`"vectors": false`);
+        expect(studioFeatures).toHaveProperty("vectors", false);
         // The sibling `@lunora/bindings` feature stays on — the verdict is
         // per-capability, and `keyValueStore` is `emulated` on this target.
-        expect(result.generated.shard).toContain(`"kv": true`);
+        expect(studioFeatures).toHaveProperty("kv", true);
     });
 
     it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {

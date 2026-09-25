@@ -45,6 +45,7 @@ import type {
     VectorIndexIR,
     WorkflowIR,
 } from "./ir";
+import renderJsonData from "./json-data";
 import LITERAL_VALUE_RE from "./literal-value";
 import sanitizeNamespace from "./paths";
 import { acceptsAbsentIr } from "./schema-ir";
@@ -3438,7 +3439,7 @@ const emitFlagsOverrides = (
 
     const constant = `
 /** Statically-discovered feature flags (\`ctx.flags.<type>("key")\` reads) served via \`__lunora_admin__:listFlags\` + the reactive \`__lunora_flags__:\` channel. */
-const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }> = ${JSON.stringify(flagKeys, undefined, 4)};
+const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>`)};
 `;
 
     const evaluateOverride = `
@@ -4101,7 +4102,7 @@ const renderMetadataFragments = (name: string, type: string, method: string, met
     return {
         constant: `
 ${document_}
-const ${name}: ${type} = ${JSON.stringify(metadata, undefined, 4)};
+const ${name} = ${renderJsonData(metadata, type)};
 `,
         override: `
         protected override ${method}(): ${type} {
@@ -5554,13 +5555,15 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, undefined, 4)};
+const LUNORA_TABLE_REFS = ${renderJsonData(tableReferences, "Record<string, Record<string, string>>")};
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
+const LUNORA_TABLE_INDEXES = ${renderJsonData(tableIndexes, `Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>`)};
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
-const LUNORA_TABLE_COLUMNS: Record<
+const LUNORA_TABLE_COLUMNS = ${renderJsonData(
+        tableColumns,
+        `Record<
     string,
     Array<{
         bucket?: string;
@@ -5574,31 +5577,32 @@ const LUNORA_TABLE_COLUMNS: Record<
         ref?: string;
         type: string;
     }>
-> = ${JSON.stringify(tableColumns, undefined, 4)};
+>`,
+    )};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = ${JSON.stringify(storageColumns, undefined, 4)};
+const LUNORA_STORAGE_COLUMNS = ${renderJsonData(storageColumns, "Record<string, string[]>")};
 
 /** Declarative TTL policies (\`.ttl(field, { after? })\`) the DO alarm sweep auto-expires rows for. */
-const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = ${JSON.stringify(ttlSweeps, undefined, 4)};
+const LUNORA_TTL_SWEEPS = ${renderJsonData(ttlSweeps, "Array<{ after?: number; field: string; softDeleteField?: string; table: string }>")};
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via \`__lunora_admin__:getAdvisories\`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
+const LUNORA_ADVISORIES = ${renderJsonData(advisoryData, "AdvisoryFinding[]")};
 
 /** Every declared procedure (discovered by @lunora/codegen) served via \`__lunora_admin__:getAdvisorProcedures\` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = ${JSON.stringify(advisorProcedureData, undefined, 4)};
+const LUNORA_ADVISOR_PROCEDURES = ${renderJsonData(advisorProcedureData, "AdvisorProcedure[]")};
 
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA: RlsPoliciesResult = ${JSON.stringify(rlsData, undefined, 4)};
+const LUNORA_RLS_METADATA = ${renderJsonData(rlsData, "RlsPoliciesResult")};
 ${shapeReadPolicyAssertion}
 /** Read-only masking metadata (table + column + strategy discovered from \`.use(mask(...))\` chains) served via \`__lunora_admin__:maskPolicies\` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA: MaskPoliciesResult = ${JSON.stringify(maskData, undefined, 4)};
+const LUNORA_MASK_METADATA = ${renderJsonData(maskData, "MaskPoliciesResult")};
 
 /** Read-only storage access-rule metadata (discovered from \`.use(storageRules(...))\` chains) served via \`__lunora_admin__:storageRules\` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesData, undefined, 4)};
+const LUNORA_STORAGE_RULES = ${renderJsonData(storageRulesData, "StorageRulesResult")};
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
+const LUNORA_STUDIO_FEATURES = ${renderJsonData(studioFeaturesData, "StudioFeaturesResult")};
 ${schemaSnapshotConst}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */

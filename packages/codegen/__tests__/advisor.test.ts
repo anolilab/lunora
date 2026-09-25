@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
 import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
+import emittedJsonData from "./emitted-json-data";
 
 /** Build a `SchemaIR` from in-memory schema source (no disk). */
 const irFrom = (schemaSource: string) => {
@@ -175,15 +176,15 @@ describe("runCodegen lint integration", () => {
 
         // The generated subclass overrides `advisories()` with the baked list,
         // so the DO's `getAdvisories` admin RPC can serve them to the studio.
-        expect(shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] =");
+        expect(shard).toContain("const LUNORA_ADVISORIES = JSON.parse(");
         expect(shard).toContain("protected override advisories(): AdvisoryFinding[]");
-        expect(shard).toContain("unindexed_foreign_key");
+        expect((emittedJsonData(shard, "LUNORA_ADVISORIES") as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
     it("emits an empty advisory list under `lint: false`", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] = [];");
+        expect(emittedJsonData(runCodegen({ lint: false, projectRoot: workdir }).generated.shard, "LUNORA_ADVISORIES")).toStrictEqual([]);
     });
 
     it("flags replication shapes targeting an unknown table and a `.global()` table (full discover → lint path)", () => {

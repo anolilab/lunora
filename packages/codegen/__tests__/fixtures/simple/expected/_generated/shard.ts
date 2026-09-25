@@ -18,57 +18,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {
-    "messages": {
-        "channelId": "channels"
-    },
-    "attachments": {
-        "ownerId": "users"
-    }
-};
+const LUNORA_TABLE_REFS = JSON.parse("{\"messages\":{\"channelId\":\"channels\"},\"attachments\":{\"ownerId\":\"users\"}}") as Record<string, Record<string, string>>;
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
-    "messages": [
-        {
-            "fields": [
-                "channelId"
-            ],
-            "name": "by_channel",
-            "type": "index"
-        },
-        {
-            "fields": [
-                "text",
-                "channelId"
-            ],
-            "name": "by_text",
-            "type": "search"
-        }
-    ],
-    "users": [
-        {
-            "fields": [
-                "email"
-            ],
-            "name": "by_email",
-            "type": "index",
-            "unique": true
-        }
-    ],
-    "places": [
-        {
-            "fields": [
-                "location"
-            ],
-            "name": "by_location",
-            "type": "geo"
-        }
-    ]
-};
+const LUNORA_TABLE_INDEXES = JSON.parse("{\"messages\":[{\"fields\":[\"channelId\"],\"name\":\"by_channel\",\"type\":\"index\"},{\"fields\":[\"text\",\"channelId\"],\"name\":\"by_text\",\"type\":\"search\"}],\"users\":[{\"fields\":[\"email\"],\"name\":\"by_email\",\"type\":\"index\",\"unique\":true}],\"places\":[{\"fields\":[\"location\"],\"name\":\"by_location\",\"type\":\"geo\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>;
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<
+const LUNORA_TABLE_COLUMNS = JSON.parse("{\"messages\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"channelId\",\"optional\":false,\"type\":\"id\",\"ref\":\"channels\"},{\"name\":\"text\",\"optional\":false,\"type\":\"string\"}],\"users\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"email\",\"optional\":false,\"type\":\"string\"},{\"name\":\"name\",\"optional\":false,\"type\":\"string\"},{\"name\":\"role\",\"optional\":false,\"type\":\"literal\"},{\"name\":\"prefs\",\"optional\":false,\"type\":\"record\"}],\"places\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"location\",\"optional\":false,\"type\":\"geoPoint\"},{\"name\":\"name\",\"optional\":false,\"type\":\"string\"}],\"sessions\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"expiresAt\",\"optional\":false,\"type\":\"timestamp\"},{\"name\":\"token\",\"optional\":false,\"type\":\"string\"}],\"attachments\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"bytes\",\"optional\":false,\"type\":\"bytes\"},{\"name\":\"fileKey\",\"optional\":false,\"type\":\"storage\",\"isStorage\":true},{\"name\":\"ownerId\",\"optional\":false,\"type\":\"id\",\"ref\":\"users\",\"onDelete\":\"cascade\"},{\"name\":\"size\",\"optional\":false,\"type\":\"bigint\"},{\"name\":\"tags\",\"optional\":false,\"type\":\"array\"},{\"name\":\"title\",\"optional\":true,\"type\":\"string\"}]}") as Record<
     string,
     Array<{
         bucket?: string;
@@ -82,211 +38,31 @@ const LUNORA_TABLE_COLUMNS: Record<
         ref?: string;
         type: string;
     }>
-> = {
-    "messages": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "channelId",
-            "optional": false,
-            "type": "id",
-            "ref": "channels"
-        },
-        {
-            "name": "text",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "users": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "email",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "name",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "role",
-            "optional": false,
-            "type": "literal"
-        },
-        {
-            "name": "prefs",
-            "optional": false,
-            "type": "record"
-        }
-    ],
-    "places": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "location",
-            "optional": false,
-            "type": "geoPoint"
-        },
-        {
-            "name": "name",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "sessions": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "expiresAt",
-            "optional": false,
-            "type": "timestamp"
-        },
-        {
-            "name": "token",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "attachments": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "bytes",
-            "optional": false,
-            "type": "bytes"
-        },
-        {
-            "name": "fileKey",
-            "optional": false,
-            "type": "storage",
-            "isStorage": true
-        },
-        {
-            "name": "ownerId",
-            "optional": false,
-            "type": "id",
-            "ref": "users",
-            "onDelete": "cascade"
-        },
-        {
-            "name": "size",
-            "optional": false,
-            "type": "bigint"
-        },
-        {
-            "name": "tags",
-            "optional": false,
-            "type": "array"
-        },
-        {
-            "name": "title",
-            "optional": true,
-            "type": "string"
-        }
-    ]
-};
+>;
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {
-    "attachments": [
-        "fileKey"
-    ]
-};
+const LUNORA_STORAGE_COLUMNS = JSON.parse("{\"attachments\":[\"fileKey\"]}") as Record<string, string[]>;
 
 /** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
-const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [
-    {
-        "field": "expiresAt",
-        "table": "sessions"
-    }
-];
+const LUNORA_TTL_SWEEPS = JSON.parse("[{\"field\":\"expiresAt\",\"table\":\"sessions\"}]") as Array<{ after?: number; field: string; softDeleteField?: string; table: string }>;
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
+const LUNORA_ADVISORIES = JSON.parse("[]") as AdvisoryFinding[];
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [];
+const LUNORA_ADVISOR_PROCEDURES = JSON.parse("[]") as AdvisorProcedure[];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA: RlsPoliciesResult = {
-    "policies": [],
-    "roles": []
-};
+const LUNORA_RLS_METADATA = JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult;
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA: MaskPoliciesResult = {
-    "columns": []
-};
+const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResult;
 
 /** Read-only storage access-rule metadata (discovered from `.use(storageRules(...))` chains) served via `__lunora_admin__:storageRules` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES: StorageRulesResult = {
-    "rules": []
-};
+const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
-    "analytics": false,
-    "auth": false,
-    "containers": false,
-    "flags": false,
-    "kv": false,
-    "mail": false,
-    "notifications": true,
-    "payments": false,
-    "queues": false,
-    "scheduler": false,
-    "storage": true,
-    "vectors": false,
-    "workflows": false
-};
+const LUNORA_STUDIO_FEATURES = JSON.parse("{\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":true,\"payments\":false,\"queues\":false,\"scheduler\":false,\"storage\":true,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "26da772428786b66", json: "{\n  \"migrationIds\": [\n    \"backfill-read-by\"\n  ],\n  \"tables\": {\n    \"attachments\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"bytes\": {\n          \"kind\": \"bytes\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"fileKey\": {\n          \"kind\": \"storage\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"id\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"ref\": \"users\"\n        },\n        \"size\": {\n          \"kind\": \"bigint\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"tags\": {\n          \"kind\": \"array\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"of\": {\n            \"kind\": \"string\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false\n          }\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {\n        \"owner\": {\n          \"field\": \"ownerId\",\n          \"kind\": \"one\",\n          \"table\": \"users\"\n        }\n      },\n      \"shardMode\": \"global:d1\"\n    },\n    \"messages\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"channelId\": {\n          \"kind\": \"id\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"ref\": \"channels\"\n        },\n        \"text\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_channel\": {\n          \"fields\": [\n            \"channelId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:channelId\"\n    },\n    \"places\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"location\": {\n          \"kind\": \"geoPoint\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"sessions\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"expiresAt\": {\n          \"kind\": \"timestamp\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"token\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\",\n      \"ttl\": {\n        \"field\": \"expiresAt\"\n      }\n    },\n    \"users\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"email\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prefs\": {\n          \"kind\": \"record\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"key\": {\n            \"kind\": \"string\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false\n          },\n          \"of\": {\n            \"kind\": \"string\",\n            \"nullable\": false,\n            \"optional\": false,\n            \"unique\": false\n          }\n        },\n        \"role\": {\n          \"kind\": \"literal\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"literal\": \"\\\"admin\\\"\"\n        }\n      },\n      \"indexes\": {\n        \"by_email\": {\n          \"fields\": [\n            \"email\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"memory\": false,\n      \"relations\": {\n        \"attachments\": {\n          \"field\": \"ownerId\",\n          \"kind\": \"many\",\n          \"table\": \"attachments\"\n        }\n      },\n      \"shardMode\": \"global:d1\"\n    }\n  },\n  \"version\": 1\n}\n" };
