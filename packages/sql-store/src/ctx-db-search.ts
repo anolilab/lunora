@@ -84,7 +84,8 @@ const runSqlSearch = async (
     if (!(await searchIndexCoversTable(exec, dialect, tableName, stage.definition))) {
         throw new LunoraError(
             "SEARCH_INDEX_BUILDING",
-            `search index "${stage.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+            // eslint-disable-next-line no-secrets/no-secrets -- false positive: the message names a function, not a credential
+            `search index "${stage.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or complete it now by calling backfillD1SearchIndexes (backfillSqlSearchIndexes on a Hyperdrive backend) with the store's exec from a host-side admin path`,
         );
     }
 

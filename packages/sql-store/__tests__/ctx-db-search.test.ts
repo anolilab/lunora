@@ -337,6 +337,22 @@ describe("global search provisioning", () => {
             await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
         });
 
+        it("points a refused read at the backfill entry point a .global() index actually has", async () => {
+            expect.assertions(2);
+
+            createNotesTable();
+            insertPastOnePage();
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const refusal = runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300);
+
+            // The `backfillSearch` admin op is wired only for shard-local
+            // indexes; on an app whose only search index is global it answers
+            // NOT_IMPLEMENTED, so naming it here sent operators nowhere.
+            await expect(refusal).rejects.toThrow(/backfillD1SearchIndexes \(backfillSqlSearchIndexes on a Hyperdrive backend\)/u);
+            await expect(refusal).rejects.not.toThrow(/backfillSearch admin/u);
+        });
+
         it("serves a staged index declared over an empty table", async () => {
             expect.assertions(2);
 
