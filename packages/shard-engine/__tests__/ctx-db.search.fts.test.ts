@@ -8,10 +8,21 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * this asserts the *emitted SQL* instead of its results: a recording `SqlExec`
  * double that reports FTS5 available (the create/drop probe succeeds), returns
  * canned rows for any MATCH query, and captures every statement + params. We
- * verify the virtual-table DDL, the delete-then-insert write sync, and the
+ * verify the virtual-table DDL, the rowid-keyed write sync, and the
  * MATCH/JOIN/ORDER-BY-rank search query. Behavioral correctness of the query
  * surface is covered by the LIKE-scan suite in `ctx-db.search.test.ts`.
  */
+
+const COMPANION = '"docs__fts_by_body"';
+const MAP = '"docs__fts_by_body__ids"';
+/** Drops the document's rows a previous build wrote (positive rowids), by `__id__`. */
+const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND CAST(${COMPANION}."__id__" AS TEXT) = ?`;
+/** Drops the document's mapped row — only if it still holds this document. */
+const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
+const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;
+/** The statement that writes a document's searchable entry, at the rowid the map holds for it. */
+const WRITE_ENTRY = `INSERT OR REPLACE INTO ${COMPANION} (rowid, "__text__", "__id__") SELECT ${MAP}."__rowid__", ?, ${MAP}."__id__" FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
 
 interface Recorded {
     params: unknown[];
@@ -165,7 +176,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         runShardMigrations(sql, searchSchema);
 
-        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const inserts = statements.filter((statement) => statement.sql === WRITE_ENTRY);
 
         expect(inserts).toHaveLength(2);
         expect(inserts.map((statement) => statement.params)).toStrictEqual([
@@ -196,25 +207,30 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
                 (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
             ),
         ).toBe(true);
-        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
+        // Only the text-less sentinel: no document entry.
+        expect(statements.some((statement) => statement.sql === WRITE_ENTRY)).toBe(false);
     });
 
-    it("syncs indexed text on insert via delete-then-insert", async () => {
-        expect.assertions(2);
+    it("syncs indexed text on insert by replacing the row at the document's mapped rowid", async () => {
+        expect.assertions(1);
 
         const { sql, statements } = createRecordingFts([]);
 
         runShardMigrations(sql, searchSchema);
 
         const writer = createShardContextDatabase({ idGenerator: () => "d1", schema: searchSchema, sql });
+        const before = statements.length;
 
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
-        const remove = statements.find((statement) => statement.sql === 'DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?');
-        const add = statements.find((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
-
-        expect(remove?.params).toStrictEqual(["d1"]);
-        expect(add?.params).toStrictEqual(["hello world", "d1"]);
+        // The only by-`__id__` purge is over the positive rowid range — a previous
+        // build's rows — which is empty once they have been rewritten.
+        expect(statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"))).toStrictEqual([
+            { params: ["d1"], sql: DROP_UNMAPPED },
+            { params: ["d1", "d1"], sql: DROP_MAPPED },
+            { params: ["d1"], sql: CLAIM_ROWID },
+            { params: ["hello world", "d1"], sql: WRITE_ENTRY },
+        ]);
     });
 
     it("clears the FTS row on delete (no re-insert)", async () => {
@@ -234,8 +250,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual(['DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?']);
-        expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([DROP_UNMAPPED, DROP_MAPPED, PURGE_MAPPING]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1", "d1"], ["d1"]]);
     });
 
     it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {

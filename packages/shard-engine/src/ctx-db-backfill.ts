@@ -16,7 +16,8 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import { analyzedSearchText, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import { matchesStaticWhere } from "./aggregate-sql";
@@ -27,8 +28,10 @@ import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./ag
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
 import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
-import { runDrizzle } from "./do-exec";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
+import { sqliteInList } from "./drizzle";
+import { ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
 import { isLiveForCompanion } from "./query-args";
 import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
@@ -184,8 +187,8 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
  * number of rows this pass walked — `0` marks the "already complete" no-op, the
  * one outcome a page-budgeted caller must not charge for.
  *
- * Each document is written DELETE-then-INSERT, so re-running a page (a retry
- * after a crash, two cold starts racing) converges instead of duplicating —
+ * Each document's entry is replaced at its mapped rowid, so re-running a page
+ * (a retry after a crash, two cold starts racing) converges instead of duplicating —
  * which on the FTS5 path would otherwise surface as the *same document twice*
  * in a result set, since that query has no `GROUP BY` to collapse it.
  */
@@ -211,7 +214,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // took a COMPLETE index down to nothing and then rebuilt it 500 rows a
     // pass — on a 1M-row table, thousands of requests served from an index
     // covering a fraction of the rows, with the read path querying it either
-    // way. Each row below is written DELETE-then-INSERT, so the re-walk
+    // way. Each row below is replaced at its mapped rowid, so the re-walk
     // converges on the new analysis in place while every row keeps serving the
     // old one until its turn: stale analysis on a shrinking suffix, rather than
     // no row at all.
@@ -238,26 +241,14 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
-        // Drop whatever the companion still holds for this id first: the
-        // DELETE-then-INSERT makes re-running a page converge, and on an
-        // unparseable document it clears a stale row serving text the
-        // document no longer has — worse than the row being unsearchable.
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
         // Safe-parsing, not `rowToDocument`: this runs inside
         // `runShardMigrations`, so an unparseable document would brick the
         // whole shard's cold start. The cursor still advances past it, so the
-        // pass makes progress.
+        // pass makes progress. An unparseable document has its entry purged
+        // rather than kept: a stale row serving text the document no longer
+        // has is worse than the row being unsearchable.
         const record = tryRowToDocument(row);
-
-        if (!record) {
-            continue;
-        }
-
-        runDrizzle(
-            sql,
-            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,
-        );
+        runAll(sql, record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index)) : ftsPurgeDocument(ftName, id));
     }
 
     const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;
@@ -265,6 +256,63 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
     return { done, rows: rows.length };
+};
+
+/** `"<table>"."<column>"`, so a name that resolves to nothing errors instead of reading as a string. */
+const qualified = (table: string, column: string): SQL => dsql`${dsql.identifier(table)}.${dsql.identifier(column)}`;
+
+/** Unmapped companion rows rewritten per cold start — the bound on one migration pass. */
+const FTS_UNMAPPED_PAGE_ROWS = 500;
+
+/**
+ * Rewrite one bounded page of the companion rows the rowid map does not know
+ * about — the ones a previous build wrote — from the document table, so each
+ * document ends with exactly the entry its current text produces. A document
+ * indexed twice is repaired from its source row rather than by guessing which
+ * copy is fresh; a document that no longer parses, or no longer exists, loses
+ * its entry. Once none are left this is one empty rowid-range read.
+ */
+const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+    const ftName = ftsTableName(tableName, index.name);
+    const page = runDrizzle(sql, ftsUnmappedPage(ftName, FTS_UNMAPPED_PAGE_ROWS)).toArray();
+    const byId = groupUnmappedRows(page);
+
+    if (byId.size === 0) {
+        return true;
+    }
+
+    const sources = new Map<string, Record<string, unknown>>();
+
+    for (const row of runDrizzle(
+        sql,
+        dsql`SELECT ${qualified(tableName, "id")}, ${qualified(tableName, "_creationTime")}, ${qualified(tableName, DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(qualified(tableName, "id"), [...byId.keys()], false)}`,
+    )) {
+        // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
+        sources.set(String(row["id"]), row);
+    }
+
+    for (const [id, unmappedRowids] of byId) {
+        const source = sources.get(id);
+        const record = source ? tryRowToDocument(source) : undefined;
+
+        runAll(
+            sql,
+            record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index), { unmappedRowids }) : ftsPurgeDocument(ftName, id, { unmappedRowids }),
+        );
+    }
+
+    return page.length < FTS_UNMAPPED_PAGE_ROWS;
+};
+
+/** Drain a previous build's rows until none are left or `budget` pages are spent; returns the pages spent. */
+const drainUnmappedFtsPages = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike, budget: number): number => {
+    let pages = 0;
+
+    while (pages < budget && !drainUnmappedFtsRows(sql, tableName, index)) {
+        pages += 1;
+    }
+
+    return pages;
 };
 
 /**
@@ -332,6 +380,11 @@ const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definiti
     }
 
     for (const index of definition.searchIndexes ?? []) {
+        // A previous build's rows, a bounded page at a time — on cold start and
+        // on every search read, so a long-lived Durable Object keeps draining
+        // them. Once none are left this is one empty rowid-range read.
+        drainUnmappedFtsRows(sql, tableName, index);
+
         // `staged` keeps the row walk out of the cold start, for tables too large
         // to walk there. A table with no rows is not one of those, and skipping it
         // records nothing — so the index would report no coverage and refuse every
@@ -430,6 +483,13 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
         }
 
         for (const index of definition.searchIndexes) {
+            // A previous build's rows first, each drain page spending the same budget.
+            pages += drainUnmappedFtsPages(sql, tableName, index, maxPages - pages);
+
+            if (pages >= maxPages) {
+                return { done: false, pages };
+            }
+
             const progress = backfillSearchIndexPages(sql, tableName, index, maxPages - pages);
 
             pages += progress.pages;
@@ -444,4 +504,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, searchIndexCoversTable };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, drainUnmappedFtsRows, searchIndexCoversTable };

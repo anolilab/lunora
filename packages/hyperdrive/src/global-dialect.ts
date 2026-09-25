@@ -209,6 +209,7 @@ export const postgresDialect: SqlDialect = {
     /** Postgres allows 1,600 columns per table (fewer once wide types are involved, which the engine reports on its own). */
     maxTableColumns: 1600,
     name: "postgres",
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
 
     /**
@@ -294,6 +295,7 @@ export const mysqlDialect: SqlDialect = {
     /** MySQL's hard ceiling is 4,096 columns per table; InnoDB's practical limit is lower and row-size-bound, which the engine reports on its own. */
     maxTableColumns: 4096,
     name: "mysql",
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
     supportsReturning: false,
 

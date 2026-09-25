@@ -94,7 +94,7 @@ export interface SearchBackfillPass {
      *
      * It does NOT mean "empty the companion", and no engine does — emptying took
      * a complete index down to nothing and refilled it a page per request. Every
-     * layout writes a document DELETE-then-INSERT, so the re-walk converges on
+     * layout replaces a document's rows in place, so the re-walk converges on
      * the new profile in place while each row keeps serving the old one until
      * its turn. `cursor` is `undefined` whenever this is set; the flag adds only
      * "there was something in there", which is what separates a rebuild from a

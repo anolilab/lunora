@@ -179,6 +179,8 @@ export type { IncrementalMaterializeResult, MaterializeResult } from "./external
 export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
 export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
+export type { FtsWriteOptions } from "./fts-companion";
+export { ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { default as GlobalPollTick } from "./global-poll-tick";

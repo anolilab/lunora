@@ -7,16 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlDialect } from "../src/dialect";
 import type { SearchLayout, SearchStage } from "../src/search-layout";
-import {
-    companionFor,
-    companionProfile,
-    fts5Layout,
-    globalSearchIndexes,
-    invertedLayout,
-    nativeLayout,
-    purgeDocument,
-    resolveSearchLayout,
-} from "../src/search-layout";
+import { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
 
 /**
@@ -595,7 +586,9 @@ describe("search layouts", () => {
 
             // Feeding FTS5 raw text would leave its own tokenizer to decide about
             // case, punctuation and accents — and it decides differently than we do.
-            expect(harness.raw(`SELECT "__text__" FROM "notes__fts_by_body"`).map((row) => row["__text__"])).toStrictEqual(["cafe reopened"]);
+            expect(
+                harness.raw(`SELECT "__text__" FROM "notes__fts_by_body" WHERE "notes__fts_by_body"."__id__" <> ''`).map((row) => row["__text__"]),
+            ).toStrictEqual(["cafe reopened"]);
         });
 
         it("replaces a document's row rather than adding a second one", async () => {
@@ -607,7 +600,9 @@ describe("search layouts", () => {
 
             // A duplicate here surfaces as the same document twice in a result set:
             // the MATCH query has no GROUP BY to collapse it.
-            expect(harness.raw(`SELECT "__text__" FROM "notes__fts_by_body"`).map((row) => row["__text__"])).toStrictEqual(["after"]);
+            expect(
+                harness.raw(`SELECT "__text__" FROM "notes__fts_by_body" WHERE "notes__fts_by_body"."__id__" <> ''`).map((row) => row["__text__"]),
+            ).toStrictEqual(["after"]);
         });
 
         it("ranks by the shared scorer, so a repeated term outranks a single one", async () => {
@@ -699,7 +694,7 @@ describe("search layouts", () => {
         });
     });
 
-    describe("purgeDocument", () => {
+    describe("invertedLayout.purgeDocument", () => {
         it("drops one document's rows and leaves the rest", async () => {
             expect.assertions(1);
 
@@ -710,7 +705,7 @@ describe("search layouts", () => {
             await invertedLayout.indexDocument(harness.exec, dialect, companion, "a", { body: "keep me" }, byBody);
             await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "drop me" }, byBody);
 
-            await purgeDocument(harness.exec, dialect, companion, "b");
+            await invertedLayout.purgeDocument(harness.exec, dialect, companion, "b");
 
             expect(harness.raw(`SELECT DISTINCT "__id__" FROM "notes__fts_by_body"`).map((row) => row["__id__"])).toStrictEqual(["a"]);
         });
