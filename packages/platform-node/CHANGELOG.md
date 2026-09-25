@@ -1,3 +1,146 @@
+## @lunora/platform-node [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.92...@lunora/platform-node@1.0.0-alpha.93) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,scheduler,workflow:** retryDeclinedMessage is now async and its message needs
+`ack`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait before the step's timeout
+
+A step's ctx.run waits out a DISPATCH_IN_PROGRESS decline in place for up to
+the claim ceiling (15 minutes). A step whose timeout is shorter than that (the
+engine default is 10 minutes) had the attempt timed out under the wait, and
+the abandoned wait kept re-dispatching next to the retry.
+
+Inside ctx.runStep the wait now reads the timeout from the config the engine
+hands the attempt (Cloudflare's default when it names none), stops two seconds
+before it, and rethrows the decline, so the attempt is charged once, to the
+decline, and the next attempt picks the wait up. A rollback is bounded the
+same way by its own config. A ctx.run in a raw ctx.step.do cannot see its
+step's timeout and stays bounded by the claim alone; the docs say so.
+
+On the real Workflows engine, with a 6s step timeout and eight declines, the
+unfixed wait dispatched from attempt 1 after attempt 2 had begun.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(queue,scheduler): authenticate a re-enqueued copy's claimed id
+
+A push consumer derives each message's replay-dedup ids from its id. The copy
+it re-enqueues on a last-delivery decline carries the replaced message's id,
+and the consumer unwrapped any body with that envelope's shape. A queue body
+is app data, often forwarded from outside (a webhook ingest doing
+send(await request.json())), so whoever controlled a body could choose the id
+its calls ran under: be answered with another live message's cached results,
+pre-fill that message's dedup slots so its calls were skipped, or, through
+failure attribution, get that message acked and dropped in a shared batch.
+The broker-assigned id could not be forged before; the envelope made it
+forgeable. The scheduler's `requeuedFrom` marker had the same hole for a job
+sent to the workpool queue by hand.
+
+A copy is now accepted only with an HMAC-SHA256 over its claimed id and
+payload, keyed by the admin token the consumer already holds to dispatch
+(WebCrypto, so workerd and Node alike; domain-separated per package). Any
+other body, including one that copies the envelope's shape or carries a MAC
+under a different key, is delivered as-is under the broker's id.
+
+- @lunora/queue: the envelope holds the id, the body as the JSON text of its
+  wire encoding (so the MAC covers exact bytes and bigint/Date/bytes survive)
+  and the MAC; it is sent as JSON. A copy that would exceed the 128 KB message
+  limit, or a body with no wire encoding, is not sent: the delayed retry and
+  the log stay. ctx.queues send/sendBatch refuse the reserved key. A
+  dead-lettered copy is readable JSON.
+- @lunora/scheduler: createQueueConsumer takes `requeue: { queue, secret }`
+  in place of `queue`; `requeuedFrom` is honoured only with a valid
+  `requeueMac`, and both fields are stripped before a QueueDispatch sees the
+  job. QueueJob no longer declares `requeuedFrom`.
+- @lunora/dispatch: signRequeue / verifyRequeue; DEFAULT_DISPATCH_TIMEOUT_MS is
+  exported for the workflow wait.
+
+Re-proved on the real workerd broker with the delay patched to 1s: deliveries
+1-3 declined, the signed copy delivered as attempt 1 under the original id,
+body and dedup id. A forged envelope sent straight through the binding is
+delivered as-is under the broker's id.
+* **queue,scheduler,workflow:** createQueueConsumer's `queue` option is now
+`requeue: { queue, secret }`, and QueueJob drops `requeuedFrom`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): bound a rollback's decline wait by its own timeout
+
+The previous commit said a rollback's wait was bounded by its own config. It
+was bounded by `rollbackContext.ctx.config`, and on the local Workflows engine
+that is the FORWARD step's config: a step with `timeout: "1 hour"` and
+`rollbackConfig: { timeout: "7 seconds" }` handed its rollback
+`ctx.config.timeout === "1 hour"`. So a rollback shorter than its step still
+had its wait outlive the attempt, and one longer gave up early and reported a
+compensation failed that would have completed. The rollback now reads
+`step.rollbackConfig` (Cloudflare's 10-minute default when unset), and a
+workerd test pins what the engine hands a rollback.
+
+A re-check can find the claim gone and run the call, which could take the
+runner's whole 30s and overrun the step timeout. Under a deadline each
+re-check now gets no more timeoutMs than is left, and the wait ends while at
+least a second remains.
+
+The "Uncaught (in promise)" lines the timed workerd test prints are the engine
+logging each failed step attempt: a plain throw in a raw step.do with no Lunora
+code on the path prints the same line.
+
+The Node host does not enforce step timeouts; its capability note and the
+workflow docs now say the bound charges an attempt there that the host would
+not have ended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): give a decline back when a late pause overran its bound
+
+The decline wait bounded each pause by the claim ceiling and the step deadline, but a timer
+can fire late. On resuming past either bound it started another dispatch anyway, with a zero
+or negative timeout, instead of returning the decline. It now re-checks both bounds after the
+pause and rethrows the decline when either has passed.
+
+The Node workflow note said rollbackConfig is ignored; the adapter ignores its retries, but
+@lunora/workflow reads rollbackConfig.timeout to end a rollback's decline wait.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait only on a real overrun, not timer jitter
+
+The previous change rethrew a decline whenever the time left after a pause was under the
+one-dispatch margin. The pause is sized to leave exactly that margin, so ordinary timer jitter
+tripped it: the final re-check before a step's timeout was skipped and the attempt was spent
+early. It now gives the decline back only when the pause actually ran past the claim ceiling
+or the deadline.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,scheduler,workflow:** close the last-delivery and step-timeout decline edges ([#829](https://github.com/anolilab/lunora/issues/829)) ([f3caafc](https://github.com/anolilab/lunora/commit/f3caafcab18a41ad84799a40dfbc197e4fa5f5b2))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.139
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+* **@lunora/queue:** upgraded to 1.0.0-alpha.69
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.141
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.166
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.53
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+* **@lunora/storage:** upgraded to 1.0.0-alpha.81
+
 ## @lunora/platform-node [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.91...@lunora/platform-node@1.0.0-alpha.92) (2026-09-25)
 
 
