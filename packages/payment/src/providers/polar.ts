@@ -303,6 +303,9 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             const webhookId = headers.get("webhook-id") ?? "";
 
             await verifyStandardWebhook({
+                // Polar keys the HMAC with the secret's UTF-8 bytes (its SDK base64-encodes the
+                // secret, and the Standard Webhooks verifier decodes it straight back).
+                keyEncoding: "utf8",
                 payload,
                 secret: webhookSecret,
                 toleranceSeconds: options.webhookToleranceSeconds,
