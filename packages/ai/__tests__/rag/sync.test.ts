@@ -93,4 +93,85 @@ describe("ragSyncTriggers", () => {
 
         expect(scheduled).toStrictEqual([{ args: { id: "slug:intro", text: "hi" }, delayMs: 500 }]);
     });
+
+    describe("tenant scope", () => {
+        const scoped = () =>
+            ragSyncTriggers({
+                action: ACTION,
+                metadata: (document) => {return { orgId: document["orgId"] }},
+                namespace: (document) => document["space"] as string | undefined,
+                text: (document) => document["body"] as string,
+            });
+
+        it("carries metadata and namespace on insert and delete", async () => {
+            expect.assertions(1);
+
+            const { context, scheduled } = fakeContext();
+            const sync = scoped();
+
+            await sync.afterInsert(context, { doc: { body: "hi", orgId: "org-a", space: "s1" }, id: "doc-1" });
+            await sync.afterDelete(context, { id: "doc-1", previous: { body: "hi", orgId: "org-a", space: "s1" } });
+
+            expect(scheduled.map((entry) => entry.args)).toStrictEqual([
+                { id: "doc-1", metadata: { orgId: "org-a" }, namespace: "s1", text: "hi" },
+                { deleted: true, id: "doc-1", namespace: "s1" },
+            ]);
+        });
+
+        it("re-indexes a row that moved tenant with unchanged text", async () => {
+            expect.assertions(1);
+
+            const { context, scheduled } = fakeContext();
+            const sync = scoped();
+
+            // Same body, new org: skipping this update left the chunks stamped
+            // `orgId: org-a`, so org-a's `rlsFilter` kept retrieving the row.
+            await sync.afterUpdate(context, {
+                doc: { body: "same", orgId: "org-b", space: "s1" },
+                id: "doc-1",
+                previous: { body: "same", orgId: "org-a", space: "s1" },
+            });
+
+            expect(scheduled.map((entry) => entry.args)).toStrictEqual([{ id: "doc-1", metadata: { orgId: "org-b" }, namespace: "s1", text: "same" }]);
+        });
+
+        it("removes the chunks from the old namespace before indexing into the new one", async () => {
+            expect.assertions(1);
+
+            const { context, scheduled } = fakeContext();
+            const sync = scoped();
+
+            await sync.afterUpdate(context, {
+                doc: { body: "same", orgId: "org-a", space: "s2" },
+                id: "doc-1",
+                previous: { body: "same", orgId: "org-a", space: "s1" },
+            });
+
+            expect(scheduled.map((entry) => entry.args)).toStrictEqual([
+                { deleted: true, id: "doc-1", namespace: "s1" },
+                { id: "doc-1", metadata: { orgId: "org-a" }, namespace: "s2", text: "same" },
+            ]);
+        });
+
+        it("still skips an update that changed none of text, metadata or namespace", async () => {
+            expect.assertions(1);
+
+            const { context, scheduled } = fakeContext();
+            const sync = ragSyncTriggers({
+                action: ACTION,
+                // Key order depends on the row, so the two projections differ in order only.
+                metadata: (document) =>
+                    document["title"] === "old" ? { orgId: document["orgId"], tag: document["tag"] } : { tag: document["tag"], orgId: document["orgId"] },
+                text: (document) => document["body"] as string,
+            });
+
+            await sync.afterUpdate(context, {
+                doc: { body: "same", orgId: "o", tag: "t", title: "new" },
+                id: "doc-1",
+                previous: { body: "same", orgId: "o", tag: "t", title: "old" },
+            });
+
+            expect(scheduled).toStrictEqual([]);
+        });
+    });
 });

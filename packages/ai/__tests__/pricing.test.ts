@@ -28,6 +28,14 @@ describe("lookupModelPrice", () => {
         expect(lookupModelPrice("@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
     });
 
+    it("strips a provider prefix from a Workers AI id without eating its own slashes", () => {
+        expect.assertions(2);
+
+        // The AI Gateway's unified form prefixes the provider onto the `@cf/...` id.
+        expect(lookupModelPrice("workers-ai/@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
+        expect(lookupModelPrice("workers-ai/@cf/meta/llama-3.1-8b-instruct")).toStrictEqual(lookupModelPrice("@cf/meta/llama-3.1-8b-instruct"));
+    });
+
     it("prices the generation models the docs' examples use, with an output price", () => {
         expect.assertions(3);
 

@@ -354,6 +354,8 @@ interface RagSyncActionReference {
 interface RagSyncArgs extends Record<string, unknown> {
     deleted?: boolean;
     id: string;
+    metadata?: Record<string, unknown>;
+    namespace?: string;
     text?: string;
 }
 ```
@@ -365,6 +367,8 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
     action: RagSyncActionReference;
     delayMs?: number;
     id?: (document: Document) => string;
+    metadata?: (document: Document) => Record<string, unknown> | undefined;
+    namespace?: (document: Document) => string | undefined;
     text: (document: Document) => string | undefined;
 }
 ```
