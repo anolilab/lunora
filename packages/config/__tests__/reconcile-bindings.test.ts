@@ -1014,7 +1014,7 @@ describe("reconcileWranglerBindings", () => {
             readConfig().queues.consumers.find((entry: { queue: string }) => entry.queue === "receipt-queue") as Record<string, unknown>;
 
         it("deploys a dead-letter queue and retry budget added to defineQueue after the consumer was first written", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
 
@@ -1024,6 +1024,11 @@ describe("reconcileWranglerBindings", () => {
             );
 
             expect(result.changed).toBe(true);
+            // A retune is an update, not a newly provisioned binding.
+            expect({ added: result.added, updated: result.updated }).toStrictEqual({
+                added: [],
+                updated: ["queues.consumers/receipt-queue (max_retries, dead_letter_queue, retry_delay)"],
+            });
             expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue", retry_delay: 60 });
             // Still exactly one consumer for the queue — updated in place, not appended.
             expect(readConfig().queues.consumers).toHaveLength(1);
@@ -1047,6 +1052,46 @@ describe("reconcileWranglerBindings", () => {
             const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }));
 
             expect(result.changed).toBe(false);
+        });
+
+        it("keeps a retune when the same run also appends a new queue", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const invoiceQueue = { bindingName: "QUEUE_INVOICE", exportName: "invoiceQueue", mode: "push" as const, name: "invoice-queue", tuning: {} };
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 }), invoiceQueue] }));
+
+            expect(readConfig().queues.consumers).toStrictEqual([{ max_retries: 5, queue: "receipt-queue" }, { queue: "invoice-queue" }]);
+        });
+
+        it("retunes a field in place, keeping the comments and layout of a hand-edited queues block", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        // consumers first on purpose
+        "consumers": [
+            // bumped after the March incident
+            { "queue": "receipt-queue", "max_retries": 3 },
+        ],
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+    },
+}
+`,
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+            const text = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+
+            expect(text).toContain("// bumped after the March incident");
+            expect(text).toContain("// consumers first on purpose");
+            // Only the one value changed: the entry stays on its line, and consumers stay ahead of producers.
+            expect(text).toContain(`{ "queue": "receipt-queue", "max_retries": 5 },`);
         });
     });
 

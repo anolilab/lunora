@@ -77,10 +77,12 @@ interface QueueProducerEntry {
 }
 
 interface QueueConsumerEntry {
-    // The tuning keys (`max_retries`, `dead_letter_queue`, …) are compared by
-    // name against what `defineQueue` declares, so the entry stays open.
-    [key: string]: unknown;
+    dead_letter_queue?: string;
+    max_batch_size?: number;
+    max_batch_timeout?: number;
+    max_retries?: number;
     queue?: string;
+    retry_delay?: number;
     type?: string;
 }
 
@@ -154,6 +156,13 @@ interface ReconcileBindingsResult {
     exportGaps: ExportGap[];
     /** Reason reconciliation was skipped, for logging. */
     reason?: string;
+
+    /**
+     * Short labels for each EXISTING entry whose settings were brought in line
+     * with its declaration (e.g. `"queues.consumers/receipt-queue (max_retries)"`).
+     * Kept apart from `added` so a retune is not logged as a new binding.
+     */
+    updated: string[];
     /** Non-fatal hints for capabilities that cannot be auto-provisioned. */
     warnings: string[];
     /** Resolved wrangler path, or `undefined` when none was found. */
@@ -191,6 +200,8 @@ const collectExportGaps = (inferred: InferredBindings): ExportGap[] => {
 interface ReconcileStep {
     added: string[];
     text: string;
+    /** Existing entries rewritten in place; see {@link ReconcileBindingsResult.updated}. */
+    updated?: string[];
 }
 
 /**
@@ -776,36 +787,22 @@ const reconcileWorkflows = (
     };
 };
 
+/** Each `defineQueue` tuning option and the `queues.consumers[]` key wrangler spells it as. */
+const CONSUMER_TUNING_KEYS = [
+    ["maxBatchSize", "max_batch_size"],
+    ["maxBatchTimeout", "max_batch_timeout"],
+    ["maxRetries", "max_retries"],
+    ["deadLetterQueue", "dead_letter_queue"],
+    ["retryDelay", "retry_delay"],
+] as const satisfies ReadonlyArray<readonly [keyof InferredQueue["tuning"], keyof QueueConsumerEntry]>;
+
 /**
  * The `queues.consumers[]` fields `defineQueue` declares for `queue`, in
  * wrangler's spelling. Only the options the export actually sets appear, so a
  * field it leaves unset is never written — and never overwritten.
  */
-const declaredConsumerTuning = (queue: InferredQueue): Record<string, unknown> => {
-    const tuning: Record<string, unknown> = {};
-
-    if (queue.tuning.maxBatchSize !== undefined) {
-        tuning.max_batch_size = queue.tuning.maxBatchSize;
-    }
-
-    if (queue.tuning.maxBatchTimeout !== undefined) {
-        tuning.max_batch_timeout = queue.tuning.maxBatchTimeout;
-    }
-
-    if (queue.tuning.maxRetries !== undefined) {
-        tuning.max_retries = queue.tuning.maxRetries;
-    }
-
-    if (queue.tuning.deadLetterQueue !== undefined) {
-        tuning.dead_letter_queue = queue.tuning.deadLetterQueue;
-    }
-
-    if (queue.tuning.retryDelay !== undefined) {
-        tuning.retry_delay = queue.tuning.retryDelay;
-    }
-
-    return tuning;
-};
+const declaredConsumerTuning = (queue: InferredQueue): Partial<QueueConsumerEntry> =>
+    Object.fromEntries(CONSUMER_TUNING_KEYS.filter(([option]) => queue.tuning[option] !== undefined).map(([option, key]) => [key, queue.tuning[option]]));
 
 /**
  * Add any missing `queues.producers[]` (matched by binding) and
@@ -821,7 +818,12 @@ const declaredConsumerTuning = (queue: InferredQueue): Record<string, unknown> =
  * the broker kept dropping exhausted messages the code said were
  * dead-lettered. It touches only the fields the export declares
  * ({@link declaredConsumerTuning}): a field it leaves unset may have been set
- * by hand, and this file cannot tell that apart from one it wrote.
+ * by hand, and this file cannot tell that apart from one it wrote. For the same
+ * reason a field REMOVED from `defineQueue` stays deployed.
+ *
+ * Each drifted field is written at its own path, never by rewriting the
+ * `queues` block: a consumer that has been hand-tuned is exactly the one that
+ * carries comments, and a whole-node write drops every comment inside it.
  *
  * Add-only for ENTRIES: a producer or consumer no `defineQueue` export declares
  * is left in place and reported by {@link orphanedEntryWarnings} instead — see
@@ -838,52 +840,57 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
     const missingProducers = queues.filter((queue) => !haveProducer.has(queue.bindingName));
     const missingConsumers = queues.filter((queue) => !haveConsumer.has(queue.name));
 
-    const retuned: string[] = [];
-    const updatedConsumers = existingConsumers.map((entry) => {
+    let nextText = text;
+    const updated: string[] = [];
+
+    for (const [index, entry] of existingConsumers.entries()) {
         const queue = queues.find((candidate) => candidate.name === entry.queue);
 
         if (queue === undefined) {
-            return entry;
+            continue;
         }
 
-        const tuning = declaredConsumerTuning(queue);
-        const drifted = Object.keys(tuning).filter((key) => entry[key] !== tuning[key]);
+        const drifted = Object.entries(declaredConsumerTuning(queue)).filter(([key, value]) => entry[key as keyof QueueConsumerEntry] !== value);
 
-        if (drifted.length === 0) {
-            return entry;
+        for (const [key, value] of drifted) {
+            nextText = applyModify(nextText, ["queues", "consumers", index, key], value);
         }
 
-        retuned.push(`queues.consumers/${queue.name} (${drifted.join(", ")})`);
-
-        return { ...entry, ...tuning };
-    });
-
-    if (missingProducers.length === 0 && missingConsumers.length === 0 && retuned.length === 0) {
-        return { added: [], text };
+        if (drifted.length > 0) {
+            updated.push(`queues.consumers/${queue.name} (${drifted.map(([key]) => key).join(", ")})`);
+        }
     }
 
-    const nextProducers = [
-        ...existingProducers,
-        ...missingProducers.map((queue) => {
-            return { binding: queue.bindingName, queue: queue.name };
-        }),
-    ];
-    const nextConsumers = [
-        ...updatedConsumers,
-        ...missingConsumers.map((queue) => {
-            return { queue: queue.name, ...(queue.mode === "pull" ? { type: "http_pull" } : {}), ...declaredConsumerTuning(queue) };
-        }),
-    ];
+    if (missingProducers.length > 0 || missingConsumers.length > 0) {
+        const nextProducers = [
+            ...existingProducers,
+            ...missingProducers.map((queue) => {
+                return { binding: queue.bindingName, queue: queue.name };
+            }),
+        ];
+        // An append rewrites the whole block, so the existing consumers it carries
+        // must already hold the retuned values written above.
+        const nextConsumers = [
+            ...existingConsumers.map((entry) => {
+                const queue = queues.find((candidate) => candidate.name === entry.queue);
 
-    const nextText = applyModify(text, ["queues"], { consumers: nextConsumers, producers: nextProducers });
+                return queue === undefined ? entry : { ...entry, ...declaredConsumerTuning(queue) };
+            }),
+            ...missingConsumers.map((queue) => {
+                return { queue: queue.name, ...(queue.mode === "pull" ? { type: "http_pull" } : {}), ...declaredConsumerTuning(queue) };
+            }),
+        ];
+
+        nextText = applyModify(nextText, ["queues"], { consumers: nextConsumers, producers: nextProducers });
+    }
 
     return {
         added: [
             ...missingProducers.map((queue) => `queues.producers/${queue.bindingName}`),
             ...missingConsumers.map((queue) => `queues.consumers/${queue.name}`),
-            ...retuned,
         ],
         text: nextText,
+        updated,
     };
 };
 
@@ -913,7 +920,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred, projectRoot) };
+        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
@@ -924,6 +931,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
             changed: false,
             exportGaps,
             reason: `failed to parse ${wranglerPath} as JSONC`,
+            updated: [],
             warnings: collectWarnings(inferred, projectRoot),
             wranglerPath,
         };
@@ -1008,6 +1016,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     let text = original;
     const added: string[] = [];
+    const updated: string[] = [];
 
     for (const step of pipeline) {
         if (!step.enabled) {
@@ -1018,6 +1027,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
         text = result.text;
         added.push(...result.added);
+        updated.push(...(result.updated ?? []));
     }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
@@ -1031,12 +1041,12 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     }
 
     if (text === original) {
-        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", warnings, wranglerPath };
+        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", updated: [], warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");
 
-    return { added, changed: true, exportGaps, warnings, wranglerPath };
+    return { added, changed: true, exportGaps, updated, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult };
