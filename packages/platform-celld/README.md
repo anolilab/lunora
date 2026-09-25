@@ -36,8 +36,38 @@ export default { target: "celld" };
 - `lunora deploy` runs the usual pipeline (codegen, schema-drift gate, binding reconcile, validation) and ships with `celld deploy`, which reads the fleet bucket from `CELLD_BUCKET` plus the standard AWS / GCS / Azure credential environment. `--dry-run` maps to `celld deploy --dry-run` (bundle without writing); `--preview`, `--env`, `--temporary` and `--outdir` are refused: celld has no equivalent.
 - Both commands hand celld a projection of `wrangler.jsonc`, written to `.celld.wrangler.json` beside it: celld refuses the Cloudflare-only keys Lunora writes (`observability`, `limits`, `version_metadata`, …), and the CLI names each one it leaves out. Add `.celld/` and `.celld.wrangler.json` to the app's `.gitignore`.
 - The `celld` binary is run from `PATH` (`curl -fsSL https://celld.dev/install.sh | sh`), never through `npx` / `bun x`; `celld deploy` also needs `esbuild` on `PATH`.
-- `lunora logs` and `lunora env push` refuse the target: celld has no log tail and no secret store — a deployed value lives in wrangler `vars`.
+- `lunora logs` and `lunora env push` refuse the target: celld has no log tail and no secret store — see [Secrets](#secrets).
 - A worker entry that is a Vite virtual module (`main: "virtual:lunora/worker"`, the react-router / tanstack-start / vinext templates) ships from the Vite build output: run the build, then `lunora deploy`. The projection reads the config `@cloudflare/vite-plugin` recorded in `.wrangler/deploy/config.json`, writes `.celld.wrangler.json` into the build's output root with `main` and the assets directory rebased onto it, lets celld re-bundle the chunks (its `no_bundle` loads the entry module only), and removes the plugin's `.assetsignore` when it matches nothing — celld refuses the file. `celld dev` rebuilds from source, which such an entry does not have, so `lunora dev` refuses it and `vite dev` serves the worker in workerd with a notice saying so.
+
+## Secrets
+
+celld has no secret store. The only way to hand a value to a deployed worker is `vars` in the Wrangler config, and `celld deploy` writes those — as plain strings — into the deployment it stores in the fleet bucket. `.dev.vars` is read by `celld dev` only; `celld deploy` never reads it, by design, so a local credential cannot reach a fleet. celld v0.5 removed node-level injection (`CELLD_VAR_*`, `CELLD_VARS_FILE`): a node started with either refuses to boot. Lunora's `ctx.secrets` (Secrets Store) is rated `unsupported`, and codegen refuses it for `target: "celld"`.
+
+So **anyone who can read the fleet bucket can read every `vars` value in plaintext**. Encryption at rest (SSE / KMS) protects against the storage provider's disks, not against a caller holding read credentials. That is no wider than celld's trust boundary already is — the bucket holds every cell's data and the fleet's peer-signing secret, so read access already means the database and the fleet — but it is weaker than Cloudflare, where a secret is write-only once set.
+
+### Treat the bucket as the secret
+
+Whatever holds a value, the fleet bucket has to be guarded like the database it is:
+
+- **One fleet per bucket** (or per prefix with its own credentials). Nothing else — backups, analytics, other teams' tooling — gets read access.
+- **Least-privilege credentials.** Nodes and the machine that runs `celld deploy` need access; nobody else needs any. Use workload identity over long-lived keys where the provider offers it.
+- **Encryption at rest** (SSE-KMS, CMEK) with access logging on the bucket, so a read is at least recorded.
+- **Clean up old deployments.** Every `celld deploy` leaves its version — and its `vars` — under `deploy/<name>/`. After rotating a value, delete the versions that still carry the old one.
+- **Encrypt node-to-node traffic.** Peer traffic is plaintext HTTP; run the fleet on a private network or an encrypted overlay (WireGuard, Tailscale), and terminate public TLS at the ingress proxy.
+
+### Keep real secrets in a secret manager
+
+For anything more sensitive than the data itself — payment provider keys, credentials to other systems — or when a value must be write-only, audited, or separately revocable, keep it out of the bucket entirely: store it in a secret manager (Vault, AWS Secrets Manager, GCP Secret Manager, Doppler, Infisical, …) and fetch it from the worker at runtime. Only one bootstrap credential then lives in `vars`:
+
+- scope it to read exactly the secrets this app needs, nothing else;
+- make it short-lived or cheap to rotate (a Vault AppRole secret ID, a scoped service token), so a leak through the bucket is revoked at the manager without redeploying anything else;
+- cache what it fetches in memory per isolate with a short TTL, rather than calling the manager on every request.
+
+A celld node gives a worker no identity of its own, so this moves the problem to one small, auditable, revocable credential rather than eliminating it.
+
+### What `vars` is still fine for
+
+Non-secret configuration (feature switches, public URLs, region names), and values whose exposure is bounded by what the bucket already exposes. Put them in `wrangler.jsonc` `vars` — the projection keeps them — and keep local-only values in `.dev.vars` for `celld dev`.
 
 ## Conformance
 
