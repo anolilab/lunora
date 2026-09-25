@@ -218,23 +218,30 @@ describe("useMutation", () => {
             WebSocket: createMockWebSocket(sockets),
         });
         const spy = vi.spyOn(client, "mutation");
-        let increment: () => Promise<unknown> = async () => undefined;
 
         const Counter = (): ReactElement => {
             const value = useQuery(counter, {}) as { count: number } | undefined;
             const { mutate } = useMutation(makeRef("counter:inc"));
 
-            increment = async () =>
-                mutate(
-                    {},
-                    {
-                        optimisticUpdate: (store) => {
-                            store.setQuery(counter, {}, { count: 1 });
-                        },
-                    },
-                );
-
-            return <div data-testid="count">{value === undefined ? "-" : String(value.count)}</div>;
+            return (
+                <button
+                    data-testid="count"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        mutate(
+                            {},
+                            {
+                                optimisticUpdate: (store) => {
+                                    store.setQuery(counter, {}, { count: 1 });
+                                },
+                            },
+                        ).catch(() => undefined);
+                    }}
+                    type="button"
+                >
+                    {value === undefined ? "-" : String(value.count)}
+                </button>
+            );
         };
 
         render(
@@ -260,7 +267,12 @@ describe("useMutation", () => {
             await act(async () => {
                 sockets.at(-1)?.drop();
                 onlineManager.setOnline(false);
-                increment().catch(() => undefined);
+                await Promise.resolve();
+            });
+
+            fireEvent.click(screen.getByTestId("count"));
+
+            await act(async () => {
                 await new Promise((resolve) => {
                     setTimeout(resolve, 20);
                 });
