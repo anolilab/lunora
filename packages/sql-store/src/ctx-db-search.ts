@@ -20,6 +20,7 @@ import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { planSearchBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
+import { ftsRowidMapName } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 
 import {
@@ -31,9 +32,9 @@ import {
 } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import type { SearchStage } from "./search-layout";
-import { companionFor, companionProfile, globalSearchIndexes, purgeDocument, resolveSearchLayout } from "./search-layout";
+import { companionFor, companionProfile, globalSearchIndexes, resolveSearchLayout } from "./search-layout";
 import type { SqlCtxExec } from "./sql-exec";
-import { forEachRowPaged, queryAll, queryRun } from "./sql-exec";
+import { decodeRow, forEachRowPaged, OCC_VERSION_COLUMN, queryAll, queryRun } from "./sql-exec";
 
 /**
  * Does this companion hold a row for every document in its table?
@@ -109,6 +110,93 @@ const layoutOf = (profile: string): string => profile.slice(profile.lastIndexOf(
 const SEARCH_BACKFILL_BATCH_ROWS = 200;
 
 /**
+ * Write-then-recheck rounds per backfill page. Each extra round happens only for
+ * rows written concurrently with the page, so the second is already rare.
+ *
+ * ponytail: a row rewritten on every round past this is left to its writers — it
+ * stays unindexed only if every one of those writes left the indexed text alone.
+ */
+const SEARCH_BACKFILL_ATTEMPTS = 5;
+
+/**
+ * Re-read the `pending` rows and return the ones written since they were read,
+ * in their current state. A row absent from the re-read was deleted, and the
+ * delete purged its entry. Versions are compared as strings: drivers disagree
+ * on number types.
+ */
+const rowsMovedSince = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    pending: ReadonlyMap<string, Record<string, unknown>>,
+): Promise<Map<string, Record<string, unknown>>> => {
+    const ids = [...pending.keys()];
+    const current = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} >= ${ids[0]} AND ${sql.identifier("id")} <= ${ids.at(-1)} ORDER BY ${sql.identifier("id")} ASC`,
+    );
+    const moved = new Map<string, Record<string, unknown>>();
+
+    for (const row of current) {
+        const id = row["id"] as string;
+        const read = pending.get(id);
+
+        if (read && [OCC_VERSION_COLUMN, "_creationTime"].some((column) => String(read[column]) !== String(row[column]))) {
+            moved.set(id, row);
+        }
+    }
+
+    return moved;
+};
+
+/**
+ * Index one backfill page's rows into a companion, safely against writers in
+ * other isolates.
+ *
+ * The page read its rows in one SELECT and writes them one at a time, and
+ * another isolate may write any of them in between — the per-isolate
+ * single-flight memo does not reach across isolates. So each write carries the
+ * row as read, and lands only if that row is still current (atomically on FTS5;
+ * see `SearchLayout.indexDocument`). A write that did NOT land left the entry to
+ * the concurrent writer — which re-indexes only if it changed the indexed text.
+ * So the page is re-read afterwards, and every row whose version moved is
+ * indexed again from its new state, until none did.
+ */
+const indexPageRows = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    companion: string,
+    index: SearchIndexDefinitionLike,
+    rows: ReadonlyArray<Record<string, unknown>>,
+): Promise<void> => {
+    const layout = resolveSearchLayout(index, dialect);
+    let pending = new Map<string, Record<string, unknown>>();
+
+    for (const row of rows) {
+        if (typeof row["id"] === "string") {
+            pending.set(row["id"], row);
+        }
+    }
+
+    for (let attempt = 0; pending.size > 0 && attempt < SEARCH_BACKFILL_ATTEMPTS; attempt += 1) {
+        for (const [id, row] of pending) {
+            const document = decodeRow(definition, row);
+
+            if (document) {
+                // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection.
+                await layout.indexDocument(exec, dialect, companion, id, document, index, { row, table: tableName });
+            }
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- the re-check has to follow the writes it checks.
+        pending = await rowsMovedSince(exec, dialect, tableName, pending);
+    }
+};
+
+/**
  * Index one page of `tableName` into a search companion, resuming from the
  * recorded cursor. Returns `true` when the table is fully indexed.
  *
@@ -126,7 +214,6 @@ const backfillSearchIndexPage = async (
     index: SearchIndexDefinitionLike,
 ): Promise<boolean> => {
     const companion = companionFor(tableName, index);
-    const layout = resolveSearchLayout(index, dialect);
     const profile = companionProfile(index, dialect);
     const pass = planSearchBackfillPass(await readSearchBackfillState(exec, dialect, companion), profile);
 
@@ -144,9 +231,9 @@ const backfillSearchIndexPage = async (
         // request — on a large table, thousands of requests answered from an
         // index covering a fraction of the rows, with the read path querying it
         // either way; on a `staged` index, which the migration pass never
-        // backfills, it never refilled at all. Every layout writes a document
-        // DELETE-then-INSERT, so the re-walk converges on the new profile in
-        // place while each row keeps serving the old one until its turn: stale
+        // backfills, it never refilled at all. Every layout replaces a
+        // document's rows in place, so the re-walk converges on the new profile
+        // while each row keeps serving the old one until its turn: stale
         // analysis on a shrinking suffix, rather than no row at all.
         await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
     }
@@ -163,36 +250,21 @@ const backfillSearchIndexPage = async (
         return true;
     }
 
-    // Counts rows *walked*, not rows indexed: a page whose rows are missing an
-    // id (or fail to decode) would otherwise look short and be mistaken for the
-    // end of the table, permanently stranding everything after it.
-    let walked = 0;
-    let lastId = pass.cursor;
-
-    await forEachRowPaged(
+    const pageRows = await queryAll(
         exec,
         dialect,
-        definition,
-        tableName,
-        async (document) => {
-            walked += 1;
-
-            const id = document["_id"];
-
-            if (typeof id !== "string") {
-                return;
-            }
-
-            lastId = id;
-
-            await layout.indexDocument(exec, dialect, companion, id, document, index);
-        },
-        { after: pass.cursor, limit: SEARCH_BACKFILL_BATCH_ROWS },
+        sql`SELECT * FROM ${sql.identifier(tableName)}${pass.cursor === undefined ? sql`` : sql` WHERE ${sql.identifier("id")} > ${pass.cursor}`} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
     );
+    const lastId = pageRows.findLast((row) => typeof row["id"] === "string")?.["id"] as string | undefined;
 
-    const done = walked < SEARCH_BACKFILL_BATCH_ROWS;
+    await indexPageRows(exec, dialect, definition, tableName, companion, index, pageRows);
 
-    await writeSearchBackfillState(exec, dialect, companion, lastId, done, profile);
+    // Rows walked, not rows indexed: a page with undecodable rows is not short.
+    const done = pageRows.length < SEARCH_BACKFILL_BATCH_ROWS;
+
+    // A page whose ids are all unusable keeps the resume point, rather than
+    // sending the next pass back to the top of the table.
+    await writeSearchBackfillState(exec, dialect, companion, lastId ?? pass.cursor, done, profile);
 
     return done;
 };
@@ -233,6 +305,8 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
         if (recorded.profile !== undefined && layoutOf(recorded.profile) !== layoutOf(profile)) {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
             await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(companion)}`);
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+            await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(ftsRowidMapName(companion))}`);
             // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
             await clearSearchBackfillState(exec, dialect, companion);
         }
@@ -380,7 +454,7 @@ const createSearchSync = (deps: {
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
-            await purgeDocument(exec, dialect, companion, id);
+            await resolveSearchLayout(index, dialect).purgeDocument(exec, dialect, companion, id);
         }
     };
 };

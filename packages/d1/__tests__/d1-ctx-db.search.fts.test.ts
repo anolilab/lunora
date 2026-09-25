@@ -10,7 +10,7 @@ import { backfillD1SearchIndexes, createD1CtxDb as createD1ContextDatabase, runD
  * results: a recording `D1Exec` double that reports FTS5 available (the
  * create/drop probe succeeds), returns canned rows for the vocabulary read, and
  * captures every statement + params. We verify the virtual-table DDL, the
- * delete-then-insert write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
+ * rowid-keyed write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
  * Behavioral correctness of the query surface is covered by the LIKE-scan suite
  * in `d1-ctx-db.search.test.ts`. The D1 twin of `@lunora/do`'s
  * `ctx-db.search.fts.test.ts`.
@@ -20,6 +20,19 @@ interface Recorded {
     params: ReadonlyArray<unknown>;
     sql: string;
 }
+
+const MAP = '"docs__fts_by_body__ids"';
+const CLAIM_ROWID = `INSERT OR IGNORE INTO ${MAP} ("__id__") VALUES (?)`;
+const PURGE_ENTRY = `DELETE FROM "docs__fts_by_body" WHERE "docs__fts_by_body"."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?)`;
+const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+
+/**
+ * Does `statement` write a document's searchable entry? It replaces the row at
+ * the document's mapped rowid; a backfill's write also carries a trailing guard
+ * on the source row, so only the leading `[text, id]` params are the entry.
+ */
+const isEntryWrite = (statement: Recorded): boolean => statement.sql.startsWith('INSERT OR REPLACE INTO "docs__fts_by_body" (rowid, "__text__", "__id__")');
+const entryOf = (statement: Recorded): unknown[] => statement.params.slice(0, 2);
 
 /** A canned MATCH/by-id row in the D1 column-per-field shape (no `__doc__` blob). */
 interface MatchRow {
@@ -121,24 +134,28 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         ).toBe(true);
     });
 
-    it("syncs indexed text on insert via delete-then-insert", async () => {
-        expect.assertions(2);
+    it("syncs indexed text on insert by replacing the row at the document's mapped rowid", async () => {
+        expect.assertions(1);
 
         const { exec, statements } = createRecordingFts([]);
 
         await runD1SearchMigrations(exec, searchSchema);
 
         const writer = createD1ContextDatabase({ exec, idGenerator: () => "d1", schema: searchSchema });
+        const before = statements.length;
 
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
-        const remove = statements.find((statement) => statement.sql === 'DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?');
-        // The last shadow INSERT is the write sync; earlier ones belong to the
-        // migration-time backfill (here just its "backfilled" sentinel).
-        const add = statements.findLast((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        // No purge by `__id__`: that column is UNINDEXED, so it was a full scan.
+        // (The writer's own cold start re-runs the idempotent DDL; that is not the write.)
+        const ftsWrites = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body") && !statement.sql.startsWith("CREATE"));
 
-        expect(remove?.params).toStrictEqual(["d1"]);
-        expect(add?.params).toStrictEqual(["hello world", "d1"]);
+        expect(ftsWrites.map((statement) => (isEntryWrite(statement) ? ["entry", ...entryOf(statement)] : [statement.sql, ...statement.params]))).toStrictEqual(
+            [
+                [CLAIM_ROWID, "d1"],
+                ["entry", "hello world", "d1"],
+            ],
+        );
     });
 
     it("backfills rows that predate the search index", async () => {
@@ -151,9 +168,9 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         await runD1SearchMigrations(exec, searchSchema);
 
-        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const inserts = statements.filter((statement) => isEntryWrite(statement));
 
-        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+        expect(inserts.map((statement) => entryOf(statement))).toStrictEqual([
             ["hello world", "d1"],
             ["hello words", "d2"],
         ]);
@@ -179,14 +196,14 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
                 (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
             ),
         ).toBe(true);
-        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
+        expect(statements.some((statement) => isEntryWrite(statement))).toBe(false);
 
         // …until the host runs the explicit backfill.
         await backfillD1SearchIndexes(exec, stagedSchema);
 
-        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const inserts = statements.filter((statement) => isEntryWrite(statement));
 
-        expect(inserts.map((statement) => statement.params)).toStrictEqual([["hello world", "d1"]]);
+        expect(inserts.map((statement) => entryOf(statement))).toStrictEqual([["hello world", "d1"]]);
     });
 
     it("clears the FTS row on delete (no re-insert)", async () => {
@@ -206,8 +223,8 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual(['DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?']);
-        expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([PURGE_ENTRY, PURGE_MAPPING]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1"]]);
     });
 
     it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {

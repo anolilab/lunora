@@ -26,7 +26,6 @@ import {
     createSearchAnalyzer,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,
-    FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
     ftsTableName,
     searchIndexProfile,
@@ -34,13 +33,13 @@ import {
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
-import { unionAll } from "@lunora/shard-engine";
+import { adoptFtsCompanion, ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsWriteDocument, unionAll } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, decodeRows, OCC_VERSION_COLUMN, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
 
 /** The staged `.withSearchIndex().search()` query a layout executes. */
 interface SearchStage {
@@ -60,7 +59,16 @@ interface SearchLayout {
     /** Create the companion (and its indexes). Idempotent. */
     ensureCompanion: (exec: SqlCtxExec, dialect: SqlDialect, companion: string) => Promise<void>;
 
-    /** Replace one document's rows in the companion. */
+    /**
+     * Replace one document's rows in the companion.
+     *
+     * `readAs` is the source row as the caller read it, for a caller that read
+     * it some time ago (the backfill): the write lands only if that row is still
+     * current, so it cannot overwrite a concurrent write's fresher entry. Only
+     * the FTS5 layout checks it, inside the write statement itself; the others
+     * write regardless and rely on the caller's re-check (see
+     * `indexPageRows`).
+     */
     indexDocument: (
         exec: SqlCtxExec,
         dialect: SqlDialect,
@@ -68,6 +76,7 @@ interface SearchLayout {
         id: string,
         document: Record<string, unknown>,
         index: SearchIndexDefinitionLike,
+        readAs?: SourceRow,
     ) => Promise<void>;
 
     /**
@@ -76,6 +85,9 @@ interface SearchLayout {
      * so a change here has to be detected and rebuilt rather than written into.
      */
     readonly name: "fts5" | "inverted" | "native";
+
+    /** Delete every companion row for one document. */
+    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string) => Promise<void>;
 
     /** Execute a staged search against this companion, ordered and bounded. */
     runSearch: (
@@ -88,7 +100,16 @@ interface SearchLayout {
     ) => Promise<Record<string, unknown>[]>;
 }
 
-/** Delete every companion row for one document — the first half of every write. */
+/** A source-table row exactly as it was read, with the table it was read from. */
+interface SourceRow {
+    row: Record<string, unknown>;
+    table: string;
+}
+
+/**
+ * Delete every companion row for one document by its `__id__` column — the
+ * first half of every write on the layouts whose `__id__` is indexed.
+ */
 const purgeDocument = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string): Promise<void> => {
     await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(companion)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
 };
@@ -348,9 +369,11 @@ const invertedLayout: SearchLayout = {
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(FTS_TOKEN_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_COUNT_COLUMN)} ${sql.raw(integer)} NOT NULL)`,
         );
 
-        // Not unique: a concurrent cold-start backfill could briefly double a
-        // row, which the delete-then-insert write repairs, whereas a unique
-        // violation would fail the request outright.
+        // Not unique, so two cold-start backfills whose purge-then-insert pairs
+        // interleave can double a document's rows — and nothing repairs that
+        // until the document is written again. A unique index would turn the
+        // same race into a failed request instead; fixing it properly needs a
+        // per-dialect insert-or-ignore, and this layout only serves Hyperdrive.
         await createIndexIfNotExists(exec, dialect, {
             columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN)}`,
             name: `${companion}__btree`,
@@ -392,37 +415,60 @@ const invertedLayout: SearchLayout = {
         await queryBatch(exec, dialect, chunks);
     },
     name: "inverted",
+    purgeDocument,
     runSearch: runInvertedSearch,
 };
 
-/** The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`. */
+/**
+ * Whether the source row is still the one that was read: the same `_version`
+ * (bumped by every guarded write) and `_creationTime` (which tells a
+ * delete-and-reinsert under the same id apart, whose version restarts at NULL).
+ * SQLite's `IS`, since only the FTS5 layout evaluates it.
+ */
+const unchangedSince = ({ row, table }: SourceRow): SQL => {
+    const current = (name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
+
+    // eslint-disable-next-line unicorn/no-null -- SQL bind value: a NULL column compares with `IS NULL`
+    return sql`EXISTS (SELECT 1 FROM ${sql.identifier(table)} WHERE ${current("id")} = ${row["id"]} AND ${current(OCC_VERSION_COLUMN)} IS ${row[OCC_VERSION_COLUMN] ?? null} AND ${current("_creationTime")} IS ${row["_creationTime"] ?? null})`;
+};
+
+/**
+ * The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`,
+ * reached through the `__ids` rowid map — see `fts-companion.ts` in
+ * `@lunora/shard-engine`, which the Durable Object store shares.
+ */
 const fts5Layout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
-        await queryRun(
-            exec,
-            dialect,
-            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(companion)} USING fts5(${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
-        );
-        // The vocabulary view over that index: one row per term *instance*, so a
-        // term's frequency in a document is a COUNT. It is what lets this layout
-        // rank by the shared scorer in SQL rather than approximating it — see
-        // `runFtsSearch`. Part of the FTS5 extension, so wherever the virtual
-        // table above can be created this can too.
-        await queryRun(
-            exec,
-            dialect,
-            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(`${companion}__vocab`)} USING fts5vocab(${sql.identifier(companion)}, ${sql.raw("instance")})`,
-        );
+        // A companion created before the map existed holds rows the map knows
+        // nothing about, and every write would miss them. Adopt them the one
+        // time the map is created — two cold starts doing it at once converge.
+        const existing = await queryAll(exec, dialect, dialect.tableExists(ftsRowidMapName(companion)));
+
+        for (const statement of ftsCompanionDdl(companion)) {
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+            await queryRun(exec, dialect, statement);
+        }
+
+        if (existing.length === 0) {
+            for (const statement of adoptFtsCompanion(companion)) {
+                // eslint-disable-next-line no-await-in-loop -- adoption then cleanup, in order.
+                await queryRun(exec, dialect, statement);
+            }
+        }
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await purgeDocument(exec, dialect, companion, id);
-        await queryRun(
-            exec,
-            dialect,
-            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__text__")}, ${sql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
-        );
+    indexDocument: async (exec, dialect, companion, id, document, index, readAs) => {
+        for (const statement of ftsWriteDocument(companion, id, analyzedSearchText(document, index), readAs && unchangedSince(readAs))) {
+            // eslint-disable-next-line no-await-in-loop -- claim the rowid, then write at it: in order.
+            await queryRun(exec, dialect, statement);
+        }
     },
     name: "fts5",
+    purgeDocument: async (exec, dialect, companion, id) => {
+        for (const statement of ftsPurgeDocument(companion, id)) {
+            // eslint-disable-next-line no-await-in-loop -- the FTS5 row, then its mapping: in order.
+            await queryRun(exec, dialect, statement);
+        }
+    },
     runSearch: runFtsSearch,
 };
 
@@ -453,6 +499,7 @@ const nativeLayout: SearchLayout = {
         await queryRun(exec, dialect, native.indexDocument(companion, id, analyzedSearchText(document, index)));
     },
     name: "native",
+    purgeDocument,
     runSearch: runNativeSearch,
 };
 
@@ -516,4 +563,4 @@ const globalSearchIndexes = function* (schema: SchemaLike): Generator<[string, T
 const companionFor = (tableName: string, index: SearchIndexDefinitionLike): string => ftsTableName(tableName, index.name);
 
 export type { SearchLayout, SearchStage };
-export { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, purgeDocument, resolveSearchLayout };
+export { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout };

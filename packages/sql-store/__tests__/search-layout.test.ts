@@ -7,16 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlDialect } from "../src/dialect";
 import type { SearchLayout, SearchStage } from "../src/search-layout";
-import {
-    companionFor,
-    companionProfile,
-    fts5Layout,
-    globalSearchIndexes,
-    invertedLayout,
-    nativeLayout,
-    purgeDocument,
-    resolveSearchLayout,
-} from "../src/search-layout";
+import { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout } from "../src/search-layout";
 import type { SqlCtxExec } from "../src/sql-exec";
 
 /**
@@ -699,7 +690,7 @@ describe("search layouts", () => {
         });
     });
 
-    describe("purgeDocument", () => {
+    describe("invertedLayout.purgeDocument", () => {
         it("drops one document's rows and leaves the rest", async () => {
             expect.assertions(1);
 
@@ -710,7 +701,7 @@ describe("search layouts", () => {
             await invertedLayout.indexDocument(harness.exec, dialect, companion, "a", { body: "keep me" }, byBody);
             await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "drop me" }, byBody);
 
-            await purgeDocument(harness.exec, dialect, companion, "b");
+            await invertedLayout.purgeDocument(harness.exec, dialect, companion, "b");
 
             expect(harness.raw(`SELECT DISTINCT "__id__" FROM "notes__fts_by_body"`).map((row) => row["__id__"])).toStrictEqual(["a"]);
         });
