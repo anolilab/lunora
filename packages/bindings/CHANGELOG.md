@@ -1,3 +1,14 @@
+## @lunora/bindings [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.71...@lunora/bindings@1.0.0-alpha.72) (2026-09-25)
+
+### Features
+
+* **vectors:** re-embed a table when its declared model changes ([#820](https://github.com/anolilab/lunora/issues/820)) ([ddbafa6](https://github.com/anolilab/lunora/commit/ddbafa6c35bf9b3d9ae68ed3db115465da876d38))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+
 ## @lunora/bindings [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.70...@lunora/bindings@1.0.0-alpha.71) (2026-09-25)
 
 ### ⚠ BREAKING CHANGES
