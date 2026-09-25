@@ -119,7 +119,10 @@ handler body itself re-executes from the top on every activation (after a
 is therefore issued more than once — so each one carries a deterministic
 **replay-dedup id**, which the shard applies as its `(identity, mutationId)`
 idempotency key. The same logical call re-issued on a retry or a replay resolves
-with the first application's result instead of applying again.
+with the first application's result instead of applying again. The id is scoped
+by the workflow's export name as well as the instance id
+(`<workflow>/<instanceId>#body.<n>`, `…#step<i>.<n>`), because an instance id is
+unique only within one workflow: two workflows can both run as `order-42`.
 
 Pinned for you on three surfaces:
 
@@ -140,9 +143,35 @@ Three paths are **not** covered, and stay at-least-once:
   past that window, so a workflow that sleeps for days re-dispatches on wake.
 
 The full guarantee applies to **mutations**, which take the dedup read under the
-shard's single-writer gate. An action or query gets the weaker form: a
-_sequential_ replay short-circuits, but two genuinely concurrent dispatches of
-one id can both miss the cache and both run.
+shard's single-writer gate. An action or query is not gated, so the shard
+claims its id instead while the handler runs: a second dispatch of the same id
+that arrives before the first has finished is declined with
+`409 DISPATCH_IN_PROGRESS` rather than run alongside it. The claim is released
+when the first run settles, and after that the id is served from the replay
+cache. It also expires after fifteen minutes, so a handler that never settles
+cannot block the id forever. Past that point a new dispatch runs, even if the
+old handler is somehow still going, so an action that can run longer than
+fifteen minutes must be idempotent on its own.
+
+#### Slow calls and the retry budget
+
+The usual source of a decline is the workflow's own retry. `context.run` gives
+up on a call after 30 seconds (`timeoutMs` overrides it), but the shard keeps
+running the call. The step retries and re-issues the same id, and that id is
+still claimed. A decline is not a failure of the call, so `context.run` does not
+throw it into the engine's retry budget. It waits and re-dispatches the same id,
+after pauses that start at 1 second and double up to 30 seconds, until the
+first run's result is served. If that run died, the re-dispatch runs the call
+itself. The wait is bounded by the claim's fifteen-minute ceiling, counted from
+the first decline. A decline after that is rethrown and retried like any other
+failure. The guarantee stays at-least-once: a decline is never treated as
+success.
+
+Two things can still spend an attempt. The first is the step's own `timeout`
+(Cloudflare's default is 10 minutes), which can end a long wait. The second is
+the 30-second give-up itself, which is a retryable failure like any other.
+Give a slow action's step a `timeout` above its expected runtime, or raise the
+call's `timeoutMs`.
 
 ### Declared events (`defineWorkflowEvent`)
 
