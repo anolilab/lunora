@@ -98,10 +98,14 @@ Cloudflare Vectorize: typed vector indexes and similarity search, wired from `de
 import { action } from "@/lunora/_generated/server";
 import { v } from "@lunora/values";
 
-export const search = action.input({ query: v.string() }).action(async ({ ctx, args }) => ctx.vectors.query("docs", { input: args.query, topK: 5 }));
+import { embed } from "../app/embed"; // the same embedder the index declares
+
+export const search = action.input({ query: v.string() }).action(async ({ ctx, args }) => ctx.vectors.query("docs", { embed, input: args.query, topK: 5 }));
 ```
 
-`query(index, { input })` embeds `input` with the index's configured embedder, then runs the search; pass a precomputed `vector` instead of `input` to skip embedding. `upsert` / `upsertMany` write vectors back. The index name is narrowed to the ones your schema declares, so a typo is a compile error.
+`query(index, { input, embed })` embeds `input` with the `embed` you pass, then runs the search. The index's own embedder is not applied for you, so pass the one the index declares, or the query vector will not be comparable with the stored ones. Pass a precomputed `vector` instead of `input` to skip embedding. `upsert` (held until the mutation commits) and `upsertNow` (immediate) write one vector; `deleteByIds` removes vectors. The index name is narrowed to the ones your schema declares, so a typo is a compile error.
+
+Rows written before an index existed are not synced by the write hook. Index them with the `__lunora_admin__:backfillVectors` admin operation, which embeds a bounded number of pages per call and resumes where the last call stopped. See [Vector search](/docs/concepts/vector-search#indexing-existing-rows).
 
 ### Tenant isolation on `.shardBy()` tables
 
@@ -109,7 +113,7 @@ Vectorize indexes are **account-global**: every shard DO shares the same index, 
 
 A schema can mix `.shardBy()`'d and root-scoped vectorized tables. `ctx.vectors` is one flat facade over every declared index, reachable from any DO instance, so the default above only applies to indexes sourced from a `.shardBy()`'d table; a root-scoped index always stays namespace-less, from any instance. The single default (root) DO instance owns no shard key at all: calling a **sharded** index from it with no explicit `namespace` throws (rather than silently searching/mutating every tenant, or silently returning nothing). Pass an explicit `namespace`, or issue the call from the sharded DO instance that owns the tenant.
 
-Vectorize's id-based operations (`getByIds`, `deleteByIds`) take no `namespace` filter remotely, so once a namespace applies (explicit or defaulted) it's enforced client-side: `getByIds` drops any returned record whose `namespace` doesn't match (a record with no `namespace` is treated as a mismatch, never as "belongs to everyone"), and `deleteByIds` resolves the ids first and only deletes the ones that belong to the resolved namespace, silently: a caller asking to delete 5 ids and having only some belong to its namespace gets no per-id signal today. Both accept an optional third `namespace` argument (`ctx.vectors.getByIds(index, ids, namespace)`) that overrides the default the same way `query`'s `input.namespace` does; `@lunora/ai/rag` uses this to thread its own tenant namespace through `getByIds`/`deleteByIds`.
+Vectorize's id-based operations (`getByIds`, `deleteByIds`) take no `namespace` filter remotely, so once a namespace applies (explicit or defaulted) it's enforced client-side: `getByIds` drops any returned record whose `namespace` doesn't match (a record with no `namespace` is treated as a mismatch, never as "belongs to everyone"), and `deleteByIds` resolves the ids first and only deletes the ones that belong to the resolved namespace, silently: a caller asking to delete 5 ids and having only some belong to its namespace gets no per-id signal today. On `ctx.vectors` both take `(index, ids)` only, so the id path always uses the default namespace. The adapter underneath (`createContextVectors`) accepts an optional third `namespace` argument, and `@lunora/ai/rag` uses it to thread its own tenant namespace through `getByIds`/`deleteByIds`.
 
 A vectorized table with **no** `.shardBy()` at all (or the single default DO, for a schema with no sharded vector tables) keeps today's namespace-less behavior, since there is no per-tenant key to scope by.
 
@@ -118,7 +122,7 @@ A vectorized table with **no** `.shardBy()` at all (or the single default DO, fo
 `.vectorize(field, { metadata: ["authorId"] })` mirrors those columns into each vector's metadata so `query(index, { filter })` can narrow by them:
 
 ```ts
-ctx.vectors.query("docs", { filter: { authorId: userId }, input: query, topK: 5 });
+ctx.vectors.query("docs", { embed, filter: { authorId: userId }, input: query, topK: 5 });
 ```
 
 Vectorize only filters on a property that has a **metadata index**, which is created separately from the vector index itself. `lunora deploy` provisions one per declared property (idempotently, and non-fatally: it reports the command if it can't); `lunora doctor` lists what your schema expects. Deploying with `wrangler` directly means creating them yourself:
