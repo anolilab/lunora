@@ -89,7 +89,7 @@ back, and `restore()` re-embeds the row's current text.
 
 Write sync only sees writes made **after** the index exists. Rows already in the
 table when you add `.vectorize()` (or change an index's `field`, `dimensions`,
-`metric`, `metadata` or `model`) are indexed by the `backfillVectors` admin operation; see
+`metric`, `metadata` or `model`, or the table's `.softDelete()` field) are indexed by the `backfillVectors` admin operation; see
 [Indexing existing rows](#indexing-existing-rows).
 
 A `.global()` table cannot declare a vector index. Its writes go to D1 or
@@ -136,15 +136,25 @@ Two kinds of failure are handled differently:
 - **A row that can never be indexed** is counted in `failed`, its id listed in
   `failedIds` (the first 20), and skipped. Examples: a non-string source value,
   text the embedding model refuses, metadata Vectorize rejects. The live write
-  sync only logs these too.
+  sync only logs these too. A row whose source text is empty or only whitespace
+  is not a failure: it has nothing to embed, so its vector is removed, as when
+  the field is cleared.
 - **A page that fails as a whole**, because the embedder or Vectorize is
   unreachable, answers `503` with the progress made so far. That page is retried
-  by the next call, not skipped.
+  by the next call. When the error carries a status, it decides: a 5xx, 408 or
+  429 (or a timeout) is the service and is retried for as long as it lasts, and
+  a 4xx is the row. Without one, a page that fails whole on three calls in a
+  row is written off: its rows are counted in `failed` and the walk moves on,
+  so one bad page cannot stop every table after it.
+
+Only one `backfillVectors` call runs per shard at a time. A second call made
+while one is running answers `409`; repeat it once the first returns.
 
 The backfill records the index configuration it built from. When you change an
-index's `field`, `dimensions`, `metric`, `metadata` or `model`, or add or rename
-an index, the next call re-embeds the table from the top. Existing vectors are
-overwritten in place, never cleared first.
+index's `field`, `dimensions`, `metric`, `metadata` or `model`, add or rename
+an index, or change the table's `.softDelete()` field, the next call re-embeds
+the table from the top. Existing vectors are overwritten in place, never cleared
+first. Nothing else is compared, so any other change needs `restart` (below).
 
 `embed` is a function, and Lunora cannot tell which model it calls: its source
 text changes with every rebuild of your bundle, so it is not compared. The

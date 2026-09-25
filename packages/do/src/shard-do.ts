@@ -1130,13 +1130,17 @@ const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
     }
 };
 
+const DIGITS = /^\d+$/u;
+
 /**
  * Read a backfill admin op's `maxPages`: absent when the caller gave none (each
  * op picks its own default), a 400 `rejection` for anything that is not a whole
- * number in `[1, ceiling]`. Strict because a lenient read of an operator's typo does the
- * expensive thing quietly — `{"maxPages":"20 pages"}`, `0` and `-1` used to read
- * as "run to completion" on exactly the tables that cannot be walked in one
- * request. Same reason the retention knobs parse strictly (`env-int.ts`).
+ * number in `[1, ceiling]` — given as an integer or as a string of digits, nothing
+ * else (`true`, `[5]`, `" 5 "`, `2.5`). Strict because a lenient read of an
+ * operator's typo does the expensive thing quietly — `{"maxPages":"20 pages"}`,
+ * `0` and `-1` used to read as "run to completion" on exactly the tables that
+ * cannot be walked in one request. Same reason the retention knobs parse strictly
+ * (`env-int.ts`).
  */
 const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: number): { maxPages?: number } | { rejection: Response } => {
     const raw = args["maxPages"];
@@ -1145,15 +1149,21 @@ const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: numbe
         return {};
     }
 
-    const parsed = typeof raw === "number" ? raw : Number(raw);
+    let parsed = Number.NaN;
 
-    if (!Number.isFinite(parsed) || parsed < 1 || parsed > ceiling) {
+    if (typeof raw === "number") {
+        parsed = raw;
+    } else if (typeof raw === "string" && DIGITS.test(raw)) {
+        parsed = Number(raw);
+    }
+
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > ceiling) {
         const range = Number.isFinite(ceiling) ? `an integer from 1 to ${String(ceiling)}` : "a positive integer";
 
         return { rejection: jsonResponse({ error: { code: "BAD_REQUEST", message: `${op}: maxPages must be ${range}, or omitted` } }, 400) };
     }
 
-    return { maxPages: Math.floor(parsed) };
+    return { maxPages: parsed };
 };
 
 const UNDELIVERED_BASELINE = "<undelivered>";
@@ -1822,6 +1832,14 @@ abstract class ShardDO {
      * Cleared when the chain drains back to its newest link.
      */
     private afterCommitStalled: boolean = false;
+
+    /**
+     * True while a `backfillVectors` call runs on this shard. A second call would
+     * read the same cursor before the first records progress and embed the same
+     * page again, so it is refused instead. `backfillSearch` needs no guard: it
+     * runs synchronously, so two calls cannot interleave.
+     */
+    private vectorBackfillRunning: boolean = false;
 
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
@@ -3584,6 +3602,13 @@ abstract class ShardDO {
      * This is what lets a backfill write to an external index without racing live
      * writes: its snapshot and its position on the chain are taken at the same
      * instant, so a newer write's hook always lands after it.
+     *
+     * The wait is bounded by {@link AFTER_COMMIT_WAIT_MS} from the call, like a
+     * mutation's: behind a stalled earlier link `work` may not start for as long
+     * as that link hangs. Past the bound this rejects with a retryable
+     * `SERVICE_UNAVAILABLE`, and `work` stays queued, so ordering is kept. A
+     * caller that records progress only after `work` resolves (the vector
+     * backfill's cursor) therefore retries the same snapshot next time.
      */
     protected async runOrderedAfterWrites<T, U>(read: () => T, work: (value: T) => Promise<U>): Promise<U> {
         // Settles with the error rather than rejecting: nothing awaits it until the
@@ -3595,20 +3620,34 @@ abstract class ShardDO {
         const outcome = new Promise<Outcome>((resolve) => {
             settle = resolve;
         });
+        // Armed before the transaction, so a wait `runInTransaction` already
+        // spent on a stalled chain counts toward this one bound, not a second.
+        const finished = waitForAfterCommit(outcome.then(() => undefined));
 
-        await this.runInTransaction(async () => {
-            const value = read();
+        try {
+            await this.runInTransaction(async () => {
+                const value = read();
 
-            // Inside the transaction this only queues the work; it runs once the
-            // transaction commits, as this transaction's link on the chain.
-            await this.deferAfterCommit(async () => {
-                try {
-                    settle({ ok: true, value: await work(value) });
-                } catch (error) {
-                    settle({ error, ok: false });
-                }
+                // Inside the transaction this only queues the work; it runs once the
+                // transaction commits, as this transaction's link on the chain.
+                await this.deferAfterCommit(async () => {
+                    try {
+                        settle({ ok: true, value: await work(value) });
+                    } catch (error) {
+                        settle({ error, ok: false });
+                    }
+                });
             });
-        });
+        } catch (error) {
+            // Rolled back: the work was dropped with the queue, so nothing else settles it.
+            settle({ error, ok: false });
+
+            throw error;
+        }
+
+        if (!(await finished)) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", "ordered work did not finish in time: an earlier after-commit hook is stalled; retry later");
+        }
 
         const settled = await outcome;
 
@@ -8786,7 +8825,22 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "backfillVectors: restart must be a boolean" } }, 400);
         }
 
-        const result = await this.runShardVectorBackfill({ ...budget, ...(rawRestart === true ? { restart: true } : {}) });
+        if (this.vectorBackfillRunning) {
+            return jsonResponse(
+                { error: { code: "CONFLICT", message: "backfillVectors: a backfill is already running on this shard; retry once it returns" } },
+                409,
+            );
+        }
+
+        this.vectorBackfillRunning = true;
+
+        let result: VectorBackfillProgress;
+
+        try {
+            result = await this.runShardVectorBackfill({ ...budget, ...(rawRestart === true ? { restart: true } : {}) });
+        } finally {
+            this.vectorBackfillRunning = false;
+        }
 
         this.recordAudit("backfillVectors", {
             detail: { done: result.done, error: result.error, failed: result.failed, pages: result.pages, restart: rawRestart === true, rows: result.rows },

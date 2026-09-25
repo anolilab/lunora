@@ -554,6 +554,34 @@ describe("createVectorSyncHook", () => {
         expect(vectors.deletes).toEqual([["messages-body", ["m1"]]]);
     });
 
+    it("purges instead of embedding when the source text is empty or whitespace, for both index shapes", async () => {
+        expect.assertions(3);
+
+        const vectors = fakeVectorSearch();
+        const embedCalls: string[] = [];
+        const counting = async (value: string): Promise<ReadonlyArray<number>> => {
+            embedCalls.push(value);
+
+            return [value.length];
+        };
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed: counting, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-title": { embed: counting, select: (row) => String(row.title), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "", title: " \n\t " }, id: "d1", op: "update", table: "docs" });
+
+        // Nothing reaches the embedder — an empty input is refused there on every
+        // attempt — and neither index keeps a vector for text the row no longer has.
+        expect(embedCalls).toHaveLength(0);
+        expect(vectors.upserts).toHaveLength(0);
+        expect(vectors.deletes).toStrictEqual([
+            ["docs-body", ["d1"]],
+            ["docs-title", ["d1"]],
+        ]);
+    });
+
     it("threads the namespace onto upserts for tenant isolation", async () => {
         expect.assertions(1);
 
