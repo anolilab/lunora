@@ -281,6 +281,8 @@ describe("createTracedFetch error-message redaction", () => {
 });
 
 describe("span attribute redaction", () => {
+    const ORDER_ID = "3f2a1c7e-9b1d-4c2a-8e2f-1a2b3c4d5e6f";
+
     it("masks credential attributes on a ctx.trace span by default", async () => {
         expect.assertions(1);
 
@@ -291,10 +293,20 @@ describe("span attribute redaction", () => {
             (_span, handle) => {
                 handle.setAttribute("stripeSecretKey", "sk_live_x");
             },
-            { accessToken: "tok", plan: "pro", tokenCount: 42 },
+            { accessToken: "tok", id: 7, "order.id": ORDER_ID, plan: "pro", tokenCount: 42, url: "https://api.example.com/v1" },
         );
 
-        expect(recorded[0]!.attributes).toStrictEqual({ accessToken: "<REDACTED>", plan: "pro", stripeSecretKey: "<REDACTED>", tokenCount: 42 });
+        // Only credentials are masked: ids and urls are what a trace is read by,
+        // and the request log's PII rules would erase them.
+        expect(recorded[0]!.attributes).toStrictEqual({
+            accessToken: "<REDACTED>",
+            id: 7,
+            "order.id": ORDER_ID,
+            plan: "pro",
+            stripeSecretKey: "<REDACTED>",
+            tokenCount: 42,
+            url: "https://api.example.com/v1",
+        });
     });
 
     it("keeps raw attributes when captureRaw is true", async () => {

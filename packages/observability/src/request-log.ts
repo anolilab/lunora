@@ -38,7 +38,7 @@
 import { fingerprintError } from "@lunora/fingerprint";
 import type { SqlExec } from "@lunora/shard-engine";
 import type { Rules } from "@visulima/redact";
-import { createRedactor, standardRules } from "@visulima/redact";
+import { createRedactor, credentialRules, standardRules } from "@visulima/redact";
 
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
@@ -272,8 +272,7 @@ const maskCredential = (value: unknown): unknown => (typeof value === "number" |
  */
 const CREDENTIAL_ASSIGNMENT = /(?:password|passwd|secret|token|api[-_]?key|private[-_]?key|credential|cookie)[\w-]*=[^\s&;,"']+/gi;
 
-const REDACT_RULES: Rules = [
-    ...standardRules,
+const LUNORA_CREDENTIAL_RULES: Rules = [
     ...CREDENTIAL_KEY_FRAGMENTS.map((fragment) => {
         return { key: `*${fragment}*`, replacement: maskCredential };
     }),
@@ -284,7 +283,26 @@ const REDACT_RULES: Rules = [
     },
 ];
 
-const redactValue = createRedactor(REDACT_RULES);
+const redactValue = createRedactor([...standardRules, ...LUNORA_CREDENTIAL_RULES]);
+
+const redactSecretValue = createRedactor([...credentialRules, ...LUNORA_CREDENTIAL_RULES]);
+
+/**
+ * Mask credentials only — the key and `name=value` rules above plus
+ * `@visulima/redact`'s `credentialRules` (bearer / JWT / provider-key shapes) —
+ * leaving PII alone. For span attributes: {@link redactArgs}' PII rules key on
+ * names like `id`, `url` and `date` and mask uuids, so they would erase the very
+ * `order.id` / `url` attributes a trace is read by, while a secret in a span is
+ * what must never reach a third-party collector. `captureRaw` as in
+ * {@link redactArgs}.
+ */
+const redactSecrets = (value: unknown, captureRaw = false): unknown => {
+    if (captureRaw || value === null || value === undefined) {
+        return value;
+    }
+
+    return redactSecretValue(value);
+};
 
 /**
  * Redact the secrets / PII out of a value before it reaches the durable log or a
@@ -1051,6 +1069,7 @@ export {
     readErrorIssues,
     readRequestLog,
     redactArgs,
+    redactSecrets,
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,

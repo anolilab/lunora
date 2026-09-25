@@ -20,7 +20,7 @@ import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { buildTraceparent, LUNORA_ATTR, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
 import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
-import { redactArgs } from "./request-log";
+import { redactArgs, redactSecrets } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -623,10 +623,11 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     assignBoundedAttributes(merged, normalized);
                     assignBoundedAttributes(merged, collected.attributes);
 
-                    // Redacted like `ctx.log` fields: `ctx.trace(name, fn, args)`
-                    // and `span.setAttributes(...)` take whatever the handler holds,
-                    // and a span is what ships to a third-party collector.
-                    const attributes = captureRaw ? merged : (redactArgs(merged) as LogFields);
+                    // Credentials masked: `ctx.trace(name, fn, args)` and
+                    // `span.setAttributes(...)` take whatever the handler holds,
+                    // and a span is what ships to a third-party collector. PII
+                    // rules are deliberately not applied — see `redactSecrets`.
+                    const attributes = redactSecrets(merged, captureRaw) as LogFields;
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];
@@ -960,9 +961,9 @@ export const dispatchRootSpan = (input: {
     userId: string | undefined;
 }): SpanEvent => {
     const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
-    // Redacted like `ctx.log` fields and `ctx.trace` attributes: `ctx.span`
-    // writes whatever the handler holds onto the span a collector receives.
-    const attributes = captureRaw ? (collected?.attributes ?? {}) : (redactArgs(collected?.attributes ?? {}) as LogFields);
+    // Credentials masked, like `ctx.trace` attributes: `ctx.span` writes
+    // whatever the handler holds onto the span a collector receives.
+    const attributes = redactSecrets(collected?.attributes ?? {}, captureRaw) as LogFields;
 
     return {
         ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
