@@ -22,6 +22,9 @@ import createSqliteExec from "./_helpers/node-sqlite";
 /** An error the way an HTTP-backed embedder reports one: the response status rides on it. */
 const httpError = (status: number): Error => Object.assign(new Error(`embedder answered ${String(status)}`), { status });
 
+/** How a `"switch"` row fails on the next call: with no status (a strike) or as a 503 (the service). */
+let switchFailure: "opaque" | "service";
+
 const embed = async (value: string): Promise<ReadonlyArray<number>> => {
     if (value === "the model rejects this") {
         throw new Error("embedding refused");
@@ -38,6 +41,11 @@ const embed = async (value: string): Promise<ReadonlyArray<number>> => {
 
     if (value === "opaque") {
         throw new Error("model failed");
+    }
+
+    // Fails the way `switchFailure` says, so one test can interleave failure kinds.
+    if (value === "switch") {
+        throw switchFailure === "service" ? httpError(503) : new Error("model failed");
     }
 
     return [value.length];
@@ -115,6 +123,7 @@ describe("backfillVectorIndexes", () => {
     beforeEach(() => {
         harness = createSqliteExec();
         n = 0;
+        switchFailure = "opaque";
     });
 
     afterEach(() => {
@@ -265,6 +274,43 @@ describe("backfillVectorIndexes", () => {
 
         expect(outcomes.filter((outcome) => outcome.error !== undefined)).toHaveLength(5);
         expect(outcomes.reduce((total, outcome) => total + outcome.rows, 0)).toBe(0);
+    });
+
+    it.each([401, 403])("holds the cursor on a %i, which is the shared credential failing, not the rows", async (status) => {
+        expect.assertions(2);
+
+        const { run } = await deploy(PRE_EXISTING, {
+            bodyOf: (index) => (index < VECTOR_BACKFILL_PAGE_ROWS ? `http ${String(status)}` : `body ${String(index)}`),
+        });
+        const outcomes = [];
+
+        for (let call = 0; call < 4; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- consecutive calls, as an operator retries
+            outcomes.push(await run({ maxPages: 10 }));
+        }
+
+        // Never written off: four calls, four errors, nothing recorded as failed or walked.
+        expect(outcomes.filter((outcome) => outcome.error !== undefined)).toHaveLength(4);
+        expect(outcomes.reduce((total, outcome) => total + outcome.failed + outcome.rows, 0)).toBe(0);
+    });
+
+    it("does not add up strikes across a service failure: only consecutive failures write a page off", async () => {
+        expect.assertions(4);
+
+        const { run } = await deploy(3, { bodyOf: () => "switch" });
+
+        await expect(run()).resolves.toMatchObject({ error: "model failed", failed: 0 });
+        await expect(run()).resolves.toMatchObject({ error: "model failed", failed: 0 });
+
+        // An outage in between breaks the run of strikes.
+        switchFailure = "service";
+        await run();
+
+        // So this is strike one again, not the third: the page must still be held.
+        switchFailure = "opaque";
+
+        await expect(run()).resolves.toMatchObject({ error: "model failed", failed: 0 });
+        await expect(run()).resolves.toMatchObject({ error: "model failed", failed: 0 });
     });
 
     it("skips a page that fails as a whole on three consecutive calls, records its rows, and reaches the next table", async () => {

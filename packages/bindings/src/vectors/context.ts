@@ -661,7 +661,9 @@ const classifyFailure = (error: unknown): "row" | "service" | "unknown" => {
     const code = typeof status === "number" ? status : statusCode;
 
     if (typeof code === "number") {
-        if (code >= 500 || code === 408 || code === 429) {
+        // 401/403 are the shared credential or permission failing, not the
+        // row: writing them off would skip every row a bad token touched.
+        if (code >= 500 || code === 401 || code === 403 || code === 408 || code === 429) {
             return "service";
         }
 

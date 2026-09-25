@@ -198,14 +198,22 @@ const strike = (
 ): { error: string } | { failedIds: string[]; page: VectorPage } => {
     const message = error instanceof Error ? error.message : String(error);
 
-    if (isLunoraError(error) && error.code === "SERVICE_UNAVAILABLE") {
-        return { error: message };
-    }
-
     // Only strikes at THIS cursor under THIS profile count: after a profile
     // change the walk restarts at the top while the row still holds the old walk's.
     const state = readBackfillState(sql, VECTOR_BACKFILL_STATE_TABLE, table);
-    const strikes = (state.profile === profile && state.cursor === cursor ? readStrikes(sql, table) : 0) + 1;
+    const saved = state.profile === profile && state.cursor === cursor ? readStrikes(sql, table) : 0;
+
+    if (isLunoraError(error) && error.code === "SERVICE_UNAVAILABLE") {
+        // It also breaks the run: strikes count CONSECUTIVE failures, so the
+        // failures on either side of an outage must not add up to a write-off.
+        if (saved > 0) {
+            writeState(sql, table, cursor, false, profile, 0);
+        }
+
+        return { error: message };
+    }
+
+    const strikes = saved + 1;
 
     if (strikes < VECTOR_BACKFILL_MAX_STRIKES) {
         writeState(sql, table, cursor, false, profile, strikes);
