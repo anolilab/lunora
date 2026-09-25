@@ -93,6 +93,7 @@ const createAdminAuthFakeClient = (): AdminAuthFakeClient => {
         listAuthUsers,
         mutation,
         onAuthTokenChange,
+        onIdentityChange: () => () => undefined,
         query,
         setAuthToken,
         subscribe,

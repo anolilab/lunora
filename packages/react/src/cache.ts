@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
 
@@ -21,6 +21,34 @@ interface RegistryEntry {
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
+
+/**
+ * Take a query's value off screen.
+ *
+ * `setQueryData(key, undefined)` cannot do this: TanStack v5 ignores an
+ * `undefined` update, so the previous value stays cached, and with
+ * `staleTime: Infinity` nothing refetches it. The client pushes `undefined` when
+ * it blanks a subscription, most importantly when a sign-out or user switch
+ * retires the previous user's session, so ignoring it kept that user's rows on
+ * screen for the next one.
+ *
+ * Not `resetQueries` either: a reset restores the query's initial state, which
+ * is the previous identity's hydrated cache value when `initialData` seeded it.
+ * A snapshot still in flight is cancelled too: it was requested under the
+ * credential that just went away.
+ */
+const blankQuery = (query: Query | undefined): void => {
+    if (query === undefined) {
+        return;
+    }
+
+    // Never rejects: `cancel` swallows the fetch's own cancellation error.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget: the promise only settles the cancelled fetch
+    query.cancel({ silent: true });
+
+    // eslint-disable-next-line unicorn/no-null -- TanStack's `QueryState.error` is `TError | null`; `null` is its "no error" value
+    query.setState({ ...query.state, data: undefined, dataUpdatedAt: 0, error: null, fetchStatus: "idle", status: "pending" });
+};
 
 /** A push-count sample held open across a `queryFn`'s fetch. */
 interface SnapshotSample {
@@ -156,6 +184,32 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
+     * Clear `queryClient`'s `["lunora", …]` entries whenever the client retires
+     * the previous identity's session (see `LunoraClient.onIdentityChange`).
+     * Returns the unsubscribe.
+     *
+     * The client blanks only the subscriptions still open. An entry kept for an
+     * unmounted query (the 5-minute `gcTime`) hears nothing, and a remount would
+     * render it with no refetch (`staleTime: Infinity`), showing the previous
+     * user's rows to the next one. Entries nothing uses are removed; entries
+     * still in use (an observer, or a hook fed through this registry) are blanked
+     * so their observers stay attached.
+     */
+    public clearOnIdentityChange(queryClient: QueryClient): Unsubscribe {
+        return this.client.onIdentityChange(() => {
+            const cache = queryClient.getQueryCache();
+
+            for (const query of cache.findAll({ queryKey: ["lunora"] })) {
+                if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
+                    cache.remove(query);
+                } else {
+                    blankQuery(query);
+                }
+            }
+        });
+    }
+
+    /**
      * Attach a consumer to the live subscription for `queryKey`. The first
      * attach opens the underlying WS subscription; subsequent attaches reuse
      * it (refcount-bumped). Returns the detach function — call it exactly once
@@ -184,6 +238,13 @@ class LunoraSubscriptionRegistry {
                     args,
                     (value) => {
                         this.pushes.set(key, (this.pushes.get(key) ?? 0) + 1);
+
+                        if (value === undefined) {
+                            blankQuery(queryClient.getQueryCache().find({ exact: true, queryKey }));
+
+                            return;
+                        }
+
                         queryClient.setQueryData(queryKey, value);
                     },
                     {

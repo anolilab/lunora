@@ -1321,6 +1321,9 @@ class LunoraClient {
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
     private readonly tokenExpiredListeners = new Listeners();
 
+    /** Subscribers notified when the previous identity's session is retired (see `onIdentityChange`). */
+    private readonly identityChangeListeners = new Listeners();
+
     /** Token hash the last durable-replay auth refusal fired `onTokenExpired` for — see `shouldRequeueReplayFailure`. */
     private authRefusalNotifiedFor: string | undefined;
 
@@ -1922,6 +1925,22 @@ class LunoraClient {
      */
     public onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe {
         return this.authTokenListeners.add(listener);
+    }
+
+    /**
+     * Subscribe to a user switch or sign-out: fired after {@link setAuthToken}
+     * retires the previous identity's session, i.e. every live subscription has
+     * just been blanked to `undefined` and its socket closed. Not fired when an
+     * identity is first established from signed-out (nothing is retired), nor
+     * when a subject is attached to the same credential.
+     *
+     * For caches layered on top of the client. A subscriber only hears the
+     * blank for queries it still subscribes to, so a cache that keeps values for
+     * unmounted queries must drop them here, or the next user can read the
+     * previous user's rows from it.
+     */
+    public onIdentityChange(listener: () => void): Unsubscribe {
+        return this.identityChangeListeners.add(listener);
     }
 
     /**
@@ -4446,6 +4465,7 @@ class LunoraClient {
         this.authTokenListeners.clear();
         this.statusListeners.clear();
         this.tokenExpiredListeners.clear();
+        this.identityChangeListeners.clear();
         this.mutationSettledListeners.clear();
         this.pendingChangeListeners.clear();
         this.whisperHandlers.clear();
@@ -8032,6 +8052,9 @@ class LunoraClient {
         }
 
         this.bounceShardSockets();
+
+        // Last: a listener reads the retired state (every value blanked).
+        this.identityChangeListeners.emit();
     }
 
     /**
