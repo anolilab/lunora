@@ -65,6 +65,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/bindings": "1.0.0-alpha.68",
+        "@lunora/container": "1.0.0-alpha.56",
         "@lunora/d1": "1.0.0-alpha.129",
         "@lunora/queue": "1.0.0-alpha.62",
         "@lunora/shard-engine": "1.0.0-alpha.79",

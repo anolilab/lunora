@@ -3969,6 +3969,9 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../container
       '@lunora/d1':
         specifier: workspace:*
         version: link:../d1

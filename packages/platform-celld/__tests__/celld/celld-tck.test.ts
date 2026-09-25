@@ -9,24 +9,19 @@
  * simulation, a SchedulerHost, a terminal dispose) are skipped here too, with
  * the suite's own reason.
  *
- * The binary is `LUNORA_CELLD_BIN`, or `celld` on `PATH`. celld bundles the
- * worker with the `esbuild` it finds on `PATH`, which this file points at the
- * package's own devDependency.
+ * The binary is `LUNORA_CELLD_BIN`, or `celld` on `PATH` (see `celld-process.ts`).
  */
-import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
-import { rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import type { CelldDev } from "./celld-process";
+import { startCelldDev, stopCelldDev } from "./celld-process";
 import type { Factories } from "./tck-legs";
 import { collectLegs } from "./tck-legs";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_BIN = join(HARNESS_DIR, "..", "..", "node_modules", ".bin");
 
 type LegResult = { message?: string; status: "failed" | "passed" | "skipped" };
 
@@ -40,45 +35,8 @@ const unusedFactories = {
     },
 } as unknown as Factories;
 
-const freePort = async (): Promise<number> =>
-    new Promise((resolve, reject) => {
-        const server = createServer();
-
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-
-            server.close(() => {
-                resolve(typeof address === "object" && address !== null ? address.port : 0);
-            });
-        });
-    });
-
 /** One `celld dev` node for the whole file, serving `tck-worker.ts`. */
-const fleet = { output: "", origin: "", process: undefined as ChildProcess | undefined };
-
-const waitUntilServing = async (deadline: number): Promise<void> => {
-    while (Date.now() < deadline) {
-        if (fleet.process?.exitCode !== null) {
-            throw new Error(`celld exited before serving (code ${String(fleet.process?.exitCode)}):\n${fleet.output}`);
-        }
-
-        try {
-            // The worker answers 404 off its two routes, which is all readiness needs.
-            // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-            await fetch(`${fleet.origin}/ready`);
-
-            return;
-        } catch {
-            // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-            await new Promise((resolve) => {
-                setTimeout(resolve, 250);
-            });
-        }
-    }
-
-    throw new Error(`celld did not serve within the deadline:\n${fleet.output}`);
-};
+const fleet = { node: undefined as CelldDev | undefined, origin: "" };
 
 const runLeg = async (suite: "engine" | "platform", index: number): Promise<LegResult> => {
     const response = await fetch(`${fleet.origin}/leg?suite=${suite}&index=${String(index)}`);
@@ -88,26 +46,12 @@ const runLeg = async (suite: "engine" | "platform", index: number): Promise<LegR
 
 describe("celld conformance run", () => {
     beforeAll(async () => {
-        const port = await freePort();
-
-        fleet.origin = `http://127.0.0.1:${String(port)}`;
-        fleet.process = spawn(process.env.LUNORA_CELLD_BIN ?? "celld", ["dev", HARNESS_DIR, "--port", String(port), "--clean", "--no-watch"], {
-            env: { ...process.env, PATH: `${PACKAGE_BIN}:${process.env.PATH ?? ""}` },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        fleet.process.stdout?.on("data", (chunk: Buffer) => {
-            fleet.output += chunk.toString();
-        });
-        fleet.process.stderr?.on("data", (chunk: Buffer) => {
-            fleet.output += chunk.toString();
-        });
-
-        await waitUntilServing(Date.now() + 90_000);
+        fleet.node = await startCelldDev(HARNESS_DIR);
+        fleet.origin = fleet.node.url;
     });
 
     afterAll(async () => {
-        fleet.process?.kill("SIGTERM");
-        await rm(join(HARNESS_DIR, ".celld"), { force: true, recursive: true });
+        await stopCelldDev(fleet.node, HARNESS_DIR);
     });
 
     describe.for(["platform", "engine"] as const)("%s contract suite on celld", (suite) => {

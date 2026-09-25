@@ -541,11 +541,11 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * `websocketHibernation` are also exercised by the conformance TCK against a
  * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project),
  * which also drives D1, KV, R2, Queues, Workflows and Cron Triggers through
- * Lunora's own adapters, and a two-node fleet test covers routing and crash
- * takeover; `containers` rests on the docs alone. celld's own rule is that an
- * unsupported configuration or API must fail at deploy or first use, so
- * "Partial" there means a listed set of gaps rather than silent degradation;
- * the gaps that bite Lunora are named per key below.
+ * Lunora's own adapters and runs a `LunoraContainer`, and a two-node fleet
+ * test covers routing, crash takeover and rebalancing. celld's own rule is
+ * that an unsupported configuration or API must fail at deploy or first use,
+ * so "Partial" there means a listed set of gaps rather than silent
+ * degradation; the gaps that bite Lunora are named per key below.
  *
  * v0.3.0 and v0.4.0 closed the blocker this matrix was first written around.
  * `state.storage.sql` is implemented, so the shard engine mounts and everything
@@ -586,7 +586,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         containers: {
             level: "native",
-            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `@cloudflare/containers` runs as published. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral); `inspect()`, snapshots and outbound interception reject; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
+            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy refuses to start (`interceptAllOutboundHttp()` is not implemented in celld), as do `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
         },
         cronTriggers: {
             level: "native",
