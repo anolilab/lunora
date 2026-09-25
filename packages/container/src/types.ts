@@ -251,9 +251,10 @@ interface ContainerConfig {
      * `STRIPE_KEY` inside the container. Unlike {@link ContainerConfig.secrets}
      * (plain Worker text secrets), this pulls from a `secrets_store_secrets`
      * binding. A name already used by `env`/`secrets` is rejected at authoring
-     * time; a missing binding or unreadable value fails the start. Resolved on
-     * every start path; a per-instance `start({ envVars })` is merged over it,
-     * as over `env`/`secrets`, the per-instance value winning on a clash. (Upstream
+     * time; a missing binding or unreadable value fails the start. Applies
+     * to the default start (the `ctx.containers` proxy path and a bare
+     * `start()`); a per-instance `start({ envVars })` replaces the env set
+     * wholesale, as it does for `env`/`secrets`. (Upstream
      * cloudflare/containers#96.)
      */
     secretsStore?: Readonly<Record<string, string>>;

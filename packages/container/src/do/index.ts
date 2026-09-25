@@ -234,21 +234,24 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     /**
      * Explicit start (`ctx.containers.<name>.get(id).start()`). Resolves the
      * `secretsStore` bindings into `envVars` first, mirroring
-     * {@link containerFetch}. A per-instance `start({ envVars })` is MERGED over
-     * the declared env (static `env`, `secrets`, and the resolved Secrets Store
-     * values), per-instance values winning on a clash. The base class would
-     * replace the whole set, starting the container without its declared
-     * credentials.
+     * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
+     * env set wholesale (base behavior), so the injected values only apply to a
+     * bare `start()` — same as the static `env`/`secrets`. When the caller
+     * supplies its own `envVars` we skip resolution entirely: those values would
+     * be discarded anyway, so a missing/unreadable binding shouldn't fail a start
+     * that never uses them.
      */
     public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
-        const [options, ...rest] = args;
+        const [options] = args;
 
-        await this.resolveSecretsStoreEnv();
+        if (options?.envVars === undefined) {
+            await this.resolveSecretsStoreEnv();
+        }
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
 
-        await (options?.envVars === undefined ? super.start(...args) : super.start({ ...options, envVars: { ...this.envVars, ...options.envVars } }, ...rest));
+        await super.start(...args);
 
         await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
     }

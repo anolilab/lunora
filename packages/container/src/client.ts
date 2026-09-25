@@ -25,7 +25,13 @@ interface ContainerStartOptions {
     enableInternet?: boolean;
     /** Override the container entrypoint. */
     entrypoint?: string[];
-    /** Per-instance environment, merged over the definition's `env`/secrets. */
+
+    /**
+     * Per-instance environment. REPLACES the definition's `env`, `secrets` and
+     * `secretsStore` for this start (Secrets Store resolution is skipped), so
+     * pass every variable the container needs. This is also how to start an
+     * untrusted sandbox without the declared credentials: `start({ envVars: {} })`.
+     */
     envVars?: Record<string, string>;
     /** Metadata labels attached for metrics/observability. */
     labels?: Record<string, string>;

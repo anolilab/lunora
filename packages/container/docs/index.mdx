@@ -547,8 +547,11 @@ export const worker = defineContainer({
 A name that collides with `env`/`secrets`, or a binding missing from the Worker
 env, is rejected (the collision at authoring time, the missing binding at start):
 the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
-is merged over `env`, `secrets` and the resolved Secrets Store values; the
-per-instance value wins on a clash.
+replaces the env set wholesale and skips Secrets Store resolution entirely, so
+the injected values apply only to implicit starts or a bare `start()`. That is
+deliberate: `start({ envVars: {} })` (or with only what the job needs) is how
+you boot an untrusted or model-driven exec sandbox without the credentials the
+definition declares. Pass every variable the container needs when you use it.
 
 Both `env` and `secrets` are **runtime** values, available when the container
 starts. For **build-time** values (`docker build --build-arg`, exposed to the
