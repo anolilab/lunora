@@ -325,6 +325,8 @@ interface TableVectorIndexLike {
 }
 
 interface TableDefinitionLike {
+    /** `.softDelete()` marker column. A row whose marker is set is hidden from `ctx.db`, so it must have no vector. */
+    softDeleteMode?: { field: string };
     vectorIndexes?: ReadonlyArray<TableVectorIndexLike>;
 }
 
@@ -470,7 +472,18 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
         // Every index sourced from this table, by name — the delete fan-out.
         const allIndexNames = [...inlineIndexes.map((index) => index.name), ...standaloneIndexes.map(([name]) => name)];
 
-        if (event.op === "delete") {
+        // A soft-deleted row is hidden from `ctx.db`, so it must not be findable
+        // through its vector either — `query` would hand back its id and metadata.
+        // Soft delete itself arrives as `op: "delete"`, but the row stays writable:
+        // a later `patch`/`replace` arrives as `update` carrying the still-set
+        // marker, and upserting it would put the hidden row back into search. So
+        // decide from the ROW, not the op: any write that leaves the marker set is
+        // a delete, whichever order the writes come in. `restore()` clears the
+        // marker, which is what re-embeds it.
+        const softField = tableDefinition?.softDeleteMode?.field;
+        const hidden = softField !== undefined && event.doc?.[softField] !== undefined && event.doc[softField] !== null;
+
+        if (event.op === "delete" || hidden) {
             // Each Vectorize index is independent: a delete on index A can't
             // observe a delete on index B, so the per-index calls run in
             // parallel rather than serially.
