@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.84...@lunora/shard-engine@1.0.0-alpha.85) (2026-09-25)
+
+### Bug Fixes
+
+* **vectors:** backfill follow-ups for [#818](https://github.com/anolilab/lunora/issues/818) and [#820](https://github.com/anolilab/lunora/issues/820) ([#826](https://github.com/anolilab/lunora/issues/826)) ([f6f8e9c](https://github.com/anolilab/lunora/commit/f6f8e9c222c7a6b9f968fb24144c7f364c3ac513))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.73
+
 ## @lunora/shard-engine [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.83...@lunora/shard-engine@1.0.0-alpha.84) (2026-09-25)
 
 ### Bug Fixes
