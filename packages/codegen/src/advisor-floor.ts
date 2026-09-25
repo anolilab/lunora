@@ -54,7 +54,7 @@ const applyAdvisorFloor = (projectRoot: string, advisories: ReadonlyArray<Findin
             ...advisories,
             invalidFloor(
                 minSeverity === undefined
-                    ? "`advisor.minSeverity` is not a string literal codegen can read without evaluating the config."
+                    ? "`advisor.minSeverity` is not a string literal codegen can read without evaluating the config: a computed value or key, or a spread that could set or override it."
                     : `\`advisor.minSeverity\` is "${minSeverity}", which is not one of "info", "warn" or "error".`,
             ),
         ];

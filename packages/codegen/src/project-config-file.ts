@@ -251,15 +251,23 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
     }
 
     const properties = value.getProperties();
-    const property = properties
-        .filter((candidate) => TsNode.isPropertyAssignment(candidate) || TsNode.isShorthandPropertyAssignment(candidate))
-        .find((candidate) => propertyKey(candidate) === "minSeverity");
+    const plain = properties.filter(
+        (candidate): candidate is PropertyAssignment | ShorthandPropertyAssignment =>
+            (TsNode.isPropertyAssignment(candidate) && !TsNode.isComputedPropertyName(candidate.getNameNode())) ||
+            TsNode.isShorthandPropertyAssignment(candidate),
+    );
 
-    // A spread, getter or method may be what sets it, and cannot be read.
+    // A spread (before or after the literal), a getter, a method or a computed
+    // key may be what sets `minSeverity`, or override the literal this would
+    // read. A wrong floor hides findings, so any of them makes it unreadable.
+    if (plain.length !== properties.length) {
+        return { advisor: { unreadable: true } };
+    }
+
+    const property = plain.find((candidate) => propertyKey(candidate) === "minSeverity");
+
     if (property === undefined) {
-        return properties.every((candidate) => TsNode.isPropertyAssignment(candidate) || TsNode.isShorthandPropertyAssignment(candidate))
-            ? { advisor: {} }
-            : { advisor: { unreadable: true } };
+        return { advisor: {} };
     }
 
     const literal = propertyLiteral(property, sourceFile);
@@ -359,9 +367,19 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     // A spread can SHADOW a literal later in the object, so the literal this
     // reader sees is not necessarily the value that wins. Reporting it anyway is
     // the one case where this reader would be actively wrong rather than merely
-    // blind, so the whole read gives up instead.
+    // blind, so the whole read gives up instead. It still says so for a
+    // declared `advisor`, whose own warning is what tells the user the floor
+    // was not applied: dropping it here left that warning silent.
     if (object.getProperties().some((property) => TsNode.isSpreadAssignment(property))) {
-        return { unreadable: true };
+        const declaresAdvisor = object.getProperties().some((property) => {
+            if (TsNode.isPropertyAssignment(property) || TsNode.isShorthandPropertyAssignment(property)) {
+                return propertyKey(property) === "advisor";
+            }
+
+            return (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) && property.getName() === "advisor";
+        });
+
+        return declaresAdvisor ? { advisor: { unreadable: true }, unreadable: true } : { unreadable: true };
     }
 
     let literals: ProjectConfigLiterals = {};

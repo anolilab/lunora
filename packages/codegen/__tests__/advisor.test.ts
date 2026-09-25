@@ -291,6 +291,15 @@ export const schema = defineSchema({
         it.each([
             ["an unknown level", `export default { advisor: { minSeverity: "loud" } };\n`, '"loud"'],
             ["a computed value", `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level } };\n`, "not a string literal"],
+            // Each of these can make the effective floor differ from any literal
+            // the parser could read, and a wrong floor hides findings.
+            ["a top-level spread", `const base = {};\nexport default { ...base, advisor: { minSeverity: "error" } };\n`, "not a string literal"],
+            [
+                "a spread after the literal",
+                `const overrides = {};\nexport default { advisor: { minSeverity: "error", ...overrides } };\n`,
+                "not a string literal",
+            ],
+            ["a computed key", `const key = "minSeverity";\nexport default { advisor: { [key]: "error" } };\n`, "not a string literal"],
         ])("reports %s and filters nothing", (_label, config, detail) => {
             expect.assertions(3);
 
