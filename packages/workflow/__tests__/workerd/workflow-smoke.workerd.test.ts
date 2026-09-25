@@ -23,6 +23,7 @@ import { BRANCH_MARKER_KEY } from "../../../../shared/branch-marker";
 import createWorkflows from "../../src/create-workflows";
 import type { WorkflowBindingLike } from "../../src/types";
 import type { SmokeParams } from "./test-worker";
+import { declineLog } from "./test-worker";
 
 const workflows = createWorkflows({ bindings: { smokeWorkflow: env.WORKFLOW_SMOKE as unknown as WorkflowBindingLike } });
 
@@ -88,4 +89,35 @@ describe("@lunora/workflow (workerd)", () => {
 
         expect(() => workflows.get("nope")).toThrow(/no workflow named "nope".*known workflows: smokeWorkflow/);
     });
+
+    // A `409 DISPATCH_IN_PROGRESS` is the shard saying the step's own earlier
+    // attempt is still running the call. Thrown out of the step, the engine
+    // charges it as a failed attempt — so a call slower than the step's retry
+    // ladder errored the instance while its work was still in flight. Handled
+    // inside the step instead, it is waited out and never touches the budget.
+    it("waits out a DISPATCH_IN_PROGRESS decline inside the step without spending its retry budget", async () => {
+        expect.hasAssertions();
+
+        const id = "decline-run-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_DECLINE, id);
+
+        declineLog.attempts.length = 0;
+        declineLog.dispatches = 0;
+
+        try {
+            // Three declines against a step allowed two retries: every attempt the
+            // engine has would be spent on a decline.
+            await env.WORKFLOW_DECLINE.create({ id, params: { declines: 3 } });
+
+            await instance.waitForStatus("complete");
+
+            await expect(instance.getOutput()).resolves.toBe("charged");
+            // COUNTS: the step body was entered once (attempt 1), and the one call
+            // it made was re-checked until the origin answered.
+            expect(declineLog.attempts).toStrictEqual([1]);
+            expect(declineLog.dispatches).toBe(4);
+        } finally {
+            await instance.dispose();
+        }
+    }, 60_000);
 });

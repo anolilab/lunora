@@ -11,6 +11,7 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
+import { DISPATCH_CLAIM_CEILING_MS, DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
@@ -59,6 +60,13 @@ const trimTrailingSlashes = (value: string): string => {
  * burn the workflow step.
  */
 const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
+
+/**
+ * Non-enumerable brand stamped on a dispatch failure whose response carried
+ * the shard's {@link DISPATCH_DECLINED_HEADER} — a claim decline, not a handler
+ * that happened to throw an error with the code `DISPATCH_IN_PROGRESS`.
+ */
+const DISPATCH_DECLINE_BRAND = Symbol("lunoraDispatchDecline");
 
 /**
  * Non-enumerable slot carrying {@link RunFunctionOptions.messageId} onto a
@@ -116,15 +124,22 @@ const getDispatchMessageId = (error: unknown): string | undefined =>
  * supplied one via {@link RunFunctionOptions.messageId}, is stamped on either
  * way for {@link getDispatchMessageId} to read back.
  */
-const toDispatchError = (label: string, status: number, rawBody: string, messageId: string | undefined): LunoraError => {
+const toDispatchError = (label: string, response: Response, rawBody: string, messageId: string | undefined): LunoraError => {
+    const { status } = response;
+
     try {
         const parsed = JSON.parse(rawBody) as { error?: unknown } | null;
         const errorBody = parsed?.error;
 
         if (typeof errorBody === "object" && errorBody !== null && typeof (errorBody as { code?: unknown }).code === "string") {
             const { code, data, message } = errorBody as { code: string; data?: unknown; message?: unknown };
+            const error = markAsDispatchFailure(new LunoraError(code, typeof message === "string" ? message : undefined, { data, status }), messageId);
 
-            return markAsDispatchFailure(new LunoraError(code, typeof message === "string" ? message : undefined, { data, status }), messageId);
+            if (response.headers.get(DISPATCH_DECLINED_HEADER) === "1") {
+                Object.defineProperty(error, DISPATCH_DECLINE_BRAND, { value: true });
+            }
+
+            return error;
         }
     } catch {
         // Not JSON / not the expected envelope — fall through to the generic error.
@@ -159,7 +174,11 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
  * decides a 409 conflict is deterministic. A decline treated as final would ack
  * the work, and a first attempt that then died would mean it never ran.
  */
-const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_IN_PROGRESS", "DISPATCH_UNAUTHENTICATED"]);
+const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set([DISPATCH_IN_PROGRESS, "DISPATCH_UNAUTHENTICATED"]);
+
+/** True when `error` was rebuilt by {@link toDispatchError} from a real dispatch envelope (it carries {@link DISPATCH_FAILURE_BRAND}). */
+const isDispatchFailure = (error: unknown): error is LunoraError =>
+    isLunoraError(error) && (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true;
 
 /**
  * True when `error` is a {@link LunoraError} {@link toDispatchError} rebuilt
@@ -175,10 +194,66 @@ const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_IN
  * would be misclassified as non-retryable merely for sharing a status.
  */
 const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
-    isLunoraError(error) &&
-    (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true &&
-    DETERMINISTIC_DISPATCH_STATUSES.has(error.status) &&
-    !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
+    isDispatchFailure(error) && DETERMINISTIC_DISPATCH_STATUSES.has(error.status) && !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
+
+/**
+ * True when `error` is the shard's claim decline: the id this call carries is
+ * already running there. It is never a failure of the call; once that run
+ * settles, the same id is served from the replay cache. A consumer waits it
+ * out, bounded by {@link DISPATCH_CLAIM_CEILING_MS}, and must never treat it
+ * as done.
+ *
+ * Keyed on the {@link DISPATCH_DECLINED_HEADER} the claim path sets, not on the
+ * `DISPATCH_IN_PROGRESS` code: the shard echoes a handler-thrown error's code,
+ * so an action that forwards a nested decline would otherwise make its own
+ * caller re-run it for fifteen minutes.
+ */
+const isDispatchDecline = (error: unknown): error is LunoraError =>
+    isDispatchFailure(error) && (error as { [DISPATCH_DECLINE_BRAND]?: unknown })[DISPATCH_DECLINE_BRAND] === true;
+
+/**
+ * How long a queue consumer delays the retry of a message whose dispatch was
+ * declined, in the seconds `message.retry` takes: the claim ceiling. Queues
+ * have no uncounted retry, so a decline costs one attempt; waiting the ceiling
+ * out is what keeps it to one per claim, because by then the claim that
+ * declined the message is gone (released with a cached result, or stale and
+ * run over). Shared by `@lunora/queue` and `@lunora/scheduler`'s queue
+ * workpool so both apply one policy.
+ */
+const DISPATCH_DECLINE_RETRY_DELAY_SECONDS: number = DISPATCH_CLAIM_CEILING_MS / 1000;
+
+/** Cloudflare Queues' default `max_retries`: retries after the first delivery, so up to four deliveries in all. */
+const DEFAULT_QUEUE_MAX_RETRIES = 3;
+
+/** The slice of a Queues message {@link retryDeclinedMessage} needs. */
+interface DeclinedMessageLike {
+    readonly attempts?: number;
+    readonly id: string;
+    retry: (options?: { delaySeconds?: number }) => void;
+}
+
+/**
+ * Retry a queue message whose dispatch was declined, past the claim ceiling
+ * (see {@link DISPATCH_DECLINE_RETRY_DELAY_SECONDS}), and say so when the
+ * decline landed on its last delivery. That is the one case a delay cannot
+ * save: the broker will not grant the retry, so the message is dead-lettered,
+ * or dropped when the queue has no DLQ, while the call that declined it may
+ * still be running. `context.maxRetries` is the consumer's `max_retries`
+ * (Cloudflare's default when unknown); `context.where` names the queue in that
+ * log line.
+ */
+const retryDeclinedMessage = (message: DeclinedMessageLike, context: { maxRetries?: number; where: string }): void => {
+    const maxRetries = context.maxRetries ?? DEFAULT_QUEUE_MAX_RETRIES;
+
+    message.retry({ delaySeconds: DISPATCH_DECLINE_RETRY_DELAY_SECONDS });
+
+    if (typeof message.attempts === "number" && message.attempts > maxRetries) {
+        // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on a queue consumer
+        console.error(
+            `${context.where}: message ${message.id} was declined (${DISPATCH_IN_PROGRESS}) on its last delivery (attempt ${String(message.attempts)} of ${String(maxRetries + 1)}) — its earlier delivery is still running the call. It is retried anyway, but its retries are exhausted, so it will be dead-lettered if the queue has a deadLetterQueue and dropped if not. Raise max_retries so a slow call cannot exhaust it.`,
+        );
+    }
+};
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class
@@ -388,7 +463,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                     return rethrowAsTimeoutOrOriginal(error);
                 }
 
-                throw toDispatchError(label, response.status, errorBody, runOptions.messageId);
+                throw toDispatchError(label, response, errorBody, runOptions.messageId);
             }
 
             let text: string;
@@ -446,4 +521,15 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
     };
 };
 
-export { createDispatchRunner, getDispatchMessageId, isDeterministicDispatchFailure };
+export type { DeclinedMessageLike };
+export {
+    createDispatchRunner,
+    DEFAULT_QUEUE_MAX_RETRIES,
+    DISPATCH_DECLINE_RETRY_DELAY_SECONDS,
+    getDispatchMessageId,
+    isDeterministicDispatchFailure,
+    isDispatchDecline,
+    retryDeclinedMessage,
+};
+
+export { DISPATCH_CLAIM_CEILING_MS } from "../../../shared/dispatch-claim";

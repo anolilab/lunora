@@ -1,4 +1,5 @@
 import { toBase64Url } from "../../../shared/base64";
+import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { jsonResponse } from "../../../shared/json-response";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { RetryPolicy, ScheduleRecord } from "./types";
@@ -737,9 +738,13 @@ class SchedulerDO {
             // second delivery `409 DISPATCH_IN_PROGRESS` (#803). A 409 is not
             // 2xx, so the record is re-armed — which is the point: the decline
             // is "come back later", never "done".
-            if (response.status === 409) {
+            //
+            // Recognised by the header the shard's claim path alone sets: a
+            // handler can throw an error with the code `DISPATCH_IN_PROGRESS` of its own,
+            // and that is a real failure the budget must see.
+            if (response.status === 409 && response.headers.get(DISPATCH_DECLINED_HEADER) === "1") {
                 const declined = await response.json().then(
-                    (envelope: unknown) => (envelope as { error?: { code?: unknown } } | null)?.error?.code === "DISPATCH_IN_PROGRESS",
+                    (envelope: unknown) => (envelope as { error?: { code?: unknown } } | null)?.error?.code === DISPATCH_IN_PROGRESS,
                     () => false,
                 );
 

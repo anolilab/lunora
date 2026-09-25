@@ -66,10 +66,10 @@ const DIGEST_WIDTH = 17;
  * check is `id.length > 100` FIRST and only then the character pattern. Both halves
  * of the id are caller-controlled right up to that ceiling — an explicit
  * `branch(…, { id })` / `ctx.spawn(…, { id })` is taken verbatim by the run
- * context's allocator, and its derived `<parentId>-c<n>` form appends to a parent id
- * the host issued at whatever length it likes. So a plain `<parentId>-c<n>` under a
- * 98-character parent is already 101, and `+ "-compensate"` puts a rollback over the
- * line at 90. Every one of those is a hard `create` rejection, and neither surfaces
+ * context's allocator, and its derived `<parentId>-<parentWorkflow>-c<n>` form appends
+ * to a parent id the host issued at whatever length it likes. So even the shortest
+ * derived suffix, `-x-c0`, puts a 96-character parent over, and `+ "-compensate"`
+ * pushes a rollback over sooner still. Every one of those is a hard `create` rejection, and neither surfaces
  * as one. For a CHILD, the spawn `Promise.all` sits outside {@link createParallel}'s
  * try, so the rejection is not a `BranchJoinFailure` and the group-saga rollback is
  * skipped entirely. For a ROLLBACK, {@link compensateCompleted} logs it and moves

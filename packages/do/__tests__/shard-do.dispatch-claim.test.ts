@@ -126,7 +126,7 @@ describe("shardDO in-flight dispatch claim (ungated path)", () => {
     });
 
     it("live claim: the second dispatch is declined and the handler does NOT run twice", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         shard.parkUpToRun = 1;
 
@@ -144,6 +144,9 @@ describe("shardDO in-flight dispatch claim (ungated path)", () => {
         expect(shard.runs).toBe(1);
         expect(second.status).toBe(409);
         await expect(second.json()).resolves.toMatchObject({ error: { code: "DISPATCH_IN_PROGRESS" } });
+        // The marker a caller keys on: only the claim path sets it, so a handler
+        // that throws the same code cannot pass for a decline.
+        expect(second.headers.get("x-lunora-dispatch-declined")).toBe("1");
 
         shard.release();
         await first;

@@ -450,6 +450,14 @@ export type QueueDispatch = (job: QueueJob, messageId?: string) => Promise<void>
 export interface QueueConsumerOptions {
     /** How each job is executed; e.g. the `httpDispatcher`. */
     dispatch: QueueDispatch;
+
+    /**
+     * The consumer's `max_retries` as deployed in `wrangler.jsonc`, which a
+     * consumer cannot read at runtime. Used only to recognise a message's last
+     * delivery, so a dispatch declined there is logged as the drop or
+     * dead-letter it becomes. Defaults to Cloudflare's default of 3.
+     */
+    maxRetries?: number;
 }
 
 /** Options for the `httpDispatcher` — the default HTTP dispatcher. */

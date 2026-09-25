@@ -17,7 +17,7 @@
  */
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
+import { DEFAULT_QUEUE_MAX_RETRIES, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
@@ -56,7 +56,26 @@ interface CapturedQueueMessage {
     attempts: number;
     /** The message body (JSON-encoded + capped by the catcher). */
     body: unknown;
-    /** `true` when this failed delivery was the message's last (its retries are exhausted) AND the queue declares a `deadLetterQueue` for it to land in. Stays `false` for a queue with no DLQ, where the broker drops the exhausted message instead — `attempts > maxRetries` with `outcome !== "ack"` is what identifies that case. */
+
+    /**
+     * `true` when this failed delivery was the message's last (its retries are
+     * exhausted) AND the queue declares a `deadLetterQueue` for it to land in.
+     * Stays `false` for a queue with no DLQ, where the broker drops the
+     * exhausted message instead — `attempts > maxRetries` with
+     * `outcome !== "ack"` is what identifies that case.
+     *
+     * Read from the `defineQueue` DECLARATION, because a consumer has no
+     * runtime API that exposes its deployed `queues.consumers[]` settings. It is
+     * true of the deployed broker only as far as Lunora's binding reconcile (run
+     * by `lunora dev`, `deploy` and `prepare`) keeps the two in step: it writes
+     * every declared tuning field onto the consumer, including onto one that
+     * already exists. It does NOT remove a field taken out of `defineQueue` —
+     * dropping `deadLetterQueue` leaves the deployed DLQ in place, so this then
+     * reads `false` for messages that were in fact dead-lettered — and it never
+     * writes wrangler's `env.<name>` blocks, so a `--env` deploy uses whatever
+     * that block says. A bare `wrangler deploy` over a hand-edited consumer can
+     * disagree too, and nothing on this side can see any of it.
+     */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
     error?: string;
@@ -104,8 +123,9 @@ interface DispatchOptions {
     traceparent?: string;
 }
 
-/** Cloudflare Queues' default `max_retries` (retries after the initial delivery; total deliveries = 1 + max_retries). */
-const DEFAULT_MAX_RETRIES = 3;
+/** The queue's retry budget: its declared `maxRetries`, or Cloudflare's default when the export leaves it unset. */
+const declaredMaxRetries = (entry: QueueRegistryEntry): number =>
+    typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_QUEUE_MAX_RETRIES;
 
 /** Coerce a `Message.timestamp` (a `Date`, or a number/string in test doubles) to epoch-ms. */
 const timestampToMs = (value: unknown): number => {
@@ -329,7 +349,7 @@ const buildCaptureRecords = (
     attributed: MessageLike | undefined,
 ): CapturedQueueMessage[] => {
     const errorMessage = threw ? describeThrownError(handlerError) : undefined;
-    const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
+    const maxRetries = declaredMaxRetries(entry);
     // What a message the handler never decided settles as: `error` when the
     // handler threw (the batch is retried by workerd, but the handler signalled
     // failure), else workerd's implicit ack-on-success.
@@ -412,6 +432,53 @@ const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike
             harness.dispositions.set(candidate, "retry");
             candidate.retry();
         }
+    }
+};
+
+/**
+ * Settle a batch whose handler threw a `409 DISPATCH_IN_PROGRESS` decline: the
+ * message's own earlier delivery is still running the call on the shard.
+ *
+ * Rethrowing it — what every other retryable failure gets — redelivers the
+ * batch at the queue's `retry_delay`, which codegen leaves at Cloudflare's
+ * default of zero. The redelivery meets the same live claim, so a `maxRetries:
+ * 3` queue spent its whole budget on declines within seconds of a slow action
+ * (a `ctx.run` gives up after 30s while the shard keeps running it) and then
+ * dropped the message, or dead-lettered it, while that action was still going.
+ *
+ * Cloudflare Queues has no uncounted retry, so a decline still costs one
+ * attempt. What this bounds is how MANY: the declined message is retried past
+ * the claim ceiling (`@lunora/dispatch`'s `retryDeclinedMessage`, the policy the
+ * scheduler's queue workpool shares), by which point the claim cannot still
+ * stand, so one claim costs at most one attempt. The next delivery is then
+ * served the finished call from the replay cache, or runs it if the first
+ * attempt died. It is never acked, so at-least-once holds.
+ *
+ * A decline scoped to one message (`message.run` scopes every call) delays just
+ * that one and retries the handler's other undecided messages normally. A
+ * decline from a bare `ctx.run` carrying its own `dedupId` names no message, so
+ * every undecided message waits the ceiling out. A message the handler already
+ * acked or retried keeps its decision.
+ */
+const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, entry: QueueRegistryEntry, queue: string): void => {
+    const declinedId = getDispatchMessageId(handlerError);
+    const scoped = harness.originals.find((candidate) => candidate.id === declinedId && !harness.dispositions.has(candidate));
+    const where = `@lunora/queue: queue "${queue}" (${entry.exportName})`;
+
+    for (const candidate of harness.originals) {
+        if (harness.dispositions.has(candidate)) {
+            continue;
+        }
+
+        harness.dispositions.set(candidate, "retry");
+
+        if (scoped !== undefined && candidate !== scoped) {
+            candidate.retry();
+
+            continue;
+        }
+
+        retryDeclinedMessage(candidate, { maxRetries: declaredMaxRetries(entry), where });
     }
 };
 
@@ -511,12 +578,20 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         );
     }
 
+    // A decline is not a failure of the call (see resolveDeclinedBatch). It is
+    // never deterministic, so it cannot also have been attributed above.
+    const declined = threw && isDispatchDecline(handlerError);
+
+    if (declined) {
+        resolveDeclinedBatch(harness, handlerError, entry, batch.queue);
+    }
+
     // `threw` stays truthful (the handler DID fail, and the records say so);
     // whether the failure propagates is a separate question, and an attributed
     // one does not — the attributed message is acked and every other message
     // has an explicit disposition, so there is nothing left for workerd to
-    // redeliver the batch for.
-    const rethrow = threw && attributed === undefined;
+    // redeliver the batch for. A declined batch is likewise fully settled.
+    const rethrow = threw && attributed === undefined && !declined;
 
     if (options.capture !== undefined) {
         // Best-effort by contract: build the records AND run the sink inside one guard

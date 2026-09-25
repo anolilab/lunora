@@ -1734,6 +1734,7 @@ interface ReconcileBindingsResult {
     changed: boolean;
     exportGaps: ExportGap[];
     reason?: string;
+    updated: string[];
     warnings: string[];
     wranglerPath?: string;
 }

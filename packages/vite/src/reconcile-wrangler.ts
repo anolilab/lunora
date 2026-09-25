@@ -32,8 +32,14 @@ const reconcileBindingsSafely = async (
         const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
         const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
 
-        if (reconciled.changed) {
-            logger.info?.(`${LUNORA_TAG} inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
+        const target = reconciled.wranglerPath ?? "wrangler.jsonc";
+
+        if (reconciled.added.length > 0) {
+            logger.info?.(`${LUNORA_TAG} inferred bindings → ${reconciled.added.join(", ")} (written to ${target})`);
+        }
+
+        if (reconciled.updated.length > 0) {
+            logger.info?.(`${LUNORA_TAG} updated bindings → ${reconciled.updated.join(", ")} (written to ${target})`);
         }
 
         for (const warning of reconciled.warnings) {

@@ -223,6 +223,7 @@ interface MonthlySchedule extends DailySchedule {
 ```ts
 interface QueueConsumerOptions {
     dispatch: QueueDispatch;
+    maxRetries?: number;
 }
 ```
 
