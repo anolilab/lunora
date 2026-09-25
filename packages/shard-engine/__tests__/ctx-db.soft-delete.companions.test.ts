@@ -380,7 +380,12 @@ describe("soft delete — Vectorize sync", () => {
             },
             getByIds: async () => [],
             query: async () => {
-                return { count: stored.size, matches: [...stored.keys()].map((id) => {return { id, metadata: {}, score: 1 }}) };
+                return {
+                    count: stored.size,
+                    matches: [...stored.keys()].map((id) => {
+                        return { id, metadata: {}, score: 1 };
+                    }),
+                };
             },
             upsert: async (_index, input) => {
                 stored.set(input.id, input.input);
