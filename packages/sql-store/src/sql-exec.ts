@@ -81,6 +81,25 @@ const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Sq
 };
 
 /**
+ * NULL-safe equality for a bound value, rendered per engine: SQLite `IS`,
+ * Postgres `IS NOT DISTINCT FROM`, MySQL's `<=>` null-safe-equal operator. A bare
+ * `col IS <literal>` is SQLite-only — it is a syntax error on Postgres/MySQL — so
+ * every cross-dialect equality predicate (the OCC guard and the rank seek/before
+ * builders) must route through this rather than emitting `IS` directly.
+ */
+const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: unknown): SQL => {
+    if (engine === "postgres") {
+        return sql`${reference} IS NOT DISTINCT FROM ${value}`;
+    }
+
+    if (engine === "mysql") {
+        return sql`${reference} <=> ${value}`;
+    }
+
+    return sql`${reference} IS ${value}`;
+};
+
+/**
  * Run several write statements as one round trip when the exec exposes
  * {@link SqlCtxExec.batch}; falls back to the historical sequential
  * `run()`-per-statement loop when it doesn't, so an exec built before `batch`
@@ -465,6 +484,7 @@ export {
     decodeRow,
     decodeRows,
     forEachRowPaged,
+    nullSafeEqualsSql,
     physicalColumn,
     qualifiedColumnRefSql,
     queryAll,

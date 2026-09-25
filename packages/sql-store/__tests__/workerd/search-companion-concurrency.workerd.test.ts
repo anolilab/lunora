@@ -322,6 +322,125 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         },
     );
 
+    describe("two live writes of one document from different isolates", () => {
+        /** A fully indexed table, and a writer per isolate — each past its own cold start. */
+        const livePair = async (table: string, gate: Gate): Promise<[ReturnType<typeof createSqlCtxDb>, ReturnType<typeof createSqlCtxDb>]> => {
+            await seed(table, (n) => `word${String(n)} common`);
+            await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+            const isolateA = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(gate), schema: schemaFor(table, INDEX) });
+            const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+
+            await isolateA.count(table);
+            await isolateB.count(table);
+
+            return [isolateA, isolateB];
+        };
+
+        /** A's first companion statement for `target` — reached only after A's source row write. */
+        const atCompanionWrite = (table: string, target: string): ReturnType<typeof holdAt> =>
+            holdAt((text, parameters) => text.includes(`"${companionOf(table)}`) && parameters.includes(target));
+
+        it("keeps the newer text when the older write's companion statement lands last", async () => {
+            expect.assertions(3);
+
+            const table = "live_order";
+            const target = pad(40);
+            const hold = atCompanionWrite(table, target);
+            const [isolateA, isolateB] = await livePair(table, hold.gate);
+
+            const older = isolateA.patch(target, { body: "olderword common" });
+
+            await hold.reached;
+            await isolateB.patch(target, { body: "newerword common" });
+            hold.release();
+            await older;
+
+            await expect(search(table, "newerword")).resolves.toStrictEqual([target]);
+            await expect(search(table, "olderword")).resolves.toStrictEqual([]);
+            await expect(companionRows(table, target)).resolves.toBe(1);
+        });
+
+        it("never exposes the older text, even before the older write re-checks the row", async () => {
+            expect.assertions(1);
+
+            // Held twice: at its companion write while B writes the row, then just
+            // before it re-reads the row. By then its own entry write has run, so
+            // an unguarded one would be sitting in the companion right now.
+            const table = "live_window";
+            const target = pad(40);
+            const atWrite = atCompanionWrite(table, target);
+            const atRecheck = holdAt((text) => text.startsWith(`SELECT * FROM "${table}" WHERE "id" >=`));
+            let written = false;
+            const [isolateA, isolateB] = await livePair(table, async (text, parameters) => {
+                await atWrite.gate(text, parameters);
+
+                if (written) {
+                    await atRecheck.gate(text, parameters);
+                }
+            });
+
+            const older = isolateA.patch(target, { body: "olderword common" });
+
+            await atWrite.reached;
+            await isolateB.patch(target, { body: "newerword common" });
+            written = true;
+            atWrite.release();
+            await atRecheck.reached;
+
+            const companion = companionOf(table);
+            const entries = await env.DB.prepare(`SELECT "${companion}"."__text__" AS t FROM "${companion}" WHERE "${companion}"."__id__" = ?`)
+                .bind(target)
+                .all<{ t: string }>();
+
+            atRecheck.release();
+            await older;
+
+            expect(entries.results.map((entry) => entry.t)).toStrictEqual(["newerword common"]);
+        });
+
+        it("indexes the older write's text when the newer write left the indexed text alone", async () => {
+            expect.assertions(3);
+
+            // B changes only the title, so B skips the companion: A's text is the
+            // current one, and A's write must land even though B moved the row.
+            const table = "live_untouched";
+            const target = pad(40);
+            const hold = atCompanionWrite(table, target);
+            const [isolateA, isolateB] = await livePair(table, hold.gate);
+
+            const writing = isolateA.patch(target, { body: "onlyword common" });
+
+            await hold.reached;
+            await isolateB.patch(target, { title: "renamed" });
+            hold.release();
+            await writing;
+
+            await expect(search(table, "onlyword")).resolves.toStrictEqual([target]);
+            await expect(search(table, "word40")).resolves.toStrictEqual([]);
+            await expect(companionRows(table, target)).resolves.toBe(1);
+        });
+
+        it("keeps a re-inserted document's entry when the delete's purge lands last", async () => {
+            expect.assertions(2);
+
+            const table = "live_reinsert";
+            const target = pad(40);
+            const hold = atCompanionWrite(table, target);
+            const [isolateA, isolateB] = await livePair(table, hold.gate);
+
+            const deleting = isolateA.delete(target);
+
+            await hold.reached;
+            await isolateB.insert(table, { _id: target, body: "rebornword common", title: "t" }, { allowExplicitId: true });
+            hold.release();
+            await deleting;
+
+            await expect(search(table, "rebornword")).resolves.toStrictEqual([target]);
+            await expect(companionRows(table, target)).resolves.toBe(1);
+        });
+    });
+
     it("reads a bounded number of companion rows per write, however large the companion", async () => {
         expect.assertions(3);
 

@@ -126,6 +126,7 @@ import {
     decodeRow,
     decodeRows,
     forEachRowPaged,
+    nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
     queryAll,
     queryBatch,
@@ -138,25 +139,6 @@ import { effectiveColumnKind, sqliteDecode } from "./value-codec";
 
 /** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
-
-/**
- * NULL-safe equality for a bound value, rendered per engine: SQLite `IS`,
- * Postgres `IS NOT DISTINCT FROM`, MySQL's `<=>` null-safe-equal operator. A bare
- * `col IS <literal>` is SQLite-only — it is a syntax error on Postgres/MySQL — so
- * every cross-dialect equality predicate (the OCC guard and the rank seek/before
- * builders) must route through this rather than emitting `IS` directly.
- */
-const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: unknown): SQL => {
-    if (engine === "postgres") {
-        return sql`${reference} IS NOT DISTINCT FROM ${value}`;
-    }
-
-    if (engine === "mysql") {
-        return sql`${reference} <=> ${value}`;
-    }
-
-    return sql`${reference} IS ${value}`;
-};
 
 /**
  * Where this engine puts NULLs, spelled out, for the keys that can hold one.
@@ -2472,6 +2454,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         }
     };
 
+    /**
+     * The version columns a {@link runGuardedWrite} `UPDATE` of `snapshot` leaves
+     * on the row: `_version` bumped as its `SET` does, and `_creationTime` as
+     * written. The search companion's write lands only while the row still holds
+     * them.
+     */
+    const writtenBy = (snapshot: Record<string, unknown> | undefined, creationTime: unknown = snapshot?.["_creationTime"]): Record<string, unknown> => {
+        const version = snapshot?.[OCC_VERSION_COLUMN];
+
+        return { _creationTime: creationTime, [OCC_VERSION_COLUMN]: version === null || version === undefined ? 1 : Number(version) + 1 };
+    };
+
     /** Serialize a document into the ordered `[id, _creationTime, ...fields]` column tuple. */
     const columnTuple = (
         definition: TableDefinitionLike,
@@ -2954,7 +2948,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // `restore()` re-adds the rank entry through the patch path.
                 await syncAggregates(tableName, existing, merged);
                 await syncRanks(tableName, id, existing, undefined);
-                await syncSearch(tableName, id, merged, existing);
+                await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
                 await recordCdc(tableName, id, "update", merged);
 
                 // `delete()` was called → fire the DELETE triggers (the flag flip
@@ -3371,7 +3365,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, undefined, documentWithMeta);
             await syncRanks(tableName, id, undefined, documentWithMeta);
-            await syncSearch(tableName, id, documentWithMeta);
+            // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
+            await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
             await recordCdc(tableName, id, "insert", documentWithMeta);
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
@@ -3443,7 +3438,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
-            await syncSearch(tableName, id, merged, existing);
+            await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
             await recordCdc(tableName, id, "update", merged);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -3986,7 +3981,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
-            await syncSearch(tableName, id, replaced, previous);
+            await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
             await recordCdc(tableName, id, "update", replaced);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {

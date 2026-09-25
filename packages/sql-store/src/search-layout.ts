@@ -37,6 +37,7 @@ import { ftsCompanionDdl, ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, g
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
 import {
@@ -44,9 +45,9 @@ import {
     createIndexIfNotExists,
     decodeRow,
     decodeRows,
+    nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
     queryAll,
-    queryBatch,
     queryRun,
     runInOrder,
     serializeColumnValue,
@@ -70,14 +71,20 @@ interface SearchLayout {
     /** Create the companion (and its indexes). Idempotent. */
     ensureCompanion: (exec: SqlCtxExec, dialect: SqlDialect, companion: string) => Promise<void>;
 
-    /** Replace one document's rows in the companion. */
+    /**
+     * Replace one document's rows in the companion, from `document` — the state
+     * of the source row `readAs`. The FTS5 and inverted layouts land the write
+     * only while that row is still current ({@link unchangedSince}), checked
+     * inside the write, so a writer that lost a race to a newer one cannot
+     * overwrite its entry. The native layout writes regardless.
+     */
     indexDocument: (
         exec: SqlCtxExec,
         dialect: SqlDialect,
         companion: string,
-        id: string,
         document: Record<string, unknown>,
         index: SearchIndexDefinitionLike,
+        readAs: SourceRow,
     ) => Promise<void>;
 
     /**
@@ -87,8 +94,13 @@ interface SearchLayout {
      */
     readonly name: "fts5" | "inverted" | "native";
 
-    /** Delete every companion row for one document. */
-    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string) => Promise<void>;
+    /**
+     * Delete every companion row for one document, which was just deleted from
+     * `table`. The FTS5 and inverted layouts purge only while no row with that
+     * id is back in `table`, so a delete whose purge lands after a re-insert
+     * does not drop the new document's entry.
+     */
+    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string, table: string) => Promise<void>;
 
     /** Execute a staged search against this companion, ordered and bounded. */
     runSearch: (
@@ -115,27 +127,54 @@ interface SourceRow {
  */
 const ROW_VERSION_COLUMNS: ReadonlyArray<string> = [OCC_VERSION_COLUMN, "_creationTime"];
 
-/**
- * Delete every companion row for one document by its `__id__` column — the
- * first half of every write on the layouts whose `__id__` is indexed.
- */
-const purgeDocument = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(companion)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
-};
+/** `<table>.<column>`, qualified so an unknown name errors instead of reading as a string. */
+const qualified = (table: string, name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
+
+/** Delete every companion row for one document by its `__id__` column, where `guard` holds. */
+const purgeStatement = (companion: string, id: string, guard?: SQL): SQL =>
+    sql`DELETE FROM ${sql.identifier(companion)} WHERE ${qualified(companion, FTS_ID_COLUMN)} = ${id}${guard === undefined ? sql`` : sql` AND ${guard}`}`;
 
 /**
- * One column of the portable companion's btree, rendered for the engine.
+ * The source row `readAs` still holds, by {@link ROW_VERSION_COLUMNS}, as a
+ * `SELECT 1`: empty once another writer has moved the row on.
+ *
+ * On Postgres the read takes a share lock. A plain read sees the version as of
+ * the statement's start, so a writer that moved the row while this statement
+ * ran could purge before this statement's rows were committed — a Postgres
+ * `DELETE` never sees rows committed after its own snapshot — and leave them
+ * behind. Under the lock that writer's `UPDATE` waits until this statement
+ * commits; if it got there first, this read waits for it and then finds the new
+ * version. MySQL needs no lock: its `DELETE` reads the latest rows, waiting on
+ * uncommitted ones, so the newer writer's purge always removes these. SQLite
+ * (D1) runs one writer at a time.
+ */
+const sourceRowStill = (dialect: SqlDialect, { row, table }: SourceRow): SQL => {
+    const matches = ROW_VERSION_COLUMNS.map(
+        // eslint-disable-next-line unicorn/no-null -- SQL bind value: a NULL column compares NULL-safely
+        (column) => sql` AND ${nullSafeEqualsSql(dialect.name, qualified(table, column), row[column] ?? null)}`,
+    );
+
+    return sql`SELECT 1 FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} = ${row["id"]}${sql.join(matches)}${dialect.name === "postgres" ? sql` FOR SHARE` : sql``}`;
+};
+
+/** Whether the source row is still the one that was read — {@link sourceRowStill} as a condition. */
+const unchangedSince = (dialect: SqlDialect, readAs: SourceRow): SQL => sql`EXISTS (${sourceRowStill(dialect, readAs)})`;
+
+/** Whether no row with `id` is in `table` — the guard on a purge after a delete. */
+const absentFrom = (table: string, id: string): SQL => sql`NOT EXISTS (SELECT 1 FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} = ${id})`;
+
+/**
+ * One column of the portable companion's indexes, rendered for the engine.
  *
  * Both columns use the dialect's `key` type, which on MySQL is `VARCHAR(768)` —
- * two of those exceed InnoDB's 3072-byte index limit, so they take the same
- * `(191)` key prefix the rank btree uses (a token is a single word; the prefix
- * never truncates one in practice). Postgres needs the opposite treatment: an
+ * two of those exceed InnoDB's 3072-byte index limit, so each takes a key
+ * prefix of `mysqlPrefix` characters. Postgres needs the opposite treatment: an
  * explicit `text_pattern_ops` class, or the prefix `LIKE` that resolves the
- * query's final term can't use the btree under a non-C collation.
+ * query's final term can't use the index under a non-C collation.
  */
-const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
+const invertedIndexColumn = (dialect: SqlDialect, column: string, mysqlPrefix: number): SQL => {
     if (dialect.name === "mysql") {
-        return sql`${sql.identifier(column)}(191)`;
+        return sql`${sql.identifier(column)}(${sql.raw(String(mysqlPrefix))})`;
     }
 
     if (dialect.textPatternOperatorClass === undefined) {
@@ -146,17 +185,104 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
 };
 
 /**
- * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
- * far under every engine's cap (3 params per row) while still turning a
- * many-token document into a handful of round trips rather than one per token.
+ * The unique key of the portable companion: one row per `(token, document)`.
+ * It replaces the plain `__btree` index the layout had before (see
+ * {@link migrateInvertedUniqueKey}) and serves the same token lookups.
  *
- * Deliberately NOT sized to Workerd's cap of 100, unlike its namesake in
- * `@lunora/shard-engine`: `chooseLayout` picks this layout only when the dialect
- * has no FTS5, and the only such dialects are Hyperdrive's Postgres and MySQL,
- * which bind thousands. D1's SQLite dialect sets `supportsFts5: true` and never
- * reaches here.
+ * On MySQL the token takes a 256-character prefix, which is the analyzer's
+ * `MAX_TOKEN_LENGTH`, so uniqueness is exact per token, and the id takes the
+ * rest of InnoDB's 3072 bytes (512 characters under utf8mb4).
+ *
+ * ponytail: two ids that agree on their first 512 characters count as one here,
+ * so one of them keeps no rows for a token they share. Widen only if ids that
+ * long appear.
  */
-const INSERT_CHUNK_ROWS = 50;
+const invertedUniqueKey = (dialect: SqlDialect, companion: string): { columns: SQL; name: string; table: string; unique: boolean } => {
+    return {
+        columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN, 256)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN, 512)}`,
+        name: `${companion}__unique`,
+        table: companion,
+        unique: true,
+    };
+};
+
+/**
+ * One document's `(token, occurrences)` rows as a row source `j` of `t`/`o`
+ * columns, bound as ONE JSON parameter: a document holds up to
+ * `MAX_INDEXED_TOKENS` distinct tokens, and one statement per write is what
+ * makes the Postgres write atomic.
+ */
+const tokenRowsSource = (dialect: SqlDialect, counts: ReadonlyArray<[string, number]>): SQL => {
+    const json = JSON.stringify(
+        counts.map(([t, o]) => {
+            return { o, t };
+        }),
+    );
+
+    switch (dialect.name) {
+        case "mysql": {
+            return sql`JSON_TABLE(${json}, '$[*]' COLUMNS (${sql.identifier("t")} VARCHAR(256) PATH '$.t', ${sql.identifier("o")} INT PATH '$.o')) AS ${sql.identifier("j")}`;
+        }
+        case "postgres": {
+            return sql`json_to_recordset(${json}::json) AS ${sql.identifier("j")}(${sql.identifier("t")} text, ${sql.identifier("o")} integer)`;
+        }
+        default: {
+            return sql`(SELECT json_extract(${qualified("e", "value")}, '$.t') AS ${sql.identifier("t")}, json_extract(${qualified("e", "value")}, '$.o') AS ${sql.identifier("o")} FROM json_each(${json}) AS ${sql.identifier("e")}) AS ${sql.identifier("j")}`;
+        }
+    }
+};
+
+/**
+ * The statements that replace one document's rows in the portable companion,
+ * landing only while the source row is still `readAs`.
+ *
+ * On Postgres it is ONE statement — the purge a data-modifying CTE, the insert
+ * waiting on it — so a reader never sees the document half-written, and the
+ * share lock {@link sourceRowStill} takes covers both halves. Elsewhere it is a
+ * purge and an insert, each carrying the guard: {@link runInOrder} runs them as
+ * one transaction on SQLite, and on MySQL, whose exec has no transaction to
+ * offer, a writer that moves the row between them turns the insert into a
+ * no-op, and that writer's own write then replaces what the purge left.
+ *
+ * The insert skips a row already present under the unique key. Only a writer of
+ * the same source version can have put it there — two backfills of one row —
+ * and that writer wrote the same text.
+ */
+const invertedWriteStatements = (dialect: SqlDialect, companion: string, id: string, counts: ReadonlyArray<[string, number]>, readAs: SourceRow): SQL[] => {
+    const columns = sql.join(
+        [FTS_TOKEN_COLUMN, FTS_ID_COLUMN, FTS_COUNT_COLUMN].map((column) => sql.identifier(column)),
+        sql`, `,
+    );
+    const insert = (condition: SQL): SQL =>
+        sql`INSERT INTO ${sql.identifier(companion)} (${columns}) SELECT ${qualified("j", "t")}, ${id}, ${qualified("j", "o")} FROM ${tokenRowsSource(dialect, counts)} WHERE ${condition}`;
+
+    switch (dialect.name) {
+        case "mysql": {
+            const guard = unchangedSince(dialect, readAs);
+
+            return [
+                purgeStatement(companion, id, guard),
+                sql`${insert(guard)} ON DUPLICATE KEY UPDATE ${qualified(companion, FTS_COUNT_COLUMN)} = ${qualified(companion, FTS_COUNT_COLUMN)}`,
+            ];
+        }
+        case "postgres": {
+            const source = sql.identifier("__source__");
+            const purged = sql.identifier("__purged__");
+            const current = sql`EXISTS (SELECT 1 FROM ${source})`;
+
+            // The insert reads `__purged__`, so the purge runs to completion
+            // before the first row goes in; left unread, it would run last.
+            return [
+                sql`WITH ${source} AS (${sourceRowStill(dialect, readAs)}), ${purged} AS (${purgeStatement(companion, id, current)} RETURNING 1) ${insert(sql`${current} AND (SELECT COUNT(*) FROM ${purged}) >= 0`)} ON CONFLICT DO NOTHING`,
+            ];
+        }
+        default: {
+            const guard = unchangedSince(dialect, readAs);
+
+            return [purgeStatement(companion, id, guard), sql`${insert(guard)} ON CONFLICT DO NOTHING`];
+        }
+    }
+};
 
 /**
  * The predicate one query term matches a companion token with: an exact
@@ -378,91 +504,58 @@ const invertedLayout: SearchLayout = {
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(FTS_TOKEN_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_COUNT_COLUMN)} ${sql.raw(integer)} NOT NULL)`,
         );
 
-        // Not unique, so two cold-start backfills whose purge-then-insert pairs
-        // interleave can double a document's rows — and nothing repairs that
-        // until the document is written again. A unique index would turn the
-        // same race into a failed request instead; fixing it properly needs a
-        // per-dialect insert-or-ignore, and this layout only serves Hyperdrive.
+        // Every write purges its old rows by id first. The token index is the
+        // unique key, which {@link migrateInvertedUniqueKey} adds once the
+        // companion holds no duplicates.
         await createIndexIfNotExists(exec, dialect, {
-            columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN)}`,
-            name: `${companion}__btree`,
-            table: companion,
-            unique: false,
-        });
-
-        // Every row write purges its old rows by id first.
-        await createIndexIfNotExists(exec, dialect, {
-            columns: invertedIndexColumn(dialect, FTS_ID_COLUMN),
+            columns: invertedIndexColumn(dialect, FTS_ID_COLUMN, 191),
             name: `${companion}__by_id`,
             table: companion,
             unique: false,
         });
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await purgeDocument(exec, dialect, companion, id);
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
+        const counts = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
 
-        const rows = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
-        const columns = sql.join(
-            [FTS_TOKEN_COLUMN, FTS_ID_COLUMN, FTS_COUNT_COLUMN].map((column) => sql.identifier(column)),
-            sql`, `,
-        );
-        const chunks: SQL[] = [];
-
-        for (let start = 0; start < rows.length; start += INSERT_CHUNK_ROWS) {
-            const values = sql.join(
-                rows.slice(start, start + INSERT_CHUNK_ROWS).map(([token, occurrences]) => sql`(${token}, ${id}, ${occurrences})`),
-                sql`, `,
-            );
-
-            chunks.push(sql`INSERT INTO ${sql.identifier(companion)} (${columns}) VALUES ${values}`);
-        }
-
-        // One round trip per document write when the exec exposes `batch`
-        // (still chunked at INSERT_CHUNK_ROWS, so the bound-parameter count of
-        // any one statement stays far under every engine's cap); a per-chunk
-        // sequential `run()` loop otherwise.
-        await queryBatch(exec, dialect, chunks);
+        await runInOrder(exec, dialect, invertedWriteStatements(dialect, companion, String(readAs.row["id"]), counts, readAs));
     },
     name: "inverted",
-    purgeDocument,
+    purgeDocument: async (exec, dialect, companion, id, table) => {
+        await queryRun(exec, dialect, purgeStatement(companion, id, absentFrom(table, id)));
+    },
     runSearch: runInvertedSearch,
 };
-
-/** `<table>.<column>`, qualified so an unknown name errors instead of reading as a string. */
-const qualified = (table: string, name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
-
-/**
- * Whether the source row is still the one that was read, by
- * {@link ROW_VERSION_COLUMNS}. SQLite's `IS`, since only the FTS5 layout
- * evaluates it.
- */
-const unchangedSince = ({ row, table }: SourceRow): SQL =>
-    sql`EXISTS (SELECT 1 FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} = ${row["id"]}${sql.join(
-        // eslint-disable-next-line unicorn/no-null -- SQL bind value: a NULL column compares with `IS NULL`
-        ROW_VERSION_COLUMNS.map((column) => sql` AND ${qualified(table, column)} IS ${row[column] ?? null}`),
-    )})`;
 
 /**
  * The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`,
  * reached through the `__ids` rowid map — see `fts-companion.ts` in
  * `@lunora/shard-engine`, which the Durable Object store shares. Every write is
- * an ordered statement list, run by {@link runInOrder}.
+ * an ordered statement list, run by {@link runInOrder}, and carries its guard in
+ * every statement.
  */
 const fts5Layout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
         await runInOrder(exec, dialect, ftsCompanionDdl(companion));
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index)));
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
+        await runInOrder(
+            exec,
+            dialect,
+            ftsWriteDocument(companion, String(readAs.row["id"]), analyzedSearchText(document, index), { guard: unchangedSince(dialect, readAs) }),
+        );
     },
     name: "fts5",
-    purgeDocument: async (exec, dialect, companion, id) => {
-        await runInOrder(exec, dialect, ftsPurgeDocument(companion, id));
+    purgeDocument: async (exec, dialect, companion, id, table) => {
+        await runInOrder(exec, dialect, ftsPurgeDocument(companion, id, { guard: absentFrom(table, id) }));
     },
     runSearch: runFtsSearch,
 };
 
-/** The engine's own full-text index, opted into with `strategy: "native"`. */
+/**
+ * The engine's own full-text index, opted into with `strategy: "native"`. Its
+ * writes are not guarded: a write that lost a race here is repaired only by the
+ * caller's re-check (`indexRowsUntilCurrent` in `ctx-db-search`).
+ */
 const nativeLayout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
         const native = dialect.nativeTextSearch;
@@ -478,18 +571,22 @@ const nativeLayout: SearchLayout = {
             await queryRun(exec, dialect, statement);
         }
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
         const native = dialect.nativeTextSearch;
 
         if (!native) {
             return;
         }
 
-        await purgeDocument(exec, dialect, companion, id);
+        const id = String(readAs.row["id"]);
+
+        await queryRun(exec, dialect, purgeStatement(companion, id));
         await queryRun(exec, dialect, native.indexDocument(companion, id, analyzedSearchText(document, index)));
     },
     name: "native",
-    purgeDocument,
+    purgeDocument: async (exec, dialect, companion, id) => {
+        await queryRun(exec, dialect, purgeStatement(companion, id));
+    },
     runSearch: runNativeSearch,
 };
 
@@ -569,35 +666,6 @@ const FTS_UNMAPPED_PAGE_ROWS = 100;
 const SOURCE_LOOKUP_IDS = 50;
 
 /**
- * Index a document the caller read some time ago — the backfill — so that the
- * write lands only if that source row is still current.
- *
- * On FTS5 the check runs inside the write's own statements, so no concurrent
- * writer can land between the check and the write, and a fresher entry is never
- * replaced — not even for the moment until the caller's re-check catches it.
- * The other layouts write regardless and rely on that re-check alone.
- */
-const indexDocumentAsRead = async (
-    layout: SearchLayout,
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    companion: string,
-    document: Record<string, unknown>,
-    index: SearchIndexDefinitionLike,
-    readAs: SourceRow,
-): Promise<void> => {
-    const id = String(readAs.row["id"]);
-
-    if (layout !== fts5Layout) {
-        await layout.indexDocument(exec, dialect, companion, id, document, index);
-
-        return;
-    }
-
-    await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard: unchangedSince(readAs) }));
-};
-
-/**
  * Rewrite one bounded page of the FTS5 rows the rowid map does not know about —
  * a previous build's, including any it wrote during the rollout — from the
  * source table, starting past rowid `after`, and report how the page went (see
@@ -671,7 +739,7 @@ const migrateUnmappedEntries = async (
         const guard =
             row === undefined
                 ? sql`NOT EXISTS (SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} = ${id})`
-                : unchangedSince({ row, table: tableName });
+                : unchangedSince(dialect, { row, table: tableName });
         statements.push(
             ...(document
                 ? ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard, unmappedRowids })
@@ -694,14 +762,203 @@ const migrateUnmappedEntries = async (
     return { done: unmapped.length < FTS_UNMAPPED_PAGE_ROWS, last, left: Number(left[0]?.["n"] ?? 0) };
 };
 
-export type { SearchLayout, SearchStage, SourceRow, UnmappedPass };
+/** Documents checked per {@link migrateInvertedUniqueKey} pass — the bound on one cold start's share of it. */
+const UNIQUE_KEY_PAGE_DOCUMENTS = 100;
+
+/** The profile the unique-key walk records its progress under; nothing reads it back. */
+const UNIQUE_KEY_PROFILE = "unique-key";
+
+/** The search-state key {@link migrateInvertedUniqueKey} records its walk under. */
+const invertedUniqueKeyState = (companion: string): string => `${companion}#unique`;
+
+/**
+ * How one {@link migrateInvertedUniqueKey} pass went: the key is in place, the
+ * walk has more pages, or the walk reached the end but the key could not be
+ * added and the walk starts over.
+ */
+type UniqueKeyPass = "done" | "more" | "restarted";
+
+/**
+ * Add the unique key, retrying once: the first attempt can fail because a
+ * concurrent pass is creating the same index, and the second then finds it.
+ * Returns `false` when the companion still holds a duplicate.
+ */
+const addUniqueKey = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<boolean> => {
+    try {
+        await createIndexIfNotExists(exec, dialect, invertedUniqueKey(dialect, companion));
+
+        return true;
+    } catch {
+        // Retried below; a failure that is not a concurrent create fails again there.
+    }
+
+    try {
+        await createIndexIfNotExists(exec, dialect, invertedUniqueKey(dialect, companion));
+
+        return true;
+    } catch (error) {
+        if (dialect.isUniqueViolation(error)) {
+            return false;
+        }
+
+        throw error;
+    }
+};
+
+/** Drop the plain `(token, id)` index the unique key replaces. */
+const dropLegacyTokenIndex = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<void> => {
+    const legacy = sql.identifier(`${companion}__btree`);
+
+    if (dialect.name !== "mysql") {
+        await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${legacy}`);
+
+        return;
+    }
+
+    try {
+        await queryRun(exec, dialect, sql`DROP INDEX ${legacy} ON ${sql.identifier(companion)}`);
+    } catch (error) {
+        // ER_CANT_DROP_FIELD_OR_KEY: already gone. MySQL has no `DROP INDEX IF EXISTS`.
+        const missing = error as { code?: unknown; errno?: unknown };
+
+        if (missing.errno !== 1091 && missing.code !== "ER_CANT_DROP_FIELD_OR_KEY") {
+            throw error;
+        }
+    }
+};
+
+/**
+ * Rewrite each of `ids` from its source row, which drops any duplicate rows it
+ * holds. A document gone from the source table loses its rows. Each write is
+ * guarded like the backfill's; one that loses to a concurrent write leaves its
+ * duplicates for the unique-key attempt at the end of the walk to catch.
+ */
+const repairFromSource = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+    companion: string,
+    ids: ReadonlyArray<string>,
+): Promise<void> => {
+    const probe = await queryAll(exec, dialect, dialect.tableExists(tableName));
+    const sourceExists = probe.length > 0;
+    const rows = sourceExists
+        ? await queryAll(
+              exec,
+              dialect,
+              sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} IN (${sql.join(
+                  ids.map((id) => sql`${id}`),
+                  sql`, `,
+              )})`,
+          )
+        : [];
+    const sources = new Map(rows.map((row) => [String(row["id"]), row]));
+
+    for (const id of ids) {
+        const row = sources.get(id);
+        const document = row === undefined ? undefined : decodeRow(definition, row);
+
+        if (row !== undefined && document) {
+            // eslint-disable-next-line no-await-in-loop -- sequential companion writes on the shared connection.
+            await invertedLayout.indexDocument(exec, dialect, companion, document, index, { row, table: tableName });
+
+            continue;
+        }
+
+        // Absent: its rows go unless the row reappears first. Undecodable: the
+        // backfill never indexes it either.
+        let guard: SQL | undefined;
+
+        if (row !== undefined) {
+            guard = unchangedSince(dialect, { row, table: tableName });
+        } else if (sourceExists) {
+            guard = absentFrom(tableName, id);
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- sequential companion writes on the shared connection.
+        await queryRun(exec, dialect, purgeStatement(companion, id, guard));
+    }
+};
+
+/**
+ * Give an inverted companion its unique `(token, id)` key, one bounded page per
+ * call; a no-op on the other layouts, and once the key is in place, one
+ * primary-key read of the state table.
+ *
+ * A companion built before the key may hold a document's rows twice, and
+ * Postgres and MySQL refuse to add a unique index while any duplicate exists.
+ * So the pass first walks the companion's documents in id order,
+ * {@link UNIQUE_KEY_PAGE_DOCUMENTS} at a time, from a cursor kept in the search
+ * state table, and rewrites every document holding a duplicate from its source
+ * row. One page reads the rows of that many documents, never the whole
+ * companion. At the end of the walk it adds the key and drops the plain index
+ * the key replaces.
+ *
+ * Two cold starts running it at once repeat each other's page, which is
+ * harmless: the rewrites are guarded and idempotent. If the key still cannot be
+ * added — a duplicate written behind the cursor while the walk ran — the cursor
+ * goes back to the top and the next pass walks again.
+ */
+const migrateInvertedUniqueKey = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+): Promise<UniqueKeyPass> => {
+    if (resolveSearchLayout(index, dialect) !== invertedLayout) {
+        return "done";
+    }
+
+    const companion = companionFor(tableName, index);
+    const key = invertedUniqueKeyState(companion);
+    const state = await readSearchBackfillState(exec, dialect, key);
+
+    if (state.done) {
+        return "done";
+    }
+
+    const id = (alias: string): SQL => qualified(alias, FTS_ID_COLUMN);
+    const page = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${id("c")} AS ${sql.identifier("id")}, COUNT(*) AS ${sql.identifier("n")}, COUNT(DISTINCT ${qualified("c", FTS_TOKEN_COLUMN)}) AS ${sql.identifier("d")} FROM ${sql.identifier(companion)} ${sql.identifier("c")} JOIN (SELECT DISTINCT ${id("q")} FROM ${sql.identifier(companion)} ${sql.identifier("q")} WHERE ${id("q")} > ${state.cursor ?? ""} ORDER BY ${id("q")} LIMIT ${sql.raw(String(UNIQUE_KEY_PAGE_DOCUMENTS))}) ${sql.identifier("p")} ON ${id("p")} = ${id("c")} GROUP BY ${id("c")} ORDER BY ${id("c")} ASC`,
+    );
+    const duplicated = page.filter((row) => Number(row["n"]) > Number(row["d"])).map((row) => String(row["id"]));
+
+    if (duplicated.length > 0) {
+        await repairFromSource(exec, dialect, definition, tableName, index, companion, duplicated);
+    }
+
+    if (page.length === UNIQUE_KEY_PAGE_DOCUMENTS) {
+        await writeSearchBackfillState(exec, dialect, key, String(page.at(-1)?.["id"]), false, UNIQUE_KEY_PROFILE);
+
+        return "more";
+    }
+
+    if (!(await addUniqueKey(exec, dialect, companion))) {
+        await writeSearchBackfillState(exec, dialect, key, undefined, false, UNIQUE_KEY_PROFILE);
+
+        return "restarted";
+    }
+
+    await dropLegacyTokenIndex(exec, dialect, companion);
+    await writeSearchBackfillState(exec, dialect, key, undefined, true, UNIQUE_KEY_PROFILE);
+
+    return "done";
+};
+
+export type { SearchLayout, SearchStage, SourceRow, UniqueKeyPass, UnmappedPass };
 export {
     companionFor,
     companionProfile,
     fts5Layout,
     globalSearchIndexes,
-    indexDocumentAsRead,
     invertedLayout,
+    invertedUniqueKeyState,
+    migrateInvertedUniqueKey,
     migrateUnmappedEntries,
     nativeLayout,
     resolveSearchLayout,
