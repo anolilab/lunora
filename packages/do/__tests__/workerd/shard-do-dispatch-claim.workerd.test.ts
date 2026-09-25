@@ -76,7 +76,7 @@ const slowRuns = async (stub: DurableObjectStub<TestCounterDO>): Promise<number>
 
 describe("shardDO in-flight dispatch claim under real workerd", () => {
     it("declines a re-delivery whose handler is still running, and runs it exactly once", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const stub = newStub("claim-overlap");
 
@@ -96,6 +96,9 @@ describe("shardDO in-flight dispatch claim under real workerd", () => {
         await expect(slowRuns(stub)).resolves.toBe(1);
         expect(second.status).toBe(409);
         await expect(second.json()).resolves.toMatchObject({ error: { code: "DISPATCH_IN_PROGRESS" } });
+        // The marker a caller keys on: only the claim path sets it, so a handler
+        // that throws the same code cannot pass for a decline.
+        expect(second.headers.get("x-lunora-dispatch-declined")).toBe("1");
         // The decline is an expected re-delivery, not a failed call: it files no
         // error row in the durable request log the studio's Issues view reads.
         await expect(errorRows(stub)).resolves.toBe(0);

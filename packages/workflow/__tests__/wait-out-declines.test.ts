@@ -8,7 +8,8 @@ const ENV = { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.exam
 const EVENT: WorkflowEventLike<Record<string, never>> = { instanceId: "inst-1", payload: {}, timestamp: new Date(0), workflowName: "order-pipeline" };
 
 /** The body a shard answers a re-delivery with while the id's first run is still going. */
-const declined = (): Response => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 });
+const declined = (): Response =>
+    Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 });
 
 /** A dispatch origin that declines the first `declines` calls, then serves the result. */
 const origin = (declines: number) => {

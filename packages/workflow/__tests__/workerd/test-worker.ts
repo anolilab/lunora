@@ -68,7 +68,8 @@ const originFetch = (): Response => {
 
         const { body, status } = toErrorBody(new LunoraError("DISPATCH_IN_PROGRESS", "a dispatch carrying this idempotency id is already running"));
 
-        return Response.json({ error: body }, { status });
+        // The header only the shard's claim path sets — what makes this a decline and not a handler error.
+        return Response.json({ error: body }, { headers: { "x-lunora-dispatch-declined": "1" }, status });
     }
 
     return Response.json({ result: "charged" });
@@ -76,13 +77,14 @@ const originFetch = (): Response => {
 
 const realFetch = globalThis.fetch.bind(globalThis);
 
-/** Route `https://origin.test` (the `LUNORA_ORIGIN_URL` var) to {@link originFetch}; everything else reaches the real `fetch`. */
-const installOriginFetch = (): void => {
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
+// Route `https://origin.test` (the `LUNORA_ORIGIN_URL` var) to `originFetch`;
+// everything else reaches the real `fetch`. Installed once, at module scope:
+// the engine runs the entrypoint in this isolate, so the dispatch its `ctx.run`
+// makes goes through this module's global `fetch`.
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
 
-        return url.origin === "https://origin.test" ? originFetch() : realFetch(input, init);
-    };
+    return url.origin === "https://origin.test" ? originFetch() : realFetch(input, init);
 };
 
 /** One durable step whose only work is a `ctx.run`, with a small, fast retry budget so an exhausted budget shows up in seconds. */
@@ -107,9 +109,6 @@ const declineWorkflow: WorkflowDefinition<DeclineParams> = defineWorkflow<Declin
 class DeclineWorkflow extends LunoraWorkflow<DeclineParams> {
     public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
         super(context, env, declineWorkflow, "declineWorkflow");
-        // The engine runs the entrypoint in this isolate, so the dispatch its
-        // `ctx.run` makes goes through this module's global `fetch`.
-        installOriginFetch();
     }
 }
 

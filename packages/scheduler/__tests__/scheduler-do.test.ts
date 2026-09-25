@@ -1089,7 +1089,12 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         // that is running fine before the attempt that is doing the work ends.
         const spy = vi
             .spyOn(globalThis, "fetch")
-            .mockImplementation(async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 }));
+            .mockImplementation(async () =>
+                Response.json(
+                    { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                    { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                ),
+            );
         const start = Date.now();
         const clock = vi.spyOn(Date, "now").mockReturnValue(start);
 
@@ -1115,6 +1120,34 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
         expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(0);
+    });
+
+    it("charges a DISPATCH_IN_PROGRESS-coded 409 the shard's claim path did not mark — a handler threw it", async () => {
+        expect.assertions(1);
+
+        // The shard echoes a handler-thrown error's code and status. Without the
+        // claim's header this is the job failing, and an uncharged failure would
+        // re-arm forever instead of dead-lettering.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "forwarded" } }, { status: 409 }));
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 3 }, scheduledFor: start - 1000 })),
+        );
+
+        await scheduler.alarm();
+
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(1);
     });
 
     it("routes a thrown dispatch (network error / crypto failure) to retry rather than orphaning the job", async () => {

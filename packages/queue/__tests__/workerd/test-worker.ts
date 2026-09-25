@@ -73,7 +73,8 @@ const declineQueue: QueueDefinition<SmokeBody> = defineQueue<SmokeBody>({
 const declineFetch = (async () => {
     const { body, status } = toErrorBody(new LunoraError("DISPATCH_IN_PROGRESS", "a dispatch carrying this idempotency id is already running"));
 
-    return Response.json({ error: body }, { status });
+    // The header only the shard's claim path sets — what makes this a decline and not a handler error.
+    return Response.json({ error: body }, { headers: { "x-lunora-dispatch-declined": "1" }, status });
 }) as unknown as typeof fetch;
 
 /** Stable wrangler queue name → registry entry, exactly as codegen builds it. */
@@ -89,16 +90,12 @@ const testWorker = {
     async queue(batch: MessageBatch<SmokeBody>, env: Env): Promise<void> {
         // The generated worker `queue()` entry: route the real workerd batch
         // through the production dispatcher.
-        if (batch.queue === queueDefaultName("declineQueue")) {
-            await dispatchQueueBatch(batch, registry, {
-                env: { ...env, LUNORA_ADMIN_TOKEN: "test-token", LUNORA_ORIGIN_URL: "https://origin.test" },
-                fetchImpl: declineFetch,
-            });
-
-            return;
-        }
-
-        await dispatchQueueBatch(batch, registry, { env: env as unknown as Record<string, unknown> });
+        // Every dispatch here is declined: `smokeQueue` makes none, so only
+        // `declineQueue` ever reaches `declineFetch`.
+        await dispatchQueueBatch(batch, registry, {
+            env: { ...env, LUNORA_ADMIN_TOKEN: "test-token", LUNORA_ORIGIN_URL: "https://origin.test" },
+            fetchImpl: declineFetch,
+        });
     },
 };
 

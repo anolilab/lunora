@@ -17,7 +17,7 @@
  */
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { DISPATCH_CLAIM_CEILING_MS, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline } from "@lunora/dispatch";
+import { DEFAULT_QUEUE_MAX_RETRIES, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
@@ -66,11 +66,15 @@ interface CapturedQueueMessage {
      *
      * Read from the `defineQueue` DECLARATION, because a consumer has no
      * runtime API that exposes its deployed `queues.consumers[]` settings. It is
-     * true of the deployed broker only because Lunora's binding reconcile (run by
-     * `lunora dev`, `deploy` and `prepare`) writes every declared tuning field
-     * onto the consumer, including onto one that already exists. A worker
-     * deployed with a bare `wrangler deploy` over a hand-edited consumer can
-     * still disagree, and nothing on this side can see that.
+     * true of the deployed broker only as far as Lunora's binding reconcile (run
+     * by `lunora dev`, `deploy` and `prepare`) keeps the two in step: it writes
+     * every declared tuning field onto the consumer, including onto one that
+     * already exists. It does NOT remove a field taken out of `defineQueue` —
+     * dropping `deadLetterQueue` leaves the deployed DLQ in place, so this then
+     * reads `false` for messages that were in fact dead-lettered — and it never
+     * writes wrangler's `env.<name>` blocks, so a `--env` deploy uses whatever
+     * that block says. A bare `wrangler deploy` over a hand-edited consumer can
+     * disagree too, and nothing on this side can see any of it.
      */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
@@ -119,8 +123,9 @@ interface DispatchOptions {
     traceparent?: string;
 }
 
-/** Cloudflare Queues' default `max_retries` (retries after the initial delivery; total deliveries = 1 + max_retries). */
-const DEFAULT_MAX_RETRIES = 3;
+/** The queue's retry budget: its declared `maxRetries`, or Cloudflare's default when the export leaves it unset. */
+const declaredMaxRetries = (entry: QueueRegistryEntry): number =>
+    typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_QUEUE_MAX_RETRIES;
 
 /** Coerce a `Message.timestamp` (a `Date`, or a number/string in test doubles) to epoch-ms. */
 const timestampToMs = (value: unknown): number => {
@@ -344,7 +349,7 @@ const buildCaptureRecords = (
     attributed: MessageLike | undefined,
 ): CapturedQueueMessage[] => {
     const errorMessage = threw ? describeThrownError(handlerError) : undefined;
-    const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
+    const maxRetries = declaredMaxRetries(entry);
     // What a message the handler never decided settles as: `error` when the
     // handler threw (the batch is retried by workerd, but the handler signalled
     // failure), else workerd's implicit ack-on-success.
@@ -431,14 +436,6 @@ const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike
 };
 
 /**
- * How long a declined message waits before its next delivery: the shard's
- * claim ceiling, in the seconds `message.retry` takes. Past it the claim that
- * declined the message is gone — released with a cached result, or stale and
- * run over — so that delivery cannot be declined by it again.
- */
-const DECLINE_RETRY_DELAY_SECONDS = DISPATCH_CLAIM_CEILING_MS / 1000;
-
-/**
  * Settle a batch whose handler threw a `409 DISPATCH_IN_PROGRESS` decline: the
  * message's own earlier delivery is still running the call on the shard.
  *
@@ -450,8 +447,9 @@ const DECLINE_RETRY_DELAY_SECONDS = DISPATCH_CLAIM_CEILING_MS / 1000;
  * dropped the message, or dead-lettered it, while that action was still going.
  *
  * Cloudflare Queues has no uncounted retry, so a decline still costs one
- * attempt. What this bounds is how MANY: the declined message is retried after
- * {@link DECLINE_RETRY_DELAY_SECONDS}, by which point the claim cannot still
+ * attempt. What this bounds is how MANY: the declined message is retried past
+ * the claim ceiling (`@lunora/dispatch`'s `retryDeclinedMessage`, the policy the
+ * scheduler's queue workpool shares), by which point the claim cannot still
  * stand, so one claim costs at most one attempt. The next delivery is then
  * served the finished call from the replay cache, or runs it if the first
  * attempt died. It is never acked, so at-least-once holds.
@@ -465,7 +463,7 @@ const DECLINE_RETRY_DELAY_SECONDS = DISPATCH_CLAIM_CEILING_MS / 1000;
 const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, entry: QueueRegistryEntry, queue: string): void => {
     const declinedId = getDispatchMessageId(handlerError);
     const scoped = harness.originals.find((candidate) => candidate.id === declinedId && !harness.dispositions.has(candidate));
-    const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
+    const where = `@lunora/queue: queue "${queue}" (${entry.exportName})`;
 
     for (const candidate of harness.originals) {
         if (harness.dispositions.has(candidate)) {
@@ -480,18 +478,7 @@ const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, en
             continue;
         }
 
-        candidate.retry({ delaySeconds: DECLINE_RETRY_DELAY_SECONDS });
-
-        // The one case a delay cannot save: the decline landed on the message's
-        // last delivery, and a retry the broker will not grant ends in the DLQ
-        // or, without one, in a drop. Say so, since the call that declined it may
-        // still be running.
-        if (typeof candidate.attempts === "number" && candidate.attempts > maxRetries) {
-            // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on the dispatch path
-            console.error(
-                `@lunora/queue: message ${candidate.id} on queue "${queue}" (${entry.exportName}) was declined (DISPATCH_IN_PROGRESS) on its last delivery (attempt ${String(candidate.attempts)} of ${String(maxRetries + 1)}) — its earlier delivery is still running the call. It is retried anyway, but its retries are exhausted, so it will be dead-lettered if the queue has a deadLetterQueue and dropped if not. Raise maxRetries so a slow call cannot exhaust it.`,
-            );
-        }
+        retryDeclinedMessage(candidate, { maxRetries: declaredMaxRetries(entry), where });
     }
 };
 

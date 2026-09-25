@@ -20,7 +20,7 @@ import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
 import type { WorkflowBindingLike, WorkflowEventLike, WorkflowRunContext, WorkflowRunFunction, WorkflowStepLike } from "./types";
 import { createWaitForEvent } from "./wait-for-event";
-import { waitOutDeclines } from "./wait-out-decline";
+import { waitOutDeclines } from "./wait-out-declines";
 
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
@@ -45,7 +45,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     //
     // Every dispatch, top-level and in-step, waits out a `DISPATCH_IN_PROGRESS`
     // decline in place rather than throwing it into the engine's retry budget
-    // (see `wait-out-decline.ts`).
+    // (see `wait-out-declines.ts`).
     const dispatch = waitOutDeclines(
         createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction,
     );

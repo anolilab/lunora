@@ -19,7 +19,7 @@
  * `createDispatchRunner`, authenticated with the admin bearer).
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { createDispatchRunner, DISPATCH_CLAIM_CEILING_MS, isDispatchDecline } from "@lunora/dispatch";
+import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { encodeWire } from "../../../shared/wire-codec";
@@ -170,7 +170,7 @@ const createQueueConsumer =
                     // the claim's ceiling out: the next delivery is then served
                     // the finished result, or runs the job if that run died.
                     if (isDispatchDecline(error)) {
-                        message.retry({ delaySeconds: DISPATCH_CLAIM_CEILING_MS / 1000 });
+                        retryDeclinedMessage(message, { maxRetries: options.maxRetries, where: `@lunora/scheduler: queue "${batch.queue}"` });
 
                         return;
                     }

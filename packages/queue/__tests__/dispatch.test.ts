@@ -496,7 +496,10 @@ const dispatchFetchFailingFor = (failFor: string, status: number, code: string) 
     const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
 
     if (args?.id === failFor) {
-        return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { status });
+        // A decline carries the header the shard's claim path sets; nothing else does.
+        const headers: Record<string, string> = code === "DISPATCH_IN_PROGRESS" ? { "x-lunora-dispatch-declined": "1" } : {};
+
+        return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { headers, status });
     }
 
     // The shard's dispatch response always carries a `result` key, so a bare body

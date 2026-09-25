@@ -2,9 +2,8 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
-import { IN_FLIGHT_CLAIM_CEILING_MS } from "../../do/src/in-flight-claims";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
-import { createDispatchRunner, DISPATCH_CLAIM_CEILING_MS, isDeterministicDispatchFailure, isDispatchDecline } from "../src/create-dispatch-runner";
+import { createDispatchRunner, isDeterministicDispatchFailure, isDispatchDecline } from "../src/create-dispatch-runner";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" };
 const REF = { __lunoraRef: "messages:send" };
@@ -308,29 +307,31 @@ describe("createDispatchRunner", () => {
 });
 
 describe("isDispatchDecline", () => {
-    const failWith = async (status: number, code: string): Promise<unknown> =>
-        createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ error: { code, message: "m" } }, { status }), label: "@lunora/queue" })(
-            REF,
-        ).then(
+    const failWith = async (status: number, code: string, headers: Record<string, string> = {}): Promise<unknown> =>
+        createDispatchRunner({
+            env: ENV,
+            fetchImpl: async () => Response.json({ error: { code, message: "m" } }, { headers, status }),
+            label: "@lunora/queue",
+        })(REF).then(
             () => undefined,
             (error: unknown) => error,
         );
 
-    it("is true only for a real DISPATCH_IN_PROGRESS envelope", async () => {
-        expect.assertions(3);
+    it("is true for the shard's claim decline, which carries the declined header", async () => {
+        expect.assertions(2);
 
-        expect(isDispatchDecline(await failWith(409, "DISPATCH_IN_PROGRESS"))).toBe(true);
-        expect(isDispatchDecline(await failWith(409, "CONFLICT"))).toBe(false);
+        expect(isDispatchDecline(await failWith(409, "DISPATCH_IN_PROGRESS", { "x-lunora-dispatch-declined": "1" }))).toBe(true);
         // Right code, but not rebuilt from a dispatch response.
         expect(isDispatchDecline(new LunoraError("DISPATCH_IN_PROGRESS", "m"))).toBe(false);
     });
 
-    it("bounds a decline by the shard's own claim ceiling", () => {
+    it("is false for a handler that forwards a DISPATCH_IN_PROGRESS error of its own", async () => {
         expect.assertions(1);
 
-        // A consumer that waits a decline out for this long relies on the claim
-        // being gone by then. The two live in packages with no dependency edge.
-        expect(DISPATCH_CLAIM_CEILING_MS).toBe(IN_FLIGHT_CLAIM_CEILING_MS);
+        // The shard echoes a handler-thrown error's code and status, but only the
+        // claim path sets the header. Read as a decline, this would re-run the
+        // action for fifteen minutes (workflow) or park it for fifteen (queue).
+        expect(isDispatchDecline(await failWith(409, "DISPATCH_IN_PROGRESS"))).toBe(false);
     });
 });
 

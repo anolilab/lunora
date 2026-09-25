@@ -200,7 +200,11 @@ describe("createQueueConsumer", () => {
         const consume = createQueueConsumer({
             dispatch: httpDispatcher({
                 adminToken: "t",
-                fetchImpl: async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 }),
+                fetchImpl: async () =>
+                    Response.json(
+                        { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                        { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                    ),
                 originUrl: "https://app.example.com",
             }),
         });
@@ -209,6 +213,34 @@ describe("createQueueConsumer", () => {
 
         expect(retries).toStrictEqual([{ delaySeconds: 900 }]);
         expect(message.acked).toBe(false);
+    });
+
+    it("says so when a decline lands on the message's last delivery", async () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const consume = createQueueConsumer({
+                dispatch: httpDispatcher({
+                    adminToken: "t",
+                    fetchImpl: async () =>
+                        Response.json(
+                            { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                            { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                        ),
+                    originUrl: "https://app.example.com",
+                }),
+                maxRetries: 1,
+            });
+
+            await consume(fakeBatch([{ ...fakeMessage({ functionPath: "jobs:a" }), attempts: 2 }]));
+
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(String(error.mock.calls[0]?.[0])).toMatch(/on its last delivery \(attempt 2 of 2\)/u);
+        } finally {
+            error.mockRestore();
+        }
     });
 
     it("retries a structurally-invalid message (no functionPath) so it dead-letters", async () => {
