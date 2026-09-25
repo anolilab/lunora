@@ -17,13 +17,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { CelldDev } from "./celld-process";
-import { startCelldDev, stopCelldDev } from "./celld-process";
-import type { Factories } from "./tck-legs";
+import { pollUntil, startCelldDev, stopCelldDev } from "./celld-process";
+import type { BindingResult } from "./tck-bindings";
+import type { Factories, LegResult } from "./tck-legs";
 import { collectLegs } from "./tck-legs";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
-
-type LegResult = { message?: string; status: "failed" | "passed" | "skipped" };
 
 /** Collection never calls a factory; the worker supplies the real ones. */
 const unusedFactories = {
@@ -75,8 +74,6 @@ describe("celld conformance run", () => {
     });
 
     describe("binding-backed ratings, through Lunora's adapters", () => {
-        type BindingResult = { message?: string; status: "failed" | "passed" | "pending"; value?: unknown };
-
         const binding = async (route: string): Promise<BindingResult> => {
             const response = await fetch(`${fleet.origin}/binding/${route}`);
 
@@ -84,21 +81,8 @@ describe("celld conformance run", () => {
         };
 
         /** Poll `route` until `done` accepts its result — deliveries and runs are not instant. */
-        const settle = async (route: string, done: (result: BindingResult) => boolean, deadlineMs: number): Promise<BindingResult> => {
-            const deadline = Date.now() + deadlineMs;
-            let result = await binding(route);
-
-            while (!done(result) && Date.now() < deadline) {
-                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 500);
-                });
-                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-                result = await binding(route);
-            }
-
-            return result;
-        };
+        const settle = async (route: string, done: (result: BindingResult) => boolean, deadlineMs: number): Promise<BindingResult> =>
+            pollUntil(async () => binding(route), done, { deadlineMs, intervalMs: 500 });
 
         const run = Date.now().toString();
 
@@ -181,14 +165,7 @@ describe("celld conformance run", () => {
         };
 
         const until = async (predicate: () => boolean): Promise<void> => {
-            const deadline = Date.now() + 5000;
-
-            while (!predicate() && Date.now() < deadline) {
-                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 25);
-                });
-            }
+            await pollUntil(async () => predicate(), Boolean, { deadlineMs: 5000, intervalMs: 25 });
         };
 
         // The suites cannot run this leg from inside a cell: celld does not deliver

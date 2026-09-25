@@ -19,7 +19,10 @@ import type { DeployDriver, DriverToolchain } from "../deploy-driver";
  * the handlers' spawn assertions. `tool` is the bare binary: the CLI wraps it
  * for the project's package manager.
  */
-const CLOUDFLARE_TOOLCHAIN: Required<DriverToolchain> = {
+const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
+    devServer: "workerd",
+    prebuildsContainerImages: true,
+
     deploy: (request) => {
         // `versions upload` publishes a new Version with a preview URL instead
         // of taking production traffic.
@@ -130,7 +133,7 @@ const CLOUDFLARE_TOOLCHAIN: Required<DriverToolchain> = {
 };
 
 /** The Cloudflare deploy driver. */
-const CLOUDFLARE_DRIVER: DeployDriver & { readonly toolchain: Required<DriverToolchain> } = {
+const CLOUDFLARE_DRIVER: DeployDriver = {
     id: "cloudflare",
     name: "Cloudflare",
     toolchain: CLOUDFLARE_TOOLCHAIN,

@@ -19,7 +19,7 @@
  * `celld dev`), and has no log stream a CLI can follow.
  */
 import type { DeployDriver, DeployRequest, DriverToolchain } from "../deploy-driver";
-import { writeCelldConfig } from "./celld-config";
+import { planCelldConfig } from "./celld-config";
 
 /**
  * The deploy options celld has no equivalent for, with what to do instead.
@@ -35,6 +35,15 @@ const UNSUPPORTED_DEPLOY_OPTIONS: ReadonlyArray<[keyof DeployRequest, string]> =
     ["temporary", "celld has no short-lived accounts — it deploys to the fleet bucket in CELLD_BUCKET"],
 ];
 
+/** The projection celld runs. A request without one is a caller bug, not a default. */
+const projectionPath = (configPath: string | undefined): string => {
+    if (configPath === undefined) {
+        throw new Error("the celld driver runs the projected wrangler config — pass `configPath` from `projectConfig`");
+    }
+
+    return configPath;
+};
+
 const CELLD_TOOLCHAIN: DriverToolchain = {
     deploy: (request) => {
         const refused = UNSUPPORTED_DEPLOY_OPTIONS.find(([option]) => request[option] !== undefined && request[option] !== false);
@@ -45,22 +54,27 @@ const CELLD_TOOLCHAIN: DriverToolchain = {
 
         // `celld deploy --dry-run` bundles and prints the version without
         // writing to the bucket.
-        return { args: ["deploy", request.configPath ?? ".", ...(request.dryRun === true ? ["--dry-run"] : [])], onPath: true, tool: "celld" };
+        return { args: ["deploy", projectionPath(request.configPath), ...(request.dryRun === true ? ["--dry-run"] : [])], onPath: true, tool: "celld" };
     },
+
+    devServer: "own",
+
+    // `celld deploy` builds each image from its Dockerfile itself.
+    prebuildsContainerImages: false,
 
     dev: (request) => {
         if (request.environment !== undefined) {
             throw new Error("celld has no Wrangler environments — `celld dev` runs the top-level config");
         }
 
-        return { args: ["dev", request.configPath ?? ".", ...(request.extraArgs ?? [])], onPath: true, tool: "celld" };
+        return { args: ["dev", projectionPath(request.configPath), ...(request.extraArgs ?? [])], onPath: true, tool: "celld" };
     },
 };
 
 const CELLD_DRIVER: DeployDriver = {
     id: "celld",
     name: "celld",
-    projectConfig: writeCelldConfig,
+    projectConfig: planCelldConfig,
     toolchain: CELLD_TOOLCHAIN,
 };
 

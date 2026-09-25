@@ -211,11 +211,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // hint instead of a bare, file-less `runner-worker` TypeError.
         plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
 
-        // A host that ships from a config projection (celld) deploys the Vite
-        // BUILD output, so composing the Cloudflare plugin is right for
-        // `vite build` — but `vite dev` then serves the worker in workerd, not
-        // on the target. Say so instead of letting it pass for the target.
-        if (resolveDeployDriver(resolved.target).projectConfig !== undefined) {
+        // A host with its own dev server (celld) deploys the Vite BUILD output,
+        // so composing the Cloudflare plugin is right for `vite build` — but
+        // `vite dev` then serves the worker in workerd, not on the target. Say
+        // so instead of letting it pass for the target.
+        if (resolveDeployDriver(resolved.target).toolchain?.devServer === "own") {
             plugins.push({
                 configureServer(server) {
                     server.config.logger.warn(

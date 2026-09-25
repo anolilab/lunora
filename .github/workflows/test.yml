@@ -29,6 +29,7 @@
             "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
+            "celld": "${{ steps.changes.outputs.celld }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -274,7 +275,7 @@
     # and on CI a missing endpoint fails the test rather than skipping it.
     "test-celld":
         "name": "celld integration (@lunora/platform-celld)"
-        "if": "needs.files-changed.outputs.packages == 'true'"
+        "if": "needs.files-changed.outputs.celld == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20

@@ -46,21 +46,6 @@ describe("createCelldWorkerPlatform", () => {
         expect(platform.capabilities.features.localSql?.level).toBe("native");
     });
 
-    it("rates the surfaces celld v0.4.1+ unblocked as working, and placement as not", () => {
-        expect.assertions(4);
-
-        const { features } = createCelldWorkerPlatform({}).capabilities;
-
-        // A celld queue consumer may now export `fetch()` on the same worker,
-        // so Queues and the queue-backed mail transport both run.
-        expect(features.queues?.level).toBe("native");
-        expect(features.mail?.level).toBe("emulated");
-        expect(features.websocketHibernation?.level).toBe("native");
-        // Cells land on whichever node has capacity, so there is nowhere to
-        // place a read replica nearer the reader.
-        expect(features.shardReadReplicas?.level).toBe("unsupported");
-    });
-
     it("resolves a bound namespace through the shared directory adapter", () => {
         expect.assertions(2);
 

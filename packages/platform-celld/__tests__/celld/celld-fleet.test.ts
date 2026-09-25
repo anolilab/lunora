@@ -13,8 +13,6 @@
  * `LUNORA_CELLD_S3_ENDPOINT`. On CI a missing endpoint fails rather than
  * skips, so the job cannot go green without the fleet having run.
  */
-import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,16 +20,16 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { celldEnvironment, freePort, pause, stopCelld } from "./celld-process";
+import type { CapturedProcess } from "./celld-process";
+import { celldEnvironment, freePort, pause, pollUntil, runCelld, spawnCaptured, stopCelld, waitUntilServing } from "./celld-process";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
-const CELLD = process.env.LUNORA_CELLD_BIN ?? "celld";
 const ENDPOINT = process.env.LUNORA_CELLD_S3_ENDPOINT;
 
 /** A cell whose owner stopped is taken over once its lease lapses (~10 s); allow several. */
 const TAKEOVER_DEADLINE_MS = 60_000;
 
-type FleetNode = { directory: string; origin: string; output: string; process: ChildProcess };
+type FleetNode = CapturedProcess & { directory: string; origin: string };
 
 /** Every node any test started, for teardown. */
 const started: FleetNode[] = [];
@@ -44,33 +42,12 @@ const credentials = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
         ...extra,
     });
 
-const run = async (args: ReadonlyArray<string>): Promise<string> =>
-    new Promise((resolve, reject) => {
-        const child = spawn(CELLD, args, { env: credentials(), stdio: ["ignore", "pipe", "pipe"] });
-        let output = "";
-
-        child.stdout.on("data", (chunk: Buffer) => {
-            output += chunk.toString();
-        });
-        child.stderr.on("data", (chunk: Buffer) => {
-            output += chunk.toString();
-        });
-        child.once("error", reject);
-        child.once("exit", (code) => {
-            if (code === 0) {
-                resolve(output);
-            } else {
-                reject(new Error(`celld ${args.join(" ")} exited ${String(code)}:\n${output}`));
-            }
-        });
-    });
-
 /** A fresh bucket with the TCK worker deployed to it. */
 const deployFleet = async (name: string): Promise<string> => {
     const bucket = `lunora-celld-${name}-${String(Date.now())}`;
 
     await fetch(`${String(ENDPOINT)}/${bucket}`, { method: "PUT" });
-    await run(["deploy", HARNESS_DIR, "--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT)]);
+    await runCelld(["deploy", HARNESS_DIR, "--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT)], credentials());
 
     return bucket;
 };
@@ -78,40 +55,16 @@ const deployFleet = async (name: string): Promise<string> => {
 const startNode = async (bucket: string, extra: NodeJS.ProcessEnv = {}): Promise<FleetNode> => {
     const port = await freePort();
     const directory = await mkdtemp(join(tmpdir(), "lunora-celld-node-"));
-    const child = spawn(CELLD, ["--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT), "--listen", `127.0.0.1:${String(port)}`], {
+    const captured = spawnCaptured(["--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT), "--listen", `127.0.0.1:${String(port)}`], {
         cwd: directory,
         env: credentials(extra),
-        stdio: ["ignore", "pipe", "pipe"],
     });
-    const node: FleetNode = { directory, origin: `http://127.0.0.1:${String(port)}`, output: "", process: child };
+    const node: FleetNode = { ...captured, directory, origin: `http://127.0.0.1:${String(port)}` };
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-        node.output += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-        node.output += chunk.toString();
-    });
     started.push(node);
+    await waitUntilServing(node.origin, node, 60_000);
 
-    const deadline = Date.now() + 60_000;
-
-    while (Date.now() < deadline) {
-        if (child.exitCode !== null) {
-            throw new Error(`celld node exited before serving:\n${node.output}`);
-        }
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-            await fetch(`${node.origin}/ready`);
-
-            return node;
-        } catch {
-            // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-            await pause(250);
-        }
-    }
-
-    throw new Error(`celld node did not serve within the deadline:\n${node.output}`);
+    return node;
 };
 
 const probe = async (node: FleetNode, name: string, value?: string): Promise<string> => {
@@ -122,34 +75,18 @@ const probe = async (node: FleetNode, name: string, value?: string): Promise<str
 
 /** Each live node's `owned_cells`, as `celld diagnose` probes them. */
 const ownedCells = async (bucket: string): Promise<number[]> => {
-    const report = await run(["diagnose", "--json", "--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT)]).catch(String);
+    const report = await runCelld(["diagnose", "--json", "--bucket", `s3://${bucket}`, "--endpoint", String(ENDPOINT)], credentials()).catch(String);
 
     return [...report.matchAll(/owned_cells=(\d+)/gu)].map((match) => Number(match[1]));
 };
 
 /** Read through `node` until it answers `expected` — a takeover is not instant. */
-const readUntil = async (node: FleetNode, name: string, expected: string): Promise<string> => {
-    const deadline = Date.now() + TAKEOVER_DEADLINE_MS;
-    let last = "";
-
-    while (Date.now() < deadline) {
-        try {
-            // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-            last = await probe(node, name);
-
-            if (last === expected) {
-                return last;
-            }
-        } catch (error) {
-            last = String(error);
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-        await pause(500);
-    }
-
-    return last;
-};
+const readUntil = async (node: FleetNode, name: string, expected: string): Promise<string> =>
+    pollUntil(
+        async () => probe(node, name).catch(String),
+        (value) => value === expected,
+        { deadlineMs: TAKEOVER_DEADLINE_MS, intervalMs: 500 },
+    );
 
 const needsEndpoint = ENDPOINT === undefined && process.env.CI === undefined;
 
@@ -163,7 +100,7 @@ describe("celld fleet", () => {
     afterAll(async () => {
         for (const node of started) {
             // eslint-disable-next-line no-await-in-loop -- tear down one node at a time
-            await stopCelld(node.process);
+            await stopCelld(node.child);
             // eslint-disable-next-line no-await-in-loop -- tear down one node at a time
             await rm(node.directory, { force: true, recursive: true });
         }
@@ -198,7 +135,7 @@ describe("celld fleet", () => {
             await expect(probe(first, "takeover", "before-crash")).resolves.toBe("stored");
 
             // Not a drain: the owner vanishes mid-lease, as a crashed machine would.
-            first.process.kill("SIGKILL");
+            first.child.kill("SIGKILL");
 
             await expect(readUntil(second, "takeover", "before-crash")).resolves.toBe("before-crash");
             // The surviving node now owns the cell and accepts writes to it.
@@ -233,15 +170,11 @@ describe("celld fleet", () => {
             await pause(5000);
 
             const second = await startNode(bucket, TUNING);
-            const deadline = Date.now() + 60_000;
-            let owned = await ownedCells(bucket);
-
-            while (owned.filter((count) => count > 0).length < 2 && Date.now() < deadline) {
-                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-                await pause(1000);
-                // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-                owned = await ownedCells(bucket);
-            }
+            const owned = await pollUntil(
+                async () => ownedCells(bucket),
+                (counts) => counts.filter((count) => count > 0).length >= 2,
+                { deadlineMs: 60_000, intervalMs: 1000 },
+            );
 
             // Both nodes own cells: some moved to the one that joined, unprompted.
             expect(owned.filter((count) => count > 0)).toHaveLength(2);
