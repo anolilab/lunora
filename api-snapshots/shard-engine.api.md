@@ -20,6 +20,7 @@ const ADMIN_FUNCTIONS: {
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backfillSearch: "__lunora_admin__:backfillSearch";
+    readonly backfillVectors: "__lunora_admin__:backfillVectors";
     readonly backRelationCounts: "__lunora_admin__:backRelationCounts";
     readonly cdcSync: "__lunora_admin__:cdcSync";
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
@@ -1464,6 +1465,12 @@ interface OrderKeyConstraints {
     pinned?: ReadonlySet<string>;
     uniqueBy?: ReadonlyArray<ReadonlyArray<string>>;
 }
+```
+
+### `OrderedAfterWrites` (type)
+
+```ts
+type OrderedAfterWrites = <T>(read: () => T, work: (value: T) => Promise<void>) => Promise<void>;
 ```
 
 ### `OwnerRelay` (class)
@@ -3302,6 +3309,12 @@ interface TtlSweepSpec {
 const UNVOUCHABLE_DEP = "!unvouchable";
 ```
 
+### `VECTOR_BACKFILL_PAGE_ROWS` (const)
+
+```ts
+const VECTOR_BACKFILL_PAGE_ROWS = 100;
+```
+
 ### `ValidatorLike` (interface)
 
 ```ts
@@ -3315,6 +3328,25 @@ interface ValidatorLike {
     };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
+}
+```
+
+### `VectorBackfillProgress` (interface)
+
+```ts
+interface VectorBackfillProgress {
+    done: boolean;
+    pages: number;
+    rows: number;
+}
+```
+
+### `VectorBackfillTarget` (interface)
+
+```ts
+interface VectorBackfillTarget {
+    profile: string;
+    table: string;
 }
 ```
 
@@ -3546,6 +3578,16 @@ const backfillSearchIndexes: (sql: SqlExec, schema: SchemaLike, options?: {
 const backfillSearchIndexesForTable: (sql: SqlExec, tableName: string, definition: {
     searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
 }) => void;
+```
+
+### `backfillVectorIndexes` (const)
+
+```ts
+const backfillVectorIndexes: (sql: SqlExec, targets: ReadonlyArray<VectorBackfillTarget>, sync: WriteHook, options: {
+    maxPages?: number;
+    ordered: OrderedAfterWrites;
+    restart?: boolean;
+}) => Promise<VectorBackfillProgress>;
 ```
 
 ### `bigintSqlKey` (const)

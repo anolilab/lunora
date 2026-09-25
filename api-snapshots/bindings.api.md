@@ -857,6 +857,9 @@ interface SchemaLike {
 
 ```ts
 interface TableDefinitionLike {
+    softDeleteMode?: {
+        field: string;
+    };
     vectorIndexes?: ReadonlyArray<TableVectorIndexLike>;
 }
 ```
@@ -865,9 +868,11 @@ interface TableDefinitionLike {
 
 ```ts
 interface TableVectorIndexLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     field: string;
     metadata?: ReadonlyArray<string>;
+    metric?: string;
     name: string;
 }
 ```
@@ -938,8 +943,10 @@ type VectorEmbedderLike = (input: string) => Promise<ReadonlyArray<number>> | Re
 
 ```ts
 interface VectorIndexDefinitionLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
+    metric?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
@@ -1106,6 +1113,15 @@ const createVectorSyncHook: (options: {
 
 ```ts
 const createVectors: (options: LunoraVectorsOptions) => LunoraVectors;
+```
+
+### `vectorBackfillTargets` (const)
+
+```ts
+const vectorBackfillTargets: (schema: SchemaLike) => {
+    profile: string;
+    table: string;
+}[];
 ```
 
 ## Referenced internal declarations

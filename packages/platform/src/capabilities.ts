@@ -486,7 +486,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
             level: "native",
-            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option",
+            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option. Write sync and the `backfillVectors` admin op (paged embedding of pre-existing rows) are Lunora's, carried by ShardHost: pages are read under `runSerialized` and synced on the shard's after-commit chain. Shard-local tables only: `.global()` plus a vector index is rejected, since D1/Hyperdrive writes never reach that chain",
         },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
@@ -649,7 +649,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. The limits R2 would apply are applied here rather than left to the deploy to discover: put verifies a declared sha256 against the bytes received and stores nothing on a mismatch, and refuses customMetadata over R2's summed 2048-byte ceiling. Because R2 has no directories, neither does this bucket's behaviour — a deleted key's empty directory is pruned, so a later object may take that prefix, and delete of a key that is only a prefix is the no-op it is on R2 rather than a raw fs error. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
-        vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
+        vectorStore: {
+            level: "unsupported",
+            note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED",
+        },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },

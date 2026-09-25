@@ -318,9 +318,11 @@ type WriteHook = (event: WriteEvent) => Promise<void>;
 
 /** Inline vector index declared via `.vectorize(field, ...)` (DSL Shape A). */
 interface TableVectorIndexLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     field: string;
     metadata?: ReadonlyArray<string>;
+    metric?: string;
     name: string;
 }
 
@@ -332,8 +334,10 @@ interface TableDefinitionLike {
 
 /** Standalone vector index declared via `defineVectorIndex(...)` (DSL Shape B). */
 interface VectorIndexDefinitionLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
+    metric?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
@@ -573,6 +577,39 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
     };
 };
 
+/**
+ * Every table with a vector index sourced from it, each with a fingerprint of
+ * what its stored vectors were built from — the input to the shard's vector
+ * backfill, which re-walks a table whose fingerprint changed.
+ *
+ * Covers what the schema can see: index names, the inline source field,
+ * dimensions, metric and inline metadata fields. A function (`embed`, a Shape B
+ * `select`/`metadata`) has no stable identity to fingerprint — its source text
+ * changes with unrelated rebuilds of the bundle, which would re-embed whole
+ * tables for nothing — so changing one is announced by calling the backfill with
+ * `restart: true`.
+ */
+const vectorBackfillTargets = (schema: SchemaLike): { profile: string; table: string }[] => {
+    const byTable = new Map<string, string[]>();
+    const add = (table: string, descriptor: unknown[]): void => {
+        byTable.set(table, [...(byTable.get(table) ?? []), JSON.stringify(descriptor)]);
+    };
+
+    for (const [table, definition] of Object.entries(schema.tables)) {
+        for (const index of definition.vectorIndexes ?? []) {
+            add(table, [index.name, index.field, index.dimensions, index.metric, index.metadata ?? []]);
+        }
+    }
+
+    for (const [name, index] of Object.entries(schema.vectorIndexes)) {
+        add(index.table, [name, "(select)", index.dimensions, index.metric]);
+    }
+
+    return [...byTable].map(([table, descriptors]) => {
+        return { profile: descriptors.toSorted((a, b) => a.localeCompare(b)).join("|"), table };
+    });
+};
+
 export type {
     CreateContextVectorsOptions,
     SchemaLike,
@@ -589,4 +626,4 @@ export type {
     WriteEvent,
     WriteHook,
 };
-export { createContextVectors, createVectorSyncHook };
+export { createContextVectors, createVectorSyncHook, vectorBackfillTargets };

@@ -13,7 +13,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./context";
-export { createContextVectors, createVectorSyncHook } from "./context";
+export { createContextVectors, createVectorSyncHook, vectorBackfillTargets } from "./context";
 export type {
     VectorAdminIndexSummary,
     VectorAdminIntrospector,

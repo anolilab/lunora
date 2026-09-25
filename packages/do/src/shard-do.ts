@@ -127,6 +127,7 @@ import type {
     TransactionLimits,
     TransactionSqlLike,
     TtlSweepSpec,
+    VectorBackfillProgress,
     WorkflowInstanceStatusResult,
     WorkflowsResult,
 } from "@lunora/shard-engine";
@@ -3502,6 +3503,64 @@ abstract class ShardDO {
         // `errorToResponse` would replace this message with "internal error" and the
         // caller would get a bare 501 with nothing actionable in it.
         throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema");
+    }
+
+    /**
+     * Embed the rows that predate a vector index — or a change to one — into
+     * Vectorize, `maxPages` pages per call. The write-through sync hook only sees
+     * rows written after the index existed; without this those rows are never
+     * findable. The base class has no schema or vector bindings, so it reports the
+     * op unsupported; the codegen subclass overrides it (only when the schema
+     * declares a vector index and the target has a vector store) to call
+     * the shard engine's vector backfill with the same sync hook `ctx.db` uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema and vector bindings
+    protected runShardVectorBackfill(_options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
+        return Promise.reject(
+            new LunoraError("NOT_IMPLEMENTED", "vector backfill is unavailable: this shard declares no vector index, or its host has no vector store"),
+        );
+    }
+
+    /**
+     * `read` inside the single-writer gate, then `work` on its result as a link of
+     * the commit-ordered after-commit chain — so `work` runs after the hooks of
+     * every write committed before `read` and before the hooks of every write
+     * committed after it. Resolves once `work` has finished, rejecting with its
+     * error.
+     *
+     * This is what lets a backfill write to an external index without racing live
+     * writes: its snapshot and its position on the chain are taken at the same
+     * instant, so a newer write's hook always lands after it.
+     */
+    protected async runOrderedAfterWrites<T>(read: () => T, work: (value: T) => Promise<void>): Promise<void> {
+        // Settles with the error rather than rejecting: nothing awaits it until the
+        // transaction below returns, and a rejection in between would be reported
+        // as unhandled.
+        let settle = (_failure: { error: unknown } | undefined): void => undefined;
+        const outcome = new Promise<{ error: unknown } | undefined>((resolve) => {
+            settle = resolve;
+        });
+
+        await this.runInTransaction(async () => {
+            const value = read();
+
+            // Inside the transaction this only queues the work; it runs once the
+            // transaction commits, as this transaction's link on the chain.
+            await this.deferAfterCommit(async () => {
+                try {
+                    await work(value);
+                    settle(undefined);
+                } catch (error) {
+                    settle({ error });
+                }
+            });
+        });
+
+        const failure = await outcome;
+
+        if (failure) {
+            throw failure.error;
+        }
     }
 
     /**
@@ -8633,6 +8692,52 @@ abstract class ShardDO {
     }
 
     /**
+     * `__lunora_admin__:backfillVectors` — embed the rows that predate this
+     * shard's vector indexes (or a change to one) into Vectorize.
+     *
+     * Bounded by default, unlike `backfillSearch`: every row is a remote embed plus
+     * a Vectorize upsert per index, so even a modest table cannot be embedded in
+     * one request. Absent `maxPages` runs ONE page; the caller repeats until
+     * `done` — `lunora run '__lunora_admin__:backfillVectors' --args
+     * '{"maxPages":5}'`. `restart: true` re-embeds every vectorized table from the
+     * top, for an embedder change the recorded profile cannot see. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleBackfillVectors(args: Record<string, unknown>): Promise<Response> {
+        const rawPages = args["maxPages"];
+        const rawRestart = args["restart"];
+        let maxPages: number | undefined;
+
+        if (rawPages !== undefined) {
+            const parsed = typeof rawPages === "number" ? rawPages : Number(rawPages);
+
+            if (!Number.isFinite(parsed) || parsed < 1) {
+                return jsonResponse(
+                    { error: { code: "BAD_REQUEST", message: "backfillVectors: maxPages must be a positive integer, or omitted for one page" } },
+                    400,
+                );
+            }
+
+            maxPages = Math.floor(parsed);
+        }
+
+        // Strict for the same reason as `maxPages`: `restart` re-embeds whole
+        // tables, so `"false"` must not read as yes.
+        if (rawRestart !== undefined && typeof rawRestart !== "boolean") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "backfillVectors: restart must be a boolean" } }, 400);
+        }
+
+        const result = await this.runShardVectorBackfill({
+            ...(maxPages === undefined ? {} : { maxPages }),
+            ...(rawRestart === true ? { restart: true } : {}),
+        });
+
+        this.recordAudit("backfillVectors", { detail: { done: result.done, pages: result.pages, restart: rawRestart === true, rows: result.rows } });
+
+        return adminResponse(result);
+    }
+
+    /**
      * Record one app-level auth attempt for the auth-failure SLO (PLAN3 §2.3).
      * The worker calls this fire-and-forget (via `waitUntil`) after a top-level
      * `/api/auth/*` ATTEMPT route returns, so it never blocks or fails the auth
@@ -9311,6 +9416,7 @@ abstract class ShardDO {
     private simpleAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response> | Response> {
         return {
             [ADMIN_FUNCTIONS.backfillSearch]: (args) => this.handleBackfillSearch(args),
+            [ADMIN_FUNCTIONS.backfillVectors]: (args) => this.handleBackfillVectors(args),
             [ADMIN_FUNCTIONS.findRelated]: (args) => this.handleFindRelated(args),
             [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
             [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),

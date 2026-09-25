@@ -3980,7 +3980,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
     describe("emitShard", () => {
         it("wires @lunora/bindings/vectors auto-sync when the schema declares vector indexes", () => {
-            expect.assertions(7);
+            expect.assertions(10);
 
             const schema: SchemaIR = {
                 tables: [
@@ -4001,7 +4001,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
-            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors"');
+            expect(output).toContain(
+                'import { createContextVectors, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors"',
+            );
             expect(output).toContain("VectorizeIndexLike");
             expect(output).toContain("WriteHook");
 
@@ -4010,6 +4012,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("onWrite = createVectorSyncHook(");
             expect(output).toContain("onWrite: onWrite === undefined ? undefined : (event) => this.deferAfterCommit(() => onWrite(event)),");
             expect(output).toContain("vectors,");
+
+            // `backfillVectors`: the same hook over the rows that predate the index,
+            // ordered on the after-commit chain so it never lands over a newer write.
+            expect(output).toContain("protected override async runShardVectorBackfill(");
+            expect(output).toContain("backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), onWrite, {");
+            expect(output).toContain("ordered: async (read, work) => this.runOrderedAfterWrites(read, work),");
         });
 
         it("emits the bare (namespace-less) createVectorSyncHook call for an unsharded (root) vectorized table", () => {

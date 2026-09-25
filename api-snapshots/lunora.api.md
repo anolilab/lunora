@@ -2549,6 +2549,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `VectorBackfillProgress` (interface)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `WhereInput` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2578,6 +2582,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `backfillSearchIndexes` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `backfillVectorIndexes` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

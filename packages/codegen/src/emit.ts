@@ -4309,6 +4309,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "SubscriptionIdentity",
     "SystemReaderStorageLike",
     "TelemetrySink",
+    ...(hasVectors ? ["VectorBackfillProgress"] : []),
     ...(hasWorkflows ? ["WorkflowsResult"] : []),
     ...(hasVectors ? ["WriteHook"] : []),
 ];
@@ -4729,7 +4730,7 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${hasShardSearchIndexes ? "backfillSearchIndexes, " : ""}${hasVectorIndexes ? "backfillVectorIndexes, " : ""}buildReprojectionMigration, ${hasMemoryTables ? "clearMemoryTables, " : ""}${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}markUnvouchableReads, ${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `TraceRefLike` rides along with the source imports: the poll override
         // takes the alarm's trace so its contained failures are correlated, and
         // `@lunora/do` projects it structurally rather than re-exporting the
@@ -4756,7 +4757,7 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
     if (hasVectorIndexes) {
         importLines.push(
             `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";`,
-            `import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors";`,
+            `import { createContextVectors, createVectors, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";`,
         );
     }
 
@@ -4936,6 +4937,32 @@ ${vectorNamespaceField}
             // \`__cdc_log\`. Wrapped AFTER \`onWrite\` is built so the write-through
             // vector-sync hook keeps calling the bare facade.
             vectors = markUnvouchableReads(vectors, options.onRead, ["getByIds", "query"]);
+`
+        : "";
+
+    // `__lunora_admin__:backfillVectors`: the rows that predate a vector index go
+    // through the SAME sync hook `ctx.db` uses (built from the same fragments as
+    // `vectorsBuild` above, so namespace scoping cannot drift), each page ordered
+    // on the shard's after-commit chain so it never lands over a newer write's.
+    const vectorBackfillOverride = hasVectorIndexes
+        ? `
+        protected override async runShardVectorBackfill(options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
+            this.ensureMigrated();
+
+            if (!config.vectors) {
+                throw new Error("vector backfill: no vectors configured. Pass \`vectors\` to createShardDO().");
+            }
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const lunora = createVectors({ indexes: config.vectors(env) });
+${vectorNamespaceField}
+            const onWrite = createVectorSyncHook({ ${vectorNamespaceOption}schema: schema as unknown as VectorSchemaLike, vectors: createContextVectors(lunora${vectorsContextOption}) });
+
+            return backfillVectorIndexes(this.sql as SqlExec, vectorBackfillTargets(schema as unknown as VectorSchemaLike), onWrite, {
+                ...options,
+                ordered: async (read, work) => this.runOrderedAfterWrites(read, work),
+            });
+        }
 `
         : "";
 
@@ -6202,7 +6229,7 @@ ${
         }
 `
         : ""
-}
+}${vectorBackfillOverride}
         private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
