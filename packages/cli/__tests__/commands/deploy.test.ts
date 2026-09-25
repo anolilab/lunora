@@ -246,8 +246,8 @@ describe("lunora deploy", () => {
                 expect(warns.some((message) => message.includes("observability"))).toBe(true);
             });
 
-            it("dry-runs celld with `celld deploy --dry-run`, and refuses --preview", async () => {
-                expect.assertions(2);
+            it("dry-runs celld with `celld deploy --dry-run`", async () => {
+                expect.assertions(1);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -257,9 +257,22 @@ describe("lunora deploy", () => {
                 await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
 
                 expect(calls.at(-1)?.descriptor.args.at(-1)).toBe("--dry-run");
+            });
+
+            // The refusal lives in the driver's argv builder, which runs before
+            // the projection is written: a refused deploy changes nothing.
+            it("refuses --preview for celld before writing the projection", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
                 await expect(
                     runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" }),
                 ).rejects.toThrow(/no preview versions/u);
+                expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
             });
         });
 

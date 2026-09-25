@@ -31,6 +31,8 @@ export { TckBox, TckFenced };
 // Re-exported the way `_generated/containers.ts` does: the egress path needs it.
 export { ContainerProxy } from "@lunora/container/do";
 
+// A Workers entry module: the runtime reads the handlers off the default export
+// and each Durable Object class by name, so this file has to mix both.
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);

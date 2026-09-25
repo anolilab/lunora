@@ -158,6 +158,7 @@ interface DeployCommandResult {
         blocked: boolean;
         reason: string;
     };
+    target?: string;
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
@@ -204,7 +205,6 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
-    targetDev?: ToolchainCommand;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;

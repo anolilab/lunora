@@ -163,15 +163,44 @@ describe("celld config projection on disk", () => {
 
     // Beside wrangler.jsonc, not under `.celld/`: celld takes the config's
     // directory as the project root and requires `main` inside it.
-    it("writes the projection beside the project's JSONC config", () => {
-        expect.assertions(2);
+    it("plans the projection beside the project's JSONC config, and writes it only on write()", () => {
+        expect.assertions(3);
 
         writeFileSync(join(root, "wrangler.jsonc"), `{\n    // comment\n    "main": "src/server.ts",\n    "observability": { "enabled": true },\n}\n`, "utf8");
 
         const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
 
         expect(projected?.configPath).toBe(join(root, ".celld.wrangler.json"));
+        // A plan: a command refused after planning must leave nothing behind.
+        expect(existsSync(join(root, ".celld.wrangler.json"))).toBe(false);
+
+        projected?.write();
+
         expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toStrictEqual({ main: "src/server.ts" });
+    });
+
+    // `wrangler dev --var WORKER_ENV:development` on Cloudflare; without it the
+    // runtime treats the dev worker as production (live mail, no capture).
+    it("marks the dev projection as development, without overriding a configured value", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { API: "x" } }), "utf8");
+        resolveDeployDriver("celld").projectConfig?.(root, "dev").write();
+
+        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { API: "x", WORKER_ENV: "development" } });
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", vars: { WORKER_ENV: "staging" } }), "utf8");
+        resolveDeployDriver("celld").projectConfig?.(root, "dev").write();
+
+        expect(JSON.parse(readFileSync(join(root, ".celld.wrangler.json"), "utf8"))).toMatchObject({ vars: { WORKER_ENV: "staging" } });
+    });
+
+    it("refuses a source entry outside the project, which celld would resolve against the wrong root", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), JSON.stringify({ main: "../shared/worker.ts" }), "utf8");
+
+        expect(() => resolveDeployDriver("celld").projectConfig?.(root, "deploy")).toThrow(/must sit inside/u);
     });
 
     it("says where celld deploys from when there is no wrangler config", () => {
@@ -214,6 +243,8 @@ describe("celld config projection on disk", () => {
 
         const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
 
+        projected?.write();
+
         expect(projected?.configPath).toBe(join(root, "dist", ".celld.wrangler.json"));
         expect(JSON.parse(readFileSync(join(root, "dist", ".celld.wrangler.json"), "utf8"))).toStrictEqual({
             assets: { directory: "client" },
@@ -224,6 +255,28 @@ describe("celld config projection on disk", () => {
         // Only what the project configured, plus what the projection did to the build.
         expect(projected?.dropped).toStrictEqual(["observability", "no_bundle (celld re-bundles the build output)", "client/.assetsignore (matched no files)"]);
         expect(existsSync(join(root, "dist", "client", ".assetsignore"))).toBe(false);
+    });
+
+    // celld resolves `migrations_dir` against the projection's directory — the
+    // build output here — while wrangler resolves it against the project.
+    it("points a Vite build's D1 migrations back at the project", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+        mkdirSync(join(root, "migrations"));
+        writeFileSync(
+            join(root, "dist", "server", "wrangler.json"),
+            JSON.stringify({ d1_databases: [{ binding: "DB", database_id: "db", database_name: "db" }], main: "index.js", name: "app" }),
+            "utf8",
+        );
+
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
+
+        projected?.write();
+
+        expect(JSON.parse(readFileSync(String(projected?.configPath), "utf8"))).toMatchObject({
+            d1_databases: [{ binding: "DB", migrations_dir: "../../migrations" }],
+        });
     });
 
     it("keeps an .assetsignore that is hiding something, and stops instead", () => {

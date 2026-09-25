@@ -235,14 +235,16 @@ const rebasePaths = (config: Config, sourceDirectory: string, root: string): Con
  * `@cloudflare/vite-plugin` writes an `.assetsignore` into the client output
  * so `wrangler deploy` does not serve its own `wrangler.json` / `.dev.vars` as
  * assets. celld refuses the file outright. When none of its patterns names
- * anything present, it guards nothing, so the build artifact is removed;
- * otherwise the deploy stops rather than publish what it was hiding.
+ * anything present it guards nothing, so the build artifact can go; otherwise
+ * the deploy stops rather than publish what it was hiding.
+ * @returns the file to remove, or `undefined` when there is none.
+ * @throws when a pattern still hides something.
  */
-const clearAssetsIgnore = (assetsDirectory: string, root: string, dropped: string[]): void => {
+const inertAssetsIgnore = (assetsDirectory: string): string | undefined => {
     const file = join(assetsDirectory, ".assetsignore");
 
     if (!existsSync(file)) {
-        return;
+        return undefined;
     }
 
     const live = readFileSync(file, "utf8")
@@ -255,8 +257,7 @@ const clearAssetsIgnore = (assetsDirectory: string, root: string, dropped: strin
         throw new Error(`${file} hides ${live.join(", ")} from the assets, and celld has no .assetsignore — remove those files from ${assetsDirectory} first`);
     }
 
-    rmSync(file);
-    dropped.push(`${relative(root, file)} (matched no files)`);
+    return file;
 };
 
 /** The Vite build's wrangler config, via the redirect `@cloudflare/vite-plugin` leaves. */
@@ -289,15 +290,120 @@ const readConfig = (path: string): Config => {
 };
 
 /**
- * Write the celld projection of the project's wrangler config.
+ * Rebase each D1 database's `migrations_dir` onto `root`. celld resolves it
+ * against the projection's directory and defaults it to `migrations` there,
+ * while wrangler resolves it against the project's own config — so a
+ * projection written anywhere but the project root (a Vite build's output)
+ * would look for the migrations in the wrong place.
+ */
+const rebaseMigrationDirectories = (config: Config, own: Config, projectRoot: string, root: string): Config => {
+    const { d1_databases: databases } = config;
+
+    if (!Array.isArray(databases) || root === projectRoot) {
+        return config;
+    }
+
+    const ownDatabases = Array.isArray(own["d1_databases"]) ? (own["d1_databases"] as unknown[]).filter((entry) => isRecord(entry)) : [];
+
+    return {
+        ...config,
+        d1_databases: databases.map((database: unknown) => {
+            if (!isRecord(database)) {
+                return database;
+            }
+
+            const declared = ownDatabases.find((entry) => entry["binding"] === database["binding"])?.["migrations_dir"];
+            const directory = resolve(projectRoot, typeof declared === "string" ? declared : "migrations");
+
+            return existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+        }),
+    };
+};
+
+/**
+ * The config the projection is built from: the project's own, or — for a Vite
+ * virtual entry — the Vite build's.
+ * @throws for a Vite virtual entry in `dev`, or one with no build output yet.
+ */
+const resolveSource = (
+    projectRoot: string,
+    wranglerPath: string,
+    own: Config,
+    purpose: ProjectionPurpose,
+): { fromBuild: boolean; source: Config; sourcePath: string } => {
+    const { main } = own;
+
+    if (typeof main !== "string" || !main.startsWith("virtual:")) {
+        return { fromBuild: false, source: own, sourcePath: wranglerPath };
+    }
+
+    if (purpose === "dev") {
+        throw new Error(
+            `wrangler \`main\` is the Vite virtual module "${main}", which only a Vite build can resolve — \`celld dev\` rebuilds from a source file. Use \`vite dev\` for the dev loop and \`lunora deploy\` to ship the build to celld, or point \`main\` at a worker file`,
+        );
+    }
+
+    const sourcePath = readViteBuildConfig(projectRoot, main);
+
+    return { fromBuild: true, source: readConfig(sourcePath), sourcePath };
+};
+
+/**
+ * The build-output adjustments: report only what the project itself
+ * configured (the build config carries every key wrangler knows, mostly
+ * generated defaults), let celld re-bundle the chunks, and plan removing an
+ * inert `.assetsignore`.
+ */
+const adjustBuildOutput = (
+    projected: Config,
+    dropped: ReadonlyArray<string>,
+    own: Config,
+    assetsDirectory: string | undefined,
+    root: string,
+): { assetsIgnore: string | undefined; projected: Config; reported: string[] } => {
+    const reported = dropped.filter((entry) => Object.hasOwn(own, entry.split(KEY_END)[0] ?? entry));
+    let bundled = projected;
+
+    // celld's `no_bundle` loads the entry module alone, and the build splits
+    // into chunks; its bundler takes the ESM output as-is instead.
+    if (projected["no_bundle"] !== undefined) {
+        bundled = Object.fromEntries(Object.entries(projected).filter(([key]) => key !== "no_bundle"));
+        reported.push("no_bundle (celld re-bundles the build output)");
+    }
+
+    const assetsIgnore = assetsDirectory === undefined ? undefined : inertAssetsIgnore(assetsDirectory);
+
+    if (assetsIgnore !== undefined) {
+        reported.push(`${relative(root, assetsIgnore)} (matched no files)`);
+    }
+
+    return { assetsIgnore, projected: bundled, reported };
+};
+
+/**
+ * What `wrangler dev --var WORKER_ENV:development` marks on Cloudflare:
+ * without it the runtime treats the dev worker as production (live mail, no
+ * queue capture). `vars` from the config win, and `.dev.vars` beats both.
+ */
+const markDevelopment = (projected: Config): Config => {
+    const variables = isRecord(projected["vars"]) ? projected["vars"] : {};
+
+    return { ...projected, vars: { WORKER_ENV: "development", ...variables } };
+};
+
+/**
+ * Plan the celld projection of the project's wrangler config: read, validate
+ * and project it without touching the disk. The caller validates the request
+ * it is for, then calls `write`.
  * @param projectRoot The directory holding `wrangler.jsonc` / `wrangler.json`.
  * @param purpose `deploy`, or `dev` — `celld dev` rebuilds from source, which a
- * Vite virtual entry does not have.
- * @returns where the projection was written and what it left out.
+ * Vite virtual entry does not have, and runs the worker as development.
+ * @returns where the projection goes, what it leaves out, and the write.
  * @throws when there is no readable wrangler config, a migration celld refuses,
- * or a Vite-built worker with no build output (or, for `dev`, at all).
+ * a path outside the project, or a Vite-built worker with no build output (or,
+ * for `dev`, at all).
  */
-const writeCelldConfig = (projectRoot: string, purpose: ProjectionPurpose = "deploy"): ProjectedConfig => {
+const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): ProjectedConfig => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     if (wranglerPath === undefined) {
@@ -305,51 +411,42 @@ const writeCelldConfig = (projectRoot: string, purpose: ProjectionPurpose = "dep
     }
 
     const own = readConfig(wranglerPath);
-    const virtualMain = typeof own["main"] === "string" && own["main"].startsWith("virtual:") ? own["main"] : undefined;
-    const fromBuild = virtualMain !== undefined;
+    const { fromBuild, source, sourcePath } = resolveSource(projectRoot, wranglerPath, own, purpose);
+    const sourceDirectory = dirname(sourcePath);
+    const { config, dropped } = projectCelldConfig(source);
+    const { assets } = source;
+    const assetsDirectory = isRecord(assets) && typeof assets["directory"] === "string" ? resolve(sourceDirectory, assets["directory"]) : undefined;
+    const mainDirectory = typeof source["main"] === "string" ? dirname(resolve(sourceDirectory, source["main"])) : undefined;
+    const root = commonDirectory([sourceDirectory, mainDirectory, assetsDirectory].filter((path): path is string => path !== undefined));
 
-    if (fromBuild && purpose === "dev") {
+    // celld takes the projection's directory as the project root; for a
+    // source entry that has to be the project itself, or `.dev.vars` and every
+    // relative path resolve against the wrong directory.
+    if (!fromBuild && root !== sourceDirectory) {
         throw new Error(
-            `wrangler \`main\` is the Vite virtual module "${virtualMain}", which only a Vite build can resolve — \`celld dev\` rebuilds from a source file. Use \`vite dev\` for the dev loop and \`lunora deploy\` to ship the build to celld, or point \`main\` at a worker file`,
+            `wrangler \`main\` and \`assets.directory\` must sit inside ${sourceDirectory} — celld resolves everything against the config's directory`,
         );
     }
 
-    const sourcePath = fromBuild ? readViteBuildConfig(projectRoot, virtualMain) : wranglerPath;
-    const source = fromBuild ? readConfig(sourcePath) : own;
-    const sourceDirectory = dirname(sourcePath);
-    const { config, dropped } = projectCelldConfig(source);
-
-    const assetsDirectory =
-        isRecord(source["assets"]) && typeof source["assets"]["directory"] === "string" ? resolve(sourceDirectory, source["assets"]["directory"]) : undefined;
-    const referenced = [typeof source["main"] === "string" ? dirname(resolve(sourceDirectory, source["main"])) : undefined, assetsDirectory].filter(
-        (path): path is string => path !== undefined,
-    );
-    const root = commonDirectory([sourceDirectory, ...referenced]);
-    let projected = rebasePaths(config, sourceDirectory, root);
-    let reported = dropped;
-
-    if (fromBuild) {
-        // The build config carries every key wrangler knows, mostly generated
-        // defaults; report only what the project itself configured.
-        reported = dropped.filter((entry) => Object.hasOwn(own, entry.split(KEY_END)[0] ?? entry));
-
-        // celld's `no_bundle` loads the entry module alone, and the build splits
-        // into chunks; its bundler takes the ESM output as-is instead.
-        if (projected["no_bundle"] !== undefined) {
-            projected = Object.fromEntries(Object.entries(projected).filter(([key]) => key !== "no_bundle"));
-            reported.push("no_bundle (celld re-bundles the build output)");
-        }
-
-        if (assetsDirectory !== undefined) {
-            clearAssetsIgnore(assetsDirectory, root, reported);
-        }
-    }
-
+    const rebased = rebaseMigrationDirectories(rebasePaths(config, sourceDirectory, root), own, projectRoot, root);
+    const build = fromBuild
+        ? adjustBuildOutput(rebased, dropped, own, assetsDirectory, root)
+        : { assetsIgnore: undefined, projected: rebased, reported: dropped };
+    const projected = purpose === "dev" ? markDevelopment(build.projected) : build.projected;
     const configPath = join(root, CELLD_CONFIG_FILE);
+    const contents = `${JSON.stringify(projected, undefined, 4)}\n`;
 
-    writeFileSync(configPath, `${JSON.stringify(projected, undefined, 4)}\n`);
+    return {
+        configPath,
+        dropped: build.reported,
+        write: () => {
+            writeFileSync(configPath, contents);
 
-    return { configPath, dropped: reported };
+            if (build.assetsIgnore !== undefined) {
+                rmSync(build.assetsIgnore);
+            }
+        },
+    };
 };
 
-export { CELLD_CONFIG_FILE, projectCelldConfig, writeCelldConfig };
+export { planCelldConfig, projectCelldConfig };

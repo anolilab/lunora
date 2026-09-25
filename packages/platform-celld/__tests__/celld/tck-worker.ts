@@ -28,12 +28,10 @@ import { createCelldShardPlatform } from "../../src/celld-platform";
 import type { BindingEnv } from "./tck-bindings";
 import { consumeQueue, handleBindingRoute, recordCron } from "./tck-bindings";
 import { createLegExpect } from "./tck-expect";
-import type { Factories, LegContext, SuiteName } from "./tck-legs";
+import type { Factories, LegContext, LegResult, SuiteName } from "./tck-legs";
 import { collectLegs, LegSkipped } from "./tck-legs";
 
 type Env = BindingEnv & { ECHO: unknown; TCK: DurableObjectNamespace };
-
-type LegResult = { message?: string; status: "failed" | "passed" | "skipped" };
 
 /** The cell the running leg executes in; set around each body. */
 let current: { env: Env; pairs: WebSocket[]; state: DurableObjectState } | undefined;
@@ -94,7 +92,7 @@ const createPlatformHost = (): ConformanceHost => {
  * The workerd harness reads frames off the client end of a `WebSocketPair`.
  * That does not work on celld: a frame sent through a socket accepted with
  * `acceptWebSocket` is never delivered to a peer inside the same cell (the
- * same socket delivers to a real network client, which `celld-tck.celld.test.ts`
+ * same socket delivers to a real network client, which `celld-tck.test.ts`
  * asserts separately). So this harness observes the frames where the host
  * hands them to the transport instead. Patching the prototype, not the minted
  * instance, matters: `getWebSockets(tag)` can hand back a different object for
@@ -257,6 +255,8 @@ class EchoCell {
 export { EchoCell, TckCell };
 export { TckWorkflow } from "./tck-bindings";
 
+// A Workers entry module: the runtime reads the handlers off the default export
+// and each Durable Object class by name, so this file has to mix both.
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);

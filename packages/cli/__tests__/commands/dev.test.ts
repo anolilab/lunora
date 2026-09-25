@@ -679,7 +679,12 @@ describe("lunora dev", () => {
 
             expect(result.plan.flavor).toBe("wrangler");
             expect(spawned).toStrictEqual(["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"]);
-            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({ main: "src/server.ts", name: "app" });
+            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
+            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
+                main: "src/server.ts",
+                name: "app",
+                vars: { WORKER_ENV: "development" },
+            });
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {

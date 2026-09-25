@@ -287,8 +287,11 @@ interface DeployCommandResult {
      * nothing was minted this run.
      */
     mintedSecretsFile?: string;
+
     /** The schema-drift gate verdict, when it ran (skipped on `--skip-codegen`). */
     schemaDrift?: { blocked: boolean; reason: string };
+    /** The target a successful deploy shipped to. */
+    target?: string;
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
@@ -662,14 +665,15 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, target: string):
     }
 
     const driver = resolveDeployDriver(target);
-
-    // `lunora env push` needs a secret store; celld has none, and only its dev
+    // `lunora env push` needs a secret store. Without one (celld), only the dev
     // server reads `.dev.vars` — a deployed value has to live in wrangler `vars`.
+    const hasSecretStore = driver.toolchain?.secretPut !== undefined;
+
     logger.warn(
-        driver.toolchain?.secretPut === undefined
-            ? `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; put the values the deployed worker needs in wrangler \`vars\`.`
-            : `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
-                  `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
+        hasSecretStore
+            ? `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
+                  `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`
+            : `Note: ${driver.name} deploys read no secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s) that only the dev server sees; put the values the deployed worker needs in wrangler \`vars\`.`,
     );
 };
 
@@ -1525,11 +1529,6 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
     // what the projection left out: those keys configure nothing on that host,
     // and an operator reading the Cloudflare config should not assume otherwise.
     const projected = driver.projectConfig?.(cwd, "deploy");
-
-    if (projected !== undefined && projected.dropped.length > 0) {
-        options.logger.warn(`${driver.name} ignores these wrangler keys, so they were left out of ${projected.configPath}: ${projected.dropped.join(", ")}`);
-    }
-
     const request = {
         configPath: projected?.configPath,
         dryRun: options.dryRun,
@@ -1548,14 +1547,22 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
         throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
     }
 
-    return driver.toolchain.deploy(request);
-};
+    // The argv builder is where a host refuses an option it has no equivalent
+    // for, so it runs before the projection touches the disk: a refused deploy
+    // leaves nothing behind.
+    const command = driver.toolchain.deploy(request);
 
-/** Whether the deployed target has a log tail for the summary to point at. */
-const hasLogTail = (cwd: string, explicit: string | undefined): boolean => {
-    const { target } = resolveRunnableTargetOrError(cwd, explicit);
+    if (projected !== undefined) {
+        projected.write();
 
-    return target === undefined || resolveDeployDriver(target).toolchain?.tail !== undefined;
+        if (projected.dropped.length > 0) {
+            options.logger.warn(
+                `${driver.name} ignores these wrangler keys, so they were left out of ${projected.configPath}: ${projected.dropped.join(", ")}`,
+            );
+        }
+    }
+
+    return command;
 };
 
 /**
@@ -1879,7 +1886,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // run (enforced inside `buildContainerImages`).
     // railpack builds and pushes to the Cloudflare registry; celld builds each
     // container from its Dockerfile itself during `celld deploy`.
-    const buildError = target === "cloudflare" ? await buildContainerImages(cwd, options) : undefined;
+    const buildError = resolveDeployDriver(target).toolchain?.prebuildsContainerImages === true ? await buildContainerImages(cwd, options) : undefined;
 
     if (buildError !== undefined) {
         return abortResult(buildError);
@@ -1925,7 +1932,9 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    return completeDeploy({ cwd, descriptor, mintedSecretsFile, options, reblessSchemaBaseline, stdout: result.stdout, validation });
+    const completed = await completeDeploy({ cwd, descriptor, mintedSecretsFile, options, reblessSchemaBaseline, stdout: result.stdout, validation });
+
+    return { ...completed, target };
 };
 
 /**
@@ -1974,7 +1983,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
             logger: options.logger,
-            logsAvailable: hasLogTail(options.cwd ?? process.cwd(), options.target),
+            logsAvailable: result.target === undefined || resolveDeployDriver(result.target).toolchain?.tail !== undefined,
             mintedSecretsFile: result.mintedSecretsFile,
             // From the deploy that just ran, not the link file — the link can be
             // stale (or absent on a first deploy), and this run knows the truth.

@@ -125,6 +125,22 @@ export interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     /** The command that runs a local dev server. */
     dev: (request: DevRequest) => ToolchainCommand;
+
+    /**
+     * Where `lunora dev` runs the worker. `"workerd"`: `wrangler dev`, or the
+     * Vite plugin's `@cloudflare/vite-plugin`, whichever flavor the project
+     * picks. `"own"`: the host's dev server ({@link DriverToolchain.dev}) on
+     * the projected config, always the standalone flavor — neither Vite nor a
+     * framework sidecar can serve the worker on that runtime.
+     */
+    readonly devServer: "own" | "workerd";
+
+    /**
+     * Whether `lunora deploy` builds and pushes container images itself
+     * (railpack, into the host's registry) before `deploy`. `false` when the
+     * host CLI builds each image from its Dockerfile during the deploy.
+     */
+    readonly prebuildsContainerImages: boolean;
     /** The command that lists remote secret names, when the host has a secret store. */
     secretList?: (request: SecretRequest) => ToolchainCommand;
     /** The command that writes one secret, when the host has a secret store. Its value is passed on stdin, never argv. */
@@ -136,12 +152,19 @@ export interface DriverToolchain {
 /** What a {@link DeployDriver.projectConfig} projection is for — a dev server may need a different source than a deploy. */
 export type ProjectionPurpose = "deploy" | "dev";
 
-/** The result of {@link DeployDriver.projectConfig}. */
+/**
+ * The result of {@link DeployDriver.projectConfig}: a plan, not yet on disk.
+ * The caller validates the request it is for (the toolchain's argv builder
+ * refuses unsupported options), then calls `write` — so a refused command
+ * changes nothing.
+ */
 export interface ProjectedConfig {
-    /** The projected config file, to pass as the request's `configPath`. */
+    /** Where the projection goes, to pass as the request's `configPath`. */
     configPath: string;
     /** Every key removed, as a dotted path (`observability`, `containers[0].rollout_step_percentage`). */
     dropped: ReadonlyArray<string>;
+    /** Write the projection (and any build-artifact cleanup it planned). */
+    write: () => void;
 }
 
 /** A deploy target's implementation: an identity the registry resolves, and the host CLI surface (if any) behind it. */

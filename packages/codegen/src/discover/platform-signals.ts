@@ -38,7 +38,7 @@ const EGRESS_POLICY_KEYS = new Set(["allowedHosts", "deniedHosts", "interceptHtt
  * walk runs over every call in every source, a same-named local elsewhere can
  * only ever over-report, and over-reporting here is a diagnostic while
  * under-reporting is a silent behavioural change on the deployed host — the same
- * trade {@link declaresDurable} already makes for a non-literal value.
+ * trade {@link declaresKey} already makes for a non-literal value.
  */
 const resolveObjectLiteral = (sourceFile: SourceFile, node: Node | undefined): Node | undefined => {
     const expression = unwrapExpression(node);
@@ -88,13 +88,35 @@ const declaresKey = (node: Node | undefined, keys: ReadonlySet<string>): boolean
 const DURABLE_KEY = new Set(["durable"]);
 const ROLLBACK_KEY = new Set(["rollback"]);
 
-const declaresDurable = (node: Node | undefined): boolean => declaresKey(node, DURABLE_KEY);
-
 /** The called function's name: `stream`, `defineStep`, also through a namespace (`workflow.defineStep`). */
 const calleeName = (call: CallExpression): string => {
     const callee = call.getExpression();
 
     return Node.isPropertyAccessExpression(callee) ? callee.getName() : callee.getText();
+};
+
+/** The option keys that make each signal call a declaration. */
+const SIGNAL_CALLS: ReadonlyMap<string, { keys: ReadonlySet<string>; signal: "containerEgressPolicy" | "durableStreams" | "workflowRollback" }> = new Map([
+    ["defineContainer", { keys: EGRESS_POLICY_KEYS, signal: "containerEgressPolicy" }],
+    // `defineStep(name, { handler, rollback })` — the compensation
+    // `@lunora/workflow` forwards to the host's `step.do`.
+    ["defineStep", { keys: ROLLBACK_KEY, signal: "workflowRollback" }],
+    ["stream", { keys: DURABLE_KEY, signal: "durableStreams" }],
+] as const);
+
+/**
+ * The signal `call` declares, if any. The callee name is checked first:
+ * resolving an argument walks the file's declarations, so doing that for every
+ * call made discovery quadratic in file size.
+ */
+const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof PlatformCodeSignals | undefined => {
+    const match = SIGNAL_CALLS.get(calleeName(call));
+
+    if (match === undefined) {
+        return undefined;
+    }
+
+    return call.getArguments().some((argument) => declaresKey(resolveObjectLiteral(sourceFile, argument), match.keys)) ? match.signal : undefined;
 };
 
 /**
@@ -133,18 +155,15 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
         }
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const name = calleeName(call);
-            const options = call.getArguments().map((argument) => resolveObjectLiteral(sourceFile, argument));
+            const signal = callSignal(sourceFile, call);
 
-            if (name === "stream" && options.some((option) => declaresDurable(option))) {
-                signals.durableStreams = true;
-            } else if (name === "defineStep" && options.some((option) => declaresKey(option, ROLLBACK_KEY))) {
-                // `defineStep(name, { handler, rollback })` — the compensation
-                // `@lunora/workflow` forwards to the host's `step.do`.
-                signals.workflowRollback = true;
-            } else if (name === "defineContainer" && options.some((option) => declaresKey(option, EGRESS_POLICY_KEYS))) {
-                signals.containerEgressPolicy = true;
+            if (signal !== undefined) {
+                signals[signal] = true;
             }
+        }
+
+        if (Object.values(signals).every(Boolean)) {
+            break;
         }
     }
 

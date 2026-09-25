@@ -20,6 +20,9 @@ type Leg = { body: (context: LegContext) => Promise<void> | void; name: string }
 
 type SuiteName = "engine" | "platform";
 
+/** What `/leg` answers — shared by the worker that runs a leg and the test that reads it. */
+type LegResult = { message?: string; status: "failed" | "passed" | "skipped" };
+
 type Factories = { engine: EngineHostFactory; platform: ConformanceHostFactory };
 
 /** Thrown by `context.skip()`; the runner reports the leg as skipped, not failed. */
@@ -68,5 +71,5 @@ const collectLegs = (suite: SuiteName, factories: Factories, expect: unknown): L
     return legs;
 };
 
-export type { Factories, Leg, LegContext, SuiteName };
+export type { Factories, Leg, LegContext, LegResult, SuiteName };
 export { collectLegs, LegSkipped };

@@ -466,6 +466,8 @@ interface DockerLike {
 interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     dev: (request: DevRequest) => ToolchainCommand;
+    readonly devServer: "own" | "workerd";
+    readonly prebuildsContainerImages: boolean;
     secretList?: (request: SecretRequest) => ToolchainCommand;
     secretPut?: (request: SecretRequest) => ToolchainCommand;
     tail?: (request: TailRequest) => ToolchainCommand;
@@ -822,6 +824,7 @@ interface PostCodegenHookResult {
 interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
+    write: () => void;
 }
 ```
 
@@ -1607,9 +1610,7 @@ interface BindingRequirement {
 ### `CLOUDFLARE_DRIVER` (const)
 
 ```ts
-const CLOUDFLARE_DRIVER: DeployDriver & {
-    readonly toolchain: Required<DriverToolchain>;
-};
+const CLOUDFLARE_DRIVER: DeployDriver;
 ```
 
 ### `ExportGap` (interface)

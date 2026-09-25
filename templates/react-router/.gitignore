@@ -3,6 +3,9 @@ build
 dist
 .react-router
 .wrangler
+# `celld dev` state (holds `.dev.vars` values) and the celld driver's projection of wrangler.jsonc
+.celld/
+.celld.wrangler.json
 .env
 .env.*
 !.env.example

@@ -34,6 +34,7 @@ export default { target: "celld" };
 
 - `lunora dev` runs codegen watch and the studio, and serves the worker with `celld dev` — even in a project on `@lunora/vite`, whose dev server runs the worker in workerd. Start the frontend's dev server separately.
 - `lunora deploy` runs the usual pipeline (codegen, schema-drift gate, binding reconcile, validation) and ships with `celld deploy`, which reads the fleet bucket from `CELLD_BUCKET` plus the standard AWS / GCS / Azure credential environment. `--dry-run` maps to `celld deploy --dry-run` (bundle without writing); `--preview`, `--env`, `--temporary` and `--outdir` are refused: celld has no equivalent.
+- The dev projection is written when `lunora dev` starts and marks the worker as development (`WORKER_ENV`, as `wrangler dev` does); `celld dev` watches the projection, not `wrangler.jsonc`, so restart `lunora dev` after editing the config.
 - Both commands hand celld a projection of `wrangler.jsonc`, written to `.celld.wrangler.json` beside it: celld refuses the Cloudflare-only keys Lunora writes (`observability`, `limits`, `version_metadata`, …), and the CLI names each one it leaves out. Add `.celld/` and `.celld.wrangler.json` to the app's `.gitignore`.
 - The `celld` binary is run from `PATH` (`curl -fsSL https://celld.dev/install.sh | sh`), never through `npx` / `bun x`; `celld deploy` also needs `esbuild` on `PATH`.
 - `lunora logs` and `lunora env push` refuse the target: celld has no log tail and no secret store — see [Secrets](#secrets).
