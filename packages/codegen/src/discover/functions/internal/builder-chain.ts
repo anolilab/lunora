@@ -4,8 +4,8 @@ import { Node } from "ts-morph";
 import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../../parse-validator";
 import { builderChainSteps } from "../../builder-chain";
+import { parseOutput } from "../../erased-returns";
 import unwrapHandlerReturn from "../unwrap-handler-return";
-import { parseOutput } from "./erased-returns";
 
 /**
  * Pull the handler's return type out of an object-literal `query/mutation/action`

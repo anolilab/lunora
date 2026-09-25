@@ -280,13 +280,29 @@ describe("procedure_return_type_erased", () => {
         expect.assertions(1);
 
         // Discovery runs more than once per codegen (the declaration surface is
-        // emitted before handler types are inferred against it), so an
-        // undeduplicated buffer reported every erasure two or three times.
+        // emitted before handler types are inferred against it); only the pass
+        // whose render is returned may report, or every erasure appeared two or
+        // three times.
         const findings = advisoriesFor({ "more.ts": RECURSIVE.replace("getTree", "getOther"), "trees.ts": RECURSIVE }).filter(
             (finding) => finding.name === "procedure_return_type_erased",
         );
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getOther", "getTree"]);
+    }, 300_000);
+
+    it("reports a procedure once when several `v.from(…)` in its one `.output(…)` erase", () => {
+        expect.assertions(1);
+
+        // The one real source of duplicate records within a pass — each erasing
+        // `v.from` records against the same `.output()` call.
+        const findings = advisoriesFor({
+            "both.ts": RECURSIVE_OUTPUT.replace("getDeclaredTree", "getBoth").replace(
+                ".output(v.from(treeSchema))",
+                ".output(v.union(v.from(treeSchema), v.array(v.from(treeSchema))))",
+            ),
+        }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getBoth"]);
     }, 300_000);
 });
 
