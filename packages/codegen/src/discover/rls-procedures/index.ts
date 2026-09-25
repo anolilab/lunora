@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsProcedureIR } from "../../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { findObjectProperty,listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { rlsCallsInChain } from "./internal/chain";
 
@@ -29,7 +29,7 @@ const extractPolicyTables = (rlsCall: CallExpression): string[] => {
             continue;
         }
 
-        const tableProperty = element.getProperty("table");
+        const tableProperty = findObjectProperty(element, "table");
 
         if (!tableProperty || !Node.isPropertyAssignment(tableProperty)) {
             continue;

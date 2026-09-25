@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { FailOpenGuardIR } from "../ir";
-import { collectCallRows, limitNameOf, optionsObjectLiteral } from "./ast";
+import { collectCallRows, findObjectProperty,limitNameOf, optionsObjectLiteral } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -40,7 +40,7 @@ const setsFailOpenTrue = (options: TsNode | undefined): boolean => {
         return false;
     }
 
-    const property = literal.getProperty("failOpen");
+    const property = findObjectProperty(literal, "failOpen");
 
     return property !== undefined && Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword;
 };

@@ -2,12 +2,21 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { containerBindingName, containerClassName, normalizeContainerImage } from "@lunora/container";
-import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
+import type {
+    CallExpression,
+    Expression,
+    Identifier,
+    ObjectLiteralElementLike,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    SpreadAssignment,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerIR } from "../ir";
-import { stringPropertyFor } from "./ast";
+import { findObjectProperty, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
@@ -62,7 +71,7 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
     }
 
     if (Node.isObjectLiteralExpression(expression)) {
-        const registry = expression.getProperty("registry");
+        const registry = findObjectProperty(expression, "registry");
 
         if (registry && Node.isPropertyAssignment(registry)) {
             const initializer = registry.getInitializerOrThrow();
@@ -70,7 +79,7 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
             return normalizeContainerImage({ registry: stringProperty(initializer, exportName, "image.registry") });
         }
 
-        const build = expression.getProperty("build");
+        const build = findObjectProperty(expression, "build");
 
         if (build && Node.isPropertyAssignment(build)) {
             const initializer = build.getInitializerOrThrow();
@@ -82,47 +91,148 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
     throw diagnosticAt(expression, `container "${exportName}": \`image\` must be a static string path, { registry: "…" }, or { build: "…" } literal`);
 };
 
-/** Lift an object literal of string-literal values (e.g. `buildArgs`), skipping non-literal entries. */
-const stringRecordLiteral = (expression: Expression): Record<string, string> | undefined => {
+/**
+ * Keys codegen writes into wrangler.jsonc (`image`, `name`, `max_instances`,
+ * `instance_type`, `image_vars`, `rollout_*`). Unlike the runtime-only fields
+ * the generated class reads off the imported definition, these exist only if
+ * codegen can read them — so one it cannot read is an error, never a skip.
+ */
+const WRANGLER_KEYS = new Set(["buildArgs", "image", "instanceType", "maxInstances", "name", "rollout"]);
+
+/** The `rollout` keys codegen lifts into wrangler.jsonc. */
+const ROLLOUT_KEYS = new Set(["gracePeriodSeconds", "stepPercentage"]);
+
+/** An identifier naming a module-scope `const` reads as that const's initializer; anything else as itself. */
+const resolveConstant = (expression: Expression): Expression => {
+    const initializer = Node.isIdentifier(expression) ? symbolConstInitializer(expression.getSymbol()) : undefined;
+
+    return initializer !== undefined && Node.isExpression(initializer) ? initializer : expression;
+};
+
+/**
+ * The `[key, value]` entries an object literal statically declares, in source
+ * order (a later entry overrides an earlier one, as at runtime).
+ *
+ * `{ maxInstances }` and `{ ...base }` are ordinary ways to write an options
+ * object, and this reader used to skip both — so a container declared with a
+ * shorthand `maxInstances` deployed with no `max_instances` and no error. A
+ * shorthand or spread now resolves through a module-scope `const`; one that
+ * does not resolve is a located diagnostic when it can carry a key in `guarded`
+ * (a spread's keys come from its type), and is left to the runtime otherwise.
+ */
+/** Which keys an unreadable member may not hide: a fixed set, or every key (`buildArgs`, where each one is an `image_vars` entry). */
+type GuardedKeys = ReadonlySet<string> | "every";
+
+/**
+ * Throw when a spread `staticEntries` could not resolve may set a guarded key.
+ * Its keys come from its type; a record-typed spread names none, so under
+ * `"every"` it is refused outright rather than read through an empty key list.
+ */
+const assertOpaqueSpreadSafe = (property: SpreadAssignment, guarded: GuardedKeys, what: string): void => {
+    const hidden =
+        guarded === "every"
+            ? ["its keys"]
+            : property
+                  .getExpression()
+                  .getType()
+                  .getProperties()
+                  .map((symbol) => symbol.getName())
+                  .filter((key) => guarded.has(key))
+                  .map((key) => `\`${key}\``);
+
+    if (hidden.length > 0) {
+        throw diagnosticAt(
+            property,
+            `${what}: this spread can set ${hidden.join(", ")}, which codegen writes into wrangler.jsonc and so must read statically. Spread a module-scope \`const\` object literal, or write the keys inline.`,
+        );
+    }
+};
+
+/**
+ * The entry a shorthand / method / accessor member contributes: a shorthand
+ * naming a module-scope `const` reads as its initializer; anything else is
+ * `undefined`, and an error when its key is guarded.
+ */
+const unreadableMemberEntry = (
+    property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
+    guarded: GuardedKeys,
+    what: string,
+): [string, Expression] | undefined => {
+    const key = propertyKeyName(property);
+    const value = Node.isShorthandPropertyAssignment(property) ? symbolConstInitializer(property.getValueSymbol()) : undefined;
+
+    if (value !== undefined && Node.isExpression(value)) {
+        return [key, value];
+    }
+
+    if (guarded === "every" || guarded.has(key)) {
+        throw diagnosticAt(
+            property,
+            `${what}: \`${key}\` is deploy configuration codegen writes into wrangler.jsonc, so it must be a static literal — inline it, or name a module-scope \`const\` initialized with one.`,
+        );
+    }
+
+    return undefined;
+};
+
+const staticEntries = (object: ObjectLiteralExpression, guarded: GuardedKeys, what: string): [string, Expression][] => {
+    const entries: [string, Expression][] = [];
+
+    for (const property of object.getProperties()) {
+        if (Node.isPropertyAssignment(property)) {
+            entries.push([propertyKeyName(property), resolveConstant(property.getInitializerOrThrow())]);
+        } else if (Node.isSpreadAssignment(property)) {
+            const spread = resolveConstant(property.getExpression());
+
+            if (Node.isObjectLiteralExpression(spread)) {
+                entries.push(...staticEntries(spread, guarded, what));
+            } else {
+                assertOpaqueSpreadSafe(property, guarded, what);
+            }
+        } else {
+            const entry = unreadableMemberEntry(property, guarded, what);
+
+            if (entry !== undefined) {
+                entries.push(entry);
+            }
+        }
+    }
+
+    return entries;
+};
+
+/** Lift `buildArgs` — an object of static string values, each becoming a wrangler `image_vars` entry. */
+const stringRecordLiteral = (expression: Expression, exportName: string): Record<string, string> | undefined => {
     if (!Node.isObjectLiteralExpression(expression)) {
-        return undefined;
+        throw diagnosticAt(
+            expression,
+            `container "${exportName}": \`buildArgs\` must be a static object literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+        );
     }
 
     const record: Record<string, string> = {};
 
-    for (const property of expression.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
-            continue;
-        }
-
-        const value = property.getInitializerOrThrow();
-
-        if (Node.isStringLiteral(value) || Node.isNoSubstitutionTemplateLiteral(value)) {
-            record[property.getName()] = value.getLiteralValue();
-        }
+    for (const [key, value] of staticEntries(expression, "every", `container "${exportName}" buildArgs`)) {
+        record[key] = stringProperty(value, exportName, `buildArgs.${key}`);
     }
 
     return Object.keys(record).length > 0 ? record : undefined;
 };
 
-/** Lift the `rollout` object's numeric-literal fields. */
-const rolloutLiteral = (expression: Expression): ContainerIR["rollout"] => {
+/** Lift the `rollout` object's `gracePeriodSeconds` / `stepPercentage` (static numbers; other keys are runtime-only). */
+const rolloutLiteral = (expression: Expression, exportName: string): ContainerIR["rollout"] => {
     if (!Node.isObjectLiteralExpression(expression)) {
-        return undefined;
+        throw diagnosticAt(
+            expression,
+            `container "${exportName}": \`rollout\` must be a static object literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+        );
     }
 
     const rollout: { gracePeriodSeconds?: number; stepPercentage?: number } = {};
 
-    for (const property of expression.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
-            continue;
-        }
-
-        const key = property.getName();
-        const value = property.getInitializerOrThrow();
-
-        if (Node.isNumericLiteral(value) && (key === "gracePeriodSeconds" || key === "stepPercentage")) {
-            rollout[key] = value.getLiteralValue();
+    for (const [key, value] of staticEntries(expression, ROLLOUT_KEYS, `container "${exportName}" rollout`)) {
+        if (key === "gracePeriodSeconds" || key === "stepPercentage") {
+            rollout[key] = numberProperty(value, exportName, `rollout.${key}`);
         }
     }
 
@@ -171,7 +281,7 @@ const instanceTypeFromExpression = (expression: Expression, exportName: string):
                 throw diagnosticAt(property, `container "${exportName}": \`instanceType\` must be an object of static number literals`);
             }
 
-            const key = property.getName();
+            const key = propertyKeyName(property);
 
             if (key !== "diskMb" && key !== "memoryMib" && key !== "vcpu") {
                 throw diagnosticAt(property, `container "${exportName}": unknown \`instanceType\` field "${key}" — expected vcpu, memoryMib, or diskMb`);
@@ -203,21 +313,10 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
 
     let sawImage = false;
 
-    for (const property of argument.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
-            // Shorthand/spread for runtime-only fields is fine — the generated
-            // class imports the definition object, so codegen doesn't need to
-            // evaluate them. Only the wrangler-relevant fields below must be
-            // static, and those are property assignments by construction here.
-            continue;
-        }
-
-        const key = property.getName();
-        const initializer = property.getInitializerOrThrow();
-
+    for (const [key, initializer] of staticEntries(argument, WRANGLER_KEYS, `container "${exportName}"`)) {
         switch (key) {
             case "buildArgs": {
-                ir.buildArgs = stringRecordLiteral(initializer);
+                ir.buildArgs = stringRecordLiteral(initializer, exportName);
 
                 break;
             }
@@ -250,7 +349,7 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
                 break;
             }
             case "rollout": {
-                ir.rollout = rolloutLiteral(initializer);
+                ir.rollout = rolloutLiteral(initializer, exportName);
 
                 break;
             }
@@ -277,6 +376,10 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
 /** Collect exported `defineContainer` declarations from one source file. */
 const containersFromSource = (source: SourceFile): ContainerIR[] => {
     const containers: ContainerIR[] = [];
+    // `containerBindingName` upper-snakes the export name, so `imageResizer` and
+    // `image_resizer` both become CONTAINER_IMAGE_RESIZER — two Durable Object
+    // bindings under one name in wrangler.jsonc, one silently shadowing the other.
+    const exportByBinding = new Map<string, string>();
 
     for (const declaration of source.getVariableDeclarations()) {
         if (!declaration.isExported()) {
@@ -302,7 +405,18 @@ const containersFromSource = (source: SourceFile): ContainerIR[] => {
             throw diagnosticAt(nameNode, "defineContainer exports must be plain named exports (no destructuring)");
         }
 
-        containers.push(containerFromCall(call, nameNode.getText()));
+        const container = containerFromCall(call, nameNode.getText());
+        const clash = exportByBinding.get(container.bindingName);
+
+        if (clash !== undefined) {
+            throw diagnosticAt(
+                nameNode,
+                `containers "${clash}" and "${container.exportName}" both map to the binding ${container.bindingName} — rename one so each container gets its own Durable Object binding`,
+            );
+        }
+
+        exportByBinding.set(container.bindingName, container.exportName);
+        containers.push(container);
     }
 
     return containers;

@@ -1,6 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { findObjectProperty,propertyKeyName } from "./discover/ast";
 import { resolveObjectLiteral } from "./parse-validator";
 
 /**
@@ -73,7 +74,7 @@ const argumentsOfFactory = (call: CallExpression): ProcedureArgumentObjects => {
         return { objects: [], opaque: true };
     }
 
-    const argumentsProperty = first.getProperty("args");
+    const argumentsProperty = findObjectProperty(first, "args");
 
     if (!argumentsProperty) {
         return { objects: [], opaque: false };
@@ -161,7 +162,7 @@ const namesOfObject = (object: ObjectLiteralExpression, active: Set<ObjectLitera
                 return resolved === undefined ? [] : namesOfObject(resolved, active);
             }
 
-            return Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property) ? [property.getName()] : [];
+            return Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property) ? [propertyKeyName(property)] : [];
         });
     } finally {
         active.delete(object);

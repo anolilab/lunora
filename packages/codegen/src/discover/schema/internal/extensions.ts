@@ -4,12 +4,13 @@ import { Node } from "ts-morph";
 import { diagnosticAt } from "../../../diagnostics";
 import type { TableIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
+import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
 import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
 const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
-    const sourceProperty = optionsExpression.getProperty("source");
+    const sourceProperty = findObjectProperty(optionsExpression, "source");
 
     if (sourceProperty && Node.isPropertyAssignment(sourceProperty)) {
         const sourceInitializer = sourceProperty.getInitializer();
@@ -326,7 +327,7 @@ const extensionPartsOf = (call: CallExpression): { key: string; keyNode: TsNode;
 
 /** Parse the `tables: {...}` property of a `defineSchemaExtension` options object into bare-named {@link TableIR}s. */
 const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
-    const tablesProperty = options.getProperty("tables");
+    const tablesProperty = findObjectProperty(options, "tables");
 
     if (!tablesProperty || !Node.isPropertyAssignment(tablesProperty)) {
         return [];
@@ -351,7 +352,7 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
             continue;
         }
 
-        const name = property.getName();
+        const name = propertyKeyName(property);
 
         // Validate the extension's BARE name — the user wrote this one; the
         // eventual `${key}_${bareName}` prefix is codegen's own construction,
@@ -366,7 +367,7 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
 
 /** Parse the optional `vectorIndexes: {...}` property of a `defineSchemaExtension` options object (Shape B map). */
 const parseExtensionVectorIndexes = (options: ObjectLiteralExpression): VectorIndexIR[] => {
-    const property = options.getProperty("vectorIndexes");
+    const property = findObjectProperty(options, "vectorIndexes");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return [];

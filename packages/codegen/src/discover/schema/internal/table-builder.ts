@@ -1,6 +1,7 @@
 import type { Expression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { globalTtlMessage } from "../../../../../../shared/global-ttl";
 import { diagnosticAt } from "../../../diagnostics";
 import type {
     ExternalSourceIR,
@@ -16,16 +17,8 @@ import type {
     VectorIndexIR,
 } from "../../../ir";
 import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
-import {
-    asMetric,
-    getBooleanProperty,
-    getNumberProperty,
-    getStringArrayProperty,
-    getStringProperty,
-    indexNameOf,
-    stringArrayPropertyOf,
-    stripQuotes,
-} from "./properties";
+import { findObjectProperty, propertyKeyName } from "../../ast";
+import { asMetric, getBooleanProperty, getNumberProperty, getStringArrayProperty, getStringProperty, indexNameOf, stringArrayPropertyOf } from "./properties";
 
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
@@ -162,26 +155,24 @@ const TABLE_NAME_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
  * offending declaration.
  */
 const assertTableNameAllowed = (name: string, node: Node): void => {
-    const unquoted = stripQuotes(name);
-
-    if (RESERVED_TABLE_NAMES.has(unquoted)) {
+    if (RESERVED_TABLE_NAMES.has(name)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own members, so this table would overwrite \`ctx.db.${unquoted}\` and every use of it would break. Rename the table.`,
+            `table name "${name}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own members, so this table would overwrite \`ctx.db.${name}\` and every use of it would break. Rename the table.`,
         );
     }
 
-    if (RESERVED_JS_WORDS.has(unquoted)) {
+    if (RESERVED_JS_WORDS.has(name)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is a reserved JavaScript word — codegen interpolates table names into a bare \`const ${unquoted} = sqliteTable(...)\` binding in the generated Drizzle module, which is a syntax error for a keyword. Rename the table.`,
+            `table name "${name}" is a reserved JavaScript word — codegen interpolates table names into a bare \`const ${name} = sqliteTable(...)\` binding in the generated Drizzle module, which is a syntax error for a keyword. Rename the table.`,
         );
     }
 
-    if (!TABLE_NAME_IDENTIFIER_RE.test(unquoted)) {
+    if (!TABLE_NAME_IDENTIFIER_RE.test(name)) {
         throw diagnosticAt(
             node,
-            `table name ${JSON.stringify(unquoted)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
+            `table name ${JSON.stringify(name)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
         );
     }
 };
@@ -262,7 +253,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
         onDelete = method === "one" ? asOnDelete(getStringProperty(optionsExpression, "onDelete")) : undefined;
     }
 
-    return { field, kind: method, name: property.getName(), onDelete, references, table };
+    return { field, kind: method, name: propertyKeyName(property), onDelete, references, table };
 };
 
 /**
@@ -331,7 +322,7 @@ const parseIndexUniqueOption = (optionsExpression: Node | undefined): boolean =>
         return false;
     }
 
-    const property = optionsExpression.getProperty("unique");
+    const property = findObjectProperty(optionsExpression, "unique");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return false;
@@ -453,7 +444,7 @@ const parseRankIndexCall = (args: ReadonlyArray<Node>): RankIndexIR => {
     let partitionBy: string[] | undefined;
 
     if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        const sortByProperty = optionsExpression.getProperty("sortBy");
+        const sortByProperty = findObjectProperty(optionsExpression, "sortBy");
 
         if (sortByProperty && Node.isPropertyAssignment(sortByProperty)) {
             const initializer = sortByProperty.getInitializer();
@@ -528,7 +519,7 @@ interface TableBuilderAccumulator {
 /** Read the marker-column name off a `.softDelete({ field })` options arg; defaults to `deletedAt`. */
 const softDeleteFieldOf = (optionsArgument: Node | undefined): string => {
     if (optionsArgument && Node.isObjectLiteralExpression(optionsArgument)) {
-        const fieldProperty = optionsArgument.getProperty("field");
+        const fieldProperty = findObjectProperty(optionsArgument, "field");
 
         if (fieldProperty && Node.isPropertyAssignment(fieldProperty)) {
             const initializer = fieldProperty.getInitializer();
@@ -566,9 +557,9 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
     return {
         binding: getStringProperty(first, "binding") ?? "",
         columns: stringArrayPropertyOf(first, "columns"),
-        hasReconcile: first.getProperty("reconcileEveryMs") !== undefined,
-        hasSoftDelete: first.getProperty("softDeleteColumn") !== undefined,
-        hasTenantBy: first.getProperty("tenantBy") !== undefined,
+        hasReconcile: findObjectProperty(first, "reconcileEveryMs") !== undefined,
+        hasSoftDelete: findObjectProperty(first, "softDeleteColumn") !== undefined,
+        hasTenantBy: findObjectProperty(first, "tenantBy") !== undefined,
         idColumn: getStringProperty(first, "idColumn"),
         mode: getStringProperty(first, "mode"),
         query: getStringProperty(first, "query"),
@@ -759,6 +750,17 @@ const assertNoFtsShadowCollision = (expression: Expression, table: string, searc
     }
 };
 
+/**
+ * Reject `.ttl()` on a `.global()` table — mirrors `defineSchema`'s runtime
+ * refusal, so the build fails at the table rather than the emitter quietly
+ * generating no sweep for rows no shard alarm can reach.
+ */
+const assertNoGlobalTtl = (expression: Expression, table: string, accumulator: TableBuilderAccumulator): void => {
+    if (accumulator.ttl !== undefined && accumulator.shardMode === "global") {
+        throw diagnosticAt(expression, globalTtlMessage(table));
+    }
+};
+
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         commitOrdered: false,
@@ -815,10 +817,12 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     // (`number | null | undefined`), absent on a live row. The user's own
     // declaration of the column wins (matches the runtime `if (!(field in shape))`).
     if (accumulator.softDelete && !(accumulator.softDelete.field in shape)) {
-        shape = { ...shape, [accumulator.softDelete.field]: { inner: { kind: "number" }, kind: "optional" } };
+        shape = { ...shape, [accumulator.softDelete.field]: { inner: { column: { notNull: false }, kind: "number" }, kind: "optional" } };
     }
 
     assertNoFtsShadowCollision(expression, name, accumulator.searchIndexes);
+
+    assertNoGlobalTtl(expression, name, accumulator);
 
     return {
         commitOrdered: accumulator.commitOrdered,
@@ -877,20 +881,18 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
         const initializer = property.getInitializer();
 
         if (initializer) {
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             assertTableNameAllowed(name, property.getNameNode());
 
-            const unquoted = stripQuotes(name);
-
-            if (seenNames.has(unquoted)) {
+            if (seenNames.has(name)) {
                 throw diagnosticAt(
                     property.getNameNode(),
-                    `defineSchema({...}): table "${unquoted}" is declared more than once — the earlier declaration would be silently discarded. Remove the duplicate.`,
+                    `defineSchema({...}): table "${name}" is declared more than once — the earlier declaration would be silently discarded. Remove the duplicate.`,
                 );
             }
 
-            seenNames.add(unquoted);
+            seenNames.add(name);
             tables.push(parseTableBuilder(initializer, name));
         }
     }

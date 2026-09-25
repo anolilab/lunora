@@ -107,7 +107,7 @@ describe("discover/containers", () => {
 
         writeContainers(`
             import { defineContainer } from "@lunora/container";
-            const path = "./containers/worker";
+            let path = "./containers/worker";
             export const worker = defineContainer({ image: path });
         `);
 
@@ -130,7 +130,7 @@ describe("discover/containers", () => {
 
         writeContainers(`
             import { defineContainer } from "@lunora/container";
-            const n = 5;
+            const n = Number("5");
             export const worker = defineContainer({ image: "./w", maxInstances: n });
         `);
 
@@ -266,6 +266,110 @@ describe("emit (containers)", () => {
 
         expect(shard).toContain(
             'const containers = createContainerContext(env, LUNORA_CONTAINERS, "us", this.getCurrentTraceparent(), this.getCurrentSampleErrors());',
+        );
+    });
+
+    it("reads shorthand and spread wrangler settings through module-scope consts", () => {
+        expect.assertions(1);
+
+        // `{ maxInstances, instanceType }` and `{ ...base }` used to be skipped,
+        // so the deploy config silently lost `max_instances` / `instance_type`.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const maxInstances = 20;
+            const instanceType = "standard-4";
+            const NODE_VERSION = "22";
+            const base = { image: "./containers/base", rollout: { stepPercentage: 25 } };
+
+            export const worker = defineContainer({ ...base, maxInstances, instanceType, buildArgs: { NODE_VERSION } });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir);
+
+        expect({
+            buildArgs: container?.buildArgs,
+            image: container?.image,
+            instanceType: container?.instanceType,
+            maxInstances: container?.maxInstances,
+            rollout: container?.rollout,
+        }).toStrictEqual({
+            buildArgs: { NODE_VERSION: "22" },
+            image: { buildContext: "./containers/base", dockerfilePath: "./containers/base/Dockerfile", kind: "dockerfile" },
+            instanceType: "standard-4",
+            maxInstances: 20,
+            rollout: { stepPercentage: 25 },
+        });
+    });
+
+    it("rejects a shorthand wrangler setting it cannot resolve instead of dropping it", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            let maxInstances = 20;
+
+            export const worker = defineContainer({ image: "./containers/worker", maxInstances });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`maxInstances` is deploy configuration codegen writes into wrangler.jsonc");
+    });
+
+    it("rejects an opaque spread that can carry a wrangler setting", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const settings = (): { maxInstances: number; env: Record<string, string> } => ({ maxInstances: 3, env: {} });
+
+            export const worker = defineContainer({ image: "./containers/worker", ...settings() });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("this spread can set `maxInstances`");
+    });
+
+    it("leaves an opaque spread of runtime-only fields to the runtime", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const runtime = (): { env: Record<string, string>; defaultPort: number } => ({ env: {}, defaultPort: 8080 });
+
+            export const worker = defineContainer({ image: "./containers/worker", ...runtime() });
+        `);
+
+        expect(discoverContainers(newProject(), workdir)).toHaveLength(1);
+    });
+
+    it("rejects a buildArgs entry it cannot read statically", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const worker = defineContainer({ image: "./containers/worker", buildArgs: { VERSION: process.env.VERSION } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`buildArgs.VERSION` must be a static string literal");
+    });
+
+    it("rejects two containers whose exports map to one binding name", () => {
+        expect.assertions(1);
+
+        // Both normalize to CONTAINER_IMAGE_RESIZER: wrangler would receive two
+        // Durable Object bindings under one name.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const imageResizer = defineContainer({ image: "./containers/a" });
+            export const image_resizer = defineContainer({ image: "./containers/b" });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(
+            'containers "imageResizer" and "image_resizer" both map to the binding CONTAINER_IMAGE_RESIZER',
         );
     });
 });

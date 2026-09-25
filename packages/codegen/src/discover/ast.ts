@@ -2,7 +2,17 @@ import type { Stats } from "node:fs";
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 
-import type { Block, CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type {
+    Block,
+    CallExpression,
+    Expression,
+    Identifier,
+    ObjectLiteralElementLike,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    Symbol as TsSymbol,
+} from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
@@ -281,6 +291,49 @@ const enclosingExportName = (call: CallExpression): string => {
 };
 
 /**
+ * The runtime key a property-name node spells, with the quotes a string-literal
+ * key is written with removed.
+ *
+ * ts-morph's `getName()` on a `PropertyAssignment` / `MethodDeclaration` (and its
+ * `getProperty("name")`, which compares against `getName()`) returns the key's
+ * SOURCE TEXT: `{ "NODE_VERSION": "22" }` reads back as `"NODE_VERSION"`, quotes
+ * included. Every reader that compared or recorded that text treated a quoted
+ * key as a different key — a cron dispatched with argument names nobody
+ * declared, a container build arg named with literal quote characters, a
+ * wrangler setting that silently vanished. The runtime sees `NODE_VERSION`, so
+ * this does too: string, template and numeric literals yield their value, a
+ * computed `["key"]` its literal, and anything else (identifier, computed
+ * expression) its text.
+ */
+const propertyNameText = (nameNode: Node): string => {
+    if (Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode) || Node.isNumericLiteral(nameNode)) {
+        return nameNode.getLiteralText();
+    }
+
+    if (Node.isComputedPropertyName(nameNode)) {
+        const expression = nameNode.getExpression();
+
+        if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
+            return expression.getLiteralText();
+        }
+    }
+
+    return nameNode.getText();
+};
+
+/** The runtime key of an object-literal member (or any named declaration) — see {@link propertyNameText}. */
+const propertyKeyName = (member: { getNameNode: () => Node }): string => propertyNameText(member.getNameNode());
+
+/**
+ * The member of `object` whose runtime key is `name`, quoted or not — the
+ * quote-blind replacement for ts-morph's `getProperty(name)`, which matches on
+ * source text and so misses `{ "handler": … }`. Spreads have no key and never
+ * match. `undefined` for an absent `object`.
+ */
+const findObjectProperty = (object: ObjectLiteralExpression | undefined, name: string): ObjectLiteralElementLike | undefined =>
+    object?.getProperties().find((property) => !Node.isSpreadAssignment(property) && propertyKeyName(property) === name);
+
+/**
  * The handler function of a query/mutation registration — its terminal-builder
  * argument or the `handler:` property of the bare-factory object literal.
  * Returns `undefined` when the handler isn't a statically recognisable function
@@ -301,7 +354,7 @@ const handlerOf = (call: CallExpression, receiver: Node | undefined): Node | und
         return undefined;
     }
 
-    const handlerProperty = first.getProperty("handler");
+    const handlerProperty = findObjectProperty(first, "handler");
 
     if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
         return undefined;
@@ -324,14 +377,14 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
         return undefined;
     }
 
-    const property = object.getProperty(name);
+    const property = findObjectProperty(object, name);
 
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
 /**
- * The initializer of the module-scope `const <name> = …` that `identifier`
- * binds to, or `undefined` when it binds to anything else.
+ * The initializer of the module-scope `const <name> = …` that `symbol`
+ * resolves to, or `undefined` when it resolves to anything else.
  *
  * Resolved through the identifier's SYMBOL, not its spelling. A name-keyed
  * lookup answers for whichever declaration happens to share the text: a
@@ -345,11 +398,8 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
  * function is out of reach of this one-hop read. Under-reporting is fail-safe;
  * reporting a stale or unrelated shape is not.
  */
-const moduleConstInitializer = (identifier: Identifier): Node | undefined => {
-    const declaration = identifier
-        .getSymbol()
-        ?.getDeclarations()
-        .find((candidate) => Node.isVariableDeclaration(candidate));
+const symbolConstInitializer = (symbol: TsSymbol | undefined): Node | undefined => {
+    const declaration = symbol?.getDeclarations().find((candidate) => Node.isVariableDeclaration(candidate));
 
     if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
         return undefined;
@@ -365,6 +415,9 @@ const moduleConstInitializer = (identifier: Identifier): Node | undefined => {
 
     return Node.isVariableStatement(statement) && Node.isSourceFile(statement.getParent()) ? declaration.getInitializer() : undefined;
 };
+
+/** The {@link symbolConstInitializer} of the binding `identifier` names. */
+const moduleConstInitializer = (identifier: Identifier): Node | undefined => symbolConstInitializer(identifier.getSymbol());
 
 /**
  * The object literal an options argument denotes: `node` itself when it already
@@ -574,7 +627,7 @@ const stringPropertyOf = (object: Node, name: string): string | undefined => {
         return undefined;
     }
 
-    const property = object.getProperty(name);
+    const property = findObjectProperty(object, name);
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return undefined;
@@ -650,6 +703,7 @@ export {
     collectSecurityCallRows,
     defaultExportExpression,
     enclosingExportName,
+    findObjectProperty,
     handlerOf,
     isContextIdentifier,
     isDatabaseAccessor,
@@ -660,9 +714,12 @@ export {
     objectLiteralFromCallbackBody,
     optionsObjectLiteral,
     propertyInitializer,
+    propertyKeyName,
+    propertyNameText,
     readTargetOf,
     stringPropertyFor,
     stringPropertyOf,
+    symbolConstInitializer,
     tableArgumentOf,
     tablesAccessedIn,
     TS_EXTENSION_RE,

@@ -2,6 +2,7 @@ import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { MaskColumnMetadataIR } from "../../../ir";
+import { propertyKeyName } from "../../ast";
 import { wrappedCallsInChain } from "../../builder-chain";
 import { resolvesToImportedName } from "../../callee";
 
@@ -35,8 +36,9 @@ const isMaskCall = (node: TsNode): boolean => {
  * the PII strategy lint keyed off the same string and missed for the same
  * reason. Quoting a key is ordinary TypeScript, so nothing warned.
  *
- * A COMPUTED key still resolves to its bracketed source text rather than
- * `undefined` — deliberate, and `hasComputedName` in `has-non-literal-policy`
+ * A string-literal key is read through `propertyKeyName`, the one helper every
+ * discover pass uses for this. A COMPUTED key over a non-literal expression
+ * still resolves to its bracketed source text rather than `undefined` — deliberate, and `hasComputedName` in `has-non-literal-policy`
  * rejects those independently rather than relying on this returning `undefined`.
  */
 const memberName = (member: TsNode): string | undefined => {
@@ -49,9 +51,7 @@ const memberName = (member: TsNode): string | undefined => {
         return undefined;
     }
 
-    const nameNode = member.getNameNode();
-
-    return Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : member.getName();
+    return propertyKeyName(member);
 };
 
 /**

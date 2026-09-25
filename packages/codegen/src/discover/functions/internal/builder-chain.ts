@@ -3,6 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ValidatorIR } from "../../../ir";
 import { parseObjectShape, parseValidator, resolveObjectLiteral } from "../../../parse-validator";
+import { findObjectProperty } from "../../ast";
 import { builderChainSteps } from "../../builder-chain";
 import { parseOutput } from "../../erased-returns";
 import unwrapHandlerReturn from "../unwrap-handler-return";
@@ -18,7 +19,7 @@ const returnTypeFromCall = (call: CallExpression): string => {
         return "unknown";
     }
 
-    const handlerProperty = first.getProperty("handler");
+    const handlerProperty = findObjectProperty(first, "handler");
 
     if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
         return "unknown";

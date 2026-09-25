@@ -8,7 +8,7 @@ import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
 import sanitizeNamespace from "../paths";
-import { listLunoraSourceFiles } from "./ast";
+import { listLunoraSourceFiles, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
@@ -149,7 +149,7 @@ const objectLiteralValue = (object: ObjectLiteralExpression, jobName: string): R
         const initializer = property.getInitializer();
 
         if (initializer) {
-            result[property.getName()] = literalValue(initializer, jobName);
+            result[propertyKeyName(property)] = literalValue(initializer, jobName);
         }
     }
 

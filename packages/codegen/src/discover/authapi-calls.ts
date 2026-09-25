@@ -2,7 +2,7 @@ import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { AuthApiCallIR } from "../ir";
-import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * True for a `ctx.authApi.<method>(...)` (or bare `authApi.<method>(...)`)
@@ -59,7 +59,7 @@ const hasHeadersProp = (call: CallExpression): boolean => {
     }
 
     for (const property of argument.getProperties()) {
-        if ((Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) && property.getName() === "headers") {
+        if ((Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) && propertyKeyName(property) === "headers") {
             return true;
         }
 

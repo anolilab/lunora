@@ -5,6 +5,7 @@ import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { globalTtlMessage } from "../../../shared/global-ttl";
 import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
@@ -354,7 +355,8 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `.softDelete()`s). `field` is an epoch-millisecond column; without
      * `options.after` its value is the absolute expiry instant, with `after` the
      * row expires `after` ms past `field` (`field + after`). Coarse, cheap,
-     * table-level — for per-row schedules use `@lunora/scheduler`.
+     * table-level — for per-row schedules use `@lunora/scheduler`. Rejected on a
+     * `.global()` table, whose rows live outside every shard's alarm.
      */
     ttl: (field: keyof Shape & string, options?: { after?: number }) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
@@ -1415,6 +1417,23 @@ const validateDropStalePatches = (tables: Record<string, TableDefinition>): void
 };
 
 /**
+ * Reject `.ttl()` on a `.global()` table.
+ *
+ * The sweep is a shard's alarm deleting rows from its own SQLite. A `.global()`
+ * table's rows live in D1 (or Hyperdrive), which no shard owns, so no alarm ever
+ * visited them: the table accepted `.ttl()`, documented expiry, and kept every
+ * expired row forever. Refusing is the same call `.dropStalePatches()` makes —
+ * a policy that looks enforced and is not is worse than one that will not build.
+ */
+const validateGlobalTtl = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.ttlPolicy !== undefined && table.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalTtlMessage(tableName)}`);
+        }
+    }
+};
+
+/**
  * Reject a vector index on a `.global()` table — inline `.vectorize()` or a
  * standalone `defineVectorIndex()` whose `source.table` is one.
  *
@@ -1484,6 +1503,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     validateCommitOrdered(tables);
     validateDropStalePatches(tables);
     validateGlobalBigint(tables);
+    validateGlobalTtl(tables);
     validateGlobalVectors(tables, vectorIndexes);
     validateMemoryTables(tables);
     validateIndexFields(tables);
