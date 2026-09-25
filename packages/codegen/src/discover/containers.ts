@@ -11,6 +11,7 @@ import type {
     Project,
     SourceFile,
     SpreadAssignment,
+    Type,
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
@@ -102,11 +103,107 @@ const WRANGLER_KEYS = new Set(["buildArgs", "image", "instanceType", "maxInstanc
 /** The `rollout` keys codegen lifts into wrangler.jsonc. */
 const ROLLOUT_KEYS = new Set(["gracePeriodSeconds", "stepPercentage"]);
 
-/** An identifier naming a module-scope `const` reads as that const's initializer; anything else as itself. */
-const resolveConstant = (expression: Expression): Expression => {
-    const initializer = Node.isIdentifier(expression) ? symbolConstInitializer(expression.getSymbol()) : undefined;
+/** `x as const`, `x satisfies T`, `<T>x` and `(x)` read as `x` — none changes the value wrangler would get. */
+const unwrapTypeOnly = (expression: Expression): Expression => {
+    let current = expression;
 
-    return initializer !== undefined && Node.isExpression(initializer) ? initializer : expression;
+    while (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isTypeAssertion(current) || Node.isParenthesizedExpression(current)) {
+        current = current.getExpression();
+    }
+
+    return current;
+};
+
+/**
+ * Whether `identifier`'s binding is written through anywhere in its file:
+ * `base.key = …` (any assignment operator), `base.key++`, `delete base.key`,
+ * or `Object.assign(base, …)`. A `const` object literal written that way has
+ * a runtime value its initializer does not show, so reading the initializer
+ * would put a different number in wrangler.jsonc than the one the app runs.
+ */
+const isWrittenThrough = (identifier: Identifier): boolean => {
+    const symbol = identifier.getSymbol();
+
+    if (symbol === undefined) {
+        return false;
+    }
+
+    const rootOf = (target: Node): Node | undefined => {
+        let current: Node = target;
+
+        while (Node.isPropertyAccessExpression(current) || Node.isElementAccessExpression(current) || Node.isParenthesizedExpression(current)) {
+            current = current.getExpression();
+        }
+
+        return current === target ? undefined : current;
+    };
+    const namesBinding = (node: Node | undefined): boolean => node !== undefined && Node.isIdentifier(node) && node.getSymbol() === symbol;
+
+    return identifier
+        .getSourceFile()
+        .getDescendants()
+        .some((node) => {
+            if (Node.isBinaryExpression(node)) {
+                const operator = node.getOperatorToken().getKind();
+
+                return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment && namesBinding(rootOf(node.getLeft()));
+            }
+
+            if (Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) {
+                const operator = node.getOperatorToken();
+
+                return (operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken) && namesBinding(rootOf(node.getOperand()));
+            }
+
+            if (Node.isDeleteExpression(node)) {
+                return namesBinding(rootOf(node.getExpression()));
+            }
+
+            return Node.isCallExpression(node) && node.getExpression().getText() === "Object.assign" && namesBinding(node.getArguments()[0]);
+        });
+};
+
+/**
+ * An identifier naming a module-scope `const` reads as that const's
+ * initializer; anything else as itself. Type-only wrappers are unwrapped on
+ * both sides, and a const object written through elsewhere is refused.
+ */
+const resolveConstant = (expression: Expression, what: string): Expression => {
+    const bare = unwrapTypeOnly(expression);
+
+    if (!Node.isIdentifier(bare)) {
+        return bare;
+    }
+
+    const initializer = symbolConstInitializer(bare.getSymbol());
+
+    if (initializer === undefined || !Node.isExpression(initializer)) {
+        return bare;
+    }
+
+    const value = unwrapTypeOnly(initializer);
+
+    if (Node.isObjectLiteralExpression(value) && isWrittenThrough(bare)) {
+        throw diagnosticAt(
+            bare,
+            `${what}: \`${bare.getText()}\` is a const object that is written to elsewhere in this file, so its initializer is not the value the container runs with. Declare the settings where they are final.`,
+        );
+    }
+
+    return value;
+};
+
+/** Every property a type can carry: `T | undefined` reads as `T`, a union as all of its members' keys. */
+const typePropertyNames = (type: Type): string[] => {
+    const nonNullable = type.getNonNullableType();
+    const members = nonNullable.isUnion() ? nonNullable.getUnionTypes() : [nonNullable];
+
+    return members.flatMap((member) =>
+        member
+            .getApparentType()
+            .getProperties()
+            .map((symbol) => symbol.getName()),
+    );
 };
 
 /**
@@ -129,16 +226,13 @@ type GuardedKeys = ReadonlySet<string> | "every";
  * `"every"` it is refused outright rather than read through an empty key list.
  */
 const assertOpaqueSpreadSafe = (property: SpreadAssignment, guarded: GuardedKeys, what: string): void => {
+    const type = property.getExpression().getType();
+    // `any` / `unknown` name no keys, and neither says it cannot carry one — so
+    // they are refused outright, like a record-typed spread under "every".
     const hidden =
-        guarded === "every"
+        guarded === "every" || type.isAny() || type.isUnknown()
             ? ["its keys"]
-            : property
-                  .getExpression()
-                  .getType()
-                  .getProperties()
-                  .map((symbol) => symbol.getName())
-                  .filter((key) => guarded.has(key))
-                  .map((key) => `\`${key}\``);
+            : [...new Set(typePropertyNames(type))].filter((key) => guarded.has(key)).map((key) => `\`${key}\``);
 
     if (hidden.length > 0) {
         throw diagnosticAt(
@@ -162,7 +256,7 @@ const unreadableMemberEntry = (
     const value = Node.isShorthandPropertyAssignment(property) ? symbolConstInitializer(property.getValueSymbol()) : undefined;
 
     if (value !== undefined && Node.isExpression(value)) {
-        return [key, value];
+        return [key, unwrapTypeOnly(value)];
     }
 
     if (guarded === "every" || guarded.has(key)) {
@@ -175,20 +269,21 @@ const unreadableMemberEntry = (
     return undefined;
 };
 
-const staticEntries = (object: ObjectLiteralExpression, guarded: GuardedKeys, what: string): [string, Expression][] => {
+const staticEntries = (
+    object: ObjectLiteralExpression,
+    guarded: GuardedKeys,
+    what: string,
+    visiting: ReadonlySet<ObjectLiteralExpression> = new Set(),
+): [string, Expression][] => {
     const entries: [string, Expression][] = [];
+    const path = new Set(visiting).add(object);
 
     for (const property of object.getProperties()) {
         if (Node.isPropertyAssignment(property)) {
-            entries.push([propertyKeyName(property), resolveConstant(property.getInitializerOrThrow())]);
+            entries.push([propertyKeyName(property), resolveConstant(property.getInitializerOrThrow(), what)]);
         } else if (Node.isSpreadAssignment(property)) {
-            const spread = resolveConstant(property.getExpression());
-
-            if (Node.isObjectLiteralExpression(spread)) {
-                entries.push(...staticEntries(spread, guarded, what));
-            } else {
-                assertOpaqueSpreadSafe(property, guarded, what);
-            }
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a spread of a const object literal re-enters staticEntries
+            entries.push(...spreadEntries(property, guarded, what, path));
         } else {
             const entry = unreadableMemberEntry(property, guarded, what);
 
@@ -199,6 +294,31 @@ const staticEntries = (object: ObjectLiteralExpression, guarded: GuardedKeys, wh
     }
 
     return entries;
+};
+
+/**
+ * The entries a spread contributes: those of the module-scope `const` object
+ * literal it names, or none from an opaque spread that cannot carry a guarded
+ * key (see {@link assertOpaqueSpreadSafe}). `path` holds the literals already
+ * being read, so a spread cycle is an error rather than a stack overflow.
+ */
+const spreadEntries = (property: SpreadAssignment, guarded: GuardedKeys, what: string, path: ReadonlySet<ObjectLiteralExpression>): [string, Expression][] => {
+    const spread = resolveConstant(property.getExpression(), what);
+
+    if (!Node.isObjectLiteralExpression(spread)) {
+        assertOpaqueSpreadSafe(property, guarded, what);
+
+        return [];
+    }
+
+    if (path.has(spread)) {
+        // `const a = { ...b }; const b = { ...a }` — only typeable through `any`,
+        // and it has no value at runtime (one initializer reads the other
+        // before it exists).
+        throw diagnosticAt(property, `${what}: this spread refers back to an object it is part of, so it has no static value.`);
+    }
+
+    return staticEntries(spread, guarded, what, path);
 };
 
 /** Lift `buildArgs` — an object of static string values, each becoming a wrangler `image_vars` entry. */

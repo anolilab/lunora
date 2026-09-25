@@ -372,4 +372,75 @@ describe("emit (containers)", () => {
             'containers "imageResizer" and "image_resizer" both map to the binding CONTAINER_IMAGE_RESIZER',
         );
     });
+
+    it.each([
+        ["an `any` spread", 'const settings: any = JSON.parse("{}");', "...settings"],
+        ["a `T | undefined` spread", "const settings = Math.random() > 0.5 ? { maxInstances: 3 } : undefined;", "...settings"],
+        ["a union-typed spread", 'const settings = Math.random() > 0.5 ? { maxInstances: 3 } : { sleepAfter: "5m" };', "...settings"],
+    ])("refuses %s that can hide a wrangler setting", (_label, declaration, spread) => {
+        expect.assertions(1);
+
+        // `getProperties()` on these types is empty (any, `T | undefined`) or
+        // only the common keys (a union), so the spread used to be skipped and
+        // `max_instances` silently dropped.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            ${declaration}
+
+            export const worker = defineContainer({ image: "./containers/worker", ${spread} });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/this spread can set/u);
+    });
+
+    it("refuses a const settings object that is written to elsewhere in the file", () => {
+        expect.assertions(1);
+
+        // The initializer says 2; the runtime value is 10. Reading the initializer
+        // would deploy `max_instances: 2` for a container that runs with 10.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const base = { image: "./containers/worker", maxInstances: 2 };
+
+            base.maxInstances = 10;
+
+            export const worker = defineContainer({ ...base });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`base` is a const object that is written to elsewhere/u);
+    });
+
+    it("refuses self-referential spreads with a diagnostic instead of overflowing the stack", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const a: any = { image: "./containers/worker", ...b };
+            const b: any = { ...a };
+
+            export const worker = defineContainer({ ...a });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/refers back to an object it is part of/u);
+    });
+
+    it("reads settings through `as const` and `satisfies`", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const maxInstances = 3 as const;
+            const base = { image: "./containers/worker", instanceType: "standard-2" } satisfies Record<string, string>;
+
+            export const worker = defineContainer({ ...base, maxInstances });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir);
+
+        expect({ instanceType: container?.instanceType, maxInstances: container?.maxInstances }).toStrictEqual({ instanceType: "standard-2", maxInstances: 3 });
+    });
 });
