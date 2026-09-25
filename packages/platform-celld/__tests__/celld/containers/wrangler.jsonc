@@ -1,0 +1,20 @@
+// The container check `celld-containers.test.ts` runs under `celld dev`. Kept
+// apart from the main TCK worker because celld builds every `containers` image
+// at startup, so this one needs a Docker (or Podman) engine and the rest does not.
+{
+    "name": "lunora-celld-containers",
+    "main": "worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "BOX", "class_name": "TckBox" },
+            { "name": "FENCED", "class_name": "TckFenced" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckBox", "TckFenced"] }],
+    "containers": [
+        { "class_name": "TckBox", "image": "./Dockerfile", "max_instances": 2 },
+        { "class_name": "TckFenced", "image": "./Dockerfile", "max_instances": 2 },
+    ],
+}

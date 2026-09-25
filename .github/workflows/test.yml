@@ -326,6 +326,8 @@
               "env":
                   "LUNORA_CELLD_TESTS": "1"
                   "LUNORA_CELLD_S3_ENDPOINT": "http://127.0.0.1:19000"
+                  # The runner's Docker engine, on its default socket, backs the containers check.
+                  "LUNORA_CELLD_CONTAINERS": "1"
               "run": |
                   pnpm --filter "@lunora/platform-celld" run test --project celld
 
