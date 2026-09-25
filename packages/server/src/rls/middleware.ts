@@ -64,7 +64,7 @@ import { LunoraError } from "@lunora/errors";
 // and every package that builds against `@lunora/server` without declaring
 // `@lunora/shard-engine` then resolves it through pnpm's hoist — which packem
 // fails the build over, by design.
-import { findRelated } from "@lunora/shard-engine";
+import { findRelated, whereFilter } from "@lunora/shard-engine";
 
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
@@ -1517,20 +1517,20 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
         query(tableName) {
             const { baseWhere } = readBase(tableName);
-
             const reader = route(tableName).query(tableName);
 
             if (!baseWhere) {
                 return reader;
             }
 
-            // The legacy reader doesn't take a `baseWhere` — push the
-            // predicate down as an in-memory `.filter()`. This trades the
-            // SQL-side prune for a row-by-row JS check, but the legacy
-            // `query()` path is already an iterator-style reader.
-            //
-            // We compile the predicate once into a JS-side checker.
-            return reader.filter((document) => matchesWhere(document, baseWhere));
+            // The policy is enforced by this predicate, on every reader and every
+            // terminal. Tagging it with its `where` lets the shard reader also AND
+            // that `where` into its SQL when it can prove SQL keeps exactly the
+            // same rows, so `take` / `first` / `paginate` keep their LIMIT — the
+            // predicate still runs over every row returned. A reader that cannot
+            // push it (the D1 / `.global()` twin, a masked reader) runs the plain
+            // predicate, and a bounded terminal reads in LIMIT-ed batches.
+            return reader.filter(whereFilter(baseWhere, (document) => matchesWhere(document, baseWhere)));
         },
 
         /**
