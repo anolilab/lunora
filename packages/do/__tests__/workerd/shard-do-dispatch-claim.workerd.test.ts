@@ -10,9 +10,13 @@
  *
  * What this file cannot model — and does not claim to — is an eviction:
  * `cloudflare:test` hands back the same instance, so "a fresh instance over the
- * same storage" (the stale-claim case) stays in the mock suite. That is the
- * right split, because the stale-claim answer here IS "the isolate is gone", and
- * an isolate workerd will not tear down is not one to assert against.
+ * same storage" stays in the mock suite, as does the staleness ceiling (a
+ * fifteen-minute clock is not one to wait out here).
+ *
+ * What it DOES pin is the one platform fact the claim's release rests on: a
+ * caller that disconnects mid-dispatch does not strand the claim. workerd keeps
+ * running the Durable Object's handler after the caller's fetch is aborted, so
+ * its `finally` still runs, writes the dedup row, and releases.
  *
  * Like every file in this directory, this suite only runs with
  * `LUNORA_WORKERD_TESTS=1` (see `packages/do/vitest.config.ts`).
@@ -40,6 +44,29 @@ const plain = (functionPath: string): Request =>
         method: "POST",
     });
 
+/** A scheduled dispatch whose caller can hang up mid-flight. */
+const abortable = (functionPath: string, recordId: string, signal: AbortSignal): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath }),
+        headers: { "content-type": "application/json", "x-lunora-mutation-id": recordId, "x-lunora-system": "1" },
+        method: "POST",
+        signal,
+    });
+
+const hangStats = async (stub: DurableObjectStub<TestCounterDO>): Promise<{ finished: number; runs: number }> => {
+    const response = await stub.fetch(plain("counter:hangStats"));
+    const body = await response.json<{ result: { finished: number; runs: number } }>();
+
+    return body.result;
+};
+
+const errorRows = async (stub: DurableObjectStub<TestCounterDO>): Promise<number> => {
+    const response = await stub.fetch(plain("counter:reqlog"));
+    const body = await response.json<{ result: { outcome: string }[] }>();
+
+    return body.result.filter((row) => row.outcome === "error").length;
+};
+
 const slowRuns = async (stub: DurableObjectStub<TestCounterDO>): Promise<number> => {
     const response = await stub.fetch(plain("counter:slowRuns"));
     const body = await response.json<{ result: { runs: number } }>();
@@ -49,7 +76,7 @@ const slowRuns = async (stub: DurableObjectStub<TestCounterDO>): Promise<number>
 
 describe("shardDO in-flight dispatch claim under real workerd", () => {
     it("declines a re-delivery whose handler is still running, and runs it exactly once", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const stub = newStub("claim-overlap");
 
@@ -69,9 +96,47 @@ describe("shardDO in-flight dispatch claim under real workerd", () => {
         await expect(slowRuns(stub)).resolves.toBe(1);
         expect(second.status).toBe(409);
         await expect(second.json()).resolves.toMatchObject({ error: { code: "DISPATCH_IN_PROGRESS" } });
+        // The decline is an expected re-delivery, not a failed call: it files no
+        // error row in the durable request log the studio's Issues view reads.
+        await expect(errorRows(stub)).resolves.toBe(0);
 
         await stub.fetch(plain("counter:slowRelease"));
         await first;
+    }, 10_000);
+
+    it("a caller that disconnects mid-dispatch does not strand the claim: the handler finishes and the next delivery is served", async () => {
+        expect.assertions(5);
+
+        const stub = newStub("claim-caller-disconnects");
+        const caller = new AbortController();
+
+        // Parked on request-owned timer I/O, the shape of an outbound call.
+        const first = stub.fetch(abortable("counter:hang", "job-1", caller.signal)).then(
+            () => "answered",
+            () => "aborted",
+        );
+
+        await expect.poll(async () => hangStats(stub)).toMatchObject({ runs: 1 });
+
+        caller.abort();
+
+        await expect(first).resolves.toBe("aborted");
+
+        // Still held while the handler keeps running with nobody listening.
+        const whileRunning = await stub.fetch(scheduled("counter:hang", "job-1"));
+
+        expect(whileRunning.status).toBe(409);
+
+        await stub.fetch(plain("counter:hangRelease"));
+
+        // The abandoned handler ran to completion — and its `finally` with it.
+        await expect.poll(async () => hangStats(stub)).toMatchObject({ finished: 1 });
+
+        // So the dedup row was written and the claim released: served, not 409,
+        // and the handler was not entered a second time.
+        const retry = await stub.fetch(scheduled("counter:hang", "job-1"));
+
+        await expect(retry.json()).resolves.toEqual({ result: { run: 1 } });
     }, 10_000);
 
     it("serves the first attempt's cached result once it settles, so the decline is only ever temporary", async () => {

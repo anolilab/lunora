@@ -331,6 +331,29 @@ describe("isDeterministicDispatchFailure", () => {
         expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
     });
 
+    it("is false for a shard's `409 DISPATCH_IN_PROGRESS` decline — it must stay retryable", async () => {
+        expect.assertions(2);
+
+        // The shard declines a re-delivery whose first attempt is still running.
+        // The decline is about WHEN the call arrived, not about the call: it
+        // clears once that attempt settles. Classified deterministic, a queue
+        // consumer would ack the message and a workflow step would fail for
+        // good — and if the first attempt then died, the job would never run:
+        // at-least-once silently turned into at-most-once.
+        const declined = await createDispatchRunner({
+            env: ENV,
+            fetchImpl: async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 }),
+            label: "@lunora/queue",
+        })(REF).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        // A real, branded dispatch failure — so it is the classification, not the brand, that keeps it retryable.
+        expect(declined).toMatchObject({ code: "DISPATCH_IN_PROGRESS", status: 409 });
+        expect(isDeterministicDispatchFailure(declined)).toBe(false);
+    });
+
     it("is false for an allowlisted status whose body carries no dispatch envelope (edge challenge / WAF block)", async () => {
         expect.assertions(3);
 

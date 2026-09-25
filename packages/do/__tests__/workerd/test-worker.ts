@@ -90,7 +90,17 @@ class TestShardDO extends DurableObject<Env> {
 }
 
 /** Paths {@link ConcreteCountingShard} reports as ACTIONS — ungated, so a parked one really is interleavable with a sibling dispatch. */
-const COUNTER_ACTION_PATHS = new Set(["counter:park", "counter:release", "counter:reqlog", "counter:slow", "counter:slowRelease", "counter:slowRuns"]);
+const COUNTER_ACTION_PATHS = new Set([
+    "counter:hang",
+    "counter:hangRelease",
+    "counter:hangStats",
+    "counter:park",
+    "counter:release",
+    "counter:reqlog",
+    "counter:slow",
+    "counter:slowRelease",
+    "counter:slowRuns",
+]);
 
 /**
  * A shard whose handler bumps a counter INSIDE a transaction and commits the
@@ -113,6 +123,9 @@ class ConcreteCountingShard extends ShardDO {
      * also parked would hang the test instead of failing it.
      */
     public slowRuns = 0;
+
+    /** `counter:hang` bookkeeping: handler entries, and how many of them ran to completion. */
+    public hangStats = { finished: 0, released: false, runs: 0 };
 
     private migrated = false;
 
@@ -166,6 +179,33 @@ class ConcreteCountingShard extends ShardDO {
             this.releaseSlow = undefined;
 
             return { released: true };
+        }
+
+        // Parked on real TIMER I/O rather than a bare promise, so the wait is
+        // owned by the request's I/O context the way an outbound call is.
+        if (functionPath === "counter:hang") {
+            this.hangStats.runs += 1;
+
+            while (!this.hangStats.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling a flag is the point: each wait is request-owned timer I/O
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.hangStats.finished += 1;
+
+            return { run: this.hangStats.runs };
+        }
+
+        if (functionPath === "counter:hangRelease") {
+            this.hangStats.released = true;
+
+            return { released: true };
+        }
+
+        if (functionPath === "counter:hangStats") {
+            return { ...this.hangStats };
         }
 
         if (functionPath === "counter:slowRuns") {

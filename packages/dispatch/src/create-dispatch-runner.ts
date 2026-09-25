@@ -151,8 +151,15 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
  * secret is fixed succeeds, so classifying it as deterministic would ack every
  * queued message one delivery at a time and drain the queue while the operator
  * is still fixing the credential.
+ *
+ * `DISPATCH_IN_PROGRESS` (409) is the shard declining a re-delivery whose first
+ * attempt is still running — about when the call arrived, never about the
+ * call. Its status is not deterministic today; it is listed anyway because this
+ * set is keyed on the CODE, so the decline stays retryable even if someone later
+ * decides a 409 conflict is deterministic. A decline treated as final would ack
+ * the work, and a first attempt that then died would mean it never ran.
  */
-const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_UNAUTHENTICATED"]);
+const INFRASTRUCTURE_DISPATCH_CODES: ReadonlySet<string> = new Set(["DISPATCH_IN_PROGRESS", "DISPATCH_UNAUTHENTICATED"]);
 
 /**
  * True when `error` is a {@link LunoraError} {@link toDispatchError} rebuilt

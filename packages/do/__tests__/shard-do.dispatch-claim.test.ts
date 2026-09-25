@@ -1,44 +1,36 @@
+import { readRequestLog } from "@lunora/observability";
 import { runShardMigrations } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { IN_FLIGHT_CLAIM_CEILING_MS, InFlightClaims } from "../src/in-flight-claims";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * The receiver half of the at-least-once scheduled-dispatch guarantee (#803).
- *
- * `@lunora/scheduler`'s dispatch lease (#809) stops a SUCCESSOR SchedulerDO from
- * re-firing a record while the instance that claimed it is presumably still
- * alive. What no lease length can see is the other side of that fetch: a
- * receiver still executing after the dispatcher's side is gone. These tests
- * drive the four states a second delivery can land in, at the shard, on the
- * UNGATED (non-mutation) path where nothing else serialises the two.
- *
- * Staleness here is not a clock. A Durable Object is single-instance, so a claim
- * that is not held by the CURRENT instance is a claim whose writer no longer
- * exists — the "stale claim" case is therefore literally "a fresh instance over
- * the same storage", and it must run the handler.
+ * The receiver half of the at-least-once scheduled-dispatch guarantee (#803),
+ * driven through `ShardDO.fetch` on the UNGATED (non-mutation) path where
+ * nothing but the in-flight claim serialises two deliveries of one id. The
+ * claim's own rules (ceiling, owner-checked release) are unit-tested in
+ * `in-flight-claims.test.ts`; this file pins how the dispatch path uses them.
  */
 
 /**
  * An action shard whose handler parks until released, standing in for a long
  * outbound call.
  *
- * Only the first {@link ParkingActionShard.parkUpToRun} runs park. That is
- * deliberate: if EVERY run parked, an unfixed shard's second (concurrent) run
- * would park too and the test would fail as a 30s timeout instead of as a run
- * COUNT — which is the assertion that actually distinguishes "declined" from
- * "ran alongside".
+ * Only runs with an index at or below {@link ParkingActionShard.parkUpToRun}
+ * park. That is deliberate: if EVERY run parked, an unfixed shard's second
+ * (concurrent) run would park too and the test would fail as a timeout instead
+ * of as a run COUNT — which is the assertion that actually distinguishes
+ * "declined" from "ran alongside".
  */
 class ParkingActionShard extends ShardDO {
     public runs = 0;
 
-    /** Runs with an index at or below this park until {@link ParkingActionShard.release}. */
     public parkUpToRun = 0;
 
-    /** Resolved by {@link ParkingActionShard.release}; every parked handler awaits it. */
     private readonly hold: Promise<void>;
 
     private releaseHold: (() => void) | undefined;
@@ -53,6 +45,16 @@ class ParkingActionShard extends ShardDO {
     /** Let every parked handler on this instance finish. */
     public release(): void {
         this.releaseHold?.();
+    }
+
+    /** Test-only view of the private error counter the error branch bumps. */
+    public get errorCount(): number {
+        return (this as unknown as { metrics: { errors: number } }).metrics.errors;
+    }
+
+    /** Test-only view of the private in-memory log buffer the error branch appends to. */
+    public get logCount(): number {
+        return (this as unknown as { logs: { size: number } }).logs.size;
     }
 
     public override async handleRpc(functionPath: string): Promise<unknown> {
@@ -83,17 +85,15 @@ const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState 
     };
 };
 
-/** The shape `dispatchToShard` sends for a scheduled action: the record id as the dedup id, under the `"system:"` namespace. */
-const scheduledDispatch = (recordId: string): Request =>
+const rpc = (headers: Record<string, string>): Request =>
     new Request("https://shard.internal/rpc", {
         body: JSON.stringify({ args: {}, functionPath: "messages:slowAction" }),
-        headers: {
-            "content-type": "application/json",
-            "x-lunora-mutation-id": recordId,
-            "x-lunora-system": "1",
-        },
+        headers: { "content-type": "application/json", ...headers },
         method: "POST",
     });
+
+/** The shape `dispatchToShard` sends for a scheduled action: the record id as the dedup id, under the `"system:"` namespace. */
+const scheduledDispatch = (recordId: string): Request => rpc({ "x-lunora-mutation-id": recordId, "x-lunora-system": "1" });
 
 /** Yield to the timer queue so a just-started dispatch reaches its park. */
 const settle = async (): Promise<void> =>
@@ -102,249 +102,270 @@ const settle = async (): Promise<void> =>
     });
 
 describe("shardDO in-flight dispatch claim (ungated path)", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: ParkingActionShard;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, messagesSchema);
+        shard = new ParkingActionShard(makeState(database), {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        database.close();
+    });
+
     it("never started: the handler runs", async () => {
         expect.assertions(2);
 
-        const database = createSqliteExec();
+        const response = await shard.fetch(scheduledDispatch("job-1"));
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
-
-            const shard = new ParkingActionShard(makeState(database), {});
-            const response = await shard.fetch(scheduledDispatch("job-1"));
-
-            expect(response.status).toBe(200);
-            expect(shard.runs).toBe(1);
-        } finally {
-            database.close();
-        }
+        expect(response.status).toBe(200);
+        expect(shard.runs).toBe(1);
     });
 
     it("live claim: the second dispatch is declined and the handler does NOT run twice", async () => {
         expect.assertions(5);
 
-        const database = createSqliteExec();
+        shard.parkUpToRun = 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        // The first attempt: still running when its dispatcher dies.
+        const first = shard.fetch(scheduledDispatch("job-1"));
 
-            const shard = new ParkingActionShard(makeState(database), {});
+        await settle();
 
-            shard.parkUpToRun = 1;
+        expect(shard.runs).toBe(1);
 
-            // The first attempt: still running when its dispatcher dies.
-            const first = shard.fetch(scheduledDispatch("job-1"));
+        // The re-delivery the expired lease mints.
+        const second = await shard.fetch(scheduledDispatch("job-1"));
 
-            await settle();
+        // COUNT, not presence: the whole defect is a SECOND run.
+        expect(shard.runs).toBe(1);
+        expect(second.status).toBe(409);
+        await expect(second.json()).resolves.toMatchObject({ error: { code: "DISPATCH_IN_PROGRESS" } });
 
-            expect(shard.runs).toBe(1);
+        shard.release();
+        await first;
 
-            // The re-delivery the expired lease mints.
-            const second = await shard.fetch(scheduledDispatch("job-1"));
+        expect(shard.runs).toBe(1);
+    });
 
-            // COUNT, not presence: the whole defect is a SECOND run, so
-            // asserting "it ran" would pass over the bug.
-            expect(shard.runs).toBe(1);
-            expect(second.status).toBe(409);
-            await expect(second.json()).resolves.toMatchObject({ error: { code: "DISPATCH_IN_PROGRESS" } });
+    it("a decline is not a failure: no error metric, no error reqlog row, no error log entry", async () => {
+        expect.assertions(2);
 
-            shard.release();
-            await first;
+        shard.parkUpToRun = 1;
 
-            expect(shard.runs).toBe(1);
-        } finally {
-            database.close();
-        }
+        const first = shard.fetch(scheduledDispatch("job-1"));
+
+        await settle();
+
+        const errorsBefore = shard.errorCount;
+        const logsBefore = shard.logCount;
+        const declined = await shard.fetch(scheduledDispatch("job-1"));
+
+        // Counted, not probed for, and all three in one assertion so a
+        // regression reports every sink it reached: the defect is an EXPECTED
+        // re-delivery landing in the error-rate advisors and studio's Issues
+        // view as a failed action.
+        expect(declined.status).toBe(409);
+        expect({
+            errorLogEntries: shard.logCount - logsBefore,
+            errorMetric: shard.errorCount - errorsBefore,
+            errorReqlogRows: readRequestLog(database.sql).filter((row) => row.outcome === "error").length,
+        }).toStrictEqual({ errorLogEntries: 0, errorMetric: 0, errorReqlogRows: 0 });
+
+        shard.release();
+        await first;
     });
 
     it("live claim: the decline is temporary — the retry is served the first attempt's result", async () => {
         expect.assertions(4);
 
-        const database = createSqliteExec();
+        shard.parkUpToRun = 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        const first = shard.fetch(scheduledDispatch("job-1"));
 
-            const shard = new ParkingActionShard(makeState(database), {});
+        await settle();
 
-            shard.parkUpToRun = 1;
+        const declined = await shard.fetch(scheduledDispatch("job-1"));
 
-            const first = shard.fetch(scheduledDispatch("job-1"));
+        // NOT 2xx: `SchedulerDO.dispatch()` would otherwise clear the record and
+        // the job would never run again if the first attempt then died.
+        expect(declined.ok).toBe(false);
 
-            await settle();
+        shard.release();
+        await first;
 
-            const declined = await shard.fetch(scheduledDispatch("job-1"));
+        const retry = await shard.fetch(scheduledDispatch("job-1"));
 
-            // NOT 2xx: `SchedulerDO.dispatch()` returns `response.ok`, so a 2xx
-            // here would have `drainRecord` clear the record's `id:` header and
-            // the job would never run again if the first attempt then died.
-            expect(declined.ok).toBe(false);
+        expect(retry.ok).toBe(true);
+        await expect(retry.json()).resolves.toEqual({ result: { ran: "messages:slowAction", run: 1 } });
+        expect(shard.runs).toBe(1);
+    });
 
-            shard.release();
-            await first;
+    it("a claim older than the ceiling is stale: a live instance whose handler never settles lets the next delivery run", async () => {
+        expect.assertions(3);
 
-            // The scheduler's `recordRetry` re-fires the same record id. Now the
-            // first attempt has settled, so the dedup row serves it.
-            const retry = await shard.fetch(scheduledDispatch("job-1"));
+        const start = Date.now();
+        const now = vi.spyOn(Date, "now").mockReturnValue(start);
 
-            expect(retry.ok).toBe(true);
-            await expect(retry.json()).resolves.toEqual({ result: { ran: "messages:slowAction", run: 1 } });
-            expect(shard.runs).toBe(1);
-        } finally {
-            database.close();
-        }
+        // Parked and never released: a handler awaiting an outbound call with no
+        // timeout. The isolate stays alive, so its `finally` never runs.
+        shard.parkUpToRun = 1;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises -- the hung attempt is the fixture; awaiting it would hang the test
+        shard.fetch(scheduledDispatch("job-1"));
+        await settle();
+
+        now.mockReturnValue(start + IN_FLIGHT_CLAIM_CEILING_MS - 1);
+
+        const beforeCeiling = await shard.fetch(scheduledDispatch("job-1"));
+
+        now.mockReturnValue(start + IN_FLIGHT_CLAIM_CEILING_MS);
+
+        const atCeiling = await shard.fetch(scheduledDispatch("job-1"));
+
+        expect(beforeCeiling.status).toBe(409);
+        expect(atCeiling.status).toBe(200);
+        expect(shard.runs).toBe(2);
     });
 
     it("stale claim: a fresh instance over the same storage takes over and the handler runs", async () => {
+        expect.assertions(2);
+
+        // Never released: this instance is abandoned mid-handler, the way an
+        // evicted isolate's in-flight work simply stops existing.
+        shard.parkUpToRun = 1;
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises -- the abandoned attempt is the fixture; awaiting it would hang the test
+        shard.fetch(scheduledDispatch("job-1"));
+        await settle();
+
+        const successor = new ParkingActionShard(makeState(database), {});
+        const response = await successor.fetch(scheduledDispatch("job-1"));
+
+        expect(response.ok).toBe(true);
+        expect(successor.runs).toBe(1);
+    });
+
+    it("releases the claim only AFTER the dedup row is written, so a re-delivery never finds neither", async () => {
+        expect.assertions(2);
+
+        // Released first, a re-delivery landing between the release and the row
+        // write would find neither a claim nor a result and run the handler a
+        // second time. So at the instant of release the row must already exist.
+        const rowPresentAtRelease: boolean[] = [];
+        const readRow = (): unknown => (shard as unknown as { readIdempotentResult: (id: string) => unknown }).readIdempotentResult("job-1");
+        // Records its own observation first, then restores and delegates, so the
+        // real release runs and nothing reads the spy's calls after the restore.
+        const release = vi.spyOn(InFlightClaims.prototype, "release").mockImplementation(function releaseAfterCheck(this: InFlightClaims, claim) {
+            rowPresentAtRelease.push(readRow() !== undefined);
+            release.mockRestore();
+            this.release(claim);
+        });
+
+        await shard.fetch(scheduledDispatch("job-1"));
+
+        expect(rowPresentAtRelease).toStrictEqual([true]);
+        expect(shard.runs).toBe(1);
+    });
+
+    it("fails open: a request with no dedup namespace takes no claim and is never declined", async () => {
         expect.assertions(3);
 
-        const database = createSqliteExec();
+        shard.parkUpToRun = 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        // No `x-lunora-system`, no user, no client id — `idempotencyNamespace()`
+        // is `undefined`, so there is nothing to dedup against and nothing to claim.
+        const anonymous = (): Request => rpc({ "x-lunora-mutation-id": "job-1" });
 
-            const lost = new ParkingActionShard(makeState(database), {});
+        const first = shard.fetch(anonymous());
 
-            // Never released: this instance is abandoned mid-handler, the way an
-            // evicted isolate's in-flight work simply stops existing.
-            lost.parkUpToRun = 1;
+        await settle();
 
-            // Deliberately unawaited: this attempt never finishes.
-            // eslint-disable-next-line @typescript-eslint/no-floating-promises -- the abandoned attempt is the fixture; awaiting it would hang the test
-            lost.fetch(scheduledDispatch("job-1"));
-            await settle();
+        const second = await shard.fetch(anonymous());
 
-            expect(lost.runs).toBe(1);
+        expect(second.status).toBe(200);
 
-            // The successor. Nothing durable says "claimed", because nothing
-            // durable should: the isolate that held the claim is gone, so its
-            // handler is gone with it and the job must run.
-            const successor = new ParkingActionShard(makeState(database), {});
-            const response = await successor.fetch(scheduledDispatch("job-1"));
+        shard.release();
 
-            expect(response.ok).toBe(true);
-            expect(successor.runs).toBe(1);
-        } finally {
-            database.close();
-        }
+        const firstResponse = await first;
+
+        expect(firstResponse.status).toBe(200);
+        expect(shard.runs).toBe(2);
     });
 
     it("completed: the cached result is returned and the handler does not re-run", async () => {
         expect.assertions(3);
 
-        const database = createSqliteExec();
+        await shard.fetch(scheduledDispatch("job-1"));
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        const replay = await shard.fetch(scheduledDispatch("job-1"));
 
-            const shard = new ParkingActionShard(makeState(database), {});
-
-            await shard.fetch(scheduledDispatch("job-1"));
-
-            const replay = await shard.fetch(scheduledDispatch("job-1"));
-
-            expect(replay.status).toBe(200);
-            await expect(replay.json()).resolves.toEqual({ result: { ran: "messages:slowAction", run: 1 } });
-            expect(shard.runs).toBe(1);
-        } finally {
-            database.close();
-        }
+        expect(replay.status).toBe(200);
+        await expect(replay.json()).resolves.toEqual({ result: { ran: "messages:slowAction", run: 1 } });
+        expect(shard.runs).toBe(1);
     });
 
     it("a handler that THROWS leaves no claim, so the next delivery runs it (at-least-once preserved)", async () => {
         expect.assertions(2);
 
-        const database = createSqliteExec();
+        class ThrowingShard extends ParkingActionShard {
+            public override async handleRpc(functionPath: string): Promise<unknown> {
+                this.runs += 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+                await Promise.resolve();
 
-            class ThrowingShard extends ParkingActionShard {
-                public override async handleRpc(functionPath: string): Promise<unknown> {
-                    this.runs += 1;
-
-                    await Promise.resolve();
-
-                    throw new Error(`boom ${functionPath}`);
-                }
+                throw new Error(`boom ${functionPath}`);
             }
-
-            const shard = new ThrowingShard(makeState(database), {});
-
-            const first = await shard.fetch(scheduledDispatch("job-1"));
-
-            expect(first.status).toBe(500);
-
-            await shard.fetch(scheduledDispatch("job-1"));
-
-            expect(shard.runs).toBe(2);
-        } finally {
-            database.close();
         }
+
+        const throwing = new ThrowingShard(makeState(database), {});
+        const first = await throwing.fetch(scheduledDispatch("job-1"));
+
+        expect(first.status).toBe(500);
+
+        await throwing.fetch(scheduledDispatch("job-1"));
+
+        expect(throwing.runs).toBe(2);
     });
 
     it("declines only the SAME id — a different id dispatched alongside still runs", async () => {
         expect.assertions(2);
 
-        const database = createSqliteExec();
+        shard.parkUpToRun = 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        const first = shard.fetch(scheduledDispatch("job-1"));
 
-            const shard = new ParkingActionShard(makeState(database), {});
+        await settle();
 
-            shard.parkUpToRun = 1;
+        const sibling = await shard.fetch(scheduledDispatch("job-2"));
 
-            const first = shard.fetch(scheduledDispatch("job-1"));
+        expect(sibling.ok).toBe(true);
 
-            await settle();
+        shard.release();
+        await first;
 
-            const sibling = await shard.fetch(scheduledDispatch("job-2"));
-
-            expect(sibling.ok).toBe(true);
-
-            shard.release();
-            await first;
-
-            expect(shard.runs).toBe(2);
-        } finally {
-            database.close();
-        }
+        expect(shard.runs).toBe(2);
     });
 
     it("declines only within a dedup namespace — the same id under another identity still runs", async () => {
         expect.assertions(2);
 
-        const database = createSqliteExec();
+        shard.parkUpToRun = 1;
 
-        try {
-            runShardMigrations(database.sql, messagesSchema);
+        const asUser = (userId: string): Request => rpc({ "x-lunora-mutation-id": "shared", "x-lunora-userid": userId });
 
-            const shard = new ParkingActionShard(makeState(database), {});
+        const first = shard.fetch(asUser("u1"));
 
-            shard.parkUpToRun = 1;
+        await settle();
 
-            const asUser = (userId: string): Request =>
-                new Request("https://shard.internal/rpc", {
-                    body: JSON.stringify({ args: {}, functionPath: "messages:slowAction" }),
-                    headers: { "content-type": "application/json", "x-lunora-mutation-id": "shared", "x-lunora-userid": userId },
-                    method: "POST",
-                });
+        const other = await shard.fetch(asUser("u2"));
 
-            const first = shard.fetch(asUser("u1"));
+        expect(other.ok).toBe(true);
 
-            await settle();
+        shard.release();
+        await first;
 
-            const other = await shard.fetch(asUser("u2"));
-
-            expect(other.ok).toBe(true);
-
-            shard.release();
-            await first;
-
-            expect(shard.runs).toBe(2);
-        } finally {
-            database.close();
-        }
+        expect(shard.runs).toBe(2);
     });
 });

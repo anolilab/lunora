@@ -1080,6 +1080,43 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
     });
 
+    it("re-arms a `409 DISPATCH_IN_PROGRESS` decline without clearing, dead-lettering, or charging an attempt", async () => {
+        expect.assertions(4);
+
+        // The shard declines a re-delivery whose first attempt is still running.
+        // Temporary, never terminal: clearing the record would make the job
+        // at-most-once, and charging the retry budget would dead-letter a job
+        // that is running fine before the attempt that is doing the work ends.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 }));
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 1 }, scheduledFor: start - 1000 })),
+        );
+
+        // Two declines against a budget of ONE retry: charged, the second would park it.
+        await scheduler.alarm();
+        clock.mockReturnValue(start + 3_600_000);
+        await scheduler.alarm();
+
+        const dispatches = spy.mock.calls.length;
+
+        expect(dispatches).toBe(2);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(0);
+    });
+
     it("routes a thrown dispatch (network error / crypto failure) to retry rather than orphaning the job", async () => {
         expect.assertions(3);
 
