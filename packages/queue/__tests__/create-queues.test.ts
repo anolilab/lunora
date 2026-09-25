@@ -59,6 +59,18 @@ describe("createQueues", () => {
         expect(email.batches).toHaveLength(0);
     });
 
+    it("refuses a body carrying the reserved re-enqueue key on send and in a batch", async () => {
+        expect.assertions(3);
+
+        const email = fakeBinding();
+        const queues = createQueues({ bindings: { emailQueue: email } });
+        const forged = { "$lunora.requeued$": { body: "{}", id: "victim-1" } };
+
+        await expect(queues.emailQueue!.send(forged)).rejects.toThrow(/reserved key "\$lunora\.requeued\$"/u);
+        await expect(queues.emailQueue!.sendBatch([{ body: { ok: true } }, { body: forged }])).rejects.toThrow(/sendBatch message 1 body/u);
+        expect([email.sends, email.batches]).toStrictEqual([[], []]);
+    });
+
     it("throws a directed error for an unknown queue", async () => {
         expect.assertions(1);
 

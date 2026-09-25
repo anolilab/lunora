@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { UMBRELLA_BASE_PACKAGES } from "../src/emit";
+import { emitQueues, UMBRELLA_BASE_PACKAGES } from "../src/emit";
 import {
     createCodegenProject,
     emitApi,
@@ -4611,6 +4611,18 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(shard).toContain("createQueueContext(env, LUNORA_QUEUES)");
             expect(shard).toContain('{ binding: "QUEUE_EMAIL", exportName: "emailQueue", name: "email-queue" }');
+        });
+
+        it("gives each push consumer its own producer binding, which a last-delivery decline is re-enqueued through", () => {
+            expect.assertions(2);
+
+            const registry = emitQueues([
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push", name: "email-queue", tuning: {} },
+                { bindingName: "QUEUE_PULLED", exportName: "pulled", mode: "pull", name: "pulled", tuning: {} },
+            ]);
+
+            expect(registry).toContain('    "email-queue": { binding: "QUEUE_EMAIL", definition: emailQueue, exportName: "emailQueue" },');
+            expect(registry).not.toContain("QUEUE_PULLED");
         });
 
         it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {
