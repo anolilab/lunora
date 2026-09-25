@@ -307,8 +307,10 @@ const matchesEqualityOperators = (field: string, documentValue: unknown, operato
  * **Parity with `where-sql.ts`, and where it stops.** The operator set, the NULL
  * behaviour of each one and the refusal of malformed operands all match the
  * compiler case by case, verified against SQLite — the pinned truth table lives
- * in `__tests__/rls-null-semantics.test.ts`. Three known divergences remain,
- * none of them about NULL:
+ * in `__tests__/rls-null-semantics.test.ts`, the empty-group shapes (`{}`,
+ * `{ AND: [] }`, `{ OR: [] }`, an `OR` holding `allowAll()`, `{ NOT: {} }`) in
+ * `__tests__/rls-empty-shapes.test.ts`. Two known divergences remain, neither
+ * of them about NULL:
  *
  * - `contains` is case-SENSITIVE here and case-insensitive in SQL, which folds
  * both sides (`instr(lower(…), lower(…))`). Matching it needs SQLite's
@@ -316,8 +318,6 @@ const matchesEqualityOperators = (field: string, documentValue: unknown, operato
  * what the legacy `query()` filter returns — so it is stated, not guessed at.
  * - a malformed group (`{ AND: "junk" }`) is FALSE here and a vacuous TRUE in
  * the compiler, which drops the branch. Deliberately fail-closed.
- * - `{ NOT: {} }` is FALSE here and TRUE in the compiler, which drops an empty
- * branch before there is anything to negate. Deliberately fail-closed.
  */
 const matchesOperators = (field: string, documentValue: unknown, operators: Record<string, unknown>): Ternary =>
     kleeneAnd(

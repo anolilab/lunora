@@ -157,7 +157,7 @@ export {
     tryRowToDocument,
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
-export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
+export { param, renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 export type { DurableStreamRun } from "./durable-stream";
 export {
     appendStreamChunk,
@@ -312,7 +312,7 @@ export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./re
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { WhereFilter } from "./reader-where-filter";
-export { whereFilter } from "./reader-where-filter";
+export { isPushableWhere, whereFilter, whereOfFilter } from "./reader-where-filter";
 export type { RelationGraphReader } from "./relation-graph";
 export { deriveRelationEdges, findRelated, RELATED_DEFAULT_LIMIT, RELATED_DEPTH_DECAY, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT } from "./relation-graph";
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";

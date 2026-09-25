@@ -1205,6 +1205,7 @@ const buildReader = (
     onIndexUse: IndexUseHook = () => undefined,
     onTerminal: (range: KeyRange | undefined) => void = () => undefined,
     meterRows: (count: number) => void = () => undefined,
+    snapshot?: QueryStage,
 ): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
@@ -1217,7 +1218,8 @@ const buildReader = (
     // the opt-in to see them.
     const softScope = softDeleteScope(tableDefinition.softDeleteMode, undefined);
 
-    const stage: QueryStage = {
+    // `snapshot` is the copied stage an iterator walks — see `[Symbol.asyncIterator]`.
+    const stage: QueryStage = snapshot ?? {
         indexFields: [],
         indexName: undefined,
         inMemoryFilters: [],
@@ -1473,6 +1475,20 @@ const buildReader = (
          */
         // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
         async *[Symbol.asyncIterator]() {
+            // Walk a private copy of the stage, taken when iteration starts. Every
+            // page is a fresh `paginate` that reads its reader's stage, so walking
+            // this one let a later `.order("desc")` (or `.withIndex`) on it re-sort
+            // the pages still to come against a cursor from the old order: rows
+            // repeated and others were never reached. The arrays are copied
+            // because `.filter()` and the range builder push into them.
+            const walker = buildReader(sql, schema, tableName, onIndexUse, onTerminal, meterRows, {
+                ...stage,
+                indexFields: [...stage.indexFields],
+                inMemoryFilters: [...stage.inMemoryFilters],
+                sqlConditions: [...stage.sqlConditions],
+                verifyFilters: [...stage.verifyFilters],
+            });
+
             // A SEARCH stage is read unbounded, exactly as `collect()` reads it,
             // rather than paged.
             //
@@ -1493,7 +1509,7 @@ const buildReader = (
             // nothing. A scored search has to rank its whole window before it
             // knows which row is first.
             if (stage.search) {
-                yield* runFetch(undefined);
+                yield* await walker.collect();
 
                 return;
             }
@@ -1504,7 +1520,7 @@ const buildReader = (
                 // Sequential by construction: each page's cursor comes from the
                 // previous page, so these reads cannot be parallelised.
                 // eslint-disable-next-line no-await-in-loop, unicorn/no-null -- see above; `null` is PaginationOptions' documented first-page sentinel
-                const page: QueryPage = await reader.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
+                const page: QueryPage = await walker.paginate({ cursor: cursor ?? null, numItems: ITERATOR_PAGE_SIZE });
 
                 yield* page.page;
 

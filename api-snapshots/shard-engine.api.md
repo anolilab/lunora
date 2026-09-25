@@ -3347,6 +3347,17 @@ interface VectorBackfillProgress {
 }
 ```
 
+### `WORKERD_SQLITE_LIMITS` (const)
+
+```ts
+const WORKERD_SQLITE_LIMITS: {
+    readonly boundParams: 100;
+    readonly compoundSelect: 5;
+    readonly likePattern: 50;
+    readonly sqlTextLength: 100000;
+};
+```
+
 ### `WhereFilter` (type)
 
 ```ts
@@ -3748,7 +3759,7 @@ const compactCdcDocs: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 ### `compileWhereSql` (const)
 
 ```ts
-const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>) => T | undefined;
+const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>, reservedParams?: number) => T | undefined;
 ```
 
 ### `computeRankPage` (const)
@@ -4190,6 +4201,12 @@ const isLossyBody: (body: unknown) => boolean;
 
 ```ts
 const isMemoryTable: (definition: TableDefinitionLike | undefined) => boolean;
+```
+
+### `isPushableWhere` (const)
+
+```ts
+const isPushableWhere: (where: WhereInput, shape: Readonly<Record<string, ValidatorLike>>, exactText?: boolean) => boolean;
 ```
 
 ### `isRelationPredicate` (const)
@@ -5162,6 +5179,12 @@ const validateImportRow: (schema: SchemaLike, table: string, record: Record<stri
 
 ```ts
 const whereFilter: (where: WhereInput, predicate: RowPredicate) => WhereFilter;
+```
+
+### `whereOfFilter` (const)
+
+```ts
+const whereOfFilter: (predicate: RowPredicate) => undefined | WhereInput;
 ```
 
 ### `writeCdcArchivedThrough` (const)

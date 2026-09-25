@@ -175,6 +175,41 @@ describe("ctx.db reader — lazy iteration", () => {
         expect(predicateCalls).toBeLessThan(2000 + 16 * 3);
     });
 
+    it("yields every row exactly once when the reader is re-ordered between next() calls", async () => {
+        expect.assertions(4);
+
+        const database = setupWriter();
+
+        // 300 rows is three internal pages, so the re-order lands between pages.
+        await seed(database, 300);
+
+        const reader = database.query("todos").withIndex("by_seq");
+        const iterator = reader[Symbol.asyncIterator]();
+        const seqs: number[] = [];
+
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- the re-order has to land between two pulls
+            const step = await iterator.next();
+
+            if (step.done === true) {
+                break;
+            }
+
+            seqs.push(step.value["seq"] as number);
+            // Re-ordering the SAME reader mid-walk must not reach the iterator's pages.
+            reader.order("desc");
+        }
+
+        expect(seqs).toHaveLength(300);
+        expect(new Set(seqs).size).toBe(300);
+        expect(seqs).toStrictEqual(Array.from({ length: 300 }, (_, index) => index));
+
+        // The reader itself did take the last order it was given.
+        const last = await reader.first();
+
+        expect(last?.["seq"]).toBe(299);
+    });
+
     it("yields nothing for an empty table", async () => {
         expect.assertions(1);
 
