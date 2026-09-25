@@ -17,7 +17,6 @@
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "search-layout" sits beside "ctx-db-search", the established module naming in this package. */
-/* eslint-disable no-restricted-syntax -- `sql`…`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
@@ -33,24 +32,17 @@ import {
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
-import { ftsCompanionDdl, ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows, unionAll } from "@lunora/shard-engine";
+import { ftsCompanionDdl, ftsPurgeDocument, ftsWriteDocument, unionAll } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
+import type { MigrationMode, MigrationReport, MigrationTarget } from "./search-layout-migrations";
+import { ensureInvertedUniqueKey, migrateFts5Companion, migrateInvertedCompanion } from "./search-layout-migrations";
+import type { SourceRow } from "./search-writes";
+import { absentFrom, invertedIndexColumn, invertedWriteStatements, purgeStatement, unchangedSince } from "./search-writes";
 import type { SqlCtxExec } from "./sql-exec";
-import {
-    columnRefSql,
-    createIndexIfNotExists,
-    decodeRow,
-    decodeRows,
-    OCC_VERSION_COLUMN,
-    queryAll,
-    queryBatch,
-    queryRun,
-    runInOrder,
-    serializeColumnValue,
-} from "./sql-exec";
+import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryRun, runInOrder, serializeColumnValue } from "./sql-exec";
 
 /** The staged `.withSearchIndex().search()` query a layout executes. */
 interface SearchStage {
@@ -70,15 +62,28 @@ interface SearchLayout {
     /** Create the companion (and its indexes). Idempotent. */
     ensureCompanion: (exec: SqlCtxExec, dialect: SqlDialect, companion: string) => Promise<void>;
 
-    /** Replace one document's rows in the companion. */
+    /**
+     * Replace one document's rows in the companion, from `document` — the state
+     * of the source row `readAs`. The FTS5 and inverted layouts land the write
+     * only while that row is still current ({@link unchangedSince}), checked
+     * inside the write, so a writer that lost a race to a newer one cannot
+     * overwrite its entry. The native layout writes regardless.
+     */
     indexDocument: (
         exec: SqlCtxExec,
         dialect: SqlDialect,
         companion: string,
-        id: string,
         document: Record<string, unknown>,
         index: SearchIndexDefinitionLike,
+        readAs: SourceRow,
     ) => Promise<void>;
+
+    /**
+     * Move a companion built by an earlier release to this layout's current
+     * shape: a bounded `step` on every cold start, or all of it (`drain`) from
+     * the backfill entry point. Absent when nothing ever changed.
+     */
+    migrate?: (exec: SqlCtxExec, dialect: SqlDialect, target: MigrationTarget, mode: MigrationMode) => Promise<MigrationReport>;
 
     /**
      * Identity of this layout, recorded with the companion's backfill progress.
@@ -87,8 +92,13 @@ interface SearchLayout {
      */
     readonly name: "fts5" | "inverted" | "native";
 
-    /** Delete every companion row for one document. */
-    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string) => Promise<void>;
+    /**
+     * Delete every companion row for one document, which was just deleted from
+     * `table`. The FTS5 and inverted layouts purge only while no row with that
+     * id is back in `table`, so a delete whose purge lands after a re-insert
+     * does not drop the new document's entry.
+     */
+    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string, table: string) => Promise<void>;
 
     /** Execute a staged search against this companion, ordered and bounded. */
     runSearch: (
@@ -100,63 +110,6 @@ interface SearchLayout {
         limit: number,
     ) => Promise<Record<string, unknown>[]>;
 }
-
-/** A source-table row exactly as it was read, with the table it was read from. */
-interface SourceRow {
-    row: Record<string, unknown>;
-    table: string;
-}
-
-/**
- * The columns that say whether a source row changed since it was read: every
- * guarded write bumps `_version`, and `_creationTime` tells a delete-and-reinsert
- * under the same id apart, whose version restarts at NULL. Read by both the SQL
- * guard ({@link unchangedSince}) and the backfill's re-check.
- */
-const ROW_VERSION_COLUMNS: ReadonlyArray<string> = [OCC_VERSION_COLUMN, "_creationTime"];
-
-/**
- * Delete every companion row for one document by its `__id__` column — the
- * first half of every write on the layouts whose `__id__` is indexed.
- */
-const purgeDocument = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(companion)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
-};
-
-/**
- * One column of the portable companion's btree, rendered for the engine.
- *
- * Both columns use the dialect's `key` type, which on MySQL is `VARCHAR(768)` —
- * two of those exceed InnoDB's 3072-byte index limit, so they take the same
- * `(191)` key prefix the rank btree uses (a token is a single word; the prefix
- * never truncates one in practice). Postgres needs the opposite treatment: an
- * explicit `text_pattern_ops` class, or the prefix `LIKE` that resolves the
- * query's final term can't use the btree under a non-C collation.
- */
-const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
-    if (dialect.name === "mysql") {
-        return sql`${sql.identifier(column)}(191)`;
-    }
-
-    if (dialect.textPatternOperatorClass === undefined) {
-        return sql`${sql.identifier(column)}`;
-    }
-
-    return sql`${sql.identifier(column)} ${sql.raw(dialect.textPatternOperatorClass)}`;
-};
-
-/**
- * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
- * far under every engine's cap (3 params per row) while still turning a
- * many-token document into a handful of round trips rather than one per token.
- *
- * Deliberately NOT sized to Workerd's cap of 100, unlike its namesake in
- * `@lunora/shard-engine`: `chooseLayout` picks this layout only when the dialect
- * has no FTS5, and the only such dialects are Hyperdrive's Postgres and MySQL,
- * which bind thousands. D1's SQLite dialect sets `supportsFts5: true` and never
- * reaches here.
- */
-const INSERT_CHUNK_ROWS = 50;
 
 /**
  * The predicate one query term matches a companion token with: an exact
@@ -378,91 +331,65 @@ const invertedLayout: SearchLayout = {
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(FTS_TOKEN_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_COUNT_COLUMN)} ${sql.raw(integer)} NOT NULL)`,
         );
 
-        // Not unique, so two cold-start backfills whose purge-then-insert pairs
-        // interleave can double a document's rows — and nothing repairs that
-        // until the document is written again. A unique index would turn the
-        // same race into a failed request instead; fixing it properly needs a
-        // per-dialect insert-or-ignore, and this layout only serves Hyperdrive.
+        // Every write finds a document's rows by id.
         await createIndexIfNotExists(exec, dialect, {
-            columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN)}`,
-            name: `${companion}__btree`,
-            table: companion,
-            unique: false,
-        });
-
-        // Every row write purges its old rows by id first.
-        await createIndexIfNotExists(exec, dialect, {
-            columns: invertedIndexColumn(dialect, FTS_ID_COLUMN),
+            columns: invertedIndexColumn(dialect, FTS_ID_COLUMN, 191),
             name: `${companion}__by_id`,
             table: companion,
             unique: false,
         });
+
+        // The token index is the unique key: added here while the companion is
+        // empty, and otherwise by `backfillSqlSearchIndexes`.
+        await ensureInvertedUniqueKey(exec, dialect, companion);
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await purgeDocument(exec, dialect, companion, id);
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
+        const counts = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
 
-        const rows = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
-        const columns = sql.join(
-            [FTS_TOKEN_COLUMN, FTS_ID_COLUMN, FTS_COUNT_COLUMN].map((column) => sql.identifier(column)),
-            sql`, `,
-        );
-        const chunks: SQL[] = [];
-
-        for (let start = 0; start < rows.length; start += INSERT_CHUNK_ROWS) {
-            const values = sql.join(
-                rows.slice(start, start + INSERT_CHUNK_ROWS).map(([token, occurrences]) => sql`(${token}, ${id}, ${occurrences})`),
-                sql`, `,
-            );
-
-            chunks.push(sql`INSERT INTO ${sql.identifier(companion)} (${columns}) VALUES ${values}`);
-        }
-
-        // One round trip per document write when the exec exposes `batch`
-        // (still chunked at INSERT_CHUNK_ROWS, so the bound-parameter count of
-        // any one statement stays far under every engine's cap); a per-chunk
-        // sequential `run()` loop otherwise.
-        await queryBatch(exec, dialect, chunks);
+        await runInOrder(exec, dialect, invertedWriteStatements(dialect, companion, String(readAs.row["id"]), counts, readAs));
     },
+    migrate: migrateInvertedCompanion,
     name: "inverted",
-    purgeDocument,
+    purgeDocument: async (exec, dialect, companion, id, table) => {
+        await queryRun(exec, dialect, purgeStatement(companion, id, absentFrom(table, id)));
+    },
     runSearch: runInvertedSearch,
 };
-
-/** `<table>.<column>`, qualified so an unknown name errors instead of reading as a string. */
-const qualified = (table: string, name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
-
-/**
- * Whether the source row is still the one that was read, by
- * {@link ROW_VERSION_COLUMNS}. SQLite's `IS`, since only the FTS5 layout
- * evaluates it.
- */
-const unchangedSince = ({ row, table }: SourceRow): SQL =>
-    sql`EXISTS (SELECT 1 FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} = ${row["id"]}${sql.join(
-        // eslint-disable-next-line unicorn/no-null -- SQL bind value: a NULL column compares with `IS NULL`
-        ROW_VERSION_COLUMNS.map((column) => sql` AND ${qualified(table, column)} IS ${row[column] ?? null}`),
-    )})`;
 
 /**
  * The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`,
  * reached through the `__ids` rowid map — see `fts-companion.ts` in
  * `@lunora/shard-engine`, which the Durable Object store shares. Every write is
- * an ordered statement list, run by {@link runInOrder}.
+ * an ordered statement list, run by {@link runInOrder}, and carries its guard in
+ * every statement.
  */
 const fts5Layout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
         await runInOrder(exec, dialect, ftsCompanionDdl(companion));
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index)));
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
+        await runInOrder(
+            exec,
+            dialect,
+            ftsWriteDocument(companion, String(readAs.row["id"]), analyzedSearchText(document, index), { guard: unchangedSince(dialect, readAs) }),
+        );
     },
+    migrate: migrateFts5Companion,
     name: "fts5",
-    purgeDocument: async (exec, dialect, companion, id) => {
-        await runInOrder(exec, dialect, ftsPurgeDocument(companion, id));
+    purgeDocument: async (exec, dialect, companion, id, table) => {
+        await runInOrder(exec, dialect, ftsPurgeDocument(companion, id, { guard: absentFrom(table, id) }));
     },
     runSearch: runFtsSearch,
 };
 
-/** The engine's own full-text index, opted into with `strategy: "native"`. */
+/**
+ * The engine's own full-text index, opted into with `strategy: "native"`. Its
+ * writes are not guarded: a write that lost a race here is repaired only by the
+ * caller's re-check (`indexRowsUntilCurrent` in `ctx-db-search`), and a purge
+ * after a delete is neither guarded nor re-checked, so one landing after a
+ * re-insert of the same id drops the new document's entry until it is next
+ * written.
+ */
 const nativeLayout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
         const native = dialect.nativeTextSearch;
@@ -478,18 +405,22 @@ const nativeLayout: SearchLayout = {
             await queryRun(exec, dialect, statement);
         }
     },
-    indexDocument: async (exec, dialect, companion, id, document, index) => {
+    indexDocument: async (exec, dialect, companion, document, index, readAs) => {
         const native = dialect.nativeTextSearch;
 
         if (!native) {
             return;
         }
 
-        await purgeDocument(exec, dialect, companion, id);
+        const id = String(readAs.row["id"]);
+
+        await queryRun(exec, dialect, purgeStatement(companion, id));
         await queryRun(exec, dialect, native.indexDocument(companion, id, analyzedSearchText(document, index)));
     },
     name: "native",
-    purgeDocument,
+    purgeDocument: async (exec, dialect, companion, id) => {
+        await queryRun(exec, dialect, purgeStatement(companion, id));
+    },
     runSearch: runNativeSearch,
 };
 
@@ -552,158 +483,5 @@ const globalSearchIndexes = function* (schema: SchemaLike): Generator<[string, T
 /** The companion table backing one index. */
 const companionFor = (tableName: string, index: SearchIndexDefinitionLike): string => ftsTableName(tableName, index.name);
 
-/** One {@link migrateUnmappedEntries} pass over a page of unmapped rows. */
-interface UnmappedPass {
-    /** No unmapped rows past this page. */
-    done: boolean;
-    /** The highest rowid the page covered: where the next page starts. */
-    last: number;
-    /** Rows of this page still unmapped — each one lost its write to a concurrent one. */
-    left: number;
-}
-
-/** FTS5 rows rewritten per migration pass — the bound on one cold start's share of it. */
-const FTS_UNMAPPED_PAGE_ROWS = 100;
-
-/** Ids per source-row lookup in {@link migrateUnmappedEntries}. */
-const SOURCE_LOOKUP_IDS = 50;
-
-/**
- * Index a document the caller read some time ago — the backfill — so that the
- * write lands only if that source row is still current.
- *
- * On FTS5 the check runs inside the write's own statements, so no concurrent
- * writer can land between the check and the write, and a fresher entry is never
- * replaced — not even for the moment until the caller's re-check catches it.
- * The other layouts write regardless and rely on that re-check alone.
- */
-const indexDocumentAsRead = async (
-    layout: SearchLayout,
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    companion: string,
-    document: Record<string, unknown>,
-    index: SearchIndexDefinitionLike,
-    readAs: SourceRow,
-): Promise<void> => {
-    const id = String(readAs.row["id"]);
-
-    if (layout !== fts5Layout) {
-        await layout.indexDocument(exec, dialect, companion, id, document, index);
-
-        return;
-    }
-
-    await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard: unchangedSince(readAs) }));
-};
-
-/**
- * Rewrite one bounded page of the FTS5 rows the rowid map does not know about —
- * a previous build's, including any it wrote during the rollout — from the
- * source table, starting past rowid `after`, and report how the page went (see
- * {@link UnmappedPass}). Once none are left, a pass costs two reads: the source
- * table's existence probe and an empty rowid-range read. A no-op on the other
- * layouts.
- *
- * Rewriting from the source row, rather than adopting the stored text, is what
- * repairs a document indexed twice: which copy is stale cannot be told from the
- * companion, but the source row says what the entry should be. Each write is
- * guarded like the backfill's; one that loses to a concurrent write leaves its
- * rows in place, and the next pass rewrites them from the newer source row.
- */
-const migrateUnmappedEntries = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    index: SearchIndexDefinitionLike,
-    after = 0,
-): Promise<UnmappedPass> => {
-    const nothing: UnmappedPass = { done: true, last: after, left: 0 };
-
-    if (resolveSearchLayout(index, dialect) !== fts5Layout) {
-        return nothing;
-    }
-
-    const source = await queryAll(exec, dialect, dialect.tableExists(tableName));
-
-    if (source.length === 0) {
-        return nothing;
-    }
-
-    const companion = companionFor(tableName, index);
-    const unmapped = await queryAll(exec, dialect, ftsUnmappedPage(companion, FTS_UNMAPPED_PAGE_ROWS, after));
-
-    if (unmapped.length === 0) {
-        return nothing;
-    }
-
-    const last = Math.max(...unmapped.map((row) => Number(row["rowid"])));
-    const byId = groupUnmappedRows(unmapped);
-    const ids = [...byId.keys()];
-    const sources = new Map<string, Record<string, unknown>>();
-
-    // Bound parameters stay under the engine's 100 per statement.
-    for (let start = 0; start < ids.length; start += SOURCE_LOOKUP_IDS) {
-        const chunk = ids.slice(start, start + SOURCE_LOOKUP_IDS);
-        // eslint-disable-next-line no-await-in-loop -- chunked lookups on the shared connection.
-        const rows = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} IN (${sql.join(
-                chunk.map((id) => sql`${id}`),
-                sql`, `,
-            )})`,
-        );
-
-        for (const row of rows) {
-            // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
-            sources.set(String(row["id"]), row);
-        }
-    }
-
-    const statements: SQL[] = [];
-
-    for (const [id, unmappedRowids] of byId) {
-        const row = sources.get(id);
-        const document = row === undefined ? undefined : decodeRow(definition, row);
-        // Absent from the source table: its entry goes, unless the row reappears first.
-        const guard =
-            row === undefined
-                ? sql`NOT EXISTS (SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} = ${id})`
-                : unchangedSince({ row, table: tableName });
-        statements.push(
-            ...(document
-                ? ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard, unmappedRowids })
-                : ftsPurgeDocument(companion, id, { guard, unmappedRowids })),
-        );
-    }
-
-    // The whole page in one batch: one D1 round trip, not one per document.
-    // Each document's statements carry their own guard, so one losing to a
-    // concurrent write leaves only its own rows in place.
-    await runInOrder(exec, dialect, statements);
-
-    // What lost to a concurrent write stays in the page's range.
-    const left = await queryAll(
-        exec,
-        dialect,
-        sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(companion)} WHERE ${qualified(companion, "rowid")} > ${Math.max(0, after)} AND ${qualified(companion, "rowid")} <= ${last}`,
-    );
-
-    return { done: unmapped.length < FTS_UNMAPPED_PAGE_ROWS, last, left: Number(left[0]?.["n"] ?? 0) };
-};
-
-export type { SearchLayout, SearchStage, SourceRow, UnmappedPass };
-export {
-    companionFor,
-    companionProfile,
-    fts5Layout,
-    globalSearchIndexes,
-    indexDocumentAsRead,
-    invertedLayout,
-    migrateUnmappedEntries,
-    nativeLayout,
-    resolveSearchLayout,
-    ROW_VERSION_COLUMNS,
-};
+export type { SearchLayout, SearchStage };
+export { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout };

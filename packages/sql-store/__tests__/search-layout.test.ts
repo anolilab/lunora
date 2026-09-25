@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SqlDialect } from "../src/dialect";
 import type { SearchLayout, SearchStage } from "../src/search-layout";
 import { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, resolveSearchLayout } from "../src/search-layout";
+import type { SourceRow } from "../src/search-writes";
 import type { SqlCtxExec } from "../src/sql-exec";
 
 /**
@@ -170,8 +171,23 @@ const recordingExec = (): { exec: SqlCtxExec; statements: string[] } => {
 
 let harness: ReturnType<typeof createHarness>;
 
+const NOTES_DDL = `CREATE TABLE IF NOT EXISTS "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`;
+
+/**
+ * `id`'s row in `notes` as a layout write reads it, created if absent: every
+ * guarded write lands only while its source row is still the one it read.
+ */
+const sourceRowIn = (raw: (query: string, ...parameters: unknown[]) => Record<string, unknown>[], id: string): SourceRow => {
+    raw(NOTES_DDL);
+    raw(`INSERT OR IGNORE INTO "notes" ("id", "_creationTime") VALUES (?, 1)`, id);
+
+    return { row: raw(`SELECT * FROM "notes" WHERE "id" = ?`, id)[0]!, table: "notes" };
+};
+
+const sourceRow = (id: string): SourceRow => sourceRowIn(harness.raw, id);
+
 const seedDocuments = (rows: { body: string; channel: string; id: string }[]): void => {
-    harness.raw(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "body" TEXT, "channel" TEXT)`);
+    harness.raw(NOTES_DDL);
 
     let creationTime = 1_700_000_000_000;
 
@@ -189,7 +205,7 @@ const indexAll = async (layout: SearchLayout, dialect: SqlDialect, rows: { body:
 
     for (const row of rows) {
         // eslint-disable-next-line no-await-in-loop -- companion writes are sequential on one connection, as in the real backfill
-        await layout.indexDocument(harness.exec, dialect, companion, row.id, { body: row.body, channel: row.channel }, byBody);
+        await layout.indexDocument(harness.exec, dialect, companion, { body: row.body, channel: row.channel }, byBody, sourceRow(row.id));
     }
 };
 
@@ -381,16 +397,46 @@ describe("search layouts", () => {
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
 
             expect(harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, companion)).toHaveLength(1);
+            // An empty companion gets its unique token key at once.
             expect(
                 harness.raw(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? ORDER BY name`, companion).map((row) => row["name"]),
-            ).toStrictEqual(["notes__fts_by_body__btree", "notes__fts_by_body__by_id"]);
+            ).toStrictEqual(["notes__fts_by_body__by_id", "notes__fts_by_body__unique"]);
+        });
+
+        it("never fails the request when an empty companion's key build and its catalog re-read both fail", async () => {
+            expect.assertions(2);
+
+            // After the unique build fails, every later read fails too — the
+            // re-read in its catch must not carry that error into ensureMigrated.
+            let broken = false;
+            const exec: SqlCtxExec = {
+                all: async (query, parameters) => {
+                    if (broken) {
+                        throw new Error("connection reset");
+                    }
+
+                    return harness.exec.all(query, parameters);
+                },
+                run: async (query, parameters) => {
+                    if (query.includes("CREATE UNIQUE INDEX")) {
+                        broken = true;
+
+                        throw new Error("lock timeout");
+                    }
+
+                    return harness.exec.run(query, parameters);
+                },
+            };
+
+            await expect(invertedLayout.ensureCompanion(exec, dialect, companion)).resolves.toBeUndefined();
+            expect(broken).toBe(true);
         });
 
         it("stores one row per distinct token, counting repeats as the score", async () => {
             expect.assertions(1);
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "hello hello world" }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "hello hello world" }, byBody, sourceRow("b"));
 
             // Mapped rather than compared whole: `node:sqlite` hands back
             // null-prototype rows, which `toStrictEqual` reads as a difference.
@@ -404,50 +450,47 @@ describe("search layouts", () => {
             expect.assertions(1);
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "before" }, byBody);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "after" }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "before" }, byBody, sourceRow("b"));
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "after" }, byBody, sourceRow("b"));
 
             // Not a union of both versions: a stale token would keep serving text
             // the document no longer has.
             expect(companionRows().map((row) => row["__token__"])).toStrictEqual(["after"]);
         });
 
-        it("writes every row of a document whose tokens span several insert chunks", async () => {
+        it("writes every row of a document with many distinct tokens", async () => {
             expect.assertions(1);
 
-            // The write path batches rows per statement; a document with more
-            // distinct tokens than one chunk holds must still land whole.
+            // The rows go in as one bound JSON array; a document with hundreds of
+            // distinct tokens must still land whole.
             const body = Array.from({ length: 260 }, (_, index) => `token${String(index)}`).join(" ");
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "big", { body }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body }, byBody, sourceRow("big"));
 
             expect(companionRows()).toHaveLength(260);
         });
 
-        it("issues one batch call (not one per chunk) when the exec supports batch", async () => {
+        it("writes the purge and the insert as one batch when the exec supports it", async () => {
             expect.assertions(3);
 
             const batching = createBatchingHarness();
 
             try {
-                // 260 tokens spans 6 chunks at INSERT_CHUNK_ROWS = 50; without
-                // the batch seam this would be 6 sequential `run()` calls.
                 const body = Array.from({ length: 260 }, (_, index) => `token${String(index)}`).join(" ");
 
                 await invertedLayout.ensureCompanion(batching.exec, dialect, companion);
 
-                // ensureCompanion's DDL goes through `run`; `indexDocument`
-                // itself still purges the old rows via `run` (a single
-                // DELETE) before the chunked insert loop, which is the one
-                // expected to move to `batch`.
+                const readAs = sourceRowIn(batching.raw, "big");
                 const runsBeforeIndexing = batching.runCalls();
 
-                await invertedLayout.indexDocument(batching.exec, dialect, companion, "big", { body }, byBody);
+                // On SQLite a batch is one transaction: no reader sees the
+                // document between its purge and its insert.
+                await invertedLayout.indexDocument(batching.exec, dialect, companion, { body }, byBody, readAs);
 
                 expect(batching.batchCalls()).toBe(1);
                 expect(batching.raw(`SELECT "__token__" FROM "notes__fts_by_body" ORDER BY "__token__"`)).toHaveLength(260);
-                expect(batching.runCalls()).toBe(runsBeforeIndexing + 1);
+                expect(batching.runCalls()).toBe(runsBeforeIndexing);
             } finally {
                 batching.close();
             }
@@ -459,7 +502,7 @@ describe("search layouts", () => {
             const body = Array.from({ length: MAX_INDEXED_TOKENS + 200 }, (_, index) => `token${String(index)}`).join(" ");
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "big", { body }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body }, byBody, sourceRow("big"));
 
             expect(companionRows()).toHaveLength(MAX_INDEXED_TOKENS);
         });
@@ -470,7 +513,7 @@ describe("search layouts", () => {
             const english: SearchIndexDefinitionLike = { field: "body", language: "en", name: "by_body" };
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "a", { body: "the quick fox" }, english);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "the quick fox" }, english, sourceRow("a"));
 
             expect(companionRows().map((row) => row["__token__"])).toStrictEqual(["fox", "quick"]);
         });
@@ -531,13 +574,15 @@ describe("search layouts", () => {
         it("hides soft-deleted rows", async () => {
             expect.assertions(1);
 
-            harness.raw(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "body" TEXT, "channel" TEXT, "deletedAt" REAL)`);
-            harness.raw(`INSERT INTO "notes" VALUES ('a', 1, 'hello world', 'general', NULL)`);
-            harness.raw(`INSERT INTO "notes" VALUES ('b', 2, 'hello world', 'general', 99)`);
+            harness.raw(
+                `CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT, "deletedAt" REAL)`,
+            );
+            harness.raw(`INSERT INTO "notes" VALUES ('a', 1, NULL, 'hello world', 'general', NULL)`);
+            harness.raw(`INSERT INTO "notes" VALUES ('b', 2, NULL, 'hello world', 'general', 99)`);
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "a", { body: "hello world" }, byBody);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "hello world" }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "hello world" }, byBody, sourceRow("a"));
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "hello world" }, byBody, sourceRow("b"));
 
             const softDeleting = { ...notes, softDeleteMode: { field: "deletedAt" } } as unknown as TableDefinitionLike;
             const rows = await invertedLayout.runSearch(harness.exec, dialect, softDeleting, "notes", stageFor("hello"), 10);
@@ -579,9 +624,9 @@ describe("search layouts", () => {
                 harness.exec,
                 dialect,
                 companion,
-                "a",
                 { body: "The Café, Reopened!" },
                 { field: "body", language: "en", name: "by_body" },
+                sourceRow("a"),
             );
 
             // Feeding FTS5 raw text would leave its own tokenizer to decide about
@@ -595,8 +640,8 @@ describe("search layouts", () => {
             expect.assertions(1);
 
             await fts5Layout.ensureCompanion(harness.exec, dialect, companion);
-            await fts5Layout.indexDocument(harness.exec, dialect, companion, "a", { body: "before" }, byBody);
-            await fts5Layout.indexDocument(harness.exec, dialect, companion, "a", { body: "after" }, byBody);
+            await fts5Layout.indexDocument(harness.exec, dialect, companion, { body: "before" }, byBody, sourceRow("a"));
+            await fts5Layout.indexDocument(harness.exec, dialect, companion, { body: "after" }, byBody, sourceRow("a"));
 
             // A duplicate here surfaces as the same document twice in a result set:
             // the MATCH query has no GROUP BY to collapse it.
@@ -689,23 +734,32 @@ describe("search layouts", () => {
             // half-migrated deployment reaching it must do nothing rather than run
             // DDL for a companion shape the dialect never described.
             await expect(nativeLayout.ensureCompanion(harness.exec, plain, companion)).resolves.toBeUndefined();
-            await expect(nativeLayout.indexDocument(harness.exec, plain, companion, "a", { body: "hello" }, byBody)).resolves.toBeUndefined();
+            await expect(
+                nativeLayout.indexDocument(harness.exec, plain, companion, { body: "hello" }, byBody, { row: { id: "a" }, table: "notes" }),
+            ).resolves.toBeUndefined();
             await expect(nativeLayout.runSearch(harness.exec, plain, notes, "notes", stageFor("hello"), 10)).resolves.toStrictEqual([]);
         });
     });
 
     describe("invertedLayout.purgeDocument", () => {
-        it("drops one document's rows and leaves the rest", async () => {
-            expect.assertions(1);
+        it("drops one deleted document's rows and leaves the rest", async () => {
+            expect.assertions(2);
 
             const dialect = sqliteDialect({ supportsFts5: false });
             const companion = companionFor("notes", byBody);
 
             await invertedLayout.ensureCompanion(harness.exec, dialect, companion);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "a", { body: "keep me" }, byBody);
-            await invertedLayout.indexDocument(harness.exec, dialect, companion, "b", { body: "drop me" }, byBody);
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "keep me" }, byBody, sourceRow("a"));
+            await invertedLayout.indexDocument(harness.exec, dialect, companion, { body: "drop me" }, byBody, sourceRow("b"));
 
-            await invertedLayout.purgeDocument(harness.exec, dialect, companion, "b");
+            // Only once the row is gone: a purge landing after a re-insert must
+            // not drop the new document's entry.
+            await invertedLayout.purgeDocument(harness.exec, dialect, companion, "b", "notes");
+
+            expect(harness.raw(`SELECT DISTINCT "__id__" FROM "notes__fts_by_body" ORDER BY "__id__"`).map((row) => row["__id__"])).toStrictEqual(["a", "b"]);
+
+            harness.raw(`DELETE FROM "notes" WHERE "id" = 'b'`);
+            await invertedLayout.purgeDocument(harness.exec, dialect, companion, "b", "notes");
 
             expect(harness.raw(`SELECT DISTINCT "__id__" FROM "notes__fts_by_body"`).map((row) => row["__id__"])).toStrictEqual(["a"]);
         });
@@ -719,12 +773,14 @@ describe("search layouts", () => {
      * runs the DDL, so they are asserted on the emitted SQL.
      */
     describe("companion index DDL per engine", () => {
+        /** The companion's index DDL, as `ensureCompanion` issues it for an empty companion: `__by_id`, then the unique key. */
         const ddlFor = async (overrides: Partial<SqlDialect>): Promise<string[]> => {
             const recorder = recordingExec();
+            const dialect = sqliteDialect({ supportsFts5: false, ...overrides });
 
-            await invertedLayout.ensureCompanion(recorder.exec, sqliteDialect({ supportsFts5: false, ...overrides }), "notes__fts_by_body");
+            await invertedLayout.ensureCompanion(recorder.exec, dialect, "notes__fts_by_body");
 
-            return recorder.statements.filter((statement) => statement.includes("CREATE INDEX"));
+            return recorder.statements.filter((statement) => /CREATE (?:UNIQUE )?INDEX/u.test(statement));
         };
 
         it("gives MySQL a key prefix on both indexed columns", async () => {
@@ -732,26 +788,27 @@ describe("search layouts", () => {
 
             // Backticks, not double quotes: the dialect name also selects drizzle's
             // identifier quoting, so this asserts the MySQL renderer end to end.
-            const [btree, byId] = await ddlFor({ name: "mysql" });
+            const [byId, unique] = await ddlFor({ name: "mysql" });
 
-            expect(btree).toContain("`__token__`(191), `__id__`(191)");
+            // The whole token (the analyzer's 256-character cap), so the key is exact per token.
+            expect(unique).toContain("UNIQUE INDEX `notes__fts_by_body__unique` ON `notes__fts_by_body` (`__token__`(256), `__id__`(512))");
             expect(byId).toContain("`__id__`(191)");
         });
 
         it("gives Postgres the pattern operator class its prefix scan needs", async () => {
             expect.assertions(1);
 
-            const [btree] = await ddlFor({ name: "postgres", textPatternOperatorClass: "text_pattern_ops" });
+            const [, unique] = await ddlFor({ name: "postgres", textPatternOperatorClass: "text_pattern_ops" });
 
-            expect(btree).toContain(`"__token__" text_pattern_ops, "__id__" text_pattern_ops`);
+            expect(unique).toContain(`"__token__" text_pattern_ops, "__id__" text_pattern_ops`);
         });
 
         it("leaves SQLite's columns bare, since neither adjustment applies", async () => {
             expect.assertions(1);
 
-            const [btree] = await ddlFor({});
+            const [, unique] = await ddlFor({});
 
-            expect(btree).toContain(`("__token__", "__id__")`);
+            expect(unique).toContain(`("__token__", "__id__")`);
         });
 
         it("tolerates MySQL re-creating an index it already has, but not a real failure", async () => {

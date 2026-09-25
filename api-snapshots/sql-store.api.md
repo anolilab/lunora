@@ -111,6 +111,7 @@ interface SqlRunResult {
 
 ```ts
 interface SqlSearchBackfillResult {
+    uniqueKeyMissing: string[];
     unmappedSkipped: number;
 }
 ```

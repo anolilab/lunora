@@ -15,6 +15,7 @@ import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
 import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
+import searchRaceCases from "./_helpers/search-races";
 
 /**
  * The store core (`createSqlCtxDb`) driven by the MySQL dialect against a **real
@@ -476,6 +477,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
                 await harness.query("DROP TABLE IF EXISTS `notes`");
+                await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
                 const writer = notesWriter();
@@ -489,13 +491,15 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 // Both companion columns carry the dialect's VARCHAR(768) `key`
                 // type — 3072 bytes each under utf8mb4 — so the (token, id)
-                // btree only fits InnoDB's 3072-byte key limit under a prefix.
-                // `Sub_part` is that prefix length, and asserting it is what
-                // proves the mechanism rather than merely that an index exists.
+                // unique key only fits InnoDB's 3072-byte key limit under
+                // prefixes: the whole token (the analyzer caps it at 256) and
+                // the rest for the id. `Sub_part` is that prefix length, and
+                // asserting it is what proves the mechanism rather than merely
+                // that an index exists.
                 const indexes = await harness.query("SHOW INDEX FROM `notes__fts_by_body`");
-                const btree = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__btree");
+                const unique = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__unique");
 
-                expect(btree.map((row) => row["Sub_part"])).toStrictEqual([191, 191]);
+                expect(unique.map((row) => row["Sub_part"])).toStrictEqual([256, 512]);
                 expect(ids(results)).toEqual(["n2", "n4", "n1"]);
             },
             TEST_TIMEOUT,
@@ -508,6 +512,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
                 await harness.query("DROP TABLE IF EXISTS `notes`");
+                await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
                 const writer = notesWriter();
@@ -530,6 +535,35 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 expect(ids(fresh)).toEqual(["n2"]);
             },
             TEST_TIMEOUT,
+        );
+    });
+
+    describe("full-text search (portable inverted index) across isolates", () => {
+        it.each(
+            searchRaceCases({
+                dialect: mysqlDialect,
+                engine: "mysql",
+                exec: () => harness.exec,
+                indexes: async (companion) => {
+                    const rows = await harness.query(`SHOW INDEX FROM \`${companion}\``);
+
+                    return new Map(rows.map((row) => [String(row["Key_name"]), Number(row["Non_unique"]) === 0]));
+                },
+                query: (text, parameters) => harness.query(text, parameters),
+                reset: async () => {
+                    await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                    await harness.query("DROP TABLE IF EXISTS `notes`");
+                    await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            2 * TEST_TIMEOUT,
         );
     });
 });

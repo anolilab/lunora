@@ -29,6 +29,10 @@ const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 A
 const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
 const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;
 const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+/** A live write lands only while the row still holds the version it just wrote: `[id, _version, _creationTime]`. */
+const WRITTEN_GUARD = ` AND EXISTS (SELECT 1 FROM "docs" WHERE "docs"."id" = ? AND "docs"."_version" IS ? AND "docs"."_creationTime" IS ?)`;
+/** A delete's purge lands only while the row is still gone: `[id]`. */
+const DELETED_GUARD = ` AND NOT EXISTS (SELECT 1 FROM "docs" WHERE "docs"."id" = ?)`;
 
 /**
  * Does `statement` write a document's searchable entry? It replaces the row at
@@ -154,14 +158,15 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         // (Only this document's statements: the writer's own cold start re-runs the idempotent DDL.)
         const ftsWrites = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body") && statement.params.includes("d1"));
 
-        expect(ftsWrites.map((statement) => (isEntryWrite(statement) ? ["entry", ...entryOf(statement)] : [statement.sql, ...statement.params]))).toStrictEqual(
-            [
-                [DROP_UNMAPPED, "d1"],
-                [DROP_MAPPED, "d1", "d1"],
-                [CLAIM_ROWID, "d1"],
-                ["entry", "hello world", "d1"],
-            ],
-        );
+        // Every statement carries the guard; its trailing `_creationTime` is the clock's.
+        expect(
+            ftsWrites.map((statement) => (isEntryWrite(statement) ? ["entry", ...entryOf(statement)] : [statement.sql, ...statement.params.slice(0, -1)])),
+        ).toStrictEqual([
+            [DROP_UNMAPPED + WRITTEN_GUARD, "d1", "d1", null],
+            [DROP_MAPPED + WRITTEN_GUARD, "d1", "d1", "d1", null],
+            [CLAIM_ROWID + WRITTEN_GUARD, "d1", "d1", null],
+            ["entry", "hello world", "d1"],
+        ]);
     });
 
     it("backfills rows that predate the search index", async () => {
@@ -229,8 +234,16 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([DROP_UNMAPPED, DROP_MAPPED, PURGE_MAPPING]);
-        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1", "d1"], ["d1"]]);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([
+            DROP_UNMAPPED + DELETED_GUARD,
+            DROP_MAPPED + DELETED_GUARD,
+            PURGE_MAPPING + DELETED_GUARD,
+        ]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([
+            ["d1", "d1"],
+            ["d1", "d1", "d1"],
+            ["d1", "d1"],
+        ]);
     });
 
     it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {

@@ -15,6 +15,7 @@ import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { postgresDialect } from "../src/global-dialect";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
+import searchRaceCases from "./_helpers/search-races";
 
 /**
  * The store core (`createSqlCtxDb`) driven by the Postgres dialect against a
@@ -585,6 +586,32 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 "n4",
             ]);
         });
+    });
+
+    describe("full-text search (portable inverted index) across isolates", () => {
+        it.each(
+            searchRaceCases({
+                dialect: postgresDialect,
+                engine: "postgres",
+                exec: () => harness.exec,
+                indexes: async (companion) => {
+                    const rows = await harness.query(`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1`, [companion]);
+
+                    return new Map(rows.map((row) => [String(row["indexname"]), String(row["indexdef"]).startsWith("CREATE UNIQUE")]));
+                },
+                query: (text, parameters) => harness.query(text, parameters),
+                // Every case gets a fresh pglite from the suite's `beforeEach`.
+                reset: async () => {},
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
+        );
     });
 
     describe("full-text search (native Postgres strategy)", () => {
