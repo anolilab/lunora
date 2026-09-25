@@ -74,7 +74,17 @@ const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | und
     const start = config.start ?? 0;
     const windowStart = start + Math.floor((now - start) / config.period) * config.period;
 
-    if (!prior || prior.ts < windowStart) {
+    // A key with no state is a key that has sat idle forever, and an idle key
+    // rolls over to `capacity` (the per-window grants below, capped). Starting it
+    // at one window's `rate` instead made a `count` in `(rate, capacity]`
+    // unadmittable: the rejection persists nothing, so the key stayed "fresh"
+    // and was re-projected to `rate` on every retry, forever. With the default
+    // `capacity === rate` this is the same `rate` as before.
+    if (!prior) {
+        return { ts: windowStart, value: capacityOf(config) };
+    }
+
+    if (prior.ts < windowStart) {
         let carry = 0;
         let periods = 1;
 
@@ -82,7 +92,7 @@ const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | und
         // balance that must survive the boundary and be repaid, never forgiven)
         // or a positive leftover under an explicit capacity (the default
         // `capacity === rate` disables cross-window rollover).
-        if (prior && (prior.value < 0 || config.capacity !== undefined)) {
+        if (prior.value < 0 || config.capacity !== undefined) {
             carry = prior.value;
             // One grant per ELAPSED window, the way the token bucket refills per
             // elapsed millisecond — the cap below still bounds the result.
@@ -162,9 +172,28 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
 };
 
 /**
+ * Milliseconds from `now` until a fixed window whose balance is `value` at the
+ * window starting `windowTs` holds at least `needed` — the first window boundary
+ * at which {@link projectFixedWindow} projects enough.
+ *
+ * Always saying "the next window" was wrong whenever the balance carries across
+ * the boundary (reserved debt, or rollover under an explicit `capacity`): one
+ * window's `rate` does not repay a deeper debt, so the caller woke, was rejected
+ * again, and was told "next window" once more. Without carry the next window
+ * resets to `rate`, which always covers an admissible `count`.
+ */
+const fixedWindowWait = (config: RateLimitConfig, windowTs: number, value: number, needed: number, now: number): number => {
+    const carries = value < 0 || config.capacity !== undefined;
+    const windows = carries ? Math.max(1, Math.ceil((needed - value) / config.rate)) : 1;
+
+    return windowTs + windows * config.period - now;
+};
+
+/**
  * Fixed window: `rate` tokens are granted at the start of each window aligned
  * to `start + n * period`. With an explicit `capacity > rate`, unused tokens
- * roll into the next window up to `capacity`. Reserved debt (a negative balance)
+ * roll into the next window up to `capacity`, and a fresh key starts at
+ * `capacity` (it is a key that has been idle long enough to fill). Reserved debt (a negative balance)
  * is carried across the boundary and repaid out of the elapsed windows' grants,
  * so a debt larger than one window's `rate` still clears.
  */
@@ -178,17 +207,18 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter: 0 }, value: options.consume ? value : undefined };
     }
 
-    const retryAfter = base.ts + config.period - options.now;
-
     if (options.consume && options.reserve && options.count <= capacity) {
-        return { status: { ok: true, retryAfter }, value: { ts: base.ts, value: base.value - options.count } };
+        const reserved = base.value - options.count;
+
+        // When the reserved debt clears — the balance is back to zero.
+        return { status: { ok: true, retryAfter: fixedWindowWait(config, base.ts, reserved, 0, options.now) }, value: { ts: base.ts, value: reserved } };
     }
 
     if (options.count > capacity) {
         throwCountExceedsCapacity(options.count, capacity);
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
+    return { status: { ok: false, reason: "rate", retryAfter: fixedWindowWait(config, base.ts, base.value, options.count, options.now) }, value: undefined };
 };
 
 /**

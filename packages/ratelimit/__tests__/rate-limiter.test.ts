@@ -6,7 +6,6 @@ import { createMemoryStore } from "../src/store";
 import type { RateLimitConfigMap } from "../src/types";
 
 const NOT_CONFIGURED_RE = /not configured/;
-const POSITIVE_INTEGER_RE = /positive integer/;
 const POSITIVE_PERIOD_RE = /period must be a positive number/;
 const POSITIVE_RATE_RE = /rate must be a positive number/;
 const NON_NEGATIVE_CAPACITY_RE = /capacity must be a non-negative number/;
@@ -317,70 +316,44 @@ describe("live refill", () => {
     });
 });
 
-describe("sharding", () => {
-    const shardedConfig = { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 2 } } satisfies RateLimitConfigMap<"hits">;
-
-    const shardedLimiter = () => new RateLimiter({ config: shardedConfig, now: () => 0 });
-
-    it("same key always lands on the same shard (deterministic)", async () => {
-        expect.assertions(3);
-
-        const limiter = shardedLimiter();
-
-        // Per-shard capacity is rate/shards = 2. A single key drains exactly
-        // its own shard's worth of tokens — no more, no less — because every
-        // call hashes to the same shard.
-        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
-        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
-        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false, reason: "rate" });
-    });
-
-    it("getValue reflects the single shard the key routes to", async () => {
-        expect.assertions(3);
-
-        const limiter = shardedLimiter();
-
-        const full = await limiter.getValue("hits", { key: "alice" });
-
-        // Per-shard capacity is rate/shards = 2. getValue routes to the SAME
-        // single shard limit()/run() use for this key, so it reports that
-        // bucket's capacity (2) — NOT the summed capacity of every shard.
-        // Summing would over-report what `alice` can actually consume.
-        expect(full.value).toBe(2);
-        expect(full.config).toMatchObject({ rate: 4, shards: 2 });
-
-        await limiter.limit("hits", { key: "alice" });
-        await limiter.limit("hits", { key: "alice" });
-
-        // Alice's shard is now drained, so getValue for her key reports 0.
-        const drained = await limiter.getValue("hits", { key: "alice" });
-
-        expect(drained.value).toBe(0);
-    });
-
-    it("reset clears every shard", async () => {
+describe("a limit enforces its whole rate on one key", () => {
+    // `shards` used to route every key to one of N sub-buckets holding
+    // `rate / shards`, so a documented 10_000/s ingest limit admitted 625. The
+    // option is gone; a config still carrying it (plain JS, a stale object that
+    // skips the excess-property check) must enforce the full rate.
+    it("admits exactly `rate` in one period for a global limit and for a keyed one", async () => {
         expect.assertions(2);
 
-        const limiter = shardedLimiter();
+        const staleIngest = { kind: "token bucket", period: 1000, rate: 1000, shards: 16 } as const;
+        const staleApi = { kind: "fixed window", period: 60_000, rate: 100, shards: 4 } as const;
+        const limiter = new RateLimiter({
+            config: { api: staleApi, ingest: staleIngest },
+            now: () => 0,
+            store: createMemoryStore(),
+        });
+        let ingest = 0;
+        let api = 0;
 
-        await limiter.limit("hits", { key: "alice" });
-        await limiter.limit("hits", { key: "alice" });
+        for (let index = 0; index < 1500; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- consumption order is the behaviour under test
+            const status = await limiter.limit("ingest");
 
-        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false });
+            ingest += status.ok ? 1 : 0;
+        }
 
-        await limiter.reset("hits", { key: "alice" });
+        for (let index = 0; index < 150; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- consumption order is the behaviour under test
+            const status = await limiter.limit("api", { key: "user-1" });
 
-        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
+            api += status.ok ? 1 : 0;
+        }
+
+        expect(ingest).toBe(1000);
+        expect(api).toBe(100);
     });
+});
 
-    it("rejects a non-integer shard count at construction", () => {
-        expect.assertions(1);
-
-        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 1.5 } }, now: () => 0 })).toThrow(
-            POSITIVE_INTEGER_RE,
-        );
-    });
-
+describe("config validation", () => {
     it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a non-positive/non-finite period (%p) at construction", (period) => {
         expect.assertions(1);
 
