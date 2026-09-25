@@ -39,15 +39,23 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     if (classified.receiver) {
         const expose = exposeFromBuilderChain(classified.receiver);
+        // Both types are computed, but `api.ts` carries only one of them — see
+        // `declaredOutputWins`. An erasure in the other reaches nothing, so it is
+        // not reported: the handler behind a declared output, or the inert
+        // `.output()` of a `stream`.
+        const rewindOutputErasures = checkpointErasedReturns();
         const output = outputFromBuilderChain(classified.receiver);
-        // The handler's type is still inferred, but when the declared output is
-        // what `api.ts` carries, an erasure in it never reaches the output and
-        // must not be reported as one.
-        const rewindErasedReturns = checkpointErasedReturns();
+        const outputWins = declaredOutputWins({ kind: classified.kind, output });
+
+        if (!outputWins) {
+            rewindOutputErasures();
+        }
+
+        const rewindHandlerErasures = checkpointErasedReturns();
         const returnType = returnTypeFromBuilderCall(call);
 
-        if (declaredOutputWins({ kind: classified.kind, output })) {
-            rewindErasedReturns();
+        if (outputWins) {
+            rewindHandlerErasures();
         }
 
         return {

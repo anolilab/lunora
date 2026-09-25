@@ -120,6 +120,25 @@ const RECURSIVE_BEHIND_OUTPUT = `
 `;
 
 /**
+ * The mirror image: an unreproducible `.output(...)` on a `stream`, where
+ * `.output()` is inert and `api.ts` carries the handler's chunk type instead.
+ */
+const RECURSIVE_STREAM_OUTPUT = `
+    import { query, v } from "@lunora/server";
+
+    interface Tree { value: string; child: Tree }
+
+    declare const treeSchema: { readonly "~standard": { readonly version: 1; readonly vendor: "probe"; readonly types?: { input: Tree; output: Tree } | undefined } };
+
+    export const streamTrees = query
+        .input({})
+        .output(v.from(treeSchema))
+        .stream(async function* () {
+            yield 1;
+        });
+`;
+
+/**
  * The same unreproducible schema as an HTTP route's `.output(...)`. A route's
  * declared output feeds only its OpenAPI JSON Schema, which never reads the
  * recovered TS type, and a `.stream()` route ignores `.output()` altogether — so
@@ -208,6 +227,15 @@ describe("procedure_return_type_erased", () => {
         const findings = advisoriesFor({ "declared.ts": RECURSIVE_OUTPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getDeclaredTree"]);
+    }, 300_000);
+
+    it("does not report an erased `.output(...)` on a `stream`, which keeps its handler's type", () => {
+        expect.assertions(2);
+
+        const result = runCodegenFor({ "streams.ts": RECURSIVE_STREAM_OUTPUT });
+
+        expect(result.advisories.filter((finding) => finding.name === "procedure_return_type_erased")).toHaveLength(0);
+        expect(result.generated.api).toContain('streamTrees: FunctionReference<"stream", {}, number>');
     }, 300_000);
 
     it("does not report an HTTP route's `.output(v.from(…))`, which renders no TS type", () => {
