@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.211...@lunora/codegen@1.0.0-alpha.212) (2026-09-25)
+
+### Bug Fixes
+
+* **codegen:** emit generated data tables as JSON.parse strings ([#825](https://github.com/anolilab/lunora/issues/825)) ([a30a369](https://github.com/anolilab/lunora/commit/a30a36951b4c523c85307787960530e23946f17e)), closes [#823](https://github.com/anolilab/lunora/issues/823)
+
 ## @lunora/codegen [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.210...@lunora/codegen@1.0.0-alpha.211) (2026-09-25)
 
 
