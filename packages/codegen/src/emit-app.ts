@@ -88,7 +88,7 @@ interface EmitAppOptions {
     hasX402: boolean;
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
     identity?: IdentityIR;
-    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers) to the Cloudflare data-residency jurisdiction. */
+    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth) to the Cloudflare data-residency jurisdiction. */
     jurisdiction?: JurisdictionIR;
 
     /**
@@ -739,6 +739,17 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
     return entries.length > 0 ? `\n${entries.join("\n")}\n        ` : "";
 };
 
+/**
+ * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
+ * users, sessions, and credentials, so it must live where every other DO does.
+ */
+const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
+    options.jurisdiction
+        ? `
+                // The schema's jurisdiction pins the auth object like every other DO.
+                jurisdiction: ${JSON.stringify(options.jurisdiction)},`
+        : "";
+
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // Export's answer to "every table". Shard discovery unions each named table's
@@ -885,7 +896,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
             const authWiring = createDoAuthWiring({
-                internalSecret: authDeclaration.internalSecret?.(env),
+                internalSecret: authDeclaration.internalSecret?.(env),${doAuthJurisdictionLine(options)}
                 namespace: authNamespace(env),
                 objectName: authDeclaration.objectName?.(env),
             });

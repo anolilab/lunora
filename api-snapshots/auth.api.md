@@ -399,6 +399,12 @@ interface AuthInvitation {
 }
 ```
 
+### `AuthJurisdiction` (type)
+
+```ts
+type AuthJurisdiction = "eu" | "fedramp" | "us";
+```
+
 ### `AuthMember` (interface)
 
 ```ts
@@ -416,10 +422,11 @@ interface AuthMember {
 
 ```ts
 interface AuthNamespaceLike {
-    get: (id: unknown) => {
+    get(this: void, id: unknown): {
         fetch: (request: Request) => Promise<Response>;
     };
-    idFromName: (name: string) => unknown;
+    idFromName(this: void, name: string): unknown;
+    jurisdiction?(this: void, jurisdiction: AuthJurisdiction): AuthNamespaceLike;
 }
 ```
 
@@ -604,6 +611,7 @@ interface DoAuthWiring {
 ```ts
 interface DoAuthWiringOptions {
     internalSecret: string | undefined;
+    jurisdiction?: AuthJurisdiction;
     namespace: AuthNamespaceLike | undefined;
     objectName?: string;
 }

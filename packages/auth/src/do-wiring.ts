@@ -16,10 +16,20 @@ import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from ".
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface AuthNamespaceLike {
-    get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
-    idFromName: (name: string) => unknown;
+    get(this: void, id: unknown): { fetch: (request: Request) => Promise<Response> };
+    idFromName(this: void, name: string): unknown;
+    /** Jurisdiction-restricted subnamespace. Optional only so older binding types still fit; {@link createDoAuthWiring} fails closed without it when a jurisdiction is set. */
+    jurisdiction?(this: void, jurisdiction: AuthJurisdiction): AuthNamespaceLike;
 }
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
+
+/**
+ * Cloudflare Durable Object data-residency jurisdiction. Widening union —
+ * Cloudflare adds values over time.
+ */
+export type AuthJurisdiction = "eu" | "fedramp" | "us";
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
@@ -28,6 +38,15 @@ export interface DoAuthWiringOptions {
      * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
      */
     internalSecret: string | undefined;
+
+    /**
+     * Pin the auth object to a data-residency jurisdiction — pass the worker's
+     * `jurisdiction`. The object holds users, sessions, and credentials, so it must
+     * live where the rest of the app's data does. The same name maps to a different
+     * object per jurisdiction, so toggling this on an existing deployment starts a
+     * fresh, empty auth object.
+     */
+    jurisdiction?: AuthJurisdiction;
 
     /** The bound namespace, or `undefined` when the binding is absent from `env`. */
     namespace: AuthNamespaceLike | undefined;
@@ -81,12 +100,28 @@ export interface DoAuthWiring {
  * Every failure path answers "not authenticated" rather than throwing: this runs on
  * the request path for every request that touches `ctx.auth`, and a throw there would
  * turn a misconfiguration into a 500 on traffic that has nothing to do with auth.
+ * The exception is a `jurisdiction` the namespace cannot express, which throws here.
  * @param options The resolved namespace, secret, and names.
  * @returns The `authHandler` / `resolveIdentity` pair.
  * @experimental
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
-    const { internalSecret, namespace, objectName = "auth" } = options;
+    const { internalSecret, jurisdiction, objectName = "auth" } = options;
+    let { namespace } = options;
+
+    // The one throw here, and deliberately at construction: a residency pin that
+    // cannot be honoured is a deployment bug. Degrading to "not authenticated"
+    // would hide it, and falling back to the unrestricted namespace would put the
+    // auth tables outside the jurisdiction the app declared.
+    if (namespace && jurisdiction !== undefined) {
+        if (typeof namespace.jurisdiction !== "function") {
+            throw new TypeError(
+                `@lunora/auth: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
+            );
+        }
+
+        namespace = namespace.jurisdiction(jurisdiction);
+    }
 
     /** The object's stub, or `undefined` when the binding is missing. */
     const stub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {

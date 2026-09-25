@@ -226,4 +226,81 @@ describe("createDoAuthWiring", () => {
         // A relative URL would throw; a hardcoded origin would break custom domains.
         expect(requests[0]?.url).toBe("https://tenant.example.test/__lunora/auth/session");
     });
+
+    describe("jurisdiction", () => {
+        /** A namespace whose unrestricted and pinned views log which one served the call. */
+        const createRecording = (): { log: string[]; namespace: AuthNamespaceLike; pinnedTo: string[] } => {
+            const log: string[] = [];
+            const pinnedTo: string[] = [];
+            const view = (label: string): AuthNamespaceLike => {
+                return {
+                    get: () => {
+                        return {
+                            fetch: async () => {
+                                log.push(label);
+
+                                return ok({ userId: "user_123" });
+                            },
+                        };
+                    },
+                    idFromName: (name: string) => name,
+                };
+            };
+
+            return {
+                log,
+                namespace: {
+                    ...view("UNPINNED"),
+                    jurisdiction: (jurisdiction) => {
+                        pinnedTo.push(jurisdiction);
+
+                        return view("PINNED");
+                    },
+                },
+                pinnedTo,
+            };
+        };
+
+        it("routes /api/auth/*, identity resolution, and the audit feed through the pinned namespace", async () => {
+            expect.assertions(2);
+
+            const { log, namespace, pinnedTo } = createRecording();
+            const wiring = createDoAuthWiring({ internalSecret: SECRET, jurisdiction: "eu", namespace });
+
+            await wiring.authHandler(new Request("https://example.test/api/auth/get-session"));
+            await wiring.resolveIdentity(new Request("https://example.test/x"));
+            await wiring.auditReader.read({ limit: 1 });
+
+            expect(pinnedTo).toStrictEqual(["eu"]);
+            expect(log).toStrictEqual(["PINNED", "PINNED", "PINNED"]);
+        });
+
+        it("uses the unrestricted namespace when no jurisdiction is set", async () => {
+            expect.assertions(1);
+
+            const { log, namespace } = createRecording();
+
+            await createDoAuthWiring({ internalSecret: SECRET, namespace }).resolveIdentity(new Request("https://example.test/x"));
+
+            expect(log).toStrictEqual(["UNPINNED"]);
+        });
+
+        it("accepts a real Durable Object namespace binding without a cast", () => {
+            expect.assertions(1);
+
+            // Type-level: codegen's `.auth({ namespace })` selector returns `env.AUTH`,
+            // so a projection a real binding cannot satisfy forces every app to cast.
+            const accepts = (binding: DurableObjectNamespace): AuthNamespaceLike => binding;
+
+            expect(accepts).toBeTypeOf("function");
+        });
+
+        it("fails closed when the namespace cannot express the jurisdiction", () => {
+            expect.assertions(1);
+
+            const { namespace } = createNamespace(() => ok({}));
+
+            expect(() => createDoAuthWiring({ internalSecret: SECRET, jurisdiction: "eu", namespace })).toThrow('does not support jurisdiction("eu")');
+        });
+    });
 });
