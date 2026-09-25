@@ -676,8 +676,8 @@ describe("search layouts", () => {
                 createIndexes: (companion) => [
                     sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${companion}__vec`)} ON ${sql.identifier(companion)} (${sql.identifier("__vector__")})`,
                 ],
-                indexDocument: (companion, id, analyzed) =>
-                    sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) VALUES (${id}, ${analyzed})`,
+                indexDocument: (companion, id, analyzed, guard) =>
+                    sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) SELECT ${id}, ${analyzed} WHERE ${guard} ON CONFLICT (${sql.identifier("__id__")}) DO UPDATE SET ${sql.identifier("__vector__")} = excluded.${sql.identifier("__vector__")}`,
                 matches: (companion, terms) =>
                     sql.join(
                         terms.map((term) => sql`${sql.identifier(companion)}.${sql.identifier("__vector__")} LIKE ${`%${term}%`}`),

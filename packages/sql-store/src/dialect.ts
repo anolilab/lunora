@@ -172,8 +172,14 @@ export interface SqlDialect {
         createCompanion: (companion: string, keyType: string) => SQL;
         /** DDL for the indexes that make the match fast. */
         createIndexes: (companion: string) => SQL[];
-        /** Replace one document's row, given its already-analyzed token stream. */
-        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+
+        /**
+         * Replace one document's row, given its already-analyzed token stream,
+         * only where `guard` holds. One idempotent statement: two writers of one
+         * id converge on one row, never raise a key conflict, and a writer whose
+         * `guard` fails writes nothing.
+         */
+        indexDocument: (companion: string, id: string, analyzed: string, guard: SQL) => SQL;
         /** The `WHERE` predicate matching a query's analyzed terms, final term as a prefix. */
         matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
         /** The `ORDER BY` expression, best first. */

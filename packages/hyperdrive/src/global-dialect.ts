@@ -231,8 +231,11 @@ export const postgresDialect: SqlDialect = {
         createIndexes: (companion) => [
             sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${companion}__gin`)} ON ${sql.identifier(companion)} USING GIN (${sql.identifier(VECTOR_COLUMN)})`,
         ],
-        indexDocument: (companion, id, analyzed) =>
-            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) VALUES (${id}, ${toVector(analyzed)})`,
+        // An upsert on the id key, so two writers of one document converge
+        // instead of one failing on the key. The guard sits in the SELECT: a
+        // writer that lost the race to a newer one inserts and updates nothing.
+        indexDocument: (companion, id, analyzed, guard) =>
+            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) SELECT ${id}, ${toVector(analyzed)} WHERE ${guard} ON CONFLICT (${sql.identifier(VECTOR_ID_COLUMN)}) DO UPDATE SET ${sql.identifier(VECTOR_COLUMN)} = EXCLUDED.${sql.identifier(VECTOR_COLUMN)}`,
         matches: (companion, terms) => sql`${vectorRef(companion)} @@ ${toQuery(terms)}`,
         rank: (companion, terms) => sql`ts_rank_cd(${vectorRef(companion)}, ${toQuery(terms)})`,
     },
