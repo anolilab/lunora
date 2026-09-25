@@ -143,6 +143,36 @@ Common options:
   writing files. `outputDirectory` is still the path that would have been
   written.
 - `lint`: run the static schema advisor (default `true`); when `false`,
-  `result.advisories` is empty.
+  `result.advisories` is empty. To keep the advisor but drop its lower levels,
+  set `advisor.minSeverity` in `lunora.config.ts` instead (see below).
 - `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
 - `lunoraDirectory`: override the `lunora` subdirectory name.
+
+## Trimming advisories (`advisor.minSeverity`)
+
+Codegen writes every static advisory into `_generated/shard.ts`, where the
+studio's Advisors table reads it, and returns the same list in
+`result.advisories`. Several INFO rules fire once per procedure, so in a growing
+project most of those advisories are INFO. Set a floor in `lunora.config.ts` to
+leave them out:
+
+```ts
+// lunora.config.ts
+import type { LunoraConfig } from "./lunora/_generated/app";
+
+export default {
+    advisor: { minSeverity: "warn" },
+} satisfies LunoraConfig;
+```
+
+`minSeverity` is `"info"` (the default, everything), `"warn"` or `"error"`.
+Findings below it are dropped from `result.advisories`, and so from the terminal
+and the dev overlay, and from the generated shard. It changes emission and
+display only. An ERROR is at or above every floor, so the gate that fails
+`lunora codegen`, `lunora deploy` and `vite build` on ERROR-level advisories
+cannot be turned off this way. `lint: false` is still the only way to skip the
+advisor entirely.
+
+Write it as a string literal, like `target`: codegen reads it by parsing the
+file. An unknown level or a computed value filters nothing and adds one
+`advisor_min_severity_invalid` WARN saying why.

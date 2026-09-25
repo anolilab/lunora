@@ -7,6 +7,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
+import { errorAdvisoryNames } from "../src/blocking";
 import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
 import emittedJsonData from "./emitted-json-data";
@@ -218,6 +219,94 @@ export const ghost = defineShape({ table: "mesages", where: () => ({}) });
         expect(byName("shape_targets_global_table")[0]?.metadata).toMatchObject({ exportName: "allUsers", table: "users" });
         expect(byName("shape_unknown_table")).toHaveLength(1);
         expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
+    });
+
+    describe("advisor.minSeverity in lunora.config", () => {
+        /** One INFO (the fixture's unindexed FK), one WARN and one ERROR (the two shapes). */
+        const seedAllLevels = (config?: string): void => {
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `import { defineShape } from "@lunora/server";
+export const allUsers = defineShape({ table: "users", where: () => ({}) });
+export const ghost = defineShape({ table: "mesages", where: () => ({}) });
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+    posts: defineTable({ authorId: v.id("users") }),
+});
+`,
+                "utf8",
+            );
+
+            if (config !== undefined) {
+                writeFileSync(join(workdir, "lunora.config.ts"), config, "utf8");
+            }
+        };
+
+        const levels = (findings: ReadonlyArray<{ level: string }>): Record<string, number> => {
+            const counts: Record<string, number> = {};
+
+            for (const { level } of findings) {
+                counts[level] = (counts[level] ?? 0) + 1;
+            }
+
+            return counts;
+        };
+
+        it('drops INFO from the result and the generated shard with "warn", and keeps every ERROR', () => {
+            expect.assertions(4);
+
+            seedAllLevels();
+
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { minSeverity: "warn" } };\n`, "utf8");
+
+            const { advisories, generated } = runCodegen({ projectRoot: workdir });
+            const emitted = emittedJsonData(generated.shard, "LUNORA_ADVISORIES") as { level: string; name: string }[];
+
+            expect(levels(unfiltered)["INFO"]).toBeGreaterThan(0);
+            // COUNTS: every WARN and ERROR survives, no INFO does, in both channels.
+            expect(levels(advisories)).toStrictEqual({ ERROR: levels(unfiltered)["ERROR"], WARN: levels(unfiltered)["WARN"] });
+            expect(levels(emitted)).toStrictEqual(levels(advisories));
+            expect(advisories.map((advisory) => advisory.name)).toContain("shape_unknown_table");
+        });
+
+        it('keeps only ERRORs with "error", so the codegen gate still fires', () => {
+            expect.assertions(2);
+
+            seedAllLevels(`const advisor = { minSeverity: "error" } as const;\nexport default { advisor };\n`);
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+
+            expect(Object.keys(levels(advisories))).toStrictEqual(["ERROR"]);
+            expect(errorAdvisoryNames(advisories)).toContain("shape_unknown_table");
+        });
+
+        it.each([
+            ["an unknown level", `export default { advisor: { minSeverity: "loud" } };\n`, '"loud"'],
+            ["a computed value", `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level } };\n`, "not a string literal"],
+        ])("reports %s and filters nothing", (_label, config, detail) => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), config, "utf8");
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+            const invalid = advisories.filter((advisory) => advisory.name === "advisor_min_severity_invalid");
+
+            expect(advisories).toHaveLength(unfiltered.length + 1);
+            expect(invalid).toHaveLength(1);
+            expect(invalid[0]?.detail).toContain(detail);
+        });
     });
 
     it("reads observability facts off real handler bodies", () => {

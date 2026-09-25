@@ -56,8 +56,11 @@ dispatch origin from its own env and refuses to enqueue without it, so
 ## `lunora.config.ts`
 
 One optional file at the project root carries the project's Lunora settings — the
-deploy `target`, the `remote`-binding dev preference, and the `app` hook a
-Vite-first project composes its worker with. It replaces `lunora.json`: the two
+deploy `target`, the `remote`-binding dev preference, the `app` hook a
+Vite-first project composes its worker with, and `advisor.minSeverity`, the
+lowest advisory level codegen reports and writes into `_generated/shard.ts`
+(`"info"`, `"warn"` or `"error"`; an ERROR is never dropped, so the codegen gate
+stays on). It replaces `lunora.json`: the two
 were always the same question, split across a format boundary that existed only
 because the CLI could not read TypeScript. It can now (`jiti`), so there is one
 file and it is real code.
@@ -69,6 +72,7 @@ import type { LunoraConfig } from "./lunora/_generated/app";
 export default {
     target: "cloudflare",
     remote: true,
+    advisor: { minSeverity: "warn" },
 } satisfies LunoraConfig;
 ```
 
@@ -128,11 +132,12 @@ Three things are worth knowing about this file:
   will throw, and the build warns that the hook was not composed. `import type`
   is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Write `target` and `remote` as literals.** `lunora codegen` resolves the
+- **Write `target`, `remote` and `advisor.minSeverity` as literals.** `lunora codegen` resolves the
   target synchronously, by parsing this file rather than running it, so a computed
   value, a getter or a spread is not seen. It is not silently defaulted either —
-  `lunora verify` reports `platform_unreadable_target`. A `const` in the same
-  file and a shorthand property both work.
+  `lunora verify` reports `platform_unreadable_target`, and an unreadable
+  `minSeverity` reports `advisor_min_severity_invalid` and filters nothing. A
+  `const` in the same file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than
 breaking the build — the entry composes as if the hook were absent. A
