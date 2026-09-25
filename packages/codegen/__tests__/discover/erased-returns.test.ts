@@ -119,6 +119,29 @@ const RECURSIVE_BEHIND_OUTPUT = `
         .query(async () => tree);
 `;
 
+/**
+ * The same unreproducible schema as an HTTP route's `.output(...)`. A route's
+ * declared output feeds only its OpenAPI JSON Schema, which never reads the
+ * recovered TS type, and a `.stream()` route ignores `.output()` altogether — so
+ * nothing generated says `unknown` for it, and a finding would be about nothing.
+ */
+const RECURSIVE_ROUTE_OUTPUT = `
+    import { httpRoute, v } from "@lunora/server";
+
+    interface Tree { value: string; child: Tree }
+
+    declare const treeSchema: { readonly "~standard": { readonly version: 1; readonly vendor: "probe"; readonly types?: { input: Tree; output: Tree } | undefined } };
+
+    export const getTreeRoute = httpRoute.get("/tree").output(v.from(treeSchema)).handler(async () => new Response("ok"));
+
+    export const streamTree = httpRoute
+        .get("/tree-stream")
+        .output(v.from(treeSchema))
+        .stream(async function* () {
+            yield 1;
+        });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -185,6 +208,17 @@ describe("procedure_return_type_erased", () => {
         const findings = advisoriesFor({ "declared.ts": RECURSIVE_OUTPUT }).filter((finding) => finding.name === "procedure_return_type_erased");
 
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["getDeclaredTree"]);
+    }, 300_000);
+
+    it("does not report an HTTP route's `.output(v.from(…))`, which renders no TS type", () => {
+        expect.assertions(2);
+
+        const result = runCodegenFor({ "routes.ts": RECURSIVE_ROUTE_OUTPUT });
+
+        expect(result.advisories.filter((finding) => finding.name === "procedure_return_type_erased")).toHaveLength(0);
+        // Guards the guard: both routes were discovered, and the stream's chunk
+        // type comes from its handler, not from the erased `.output()`.
+        expect(result.generated.api).toContain("streamTree: HttpStreamRef<number, {}, {}>");
     }, 300_000);
 
     it("reports a shared `.output(schema)` once per procedure that uses it", () => {
