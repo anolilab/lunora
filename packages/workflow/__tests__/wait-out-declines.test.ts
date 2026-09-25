@@ -77,6 +77,23 @@ describe("ctx.run — a DISPATCH_IN_PROGRESS decline", () => {
         expect(fetchImpl).toHaveBeenCalledTimes(calls);
     });
 
+    it("rethrows instead of dispatching again when a late pause overran the claim ceiling", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = origin(Number.POSITIVE_INFINITY);
+        const pending = runner(fetchImpl)({ __lunoraRef: "orders:charge" }).catch((error: unknown) => error);
+
+        // The first dispatch is declined and a 1s pause starts. The wall clock then
+        // jumps past the ceiling before that timer fires: a timer that resumes late.
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(Date.now() + 16 * 60_000);
+        await vi.advanceTimersByTimeAsync(1000);
+
+        await expect(pending).resolves.toMatchObject({ code: "DISPATCH_IN_PROGRESS" });
+        // COUNT: only the first dispatch; nothing was sent after the overrun.
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
     describe("inside ctx.runStep", () => {
         /** A native step double that runs the callback once, handing it `config` the way the engine does. */
         const stepApi = {
