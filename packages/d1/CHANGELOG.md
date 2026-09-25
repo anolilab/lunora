@@ -1,3 +1,10 @@
+## @lunora/d1 [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.136...@lunora/d1@1.0.0-alpha.137) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/d1 [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.135...@lunora/d1@1.0.0-alpha.136) (2026-09-25)
 
 
