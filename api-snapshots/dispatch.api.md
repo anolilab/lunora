@@ -15,6 +15,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : never;
 ```
 
+### `DISPATCH_CLAIM_CEILING_MS` (const)
+
+```ts
+const DISPATCH_CLAIM_CEILING_MS = 9e5;
+```
+
 ### `DispatchLogger` (interface)
 
 ```ts
@@ -73,6 +79,12 @@ const getDispatchMessageId: (error: unknown) => string | undefined;
 
 ```ts
 const isDeterministicDispatchFailure: (error: unknown) => error is LunoraError;
+```
+
+### `isDispatchDecline` (const)
+
+```ts
+const isDispatchDecline: (error: unknown) => error is LunoraError;
 ```
 
 ## Referenced internal declarations

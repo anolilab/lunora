@@ -740,8 +740,8 @@ interface RunContextOptions<Params> {
 
 ```ts
 interface RunStepDeps {
+    dedupNamespace: string;
     env: Record<string, unknown>;
-    instanceId: string;
     log: WorkflowLogger;
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
     run: WorkflowRunFunction;
