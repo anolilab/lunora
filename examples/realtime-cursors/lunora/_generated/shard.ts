@@ -16,34 +16,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {};
+const LUNORA_TABLE_REFS = JSON.parse("{}") as Record<string, Record<string, string>>;
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
-    "cursors": [
-        {
-            "fields": [
-                "roomId",
-                "sessionId"
-            ],
-            "name": "by_room_session",
-            "type": "index",
-            "unique": true
-        }
-    ],
-    "ratelimit_buckets": [
-        {
-            "fields": [
-                "key"
-            ],
-            "name": "by_key",
-            "type": "index"
-        }
-    ]
-};
+const LUNORA_TABLE_INDEXES = JSON.parse("{\"cursors\":[{\"fields\":[\"roomId\",\"sessionId\"],\"name\":\"by_room_session\",\"type\":\"index\",\"unique\":true}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>;
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<
+const LUNORA_TABLE_COLUMNS = JSON.parse("{\"cursors\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"roomId\",\"optional\":false,\"type\":\"string\"},{\"name\":\"sessionId\",\"optional\":false,\"type\":\"string\"},{\"name\":\"name\",\"optional\":false,\"type\":\"string\"},{\"name\":\"color\",\"optional\":false,\"type\":\"string\"},{\"name\":\"x\",\"optional\":false,\"type\":\"number\"},{\"name\":\"y\",\"optional\":false,\"type\":\"number\"},{\"name\":\"lastSeen\",\"optional\":false,\"type\":\"number\"}],\"ratelimit_buckets\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"key\",\"optional\":false,\"type\":\"string\"},{\"name\":\"value\",\"optional\":false,\"type\":\"number\"},{\"name\":\"ts\",\"optional\":false,\"type\":\"number\"},{\"name\":\"prev\",\"optional\":true,\"type\":\"number\"}]}") as Record<
     string,
     Array<{
         bucket?: string;
@@ -57,307 +36,31 @@ const LUNORA_TABLE_COLUMNS: Record<
         ref?: string;
         type: string;
     }>
-> = {
-    "cursors": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "roomId",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "sessionId",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "name",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "color",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "x",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "y",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "lastSeen",
-            "optional": false,
-            "type": "number"
-        }
-    ],
-    "ratelimit_buckets": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "key",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "value",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "ts",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "prev",
-            "optional": true,
-            "type": "number"
-        }
-    ]
-};
+>;
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
+const LUNORA_STORAGE_COLUMNS = JSON.parse("{}") as Record<string, string[]>;
 
 /** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
-const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
+const LUNORA_TTL_SWEEPS = JSON.parse("[]") as Array<{ after?: number; field: string; softDeleteField?: string; table: string }>;
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [
-    {
-        "cacheKey": "nondeterministic_query_mutation:cursors:66:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in joinRoom (cursors:66) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `joinRoom` is invoked from a workflow step or queue consumer that can itself replay.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "kind": "mutation",
-            "line": 66
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "nondeterministic_query_mutation:cursors:78:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in joinRoom (cursors:78) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `joinRoom` is invoked from a workflow step or queue consumer that can itself replay.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "kind": "mutation",
-            "line": 78
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "nondeterministic_query_mutation:cursors:104:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.",
-        "detail": "`Date.now(…)` in updateCursor (cursors:104) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `updateCursor` is invoked from a workflow step or queue consumer that can itself replay.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "kind": "mutation",
-            "line": 104
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:cursors:joinRoom",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `joinRoom` (cursors) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "joinRoom",
-            "file": "cursors",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    },
-    {
-        "cacheKey": "procedure_without_structured_event:cursors:updateCursor",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.",
-        "detail": "Public mutation `updateCursor` (cursors) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.",
-        "facing": "INTERNAL",
-        "level": "INFO",
-        "metadata": {
-            "exportName": "updateCursor",
-            "file": "cursors",
-            "kind": "mutation"
-        },
-        "name": "procedure_without_structured_event",
-        "remediation": "Emit one event on the primary path: `ctx.log.info(\"<verb>\", { … })`, or wrap the handler in `ctx.span(\"<name>\", …)` to attach timing too.",
-        "title": "Public write emits no structured event"
-    }
-];
+const LUNORA_ADVISORIES = JSON.parse("[{\"cacheKey\":\"nondeterministic_query_mutation:cursors:66:Date.now\",\"categories\":[\"SCHEMA\"],\"description\":\"A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.\",\"detail\":\"`Date.now(…)` in joinRoom (cursors:66) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `joinRoom` is invoked from a workflow step or queue consumer that can itself replay.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"callee\":\"Date.now\",\"exportName\":\"joinRoom\",\"file\":\"cursors\",\"kind\":\"mutation\",\"line\":66},\"name\":\"nondeterministic_query_mutation\",\"remediation\":\"For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.\",\"title\":\"Non-deterministic call in query/mutation handler\"},{\"cacheKey\":\"nondeterministic_query_mutation:cursors:78:Date.now\",\"categories\":[\"SCHEMA\"],\"description\":\"A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.\",\"detail\":\"`Date.now(…)` in joinRoom (cursors:78) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `joinRoom` is invoked from a workflow step or queue consumer that can itself replay.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"callee\":\"Date.now\",\"exportName\":\"joinRoom\",\"file\":\"cursors\",\"kind\":\"mutation\",\"line\":78},\"name\":\"nondeterministic_query_mutation\",\"remediation\":\"For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.\",\"title\":\"Non-deterministic call in query/mutation handler\"},{\"cacheKey\":\"nondeterministic_query_mutation:cursors:104:Date.now\",\"categories\":[\"SCHEMA\"],\"description\":\"A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). A `query` may be re-run by a live subscription, so non-determinism there can flicker between evaluations (WARN). An ordinary `mutation` handler does not replay on this runtime — it runs at most once per logical write — so this is informational there (INFO) unless the mutation is itself invoked from a workflow step or queue consumer that can replay.\",\"detail\":\"`Date.now(…)` in updateCursor (cursors:104) runs inside a mutation handler. Ordinary mutations don't replay on this runtime (idempotency dedup returns a cached result rather than re-running the handler, and an OCC conflict throws to the caller instead of retrying internally), so this is informational — no action needed unless `updateCursor` is invoked from a workflow step or queue consumer that can itself replay.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"callee\":\"Date.now\",\"exportName\":\"updateCursor\",\"file\":\"cursors\",\"kind\":\"mutation\",\"line\":104},\"name\":\"nondeterministic_query_mutation\",\"remediation\":\"For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.\",\"title\":\"Non-deterministic call in query/mutation handler\"},{\"cacheKey\":\"procedure_without_structured_event:cursors:joinRoom\",\"categories\":[\"SCHEMA\"],\"description\":\"A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.\",\"detail\":\"Public mutation `joinRoom` (cursors) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"exportName\":\"joinRoom\",\"file\":\"cursors\",\"kind\":\"mutation\"},\"name\":\"procedure_without_structured_event\",\"remediation\":\"Emit one event on the primary path: `ctx.log.info(\\\"<verb>\\\", { … })`, or wrap the handler in `ctx.span(\\\"<name>\\\", …)` to attach timing too.\",\"title\":\"Public write emits no structured event\"},{\"cacheKey\":\"procedure_without_structured_event:cursors:updateCursor\",\"categories\":[\"SCHEMA\"],\"description\":\"A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.\",\"detail\":\"Public mutation `updateCursor` (cursors) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"exportName\":\"updateCursor\",\"file\":\"cursors\",\"kind\":\"mutation\"},\"name\":\"procedure_without_structured_event\",\"remediation\":\"Emit one event on the primary path: `ctx.log.info(\\\"<verb>\\\", { … })`, or wrap the handler in `ctx.span(\\\"<name>\\\", …)` to attach timing too.\",\"title\":\"Public write emits no structured event\"}]") as AdvisoryFinding[];
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": false,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "listCursors",
-        "file": "cursors",
-        "hasEmailArg": false,
-        "kind": "query",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "joinRoom",
-        "file": "cursors",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "updateCursor",
-        "file": "cursors",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    }
-];
+const LUNORA_ADVISOR_PROCEDURES = JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"listCursors\",\"file\":\"cursors\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"joinRoom\",\"file\":\"cursors\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"updateCursor\",\"file\":\"cursors\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"}]") as AdvisorProcedure[];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA: RlsPoliciesResult = {
-    "policies": [],
-    "roles": []
-};
+const LUNORA_RLS_METADATA = JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult;
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA: MaskPoliciesResult = {
-    "columns": []
-};
+const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResult;
 
 /** Read-only storage access-rule metadata (discovered from `.use(storageRules(...))` chains) served via `__lunora_admin__:storageRules` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES: StorageRulesResult = {
-    "rules": []
-};
+const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
-    "analytics": false,
-    "auth": false,
-    "containers": false,
-    "flags": false,
-    "kv": false,
-    "mail": false,
-    "notifications": false,
-    "payments": false,
-    "queues": false,
-    "scheduler": false,
-    "storage": false,
-    "vectors": false,
-    "workflows": false
-};
+const LUNORA_STUDIO_FEATURES = JSON.parse("{\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "a266edaab2cc5a98", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"cursors\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"color\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"roomId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"x\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"y\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_room_session\": {\n          \"fields\": [\n            \"roomId\",\n            \"sessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:roomId\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };

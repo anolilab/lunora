@@ -2,6 +2,7 @@ import type { JsonSchema } from "@lunora/values";
 
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR } from "./ir";
+import renderJsonData from "./json-data";
 import sanitizeNamespace from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
@@ -137,13 +138,14 @@ const emitOpenRpc = (input: OpenRpcEmitInput): string => `${JSON.stringify(build
 /**
  * Emit the OpenRPC document as an importable TS module
  * (`_generated/openrpc.ts`) the worker entry imports and passes to
- * `createWorker({ openRpcSpec })`. The document object literal is inlined
- * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
- * `.json` are byte-identical content and regenerate together. `document_` is
+ * `createWorker({ openRpcSpec })`. The document is inlined as a `JSON.parse`
+ * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
+ * content and regenerate together; its `methods` array grows with every
+ * procedure, which as a literal fails `tsc` with TS2590 (#823). `document_` is
  * the object returned by {@link buildOpenRpcDocument} (reused, never recomputed).
  */
 const emitOpenRpcModule = (document_: Record<string, unknown>): string =>
-    `${GENERATED_HEADER}export const openRpcSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+    `${GENERATED_HEADER}export const openRpcSpec = ${renderJsonData(document_, "Record<string, unknown>")};\n`;
 
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION };
 export type { OpenRpcEmitInput };

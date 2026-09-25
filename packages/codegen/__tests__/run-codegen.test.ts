@@ -20,6 +20,7 @@ import {
     runCodegen,
 } from "../src/index";
 import type { FunctionIR, SchemaIR, ShapeIR } from "../src/ir";
+import emittedJsonData from "./emitted-json-data";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -1220,12 +1221,14 @@ export default crons;
 
             // payments via ctx read; scheduler via a declared cron (no @lunora/scheduler ctx use needed);
             // storage via the fixture's `attachments.fileKey: v.storage()` column (no ctx.storage use needed).
-            expect(result.generated.shard).toContain('"payments": true');
-            expect(result.generated.shard).toContain('"scheduler": true');
-            expect(result.generated.shard).toContain('"storage": true');
+            const studioFeatures = emittedJsonData(result.generated.shard, "LUNORA_STUDIO_FEATURES");
+
+            expect(studioFeatures).toHaveProperty("payments", true);
+            expect(studioFeatures).toHaveProperty("scheduler", true);
+            expect(studioFeatures).toHaveProperty("storage", true);
             // The fixture app declares no mail or vector usage, so those stay hidden.
-            expect(result.generated.shard).toContain('"mail": false');
-            expect(result.generated.shard).toContain('"vectors": false');
+            expect(studioFeatures).toHaveProperty("mail", false);
+            expect(studioFeatures).toHaveProperty("vectors", false);
         });
 
         it("wires the vector introspector on exactly the condition studioFeatures.vectors gates the nav on", () => {
@@ -1248,9 +1251,9 @@ export default crons;
             // A bare `@lunora/bindings` dependency (installed for `ctx.kv` /
             // `ctx.images`) declares no index, so there is no registry to serve and
             // the tab stays hidden rather than failing open into an error.
-            expect(withoutIndex.generated.shard).toContain('"vectors": false');
+            expect(emittedJsonData(withoutIndex.generated.shard, "LUNORA_STUDIO_FEATURES")).toHaveProperty("vectors", false);
             expect(withoutIndex.generated.app).not.toContain("vectorIntrospector");
-            expect(withoutIndex.generated.shard).toContain('"kv": true');
+            expect(emittedJsonData(withoutIndex.generated.shard, "LUNORA_STUDIO_FEATURES")).toHaveProperty("kv", true);
 
             writeFileSync(
                 join(workdir, "lunora", "schema.ts"),
@@ -1267,7 +1270,7 @@ export default schema;
 
             const withIndex = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(withIndex.generated.shard).toContain('"vectors": true');
+            expect(emittedJsonData(withIndex.generated.shard, "LUNORA_STUDIO_FEATURES")).toHaveProperty("vectors", true);
             expect(withIndex.generated.app).toContain("options.vectorIntrospector = createVectorAdminIntrospector({");
             // The index map is the app's own `.vectors(...)` selector, not a re-scan
             // of `env` — an arbitrary binding name still resolves to its logical index.
@@ -3426,8 +3429,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override storageRulesMetadata(): StorageRulesResult {");
-            expect(output).toContain('"bucket": "avatars"');
-            expect(output).toContain('"prefix": "user/"');
+            expect(output).toContain("const LUNORA_STORAGE_RULES = JSON.parse(");
+            expect(emittedJsonData(output, "LUNORA_STORAGE_RULES")).toStrictEqual({
+                rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
+            });
         });
 
         it("emits an empty storage-rules metadata when none are declared", () => {
@@ -3435,7 +3440,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const LUNORA_STORAGE_RULES: StorageRulesResult = {");
+            expect(emittedJsonData(output, "LUNORA_STORAGE_RULES")).toStrictEqual({ rules: [] });
         });
     });
 
@@ -3463,17 +3468,16 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override studioFeatures(): StudioFeaturesResult {");
-            expect(output).toContain('"payments": true');
-            expect(output).toContain('"storage": true');
+            expect(emittedJsonData(output, "LUNORA_STUDIO_FEATURES")).toHaveProperty("payments", true);
+            expect(emittedJsonData(output, "LUNORA_STUDIO_FEATURES")).toHaveProperty("storage", true);
         });
 
         it("defaults every feature flag off when none are passed", () => {
-            expect.assertions(2);
+            expect.assertions(1);
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {");
-            expect(output).not.toContain('"payments": true');
+            expect(Object.values(emittedJsonData(output, "LUNORA_STUDIO_FEATURES") as Record<string, boolean>)).not.toContain(true);
         });
     });
 
@@ -3519,8 +3523,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 schema: { tables: [], vectorIndexes: [] },
             });
 
-            expect(output).toContain("const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: ");
-            expect(output).toContain('"key": "dark-mode"');
+            expect(output).toContain('const LUNORA_FLAG_KEYS = JSON.parse("');
+            expect(emittedJsonData(output, "LUNORA_FLAG_KEYS")).toStrictEqual([
+                { key: "dark-mode", type: "boolean" },
+                { key: "page-size", type: "number" },
+            ]);
             expect(output).toContain("protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {");
             expect(output).toContain("protected override runFlagSubscriptionRead(");
             expect(output).toContain("FlagsResult");
@@ -3554,9 +3561,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override workflowsMetadata(): WorkflowsResult {");
-            expect(output).toContain("const LUNORA_WORKFLOWS_INFO: WorkflowsResult = {");
-            expect(output).toContain('"binding": "WORKFLOW_ORDER_PIPELINE"');
-            expect(output).toContain('"name": "order-pipeline"');
+            expect(output).toContain("const LUNORA_WORKFLOWS_INFO = JSON.parse(");
+            expect(output).toContain(") as WorkflowsResult;");
+            expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
+                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+            });
         });
 
         it("omits the workflows metadata constant and override when none are declared", () => {
@@ -3643,6 +3652,13 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
     });
 
     describe("emitShard — table columns", () => {
+        /** The emitted `LUNORA_TABLE_COLUMNS` entries of `table`, keyed by column name. */
+        const columnsOf = (output: string, table: string): Map<string, Record<string, unknown>> => {
+            const columns = (emittedJsonData(output, "LUNORA_TABLE_COLUMNS") as Record<string, Record<string, unknown>[]>)[table] ?? [];
+
+            return new Map(columns.map((column) => [String(column["name"]), column]));
+        };
+
         it("prepends system fields (_id, _creationTime) to every table", () => {
             expect.assertions(4);
 
@@ -3662,12 +3678,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
+            const columns = columnsOf(emitShard({ schema }), "posts");
 
-            expect(output).toContain('"name": "_id"');
-            expect(output).toContain('"pk": true');
-            expect(output).toContain('"name": "_creationTime"');
-            expect(output).toContain('"type": "number"');
+            expect([...columns.keys()].slice(0, 2)).toStrictEqual(["_id", "_creationTime"]);
+            expect(columns.get("_id")).toHaveProperty("pk", true);
+            expect(columns.get("_creationTime")).toHaveProperty("type", "number");
+            expect(columns.has("title")).toBe(true);
         });
 
         it("emits a scalar column with its IR kind as type", () => {
@@ -3689,10 +3705,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
+            const columns = columnsOf(emitShard({ schema }), "posts");
 
-            expect(output).toContain('"name": "title"');
-            expect(output).toContain('"type": "string"');
+            expect(columns.has("title")).toBe(true);
+            expect(columns.get("title")).toHaveProperty("type", "string");
         });
 
         it("unwraps v.optional(...) to the inner kind and marks optional: true", () => {
@@ -3714,11 +3730,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
+            const columns = columnsOf(emitShard({ schema }), "profiles");
 
-            expect(output).toContain('"name": "bio"');
-            expect(output).toContain('"optional": true');
-            expect(output).toContain('"type": "string"');
+            expect(columns.has("bio")).toBe(true);
+            expect(columns.get("bio")).toHaveProperty("optional", true);
+            expect(columns.get("bio")).toHaveProperty("type", "string");
         });
 
         it("marks a defaulted column optional", () => {
@@ -3740,10 +3756,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
+            const columns = columnsOf(emitShard({ schema }), "posts");
 
-            expect(output).toContain('"optional": true');
-            expect(output).toContain('"type": "number"');
+            expect(columns.get("views")).toHaveProperty("optional", true);
+            expect(columns.get("views")).toHaveProperty("type", "number");
         });
 
         it("records the FK target table for v.id('ref')", () => {
@@ -3765,10 +3781,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
+            const columns = columnsOf(emitShard({ schema }), "posts");
 
-            expect(output).toContain('"ref": "users"');
-            expect(output).toContain('"type": "id"');
+            expect(columns.get("author")).toHaveProperty("ref", "users");
+            expect(columns.get("author")).toHaveProperty("type", "id");
         });
 
         it("carries each foreign key's declared onDelete onto its column", () => {
@@ -3800,14 +3816,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const columns = JSON.parse(/const LUNORA_TABLE_COLUMNS[^=]+= (?<json>\{.*?\n\});/su.exec(emitShard({ schema }))?.groups?.["json"] ?? "{}") as {
-                posts: { name: string; onDelete?: string }[];
-            };
-            const byName = new Map(columns.posts.map((column) => [column.name, column.onDelete]));
+            const columns = columnsOf(emitShard({ schema }), "posts");
 
-            expect(byName.get("authorId")).toBe("cascade");
-            expect(byName.get("editorId")).toBe("restrict");
-            expect(byName.get("reviewerId")).toBeUndefined();
+            expect(columns.get("authorId")?.["onDelete"]).toBe("cascade");
+            expect(columns.get("editorId")?.["onDelete"]).toBe("restrict");
+            expect(columns.get("reviewerId")?.["onDelete"]).toBeUndefined();
         });
 
         it("flags a v.storage() column with isStorage: true", () => {
@@ -3829,9 +3842,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard({ schema });
-
-            expect(output).toContain('"isStorage": true');
+            expect(columnsOf(emitShard({ schema }), "uploads").get("avatar")).toHaveProperty("isStorage", true);
         });
 
         it("emits the LUNORA_TABLE_COLUMNS constant even for an empty schema", () => {
@@ -3839,7 +3850,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const LUNORA_TABLE_COLUMNS");
+            expect(emittedJsonData(output, "LUNORA_TABLE_COLUMNS")).toStrictEqual({});
             expect(output).toContain('onDelete?: "cascade" | "restrict" | "set null";');
         });
 
@@ -3872,10 +3883,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 },
             });
 
-            expect(output).toContain('"enumValues"');
+            expect(columnsOf(output, "posts").get("status")).toHaveProperty("enumValues");
             // The parsed VALUES, not the source text `parse-validator` stores — a
             // dropdown built from the latter offers `"draft"` with the quotes in it.
-            expect(output).toContain('"draft"');
+            expect(columnsOf(output, "posts").get("status")?.["enumValues"]).toStrictEqual(["draft", "published"]);
         });
 
         it("reports nullability separately from insert-optionality", () => {
@@ -3904,16 +3915,13 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 },
             });
 
-            const noteAt = output.indexOf('"name": "note"');
-            const slugAt = output.indexOf('"name": "slug"');
-            const note = output.slice(noteAt, output.indexOf("}", noteAt));
-            const slug = output.slice(slugAt, output.indexOf("}", slugAt));
+            const columns = columnsOf(output, "posts");
 
-            expect(note).toContain('"nullable": true');
+            expect(columns.get("note")).toHaveProperty("nullable", true);
             // The distinction the studio's row editor needs: a defaulted column is
             // optional on insert and must NOT be offered a control that writes null.
-            expect(slug).toContain('"optional": true');
-            expect(slug).not.toContain("nullable");
+            expect(columns.get("slug")).toHaveProperty("optional", true);
+            expect(columns.get("slug")).not.toHaveProperty("nullable");
         });
 
         it("names the bucket a v.storage(bucket) column's keys live in", () => {
@@ -3939,14 +3947,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             // Without this the studio resolved every storage key against the
             // deployment's default bucket, so a non-default one never previewed.
-            expect(output).toContain('"bucket": "media"');
+            expect(columnsOf(output, "uploads").get("avatar")).toHaveProperty("bucket", "media");
             // `v.storage()` with no argument names none, which IS the default bucket.
-            // Anchored on the JSON key (`"bucket":`) rather than the bare word: the
-            // emitted module also carries `"bucket"` as a plain string in the
-            // eslint-disable-next-line no-secrets/no-secrets -- an emitted identifier, not a credential
-            // `markUnvouchableReads` method allowlist for `ctx.storage`, which is
-            // unrelated to column metadata and would otherwise inflate this count.
-            expect(output.match(/"bucket":/gu)).toHaveLength(1);
+            expect(columnsOf(output, "uploads").get("raw")).not.toHaveProperty("bucket");
         });
 
         it("omits enumValues for a union with a non-literal member", () => {
@@ -3974,7 +3977,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 },
             });
 
-            expect(output).not.toContain('"enumValues"');
+            expect(columnsOf(output, "posts").get("status")).not.toHaveProperty("enumValues");
         });
     });
 
@@ -4618,10 +4621,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             ];
             const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
 
-            expect(shard).toContain("const LUNORA_QUEUES_INFO: QueuesResult = {");
+            expect(shard).toContain(") as QueuesResult;");
             expect(shard).toContain("protected override queuesMetadata(): QueuesResult {");
-            expect(shard).toContain('"mode": "pull"');
-            expect(shard).toContain('"deadLetterQueue": "email-dlq"');
+            expect(emittedJsonData(shard, "LUNORA_QUEUES_INFO")).toHaveProperty(["queues", 0, "mode"], "pull");
+            expect(emittedJsonData(shard, "LUNORA_QUEUES_INFO")).toHaveProperty(["queues", 0, "deadLetterQueue"], "email-dlq");
 
             // A queue-free app stays byte-identical: no metadata constant/override.
             expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).not.toContain("LUNORA_QUEUES_INFO");

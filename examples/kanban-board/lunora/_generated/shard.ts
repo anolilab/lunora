@@ -16,33 +16,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {};
+const LUNORA_TABLE_REFS = JSON.parse("{}") as Record<string, Record<string, string>>;
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
-    "tasks": [
-        {
-            "fields": [
-                "status",
-                "order"
-            ],
-            "name": "by_status_and_order",
-            "type": "index"
-        }
-    ],
-    "ratelimit_buckets": [
-        {
-            "fields": [
-                "key"
-            ],
-            "name": "by_key",
-            "type": "index"
-        }
-    ]
-};
+const LUNORA_TABLE_INDEXES = JSON.parse("{\"tasks\":[{\"fields\":[\"status\",\"order\"],\"name\":\"by_status_and_order\",\"type\":\"index\"}],\"ratelimit_buckets\":[{\"fields\":[\"key\"],\"name\":\"by_key\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>;
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<
+const LUNORA_TABLE_COLUMNS = JSON.parse("{\"tasks\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"title\",\"optional\":false,\"type\":\"string\"},{\"name\":\"status\",\"optional\":false,\"type\":\"union\",\"enumValues\":[\"todo\",\"in-progress\",\"done\",\"archived\"]},{\"name\":\"order\",\"optional\":false,\"type\":\"string\"}],\"ratelimit_buckets\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"key\",\"optional\":false,\"type\":\"string\"},{\"name\":\"value\",\"optional\":false,\"type\":\"number\"},{\"name\":\"ts\",\"optional\":false,\"type\":\"number\"},{\"name\":\"prev\",\"optional\":true,\"type\":\"number\"}]}") as Record<
     string,
     Array<{
         bucket?: string;
@@ -56,246 +36,31 @@ const LUNORA_TABLE_COLUMNS: Record<
         ref?: string;
         type: string;
     }>
-> = {
-    "tasks": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "title",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "status",
-            "optional": false,
-            "type": "union",
-            "enumValues": [
-                "todo",
-                "in-progress",
-                "done",
-                "archived"
-            ]
-        },
-        {
-            "name": "order",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "ratelimit_buckets": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "key",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "value",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "ts",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "prev",
-            "optional": true,
-            "type": "number"
-        }
-    ]
-};
+>;
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
+const LUNORA_STORAGE_COLUMNS = JSON.parse("{}") as Record<string, string[]>;
 
 /** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
-const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
+const LUNORA_TTL_SWEEPS = JSON.parse("[]") as Array<{ after?: number; field: string; softDeleteField?: string; table: string }>;
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
+const LUNORA_ADVISORIES = JSON.parse("[]") as AdvisoryFinding[];
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [
-    {
-        "callsMail": false,
-        "emitsEvent": false,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": false,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "list",
-        "file": "tasks",
-        "hasEmailArg": false,
-        "kind": "query",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": true,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "create",
-        "file": "tasks",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": true,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "rename",
-        "file": "tasks",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": true,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "move",
-        "file": "tasks",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    },
-    {
-        "callsMail": false,
-        "emitsEvent": true,
-        "fanOut": false,
-        "handlesErrors": false,
-        "reachesOutbound": false,
-        "runsAiGeneration": false,
-        "throwsBareError": false,
-        "unboundedAiGeneration": false,
-        "usesInsertManyUnsafe": false,
-        "writesUserTable": false,
-        "exempt": false,
-        "exemptReason": "",
-        "usesCaptcha": false,
-        "usesEmailGate": false,
-        "usesMask": false,
-        "usesRateLimit": true,
-        "usesRls": false,
-        "analyzableBody": true,
-        "exportName": "remove",
-        "file": "tasks",
-        "hasEmailArg": false,
-        "kind": "mutation",
-        "visibility": "public"
-    }
-];
+const LUNORA_ADVISOR_PROCEDURES = JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"list\",\"file\":\"tasks\",\"hasEmailArg\":false,\"kind\":\"query\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":true,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"create\",\"file\":\"tasks\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":true,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"rename\",\"file\":\"tasks\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":true,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"move\",\"file\":\"tasks\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"},{\"callsMail\":false,\"emitsEvent\":true,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":true,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"remove\",\"file\":\"tasks\",\"hasEmailArg\":false,\"kind\":\"mutation\",\"visibility\":\"public\"}]") as AdvisorProcedure[];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA: RlsPoliciesResult = {
-    "policies": [],
-    "roles": []
-};
+const LUNORA_RLS_METADATA = JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult;
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA: MaskPoliciesResult = {
-    "columns": []
-};
+const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResult;
 
 /** Read-only storage access-rule metadata (discovered from `.use(storageRules(...))` chains) served via `__lunora_admin__:storageRules` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES: StorageRulesResult = {
-    "rules": []
-};
+const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
-    "analytics": false,
-    "auth": false,
-    "containers": false,
-    "flags": false,
-    "kv": false,
-    "mail": false,
-    "notifications": false,
-    "payments": false,
-    "queues": false,
-    "scheduler": false,
-    "storage": false,
-    "vectors": false,
-    "workflows": false
-};
+const LUNORA_STUDIO_FEATURES = JSON.parse("{\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "b2dc0ca45a3b4ea2", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    },\n    \"tasks\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"order\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"status\": {\n          \"kind\": \"union\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false,\n          \"members\": [\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"archived\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"done\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"in-progress\\\"\"\n            },\n            {\n              \"kind\": \"literal\",\n              \"nullable\": false,\n              \"optional\": false,\n              \"unique\": false,\n              \"literal\": \"\\\"todo\\\"\"\n            }\n          ]\n        },\n        \"title\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_status_and_order\": {\n          \"fields\": [\n            \"status\",\n            \"order\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };

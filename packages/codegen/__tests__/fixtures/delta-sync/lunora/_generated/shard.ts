@@ -17,32 +17,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS: Record<string, Record<string, string>> = {};
+const LUNORA_TABLE_REFS = JSON.parse("{}") as Record<string, Record<string, string>>;
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
-    "notes": [
-        {
-            "fields": [
-                "boardId"
-            ],
-            "name": "by_board",
-            "type": "index"
-        }
-    ],
-    "boards": [
-        {
-            "fields": [
-                "ownerId"
-            ],
-            "name": "by_owner",
-            "type": "index"
-        }
-    ]
-};
+const LUNORA_TABLE_INDEXES = JSON.parse("{\"notes\":[{\"fields\":[\"boardId\"],\"name\":\"by_board\",\"type\":\"index\"}],\"boards\":[{\"fields\":[\"ownerId\"],\"name\":\"by_owner\",\"type\":\"index\"}]}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>;
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<
+const LUNORA_TABLE_COLUMNS = JSON.parse("{\"notes\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"boardId\",\"optional\":false,\"type\":\"string\"},{\"name\":\"body\",\"optional\":false,\"type\":\"string\"},{\"name\":\"ownerId\",\"optional\":false,\"type\":\"string\"}],\"boards\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"name\",\"optional\":false,\"type\":\"string\"},{\"name\":\"ownerId\",\"optional\":false,\"type\":\"string\"}],\"contacts\":[{\"name\":\"_id\",\"optional\":false,\"pk\":true,\"type\":\"id\"},{\"name\":\"_creationTime\",\"optional\":false,\"type\":\"number\"},{\"name\":\"boardId\",\"optional\":false,\"type\":\"string\"},{\"name\":\"email\",\"optional\":false,\"type\":\"string\"}]}") as Record<
     string,
     Array<{
         bucket?: string;
@@ -56,127 +37,31 @@ const LUNORA_TABLE_COLUMNS: Record<
         ref?: string;
         type: string;
     }>
-> = {
-    "notes": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "boardId",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "body",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "ownerId",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "boards": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "name",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "ownerId",
-            "optional": false,
-            "type": "string"
-        }
-    ],
-    "contacts": [
-        {
-            "name": "_id",
-            "optional": false,
-            "pk": true,
-            "type": "id"
-        },
-        {
-            "name": "_creationTime",
-            "optional": false,
-            "type": "number"
-        },
-        {
-            "name": "boardId",
-            "optional": false,
-            "type": "string"
-        },
-        {
-            "name": "email",
-            "optional": false,
-            "type": "string"
-        }
-    ]
-};
+>;
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS: Record<string, string[]> = {};
+const LUNORA_STORAGE_COLUMNS = JSON.parse("{}") as Record<string, string[]>;
 
 /** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
-const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?: string; table: string }> = [];
+const LUNORA_TTL_SWEEPS = JSON.parse("[]") as Array<{ after?: number; field: string; softDeleteField?: string; table: string }>;
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES: AdvisoryFinding[] = [];
+const LUNORA_ADVISORIES = JSON.parse("[]") as AdvisoryFinding[];
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[] = [];
+const LUNORA_ADVISOR_PROCEDURES = JSON.parse("[]") as AdvisorProcedure[];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA: RlsPoliciesResult = {
-    "policies": [],
-    "roles": []
-};
+const LUNORA_RLS_METADATA = JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult;
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA: MaskPoliciesResult = {
-    "columns": []
-};
+const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResult;
 
 /** Read-only storage access-rule metadata (discovered from `.use(storageRules(...))` chains) served via `__lunora_admin__:storageRules` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES: StorageRulesResult = {
-    "rules": []
-};
+const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
-    "analytics": false,
-    "auth": false,
-    "containers": false,
-    "flags": false,
-    "kv": false,
-    "mail": false,
-    "notifications": false,
-    "payments": false,
-    "queues": false,
-    "scheduler": false,
-    "storage": false,
-    "vectors": false,
-    "workflows": false
-};
+const LUNORA_STUDIO_FEATURES = JSON.parse("{\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "0d7dbc7f1c8601d5", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"boards\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner\": {\n          \"fields\": [\n            \"ownerId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"global:d1\"\n    },\n    \"contacts\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    },\n    \"notes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_board\": {\n          \"fields\": [\n            \"boardId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    }\n  },\n  \"version\": 1\n}\n" };
