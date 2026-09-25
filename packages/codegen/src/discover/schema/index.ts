@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { globalVectorIndexMessage } from "../../../../../shared/global-vector-index";
 import { diagnosticAt } from "../../diagnostics";
 import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
@@ -77,10 +78,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     const globalVectorIndex = vectorIndexes.find((index) => globalTables.has(index.table));
 
     if (globalVectorIndex) {
-        throw diagnosticAt(
-            defineSchemaCall,
-            `table "${globalVectorIndex.table}" is .global() and declares vector index "${globalVectorIndex.name}". Vector sync runs on the shard write path, which a global (D1/Hyperdrive) table's writes never take — the index would stay empty. Drop .global(), or keep the index yourself with ctx.vectors.upsert/deleteByIds.`,
-        );
+        throw diagnosticAt(defineSchemaCall, globalVectorIndexMessage(globalVectorIndex.table, globalVectorIndex.name));
     }
 
     return { jurisdiction: jurisdictionOf(defineSchemaCall), rlsMode: rlsModeOf(defineSchemaCall), tables, vectorIndexes };

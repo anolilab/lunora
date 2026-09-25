@@ -5,6 +5,7 @@ import type { Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
 import type {
@@ -1415,10 +1416,7 @@ const validateGlobalVectors = (tables: Record<string, TableDefinition>, vectorIn
 
     for (const [tableName, indexName] of sources) {
         if (tables[tableName]?.shardMode.kind === "global") {
-            throw new LunoraError(
-                "INTERNAL",
-                `defineSchema: table "${tableName}" is .global() and declares vector index "${indexName}". Vector sync runs on the shard write path, which a global (D1/Hyperdrive) table's writes never take — the index would stay empty. Drop .global(), or keep the index yourself with ctx.vectors.upsert/deleteByIds.`,
-            );
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalVectorIndexMessage(tableName, indexName)}`);
         }
     }
 };
