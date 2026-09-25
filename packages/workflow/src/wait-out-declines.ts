@@ -141,11 +141,13 @@ const waitOutDeclines =
 
                 await pause(Math.min(recheckMs, remaining));
 
-                // A timer can fire late; if the pause overran either bound, give the
+                // A timer can fire late; if the pause ran past either bound, give the
                 // decline back rather than start a dispatch with no time left for it.
+                // The pause already leaves room for one dispatch before the deadline, so
+                // only an actual overrun counts; ordinary timer jitter must not end the wait.
                 const resumed = Date.now();
 
-                if (resumed >= since + DISPATCH_CLAIM_CEILING_MS || (deadline !== undefined && deadline - resumed < MIN_RECHECK_DISPATCH_MS)) {
+                if (resumed >= since + DISPATCH_CLAIM_CEILING_MS || (deadline !== undefined && resumed >= deadline)) {
                     throw error;
                 }
 
