@@ -21,10 +21,18 @@ import { DEFAULT_QUEUE_MAX_RETRIES, getDispatchMessageId, isDeterministicDispatc
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
-import type { MessageBatchLike, MessageLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
+import type { MessageBatchLike, MessageLike, QueueBindingLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
 
 /** One declared queue, keyed for batch routing by its stable wrangler name. */
 interface QueueRegistryEntry {
+    /**
+     * The queue's own producer binding on `env` (`QUEUE_*`). A message whose
+     * dispatch is declined on its last delivery is re-enqueued through it (see
+     * {@link resolveDeclinedBatch}); without it that message is dead-lettered or
+     * dropped, and logged. Codegen always emits it.
+     */
+    binding?: string;
+
     /**
      * The `defineQueue` result (carries the push handler). The body type is
      * erased to `any` here because the registry is heterogeneous — different
@@ -147,8 +155,45 @@ const timestampToMs = (value: unknown): number => {
 interface CaptureHarness {
     dispositions: Map<MessageLike, QueueMessageOutcome>;
     originals: ReadonlyArray<MessageLike>;
+    /** Messages {@link resolveDeclinedBatch} re-enqueued as a delayed copy and acked. */
+    requeued: Set<MessageLike>;
+    /** Each original's {@link MessageView}. */
+    views: Map<MessageLike, MessageView>;
     wrappedBatch: QueueMessageBatch;
 }
+
+/**
+ * Body key of a copy {@link resolveDeclinedBatch} re-enqueued. It wraps the
+ * original body and id, so the copy reads as the message it replaces.
+ */
+const REQUEUED_KEY = "$lunora.requeued$";
+
+/**
+ * A message as the handler sees it. For a re-enqueued copy that is the message
+ * it replaces: its `id` and `body` come from the envelope, so `message.run`
+ * derives the same dedup ids and a call the declined delivery was waiting on is
+ * served from the replay cache, not applied twice.
+ */
+interface MessageView {
+    body: unknown;
+    id: string;
+    /** `true` for a re-enqueued copy, which is never re-enqueued again. */
+    requeued: boolean;
+}
+
+const viewOf = (message: MessageLike): MessageView => {
+    const { body } = message;
+
+    if (typeof body === "object" && body !== null && Object.hasOwn(body, REQUEUED_KEY)) {
+        const envelope = (body as Record<typeof REQUEUED_KEY, { body?: unknown; id?: unknown } | undefined>)[REQUEUED_KEY];
+
+        if (typeof envelope?.id === "string") {
+            return { body: envelope.body, id: envelope.id, requeued: true };
+        }
+    }
+
+    return { body, id: message.id, requeued: false };
+};
 
 /**
  * A `ctx.run` pinned to one message. Every call it makes carries two ids:
@@ -207,13 +252,23 @@ const pinRunToMessage = (run: DispatchRunFunction, messageId: string): DispatchR
  *
  * The wrapper also ADDS `run` — {@link pinRunToMessage} over the run context's
  * dispatcher — which is what a handler calls instead of `ctx.run` to get
- * per-message failure attribution for free.
+ * per-message failure attribution for free. `id` and `body` answer from the
+ * message's {@link MessageView}, which differs from the real ones only for a
+ * re-enqueued copy.
  */
-const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueMessageOutcome>, run: DispatchRunFunction): QueueMessage => {
-    const pinnedRun = pinRunToMessage(run, message.id);
+const wrapMessage = (message: MessageLike, view: MessageView, dispositions: Map<MessageLike, QueueMessageOutcome>, run: DispatchRunFunction): QueueMessage => {
+    const pinnedRun = pinRunToMessage(run, view.id);
 
     return new Proxy(message, {
         get: (target, property): unknown => {
+            if (property === "id") {
+                return view.id;
+            }
+
+            if (property === "body") {
+                return view.body;
+            }
+
             if (property === "ack") {
                 return (): void => {
                     dispositions.set(target, "ack");
@@ -281,8 +336,15 @@ const wrapBatch = (
 const instrumentBatch = (batch: MessageBatchLike, run: DispatchRunFunction): CaptureHarness => {
     const dispositions = new Map<MessageLike, QueueMessageOutcome>();
     const originals = batch.messages;
+    const views = new Map<MessageLike, MessageView>();
 
-    const wrappedMessages = originals.map((message) => wrapMessage(message, dispositions, run));
+    const wrappedMessages = originals.map((message) => {
+        const view = viewOf(message);
+
+        views.set(message, view);
+
+        return wrapMessage(message, view, dispositions, run);
+    });
 
     /** Fill the disposition for every message the handler didn't explicitly decide. */
     const fillUndecided = (outcome: QueueMessageOutcome): void => {
@@ -295,8 +357,11 @@ const instrumentBatch = (batch: MessageBatchLike, run: DispatchRunFunction): Cap
 
     const wrappedBatch = wrapBatch(batch, wrappedMessages, fillUndecided);
 
-    return { dispositions, originals, wrappedBatch };
+    return { dispositions, originals, requeued: new Set(), views, wrappedBatch };
 };
+
+/** The id `message.run` pinned for `message`: its own, or for a re-enqueued copy the one it replaces. */
+const idOf = (harness: CaptureHarness, message: MessageLike): string => harness.views.get(message)?.id ?? message.id;
 
 /** Best-effort human-readable message for a thrown value that may not be an `Error`. */
 const describeThrownError = (handlerError: unknown): string => {
@@ -338,7 +403,10 @@ const describeThrownError = (handlerError: unknown): string => {
  * that exhausted the queue's `maxRetries` AND has somewhere to land: with no
  * `deadLetterQueue` configured Cloudflare simply DELETES the exhausted message,
  * so claiming it was dead-lettered sends an operator hunting through a queue
- * that does not exist for a message that no longer exists anywhere.
+ * that does not exist for a message that no longer exists anywhere. Nor is a
+ * message {@link resolveDeclinedBatch} re-enqueued: it records `retry`, since
+ * its delayed copy is what gets redelivered. A copy records under the id and
+ * body of the message it replaces.
  */
 const buildCaptureRecords = (
     harness: CaptureHarness,
@@ -362,14 +430,15 @@ const buildCaptureRecords = (
         const decided = harness.dispositions.get(message);
         const outcome: QueueMessageOutcome = isAttributed ? "error" : (decided ?? undecided);
         const attempts = typeof message.attempts === "number" ? message.attempts : 1;
+        const view = harness.views.get(message) ?? viewOf(message);
 
         return {
             attempts,
-            body: message.body,
-            deadLettered: hasDeadLetterQueue && !isAttributed && outcome !== "ack" && attempts > maxRetries,
+            body: view.body,
+            deadLettered: hasDeadLetterQueue && !isAttributed && !harness.requeued.has(message) && outcome !== "ack" && attempts > maxRetries,
             error: outcome === "error" ? errorMessage : undefined,
             exportName: entry.exportName,
-            messageId: message.id,
+            messageId: view.id,
             outcome,
             queue,
             timestamp: timestampToMs(message.timestamp),
@@ -401,7 +470,7 @@ const resolveAttributedFailure = (harness: CaptureHarness, threw: boolean, handl
         return undefined;
     }
 
-    const message = harness.originals.find((candidate) => candidate.id === dispatchMessageId);
+    const message = harness.originals.find((candidate) => idOf(harness, candidate) === dispatchMessageId);
 
     if (message === undefined || harness.dispositions.has(message)) {
         return undefined;
@@ -459,11 +528,30 @@ const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike
  * decline from a bare `ctx.run` carrying its own `dedupId` names no message, so
  * every undecided message waits the ceiling out. A message the handler already
  * acked or retried keeps its decision.
+ *
+ * A decline on a message's LAST delivery cannot be retried: the broker would
+ * dead-letter or drop it with the call still running. That message is sent
+ * back to its own queue through {@link QueueRegistryEntry.binding} as a copy
+ * delayed past the ceiling, with a fresh attempt budget, and the original is
+ * acked only once the send resolved. The copy wraps the original id and body
+ * ({@link viewOf}), so its `message.run` calls carry the same dedup ids and
+ * the declined call is replayed, not re-applied. A copy is never re-enqueued
+ * again, so a call that is slow forever cannot loop the message forever; its
+ * own last-delivery decline is dead-lettered or dropped and logged, as is
+ * every such decline on a registry entry without a binding.
  */
-const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, entry: QueueRegistryEntry, queue: string): void => {
+const resolveDeclinedBatch = async (
+    harness: CaptureHarness,
+    handlerError: unknown,
+    entry: QueueRegistryEntry,
+    queue: string,
+    env: Record<string, unknown>,
+): Promise<void> => {
     const declinedId = getDispatchMessageId(handlerError);
-    const scoped = harness.originals.find((candidate) => candidate.id === declinedId && !harness.dispositions.has(candidate));
+    const scoped = harness.originals.find((candidate) => idOf(harness, candidate) === declinedId && !harness.dispositions.has(candidate));
     const where = `@lunora/queue: queue "${queue}" (${entry.exportName})`;
+    const producer = entry.binding === undefined ? undefined : (env[entry.binding] as QueueBindingLike | undefined);
+    const delayed: MessageLike[] = [];
 
     for (const candidate of harness.originals) {
         if (harness.dispositions.has(candidate)) {
@@ -478,8 +566,26 @@ const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, en
             continue;
         }
 
-        retryDeclinedMessage(candidate, { maxRetries: declaredMaxRetries(entry), where });
+        delayed.push(candidate);
     }
+
+    await Promise.all(
+        delayed.map(async (candidate) => {
+            const view = harness.views.get(candidate) ?? viewOf(candidate);
+            const requeue =
+                typeof producer?.send !== "function" || view.requeued
+                    ? undefined
+                    : async (delaySeconds: number): Promise<void> => {
+                          // `v8`, not the queue's content type: the original may be `bytes`
+                          // or `v8` itself, and structured clone carries every one of them.
+                          await producer.send({ [REQUEUED_KEY]: { body: view.body, id: view.id } }, { contentType: "v8", delaySeconds });
+                      };
+
+            if ((await retryDeclinedMessage(candidate, { maxRetries: declaredMaxRetries(entry), requeue, where })) === "requeued") {
+                harness.requeued.add(candidate);
+            }
+        }),
+    );
 };
 
 /**
@@ -574,7 +680,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
 
         // eslint-disable-next-line no-console -- last-resort operator signal for a dropped message; there is no injected logger on the dispatch path
         console.error(
-            `@lunora/queue: dropped message ${attributed.id} on queue "${batch.queue}" (${entry.exportName}) — a dispatch it made failed with a deterministic ${String(status)} (${body.code}: ${body.message}), so it was acked, not retried. Its retries are NOT exhausted and it is not dead-lettered — it will never be redelivered.`,
+            `@lunora/queue: dropped message ${idOf(harness, attributed)} on queue "${batch.queue}" (${entry.exportName}) — a dispatch it made failed with a deterministic ${String(status)} (${body.code}: ${body.message}), so it was acked, not retried. Its retries are NOT exhausted and it is not dead-lettered — it will never be redelivered.`,
         );
     }
 
@@ -583,7 +689,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     const declined = threw && isDispatchDecline(handlerError);
 
     if (declined) {
-        resolveDeclinedBatch(harness, handlerError, entry, batch.queue);
+        await resolveDeclinedBatch(harness, handlerError, entry, batch.queue, options.env);
     }
 
     // `threw` stays truthful (the handler DID fail, and the records say so);

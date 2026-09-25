@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import createQueues from "../../src/create-queues";
 import type { QueueBindingLike } from "../../src/types";
 import type { SmokeBody } from "./test-worker";
-import testWorker, { declineDeliveries, deliveries } from "./test-worker";
+import testWorker, { declineDeliveries, deliveries, requeuedSends } from "./test-worker";
 
 describe("@lunora/queue (workerd)", () => {
     it("ctx.queues producer sends through a real Queue binding", async () => {
@@ -103,4 +103,29 @@ describe("@lunora/queue (workerd)", () => {
         // (The delay's value is asserted in the Node suite: `getQueueResult` does not report `delaySeconds`.)
         expect(declineDeliveries.filter((delivery) => delivery.id === first!.id)).toHaveLength(1);
     }, 15_000);
+
+    // On the last delivery (`max_retries: 2`, so attempt 3) the broker grants no
+    // retry: the message would be dropped while its call is still running. It
+    // goes back on its own queue as a delayed copy instead, and only then is the
+    // original acked.
+    it("re-enqueues a message declined on its last delivery as a delayed copy, then acks it", async () => {
+        expect.hasAssertions();
+
+        const sendsBefore = requeuedSends.length;
+        const batch = createMessageBatch<SmokeBody>("decline-queue", [
+            { attempts: 3, body: { text: "last-try" }, id: "decline-last-1", timestamp: new Date() },
+        ]);
+        const context = createExecutionContext();
+
+        await testWorker.queue(batch, env);
+
+        const result = await getQueueResult(batch, context);
+
+        // COUNTS: acked once, retried never, one copy sent through the real binding.
+        expect(result.explicitAcks).toStrictEqual(["decline-last-1"]);
+        expect(result.retryMessages).toStrictEqual([]);
+        expect(requeuedSends.slice(sendsBefore)).toStrictEqual([
+            { body: { "$lunora.requeued$": { body: { text: "last-try" }, id: "decline-last-1" } }, options: { contentType: "v8", delaySeconds: 900 } },
+        ]);
+    });
 });

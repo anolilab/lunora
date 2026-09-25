@@ -1,5 +1,5 @@
 export { createDispatchLogger } from "./create-dispatch-logger";
-export type { DeclinedMessageLike } from "./create-dispatch-runner";
+export type { DeclinedMessageContext, DeclinedMessageLike } from "./create-dispatch-runner";
 export {
     createDispatchRunner,
     DEFAULT_QUEUE_MAX_RETRIES,

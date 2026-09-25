@@ -33,10 +33,21 @@ const DISPATCH_CLAIM_CEILING_MS = 9e5;
 const DISPATCH_DECLINE_RETRY_DELAY_SECONDS: number;
 ```
 
+### `DeclinedMessageContext` (interface)
+
+```ts
+interface DeclinedMessageContext {
+    maxRetries?: number;
+    requeue?: (delaySeconds: number) => Promise<void>;
+    where: string;
+}
+```
+
 ### `DeclinedMessageLike` (interface)
 
 ```ts
 interface DeclinedMessageLike {
+    ack: () => void;
     readonly attempts?: number;
     readonly id: string;
     retry: (options?: {
@@ -114,10 +125,7 @@ const isDispatchDecline: (error: unknown) => error is LunoraError;
 ### `retryDeclinedMessage` (const)
 
 ```ts
-const retryDeclinedMessage: (message: DeclinedMessageLike, context: {
-    maxRetries?: number;
-    where: string;
-}) => void;
+const retryDeclinedMessage: (message: DeclinedMessageLike, context: DeclinedMessageContext) => Promise<"requeued" | "retried">;
 ```
 
 ## Referenced internal declarations

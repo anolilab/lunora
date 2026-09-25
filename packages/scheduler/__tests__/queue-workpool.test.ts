@@ -243,6 +243,88 @@ describe("createQueueConsumer", () => {
         }
     });
 
+    describe("a decline on the last delivery, with the queue's producer", () => {
+        /** Declines every call, recording the dedup id each one carried. */
+        const httpDispatcherDeclining = (dedupIds: unknown[] = []): QueueDispatch =>
+            httpDispatcher({
+                adminToken: "t",
+                fetchImpl: async (_url, init) => {
+                    dedupIds.push((JSON.parse(init?.body as string) as { id?: unknown }).id);
+
+                    return Response.json(
+                        { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                        { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                    );
+                },
+                originUrl: "https://app.example.com",
+            });
+
+        it("re-enqueues a delayed copy under the original id and acks, instead of letting it drop", async () => {
+            expect.assertions(4);
+
+            const queue = fakeQueue();
+            const message = fakeMessage({ args: { n: 1 }, functionPath: "jobs:a", shardKey: "s1" });
+            const consume = createQueueConsumer({ dispatch: httpDispatcherDeclining(), maxRetries: 0, queue });
+
+            await consume(fakeBatch([message]));
+
+            // COUNTS: one copy, delayed past the claim, naming the message it replaces.
+            expect(queue.sent).toStrictEqual([
+                { body: { args: { n: 1 }, functionPath: "jobs:a", requeuedFrom: "msg-1", shardKey: "s1" }, options: { delaySeconds: 900 } },
+            ]);
+            expect(message.acked).toBe(true);
+            expect(message.retried).toBe(false);
+            expect(queue.send).toHaveBeenCalledTimes(1);
+        });
+
+        it("dispatches a copy under the id it replaces, and never re-enqueues a copy", async () => {
+            expect.assertions(4);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            try {
+                const queue = fakeQueue();
+                const dedupIds: unknown[] = [];
+                // The copy's own id is `msg-1`; the message it replaced was `msg-0`.
+                const copy = fakeMessage({ functionPath: "jobs:a", requeuedFrom: "msg-0" });
+
+                await createQueueConsumer({ dispatch: httpDispatcherDeclining(dedupIds), maxRetries: 0, queue })(fakeBatch([copy]));
+
+                expect(dedupIds).toStrictEqual(["msg-0"]);
+                expect(queue.sent).toStrictEqual([]);
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(String(error.mock.calls[0]?.[0])).toMatch(/on its last delivery/u);
+            } finally {
+                error.mockRestore();
+            }
+        });
+
+        it("falls back to the delayed retry and says why when the send fails", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            try {
+                const retries: unknown[] = [];
+                const queue = {
+                    ...fakeQueue(),
+                    send: vi.fn<QueueLike<QueueJob>["send"]>(async () => {
+                        throw new Error("queue down");
+                    }),
+                };
+                const message = { ...fakeMessage({ functionPath: "jobs:a" }), retry: (options?: unknown) => retries.push(options) };
+
+                await createQueueConsumer({ dispatch: httpDispatcherDeclining(), maxRetries: 0, queue })(fakeBatch([message]));
+
+                expect(retries).toStrictEqual([{ delaySeconds: 900 }]);
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(String(error.mock.calls[0]?.[0])).toMatch(/Re-enqueueing a delayed copy failed \(queue down\)/u);
+            } finally {
+                error.mockRestore();
+            }
+        });
+    });
+
     it("retries a structurally-invalid message (no functionPath) so it dead-letters", async () => {
         expect.assertions(2);
 

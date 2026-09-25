@@ -405,6 +405,15 @@ export interface QueueJob {
      */
     args?: Record<string, unknown>;
     functionPath: string;
+
+    /**
+     * Set by `createQueueConsumer` on the delayed copy it re-enqueues when a
+     * job's dispatch is declined on its last delivery: the id of the message it
+     * replaces. The copy dispatches under that id, so the shard serves the
+     * declined call's result instead of running it a second time, and a copy
+     * is never re-enqueued again.
+     */
+    requeuedFrom?: string;
     /** Routing hint forwarded to the Worker so the call lands on the right shard. */
     shardKey?: string;
 }
@@ -454,10 +463,20 @@ export interface QueueConsumerOptions {
     /**
      * The consumer's `max_retries` as deployed in `wrangler.jsonc`, which a
      * consumer cannot read at runtime. Used only to recognise a message's last
-     * delivery, so a dispatch declined there is logged as the drop or
-     * dead-letter it becomes. Defaults to Cloudflare's default of 3.
+     * delivery, where a declined dispatch is re-enqueued through `queue` (or
+     * logged as the drop or dead-letter it becomes without one). Defaults to
+     * Cloudflare's default of 3.
      */
     maxRetries?: number;
+
+    /**
+     * The producer binding of the queue this consumer reads (the one handed to
+     * `createQueueWorkpool`). With it, a job whose dispatch is declined on its
+     * last delivery is re-enqueued as a copy delayed past the in-flight claim,
+     * with a fresh retry budget, instead of being dead-lettered or dropped
+     * while its call is still running. Without it that loss is only logged.
+     */
+    queue?: QueueLike<QueueJob>;
 }
 
 /** Options for the `httpDispatcher` — the default HTTP dispatcher. */

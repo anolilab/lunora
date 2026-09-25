@@ -3961,7 +3961,10 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
 
     const imports = pushQueues.map((queue) => queue.exportName).join(", ");
     const entries = pushQueues
-        .map((queue) => `    ${JSON.stringify(queue.name)}: { definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`)
+        .map(
+            (queue) =>
+                `    ${JSON.stringify(queue.name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
+        )
         .join("\n");
 
     return `${GENERATED_HEADER}/**
@@ -3974,7 +3977,7 @@ import type { QueueRegistry } from "@lunora/queue";
 
 import { ${imports} } from "../queues.js";
 
-/** Stable wrangler queue name → { definition, exportName } for batch routing. */
+/** Stable wrangler queue name → { binding, definition, exportName } for batch routing. */
 export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {
 ${entries}
 };

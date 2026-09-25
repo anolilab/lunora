@@ -160,7 +160,9 @@ const createQueueConsumer =
                         throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
-                    await options.dispatch(message.body, message.id);
+                    // A re-enqueued copy dispatches under the id of the message it
+                    // replaces, so the shard dedups it against that message's call.
+                    await options.dispatch(message.body, message.body.requeuedFrom ?? message.id);
                     message.ack();
                 } catch (error: unknown) {
                     // A `DISPATCH_IN_PROGRESS` decline is this job's own earlier
@@ -168,9 +170,23 @@ const createQueueConsumer =
                     // dispatch deadline). Retried at once it meets the same
                     // claim and spends the queue's budget in seconds, so wait
                     // the claim's ceiling out: the next delivery is then served
-                    // the finished result, or runs the job if that run died.
+                    // the finished result, or runs the job if that run died. On
+                    // the last delivery, where no retry is left, a delayed copy
+                    // goes back on `options.queue` instead — once per job.
                     if (isDispatchDecline(error)) {
-                        retryDeclinedMessage(message, { maxRetries: options.maxRetries, where: `@lunora/scheduler: queue "${batch.queue}"` });
+                        const job = message.body as QueueJob;
+                        const { queue } = options;
+
+                        await retryDeclinedMessage(message, {
+                            maxRetries: options.maxRetries,
+                            requeue:
+                                queue === undefined || job.requeuedFrom !== undefined
+                                    ? undefined
+                                    : async (delaySeconds: number): Promise<void> => {
+                                          await queue.send({ ...job, requeuedFrom: message.id }, { delaySeconds });
+                                      },
+                            where: `@lunora/scheduler: queue "${batch.queue}"`,
+                        });
 
                         return;
                     }

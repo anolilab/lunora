@@ -227,32 +227,71 @@ const DEFAULT_QUEUE_MAX_RETRIES = 3;
 
 /** The slice of a Queues message {@link retryDeclinedMessage} needs. */
 interface DeclinedMessageLike {
+    ack: () => void;
     readonly attempts?: number;
     readonly id: string;
     retry: (options?: { delaySeconds?: number }) => void;
 }
 
+/** Where {@link retryDeclinedMessage} is called from, and what it may do on a last delivery. */
+interface DeclinedMessageContext {
+    /** The consumer's `max_retries`; Cloudflare's default when unknown. */
+    maxRetries?: number;
+
+    /**
+     * Send a fresh copy of the message to its own queue, delayed by
+     * `delaySeconds`. The copy must carry the original message's id, so its
+     * dispatches reuse the same dedup ids and a call the declined delivery was
+     * waiting on is served from the replay cache instead of applied again.
+     * Omit it when the consumer cannot reach the queue's producer, or when the
+     * message already IS such a copy: one copy per message is what keeps a
+     * permanently slow call from being re-enqueued forever.
+     */
+    requeue?: (delaySeconds: number) => Promise<void>;
+    /** Names the queue in the log lines. */
+    where: string;
+}
+
 /**
  * Retry a queue message whose dispatch was declined, past the claim ceiling
- * (see {@link DISPATCH_DECLINE_RETRY_DELAY_SECONDS}), and say so when the
- * decline landed on its last delivery. That is the one case a delay cannot
- * save: the broker will not grant the retry, so the message is dead-lettered,
- * or dropped when the queue has no DLQ, while the call that declined it may
- * still be running. `context.maxRetries` is the consumer's `max_retries`
- * (Cloudflare's default when unknown); `context.where` names the queue in that
- * log line.
+ * (see {@link DISPATCH_DECLINE_RETRY_DELAY_SECONDS}).
+ *
+ * On the message's last delivery the broker will not grant that retry: the
+ * message would be dead-lettered, or dropped when the queue has no DLQ, while
+ * the call that declined it may still be running. There, when the consumer can
+ * `requeue`, a delayed copy is sent first and the original is acked only once
+ * the send resolved, so the message always has a live copy: at-least-once
+ * holds, and a crash between the two leaves both, which the shared dedup id
+ * turns into a replay. The copy starts a new attempt budget. Without a
+ * `requeue`, or when the send fails, the message is retried anyway and the
+ * loss is logged.
  */
-const retryDeclinedMessage = (message: DeclinedMessageLike, context: { maxRetries?: number; where: string }): void => {
+const retryDeclinedMessage = async (message: DeclinedMessageLike, context: DeclinedMessageContext): Promise<"requeued" | "retried"> => {
     const maxRetries = context.maxRetries ?? DEFAULT_QUEUE_MAX_RETRIES;
+    const lastDelivery = typeof message.attempts === "number" && message.attempts > maxRetries;
+    let requeueFailure = "";
+
+    if (lastDelivery && context.requeue !== undefined) {
+        try {
+            await context.requeue(DISPATCH_DECLINE_RETRY_DELAY_SECONDS);
+            message.ack();
+
+            return "requeued";
+        } catch (error: unknown) {
+            requeueFailure = ` Re-enqueueing a delayed copy failed (${error instanceof Error ? error.message : String(error)}).`;
+        }
+    }
 
     message.retry({ delaySeconds: DISPATCH_DECLINE_RETRY_DELAY_SECONDS });
 
-    if (typeof message.attempts === "number" && message.attempts > maxRetries) {
+    if (lastDelivery) {
         // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on a queue consumer
         console.error(
-            `${context.where}: message ${message.id} was declined (${DISPATCH_IN_PROGRESS}) on its last delivery (attempt ${String(message.attempts)} of ${String(maxRetries + 1)}) — its earlier delivery is still running the call. It is retried anyway, but its retries are exhausted, so it will be dead-lettered if the queue has a deadLetterQueue and dropped if not. Raise max_retries so a slow call cannot exhaust it.`,
+            `${context.where}: message ${message.id} was declined (${DISPATCH_IN_PROGRESS}) on its last delivery (attempt ${String(message.attempts)} of ${String(maxRetries + 1)}) — its earlier delivery is still running the call.${requeueFailure} It is retried anyway, but its retries are exhausted, so it will be dead-lettered if the queue has a deadLetterQueue and dropped if not. Raise max_retries so a slow call cannot exhaust it.`,
         );
     }
+
+    return "retried";
 };
 
 /**
@@ -521,7 +560,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
     };
 };
 
-export type { DeclinedMessageLike };
+export type { DeclinedMessageContext, DeclinedMessageLike };
 export {
     createDispatchRunner,
     DEFAULT_QUEUE_MAX_RETRIES,

@@ -49,8 +49,17 @@ const smokeQueue: QueueDefinition<SmokeBody> = defineQueue<SmokeBody>({
     },
 });
 
-/** Every delivery of a `decline-queue` message the handler saw, with the broker's own attempt count. */
-const declineDeliveries: { attempts: number; id: string }[] = [];
+/** Every delivery of a `decline-queue` message the handler saw, with the broker's own attempt count and the body it read. */
+const declineDeliveries: { attempts: number; body: SmokeBody; id: string }[] = [];
+
+/**
+ * The `decline-queue` dispatch origin: declines while `remaining` is above
+ * zero (forever by default), and records the dedup id of every call it saw.
+ */
+const declineOrigin = { dedupIds: [] as string[], remaining: Number.POSITIVE_INFINITY };
+
+/** Every copy the consumer re-enqueued onto `decline-queue`, as sent. */
+const requeuedSends: { body: unknown; options: unknown }[] = [];
 
 /**
  * A push handler that dispatches through `message.run`, whose dispatch hop is
@@ -60,7 +69,7 @@ const declineDeliveries: { attempts: number; id: string }[] = [];
 const declineQueue: QueueDefinition<SmokeBody> = defineQueue<SmokeBody>({
     handler: async (_context, batch) => {
         for (const message of batch.messages) {
-            declineDeliveries.push({ attempts: message.attempts, id: message.id });
+            declineDeliveries.push({ attempts: message.attempts, body: message.body, id: message.id });
 
             // eslint-disable-next-line no-await-in-loop -- one message per batch here; sequential like a real handler
             await message.run({ __lunoraRef: "orders:slowAction" });
@@ -69,17 +78,27 @@ const declineQueue: QueueDefinition<SmokeBody> = defineQueue<SmokeBody>({
     maxRetries: 2,
 });
 
-/** The dispatch hop for `decline-queue`: every call is declined the way `ShardDO` declines it. */
-const declineFetch = (async () => {
+/** The dispatch hop for `decline-queue`: a call is declined the way `ShardDO` declines it, see {@link declineOrigin}. */
+const declineFetch = async (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const { id } = JSON.parse(init?.body as string) as { id?: string };
+
+    declineOrigin.dedupIds.push(String(id));
+
+    if (declineOrigin.remaining <= 0) {
+        return Response.json({ result: "done" });
+    }
+
+    declineOrigin.remaining -= 1;
+
     const { body, status } = toErrorBody(new LunoraError("DISPATCH_IN_PROGRESS", "a dispatch carrying this idempotency id is already running"));
 
     // The header only the shard's claim path sets — what makes this a decline and not a handler error.
     return Response.json({ error: body }, { headers: { "x-lunora-dispatch-declined": "1" }, status });
-}) as unknown as typeof fetch;
+};
 
 /** Stable wrangler queue name → registry entry, exactly as codegen builds it. */
 const registry: QueueRegistry = {
-    [queueDefaultName("declineQueue")]: { definition: declineQueue, exportName: "declineQueue" },
+    [queueDefaultName("declineQueue")]: { binding: "QUEUE_DECLINE_QUEUE", definition: declineQueue, exportName: "declineQueue" },
     [queueDefaultName("smokeQueue")]: { definition: smokeQueue, exportName: "smokeQueue" },
 };
 
@@ -92,13 +111,21 @@ const testWorker = {
         // through the production dispatcher.
         // Every dispatch here is declined: `smokeQueue` makes none, so only
         // `declineQueue` ever reaches `declineFetch`.
+        // The real `decline-queue` producer, recording what the consumer re-enqueues onto it.
+        const declineProducer = {
+            send: async (body: SmokeBody, options?: QueueSendOptions): Promise<void> => {
+                requeuedSends.push({ body, options });
+                await env.QUEUE_DECLINE_QUEUE.send(body, options);
+            },
+        };
+
         await dispatchQueueBatch(batch, registry, {
-            env: { ...env, LUNORA_ADMIN_TOKEN: "test-token", LUNORA_ORIGIN_URL: "https://origin.test" },
+            env: { ...env, LUNORA_ADMIN_TOKEN: "test-token", LUNORA_ORIGIN_URL: "https://origin.test", QUEUE_DECLINE_QUEUE: declineProducer },
             fetchImpl: declineFetch,
         });
     },
 };
 
 export default testWorker;
-export { declineDeliveries, deliveries, registry, smokeQueue };
+export { declineDeliveries, declineOrigin, deliveries, registry, requeuedSends, smokeQueue };
 export type { DeliveredMessage, Env, SmokeBody };

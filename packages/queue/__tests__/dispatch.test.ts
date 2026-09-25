@@ -1033,4 +1033,128 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
             error.mockRestore();
         }
     });
+
+    describe("on the last delivery, with the queue's producer binding", () => {
+        type Send = (body: unknown, options?: unknown) => Promise<undefined>;
+
+        const producer = (send = vi.fn<Send>(async () => undefined)) => {
+            return { send, sendBatch: vi.fn<() => Promise<undefined>>() };
+        };
+        const registry = { q: { binding: "QUEUE_Q", definition: perMessageRunQueue, exportName: "q" } };
+
+        it("re-enqueues a delayed copy carrying the original id and body, then acks the original", async () => {
+            expect.assertions(4);
+
+            const capture = vi.fn<QueueCaptureSink>();
+            const queue = producer();
+            const last = captureMessage({ id: "m1" }, { attempts: 4, id: "m1" });
+
+            await dispatchQueueBatch(batch("q", [last]), registry, {
+                capture,
+                env: { ...DISPATCH_ENV, QUEUE_Q: queue },
+                fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS"),
+            });
+
+            // COUNTS: one copy, delayed past the claim; the original acked, never retried.
+            expect(queue.send.mock.calls).toStrictEqual([
+                [{ "$lunora.requeued$": { body: { id: "m1" }, id: "m1" } }, { contentType: "v8", delaySeconds: 900 }],
+            ]);
+            expect(last.acked).toBe(true);
+            expect(retryOptions(last)).toStrictEqual([]);
+
+            const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+
+            // Not dead-lettered: its copy is what gets redelivered.
+            expect(
+                records.map(({ deadLettered, messageId, outcome }) => {
+                    return { deadLettered, messageId, outcome };
+                }),
+            ).toStrictEqual([{ deadLettered: false, messageId: "m1", outcome: "retry" }]);
+        });
+
+        it("hands the handler a copy as the message it replaces, with the same dedup ids", async () => {
+            expect.assertions(3);
+
+            const seen: { body: unknown; id: string }[] = [];
+            const dedupIds: unknown[] = [];
+            const queue = defineQueue({
+                handler: async (_context, b) => {
+                    for (const m of b.messages) {
+                        seen.push({ body: m.body, id: m.id });
+                        // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
+                        await m.run({ __lunoraRef: "fn" });
+                        m.ack();
+                    }
+                },
+            });
+            const copy = captureMessage({ "$lunora.requeued$": { body: { order: 7 }, id: "m1" } }, { attempts: 1, id: "copy-1" });
+
+            await dispatchQueueBatch(
+                batch("q", [copy]),
+                { q: { binding: "QUEUE_Q", definition: queue, exportName: "q" } },
+                {
+                    env: DISPATCH_ENV,
+                    fetchImpl: async (_url, init) => {
+                        dedupIds.push((JSON.parse(init?.body as string) as { id?: unknown }).id);
+
+                        return Response.json({ result: null });
+                    },
+                },
+            );
+
+            expect(seen).toStrictEqual([{ body: { order: 7 }, id: "m1" }]);
+            expect(dedupIds).toStrictEqual(["m1#1"]);
+            expect(copy.acked).toBe(true);
+        });
+
+        it("never re-enqueues a copy: its own last-delivery decline is retried and logged", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            try {
+                const queue = producer();
+                const copy = captureMessage({ "$lunora.requeued$": { body: { id: "m1" }, id: "m1" } }, { attempts: 4, id: "copy-1" });
+
+                await dispatchQueueBatch(batch("q", [copy]), registry, {
+                    env: { ...DISPATCH_ENV, QUEUE_Q: queue },
+                    fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS"),
+                });
+
+                expect(queue.send).not.toHaveBeenCalled();
+                expect(retryOptions(copy)).toStrictEqual([{ delaySeconds: 900 }]);
+                expect(error).toHaveBeenCalledTimes(1);
+            } finally {
+                error.mockRestore();
+            }
+        });
+
+        it("falls back to the delayed retry, and says why, when the send fails", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            try {
+                const last = captureMessage({ id: "m1" }, { attempts: 4, id: "m1" });
+
+                await dispatchQueueBatch(batch("q", [last]), registry, {
+                    env: {
+                        ...DISPATCH_ENV,
+                        QUEUE_Q: producer(
+                            vi.fn<Send>(async () => {
+                                throw new Error("queue down");
+                            }),
+                        ),
+                    },
+                    fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS"),
+                });
+
+                expect([last.acked, retryOptions(last)]).toStrictEqual([false, [{ delaySeconds: 900 }]]);
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(String(error.mock.calls[0]?.[0])).toMatch(/Re-enqueueing a delayed copy failed \(queue down\)/u);
+            } finally {
+                error.mockRestore();
+            }
+        });
+    });
 });
