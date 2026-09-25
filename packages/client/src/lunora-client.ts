@@ -20,7 +20,14 @@ import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
 import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
 import type { OptimisticLayerHandle } from "./optimistic-layers";
-import { applyOptimisticLayer, dropConfirmedLayers, foldOptimistic, notifySubscription } from "./optimistic-layers";
+import {
+    acknowledgementMark,
+    applyOptimisticLayer,
+    dropAcknowledgedLayers,
+    dropConfirmedLayers,
+    foldOptimistic,
+    notifySubscription,
+} from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
 import type { PollingFallback } from "./polling-fallback";
@@ -320,14 +327,18 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  * is (re)connecting and none is open; `connected` = at least one socket is open;
  * `polling` = no socket would open, so live queries are being refreshed over HTTP
  * instead (see {@link file://./polling-fallback.ts} — live but slower, and shapes
- * / streams / whispers are dark); `offline` = sockets exist but all are down
- * (between reconnect attempts).
+ * / streams / whispers are dark; mutations go over HTTP as they do while
+ * connected); `offline` = sockets exist but all are down (between reconnect
+ * attempts), and a poll could not reach the origin either.
  *
  * `polling` outranks `connecting`: while the fallback is running a reconnect is
  * still armed in the background, and reporting that attempt would flicker the
  * indicator between two states while data is in fact arriving on the slow path.
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
+
+/** Whether writes reach the origin: over the socket, or over HTTP while polling. */
+const isLiveStatus = (status: ConnectionStatus): boolean => status === "connected" || status === "polling";
 
 /** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
 interface ClientDebugShard {
@@ -1689,7 +1700,7 @@ class LunoraClient {
         // again. Gated on being connected so this stays a re-flush of an
         // already-live connection, never a reason to start replaying a queue
         // the client deliberately holds while offline.
-        if (this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
+        if (this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
             this.flushAllOfflineQueues();
         }
     }
@@ -2780,11 +2791,15 @@ class LunoraClient {
         // dropped shard only queues writes destined for it. A follower tab
         // has no `ShardConnection` of its own — `connectionGateState` derives
         // the same triple from the mirrored leader status instead.
-        const { hasSocket, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
+        const { hasSocket, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
         const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
-        const midReconnect = wsState === "connecting" && connectedGate;
+        // While polling reaches the origin, a reconnect attempt is always armed
+        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
+        // the upgrade is refused. HTTP works, so neither may queue the write.
+        const midReconnect = wsState === "connecting" && connectedGate && !polling;
+        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !polling;
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -2802,7 +2817,7 @@ class LunoraClient {
         // must still go behind the queue.
         const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
 
-        if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect || queuedAhead) {
+        if (socketDown || midReconnect || queuedAhead) {
             return this.enqueueOfflineMutation(
                 function_,
                 argsRecord,
@@ -4741,7 +4756,11 @@ class LunoraClient {
                 // the same notify path a real status change takes so this
                 // tab's own `onConnectionStatus`/`connectionStatus()`
                 // consumers see it.
-                const transitionedToConnected = status === "connected" && this.leaderStatus !== "connected";
+                // `"polling"` counts as live too: the leader reaches the origin over
+                // HTTP, and this tab's queued writes ride HTTP either way.
+                const transitionedToConnected =
+                    (status === "connected" && this.leaderStatus !== "connected") ||
+                    (status === "polling" && this.leaderStatus !== "connected" && this.leaderStatus !== "polling");
 
                 this.leaderStatus = status;
 
@@ -5517,20 +5536,41 @@ class LunoraClient {
      * than being swallowed: the whole point of the fallback is that the app keeps
      * working, and a query that is now failing (a permission change, a bad arg)
      * has to be visible.
+     *
+     * Resolves `false` when the request never reached the origin (`fetch` itself
+     * rejected), which is how the fallback tells a device with no network from a
+     * network that only refuses the upgrade. Any answer, an error envelope
+     * included, resolves `true`.
+     *
+     * Optimistic layers need the same care without a cursor. The snapshot is taken
+     * after the request is sent, so every write whose RPC had resolved before that
+     * moment is already in it. Those layers are dropped against the acknowledgement
+     * mark sampled before the send. A write acknowledged after the send may be
+     * missing from the snapshot, so its layer stays.
      */
-    private async pollSubscriptions(shardKey: string | undefined): Promise<void> {
+    private async pollSubscriptions(shardKey: string | undefined): Promise<boolean> {
         const key = connectionKey(shardKey);
         const states = this.subscriptions.all().filter((state) => connectionKey(state.shardKey) === key);
 
         if (states.length === 0) {
-            return;
+            return true;
         }
 
-        const slots = await this.batch(
-            states.map((state) => {
-                return { args: state.args, fn: state.fn, shardKey: state.shardKey };
-            }),
-        );
+        const snapshotMark = acknowledgementMark();
+        let slots: BatchSlot[];
+
+        try {
+            slots = await this.batch(
+                states.map((state) => {
+                    return { args: state.args, fn: state.fn, shardKey: state.shardKey };
+                }),
+            );
+        } catch (error) {
+            // `fetch` rejects with a `TypeError` when the request never reaches the
+            // origin (browsers, undici, React Native alike). Everything `batch`
+            // throws after a response arrived is a coded `Error` instead.
+            return !(error instanceof TypeError);
+        }
 
         for (const [index, state] of states.entries()) {
             const slot = slots[index];
@@ -5550,8 +5590,10 @@ class LunoraClient {
 
             // A subscription unsubscribed while the batch was in flight is gone
             // from the registry; `handleDataMessage` resolves by id and no-ops.
-            this.handleDataMessage({ data: encodeWire(slot.value), id: state.id, type: "data" });
+            this.handleDataMessage({ data: encodeWire(slot.value), id: state.id, type: "data" }, snapshotMark);
         }
+
+        return true;
     }
 
     /** Recompute the aggregate status and notify listeners if it changed. */
@@ -5690,7 +5732,7 @@ class LunoraClient {
     }
 
     /**
-     * The `(wsState, hasSocket, wasEverConnected)` triple `mutation()`'s
+     * The `(wsState, hasSocket, wasEverConnected, polling)` state `mutation()`'s
      * offline-queue gate reads. On the leader/single-tab path this is exactly
      * the real `ShardConnection`'s state (byte-identical to the pre-cross-tab
      * behavior). A follower has no `ShardConnection` of its own (see
@@ -5700,8 +5742,13 @@ class LunoraClient {
      * `"connecting"` (the mid-reconnect queue branch), anything else is
      * `"idle"`. `hasSocket` is always `false` for a follower — it never has
      * one.
+     *
+     * `polling` is `true` while the HTTP polling fallback is reaching the origin
+     * (the leader's mirrored `"polling"` on a follower). Writes then go straight
+     * over HTTP, as they do while connected, instead of queueing for a socket
+     * that may never open.
      */
-    private connectionGateState(shardKey: string | undefined): { hasSocket: boolean; wasEverConnected: boolean; wsState: WSState } {
+    private connectionGateState(shardKey: string | undefined): { hasSocket: boolean; polling: boolean; wasEverConnected: boolean; wsState: WSState } {
         if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
             let wsState: WSState = "idle";
 
@@ -5711,12 +5758,17 @@ class LunoraClient {
                 wsState = "connecting";
             }
 
-            return { hasSocket: false, wasEverConnected: this.leaderWasEverConnected, wsState };
+            return { hasSocket: false, polling: this.leaderStatus === "polling", wasEverConnected: this.leaderWasEverConnected, wsState };
         }
 
         const conn = this.getConnection(shardKey);
 
-        return { hasSocket: conn?.socket !== undefined, wasEverConnected: conn?.wasEverConnected ?? false, wsState: conn?.wsState ?? "idle" };
+        return {
+            hasSocket: conn?.socket !== undefined,
+            polling: conn?.polling.isPolling() ?? false,
+            wasEverConnected: conn?.wasEverConnected ?? false,
+            wsState: conn?.wsState ?? "idle",
+        };
     }
 
     private getOrCreateConnection(shardKey: string | undefined): ShardConnection {
@@ -5732,15 +5784,20 @@ class LunoraClient {
                 polling: createPollingFallback({
                     afterFailedAttempts: this.pollingFallbackAfterFailedAttempts,
                     intervalMs: this.pollingFallbackIntervalMs,
+                    // HTTP reaches the origin again, so writes queued while it
+                    // could not need not wait for a socket that may never open.
+                    // The flush applies the same identity gate and FIFO order a
+                    // reconnect flush does.
+                    onLive: () => {
+                        this.flushOfflineQueue(shardKey).catch(() => undefined);
+                    },
                     onStateChange: () => {
                         this.emitConnectionStatus();
                     },
                     // Resolved through the map rather than captured, so the poll
                     // always reads the connection record the rest of the client
                     // is mutating.
-                    poll: async () => {
-                        await this.pollSubscriptions(shardKey);
-                    },
+                    poll: async () => this.pollSubscriptions(shardKey),
                 }),
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
@@ -7260,7 +7317,11 @@ class LunoraClient {
         }
     }
 
-    private handleDataMessage(message: ServerDataMessage): void {
+    /**
+     * Apply one `data` frame. `snapshotMark` is set only for a frame synthesized
+     * by a poll, which carries no cursor: see {@link pollSubscriptions}.
+     */
+    private handleDataMessage(message: ServerDataMessage, snapshotMark?: number): void {
         const { id } = message;
         const state = id ? this.subscriptions.getById(id) : undefined;
 
@@ -7342,6 +7403,11 @@ class LunoraClient {
         // is at/under this frame's cursor), then display `serverBase` re-folded
         // through whatever optimistic layers remain pending (rebasing).
         dropConfirmedLayers(state, state.serverCursor);
+
+        if (snapshotMark !== undefined) {
+            dropAcknowledgedLayers(state, snapshotMark);
+        }
+
         notifySubscription(state, foldOptimistic(payload, state.optimisticLayers));
 
         // When cross-tab sync is active and we're the WS leader, broadcast
@@ -7787,7 +7853,7 @@ class LunoraClient {
             return;
         }
 
-        if (!this.closed && this.offlineQueue.size > 0 && this.computeStatus() === "connected") {
+        if (!this.closed && this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
             this.flushAllOfflineQueues();
         }
     }

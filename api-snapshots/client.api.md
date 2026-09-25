@@ -2333,6 +2333,7 @@ interface OfflineQueueDeps {
 
 ```ts
 interface OptimisticLayer {
+    acknowledgedAt?: number;
     commitCursor?: number;
     readonly id: symbol;
     readonly transform: (current: unknown) => unknown;
