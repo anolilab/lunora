@@ -1,3 +1,9 @@
+## @lunora/sql-store [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.138...@lunora/sql-store@1.0.0-alpha.139) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** guard native search writes and purges ([#827](https://github.com/anolilab/lunora/issues/827)) ([c1f4a2d](https://github.com/anolilab/lunora/commit/c1f4a2df34052eec74ce20eb381df3a957e66cfb))
+
 ## @lunora/sql-store [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.137...@lunora/sql-store@1.0.0-alpha.138) (2026-09-25)
 
 
