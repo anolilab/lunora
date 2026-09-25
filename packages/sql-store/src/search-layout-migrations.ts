@@ -221,7 +221,10 @@ const ensureInvertedUniqueKey = async (exec: SqlCtxExec, dialect: SqlDialect, co
                 return;
             } catch (error) {
                 // A concurrent request creating the same index is the likely cause, and the one that is fine.
-                if ((await indexState(exec, dialect, companion, key.name)) === "valid") {
+                // The re-read must not throw either: this runs on the request path.
+                const after = await indexState(exec, dialect, companion, key.name).catch(() => undefined);
+
+                if (after === "valid") {
                     return;
                 }
 

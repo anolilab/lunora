@@ -403,6 +403,35 @@ describe("search layouts", () => {
             ).toStrictEqual(["notes__fts_by_body__by_id", "notes__fts_by_body__unique"]);
         });
 
+        it("never fails the request when an empty companion's key build and its catalog re-read both fail", async () => {
+            expect.assertions(2);
+
+            // After the unique build fails, every later read fails too — the
+            // re-read in its catch must not carry that error into ensureMigrated.
+            let broken = false;
+            const exec: SqlCtxExec = {
+                all: async (query, parameters) => {
+                    if (broken) {
+                        throw new Error("connection reset");
+                    }
+
+                    return harness.exec.all(query, parameters);
+                },
+                run: async (query, parameters) => {
+                    if (query.includes("CREATE UNIQUE INDEX")) {
+                        broken = true;
+
+                        throw new Error("lock timeout");
+                    }
+
+                    return harness.exec.run(query, parameters);
+                },
+            };
+
+            await expect(invertedLayout.ensureCompanion(exec, dialect, companion)).resolves.toBeUndefined();
+            expect(broken).toBe(true);
+        });
+
         it("stores one row per distinct token, counting repeats as the score", async () => {
             expect.assertions(1);
 
