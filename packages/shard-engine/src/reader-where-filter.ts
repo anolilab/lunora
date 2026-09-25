@@ -86,15 +86,17 @@ const hasType = (value: unknown, type: "boolean" | "number" | "string"): boolean
  *
  * Yes for equality-family comparisons (`eq` / `ne` / `in` / `notIn` / `isNull`,
  * and the `{ field: value }` shorthand) of a string, id, number or boolean column
- * against an operand of that same type or `null`, combined with `AND` / `OR`.
- * Their NULL behaviour is pinned against SQLite in `@lunora/server`'s
- * `rls-null-semantics.test.ts`.
+ * against an operand of that same type or `null`, combined with `AND` / `OR` —
+ * empty groups included: `{}` / `{ AND: [] }` are TRUE and `{ OR: [] }` FALSE in
+ * both evaluators, and an `OR` holding a TRUE branch is TRUE. Their NULL
+ * behaviour is pinned against SQLite in `@lunora/server`'s
+ * `rls-null-semantics.test.ts`, the empty shapes in `rls-empty-shapes.test.ts`.
  *
  * No for everything else, which then filters in memory only:
  * - ordered comparisons (`lt` / `gt` / …) — JS coerces across types
  * (`"3" < 5`, `5n < 10`), SQLite orders by storage class;
  * - `contains` — SQL folds case, JS does not;
- * - `NOT`, relation predicates, a malformed or empty group or operator bag;
+ * - `NOT`, relation predicates, a malformed (non-array) group, an empty operator bag;
  * - an operand whose type is not the column's, or a column with no single type;
  * - a string or id comparison when `exactText` is `false`: an engine whose text
  * equality may fold case or trailing spaces (MySQL under a `_ci` / PAD SPACE

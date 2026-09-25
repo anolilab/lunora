@@ -20,6 +20,7 @@ import {
     createSearchAnalyzer,
     createSearchBuilder,
     finishSearchPage,
+    MAX_SEARCH_TERMS,
     planSearchPage,
     resolveSearchScan,
     searchPageScan,
@@ -92,6 +93,7 @@ import {
     rankTableName,
     readAggregateValue,
     relationHooks,
+    renderSql,
     resolveRankPartition,
     resolveRankSeekTuple,
     resolveRelationPredicates,
@@ -108,6 +110,7 @@ import {
     tiebreakDirectionFor,
     uniqueIndexFields,
     whereOfFilter,
+    WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -3539,8 +3542,20 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // narrows *within* that window rather than widening the read, so
                 // it reads the full window and trims after. A pushed one is in
                 // the SQL already, so the caller's limit stands.
-                const selective = inMemoryFilters > 0;
-                const scope = pushedWhere === undefined ? undefined : compileWhereSql(pushedWhere, mainTableStrategy);
+                // Placeholders the search statement binds besides the policy: up to
+                // two per term (the portable layout tests each term twice), plus
+                // its staged `.eq()` filters. The policy's `in` lists are budgeted
+                // against what is left of D1's per-statement cap.
+                const searchParams = 2 * MAX_SEARCH_TERMS + stage.filters.length;
+                const compiled = pushedWhere === undefined ? undefined : compileWhereSql(pushedWhere, mainTableStrategy, undefined, searchParams);
+                // A policy too wide to fit beside the search at all (dozens of
+                // equality branches) is filtered in memory instead of failing.
+                const tooWide =
+                    compiled !== undefined &&
+                    dialect.name === "sqlite" &&
+                    renderSql(dialect.name, compiled).params.length + searchParams > WORKERD_SQLITE_LIMITS.boundParams;
+                const scope = tooWide ? undefined : compiled;
+                const selective = inMemoryFilters > 0 || tooWide;
                 const rows = await runSqlSearch(
                     exec,
                     dialect,

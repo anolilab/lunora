@@ -318,10 +318,16 @@ const compileGroup = <T>(value: unknown, connector: "AND" | "OR", strategy: Wher
 
         if (compiled !== undefined) {
             parts.push(compiled);
+        } else if (connector === "OR") {
+            // A branch that compiles to nothing constrains nothing: it is TRUE, and
+            // so is any OR holding it. Dropping it instead narrowed
+            // `{ OR: [allowAll(), X] }` to `X`, while the JS matcher `rls()` runs
+            // on every row admits everything.
+            return undefined;
         }
     }
 
-    // An OR over zero satisfiable branches matches nothing; an empty AND matches everything.
+    // An OR over zero branches matches nothing; an AND over zero (or only vacuous) branches matches everything.
     if (parts.length === 0) {
         return connector === "OR" ? fragments.constant(false) : undefined;
     }
@@ -345,7 +351,8 @@ const compileStructuralKey = <T>(key: string, value: unknown, strategy: WhereSql
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
         const inner = compileNode((value ?? {}) as WhereInput, strategy, fragments);
 
-        return inner === undefined ? undefined : fragments.negate(inner);
+        // `NOT` of a vacuous (TRUE) predicate is FALSE, as the JS matcher has it.
+        return inner === undefined ? fragments.constant(false) : fragments.negate(inner);
     }
 
     return compileGroup(value, key as "AND" | "OR", strategy, fragments);
@@ -449,6 +456,9 @@ export const compileWhereSql = <T = SQL>(
     // Defaulted so `@lunora/sql-store` — which wants exactly this — passes
     // nothing and is unaffected by the parameterisation.
     fragments: WhereFragments<T> = drizzleFragments as unknown as WhereFragments<T>,
+    // Placeholders the REST of the statement binds outside this `where` — a
+    // search's term predicates, say — taken off the list budget up front.
+    reservedParams = 0,
 ): T | undefined => {
     if (!where || Object.keys(where).length === 0) {
         return undefined;
@@ -471,7 +481,7 @@ export const compileWhereSql = <T = SQL>(
     // half-cap is a ceiling, never a floor, so this only ever tightens. A page
     // whose keyset seek is wide gets a correspondingly narrower list budget
     // instead of the two overrunning the cap between them.
-    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars) / listCount));
+    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars - reservedParams) / listCount));
 
     // Rebinding `inList` is how the per-list budget reaches the leaf. A strategy
     // that supplied its own hook keeps it (bound to the budget); one that did not

@@ -40,7 +40,14 @@ const schema: SchemaLike = {
         notes: {
             indexes: [],
             searchIndexes: [{ field: "body", filterFields: [], name: "by_body" }],
-            shape: { body: column("string"), hidden: column("boolean"), ownerId: column("string"), tier: column("number") },
+            shape: {
+                body: column("string"),
+                hidden: column("boolean"),
+                // Nullable: absent on every fourth row.
+                label: { _meta: { column: {}, inner: { kind: "string" } }, kind: "optional" },
+                ownerId: column("string"),
+                tier: column("number"),
+            },
             shardMode: { kind: "global" },
         },
     },
@@ -48,11 +55,27 @@ const schema: SchemaLike = {
 
 const pad = (n: number): string => `r${String(n).padStart(4, "0")}`;
 
+const LABELS = [undefined, "x", "y", undefined] as const;
+
 /** Every row matches "alpha"; the first four also match "solo". */
 const corpus = (): Row[] =>
     Array.from({ length: ROWS }, (_, n) => {
-        return { _id: pad(n), body: n < 4 ? "alpha solo" : "alpha", hidden: n % 5 === 0, ownerId: n % 2 === 0 ? "u1" : "u2", tier: n % 3 };
+        const label = LABELS[n % 4];
+
+        return {
+            _id: pad(n),
+            body: n < 4 ? "alpha solo" : "alpha",
+            hidden: n % 5 === 0,
+            ownerId: n % 2 === 0 ? "u1" : "u2",
+            tier: n % 3,
+            ...(label === undefined ? {} : { label }),
+        };
     });
+
+/** A NULL cell never passes `ne` / `notIn`, in SQL or in the matcher. */
+const labelIsNot = (row: Row, value: string): boolean => row["label"] !== undefined && row["label"] !== null && row["label"] !== value;
+
+const SOME_IDS = Array.from({ length: 20 }, (_, n) => pad(n * 3 + 2));
 
 interface Policy {
     admits: (row: Row) => boolean;
@@ -76,6 +99,28 @@ const POLICIES: Policy[] = [
         pushed: () => false,
         where: { NOT: { hidden: true }, tier: 1 },
     },
+    {
+        // `allowAll()` is `{}`: the OR is TRUE whatever its other branch says.
+        admits: (row) => row["tier"] === 1,
+        name: "allowAll() branch",
+        pushed: () => true,
+        where: { AND: [{ OR: [{}, { tier: 7 }] }, { tier: 1 }] },
+    },
+    { admits: (row) => labelIsNot(row, "x"), name: "nullable ne", pushed: (target) => target.textPushed, where: { label: { ne: "x" } } },
+    {
+        admits: (row) => labelIsNot(row, "x"),
+        name: "nullable notIn",
+        pushed: (target) => target.textPushed,
+        where: { label: { notIn: ["x"] } },
+    },
+    {
+        admits: (row) => (row["label"] === undefined || row["label"] === null) && row["tier"] === 1,
+        name: "nullable isNull",
+        // `label` is a string column, so MySQL keeps even `isNull` on it in memory.
+        pushed: (target) => target.textPushed,
+        where: { label: { isNull: true }, tier: 1 },
+    },
+    { admits: (row) => SOME_IDS.includes(String(row["_id"])), name: "_id in", pushed: (target) => target.textPushed, where: { _id: { in: SOME_IDS } } },
 ];
 
 const idsOf = (rows: ReadonlyArray<Row>): string[] => rows.map((row) => String(row["_id"]));

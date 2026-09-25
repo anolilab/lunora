@@ -157,7 +157,7 @@ export {
     tryRowToDocument,
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
-export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
+export { param, renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 export type { DurableStreamRun } from "./durable-stream";
 export {
     appendStreamChunk,

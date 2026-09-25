@@ -3347,6 +3347,17 @@ interface VectorBackfillProgress {
 }
 ```
 
+### `WORKERD_SQLITE_LIMITS` (const)
+
+```ts
+const WORKERD_SQLITE_LIMITS: {
+    readonly boundParams: 100;
+    readonly compoundSelect: 5;
+    readonly likePattern: 50;
+    readonly sqlTextLength: 100000;
+};
+```
+
 ### `WhereFilter` (type)
 
 ```ts
@@ -3748,7 +3759,7 @@ const compactCdcDocs: (sql: SqlExec, throughSeq: number, maxRows: number) => voi
 ### `compileWhereSql` (const)
 
 ```ts
-const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>) => T | undefined;
+const compileWhereSql: <T = SQL>(where: WhereInput | undefined, strategy: WhereSqlStrategy<T>, fragments?: WhereFragments<T>, reservedParams?: number) => T | undefined;
 ```
 
 ### `computeRankPage` (const)

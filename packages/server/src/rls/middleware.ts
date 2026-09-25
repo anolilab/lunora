@@ -1524,12 +1524,14 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             }
 
             // The policy is enforced by this predicate, on every reader and every
-            // terminal. Tagging it with its `where` lets the shard reader also AND
-            // that `where` into its SQL when it can prove SQL keeps exactly the
-            // same rows, so `take` / `first` / `paginate` keep their LIMIT — the
-            // predicate still runs over every row returned. A reader that cannot
-            // push it (the D1 / `.global()` twin, a masked reader) runs the plain
-            // predicate, and a bounded terminal reads in LIMIT-ed batches.
+            // terminal. Tagging it with its `where` lets the shard reader and the
+            // `.global()` search reader also AND that `where` into their SQL when
+            // `isPushableWhere` proves SQL keeps exactly the same rows, so
+            // `take` / `first` / `paginate` keep their LIMIT — the predicate still
+            // runs over every row returned. Otherwise (a policy that cannot be
+            // pushed, a masked reader) the plain predicate runs alone: the shard
+            // reader then reads in LIMIT-ed batches, the search reader its whole
+            // relevance window.
             return reader.filter(whereFilter(baseWhere, (document) => matchesWhere(document, baseWhere)));
         },
 
