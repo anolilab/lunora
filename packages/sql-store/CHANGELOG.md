@@ -1,3 +1,9 @@
+## @lunora/sql-store [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.135...@lunora/sql-store@1.0.0-alpha.136) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** key inverted search rows and guard live writes ([#821](https://github.com/anolilab/lunora/issues/821)) ([a7c5696](https://github.com/anolilab/lunora/commit/a7c56969395be8df799afd2b0de90fe341b7170c))
+
 ## @lunora/sql-store [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.134...@lunora/sql-store@1.0.0-alpha.135) (2026-09-25)
 
 
