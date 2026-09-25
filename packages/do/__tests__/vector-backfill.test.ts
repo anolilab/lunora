@@ -2,7 +2,7 @@ import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@lunora/b
 import { createVectorBackfillSync, createVectorSyncHook, vectorBackfillTargets } from "@lunora/bindings/vectors";
 import type { SchemaLike, SqlExec, VectorBackfillProgress, WriteHook } from "@lunora/shard-engine";
 import { ADMIN_FUNCTIONS, backfillVectorIndexes, createShardCtxDb, runShardMigrations, VECTOR_BACKFILL_MAX_PAGES } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -24,6 +24,9 @@ const ADMIN_TOKEN = "s3cret-admin";
 
 /** The engine's page size — not exported, so pinned here; the counts below fail loudly if it moves. */
 const PAGE_ROWS = 50;
+
+/** The shard's bound on waiting for the after-commit chain — not exported, so pinned here. */
+const AFTER_COMMIT_WAIT_MS = 15_000;
 
 type Ordered = <T, U>(read: () => T, work: (value: T) => Promise<U>) => Promise<U>;
 
@@ -284,6 +287,123 @@ describe("backfillVectors admin RPC", () => {
         await expect(status(shard, { maxPages: 0 })).resolves.toBe(400);
         await expect(status(shard, { maxPages: VECTOR_BACKFILL_MAX_PAGES + 1 })).resolves.toBe(400);
         await expect(status(shard, { restart: "false" })).resolves.toBe(400);
+    });
+
+    it("refuses a maxPages that is not an integer or a string of digits, instead of coercing it", async () => {
+        expect.assertions(7);
+
+        await seed(1);
+
+        const shard = new VectorShard(makeState());
+
+        await expect(status(shard, { maxPages: true })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: [5] })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: " 5 " })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: 2.5 })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: "5e0" })).resolves.toBe(400);
+        await expect(status(shard, { maxPages: "5" })).resolves.toBe(200);
+        await expect(status(shard, { maxPages: 5 })).resolves.toBe(200);
+    });
+
+    it("answers a second concurrent call with 409 instead of embedding the same page twice", async () => {
+        expect.assertions(3);
+
+        await seed(3);
+
+        const shard = new VectorShard(makeState());
+        let embeds = 0;
+        let release = (): void => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let reached = (): void => undefined;
+        const embedding = new Promise<void>((resolve) => {
+            reached = resolve;
+        });
+
+        embedder = async (text) => {
+            embeds += 1;
+            reached();
+            await held;
+
+            return [text.length];
+        };
+
+        const first = shard.fetch(adminRequest({}));
+
+        await embedding;
+
+        const second = await Promise.race([
+            shard.fetch(adminRequest({})).then((response) => response.status),
+            new Promise<string>((resolve) => {
+                setTimeout(resolve, 200, "still waiting");
+            }),
+        ]);
+
+        release();
+
+        expect(second).toBe(409);
+        await expect(first.then((response) => response.status)).resolves.toBe(200);
+        expect(embeds).toBe(3);
+    });
+
+    it("stops waiting on a stalled after-commit chain with a retryable 503, and keeps the page retryable", async () => {
+        expect.assertions(4);
+
+        await seed(3);
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        const shard = new VectorShard(makeState());
+        let release = (): void => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        embedder = async (text) => {
+            if (text === "stuck") {
+                await held;
+            }
+
+            return [text.length];
+        };
+
+        try {
+            // An earlier write whose hook never comes back: the chain is stalled behind it.
+            const stuck = shard.mutate(async (db) => db.insert("posts", { body: "stuck" }));
+
+            await vi.advanceTimersByTimeAsync(AFTER_COMMIT_WAIT_MS);
+            await stuck;
+
+            let answered: number | undefined;
+            const backfill = shard.fetch(adminRequest({})).then((response) => {
+                answered = response.status;
+
+                return response;
+            });
+
+            await vi.advanceTimersByTimeAsync(2 * AFTER_COMMIT_WAIT_MS);
+
+            expect(answered).toBe(503);
+
+            await backfill;
+        } finally {
+            release();
+            vi.useRealTimers();
+        }
+
+        // The queued page runs once the stall clears, but its cursor was never
+        // written, so the next call walks the same page again — every row, from the top.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        const response = await shard.fetch(adminRequest({}));
+        const body = await response.json<{ result: VectorBackfillProgress }>();
+
+        expect(response.status).toBe(200);
+        expect(body.result).toStrictEqual({ done: true, failed: 0, failedIds: [], pages: 1, rows: 4 });
+        expect(shard.vectors.store.size).toBe(4);
     });
 
     it("indexes pre-existing rows a page per call until done", async () => {
