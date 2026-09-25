@@ -9,5 +9,11 @@
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
-    "workflows": [{ "name": "smoke-workflow", "binding": "WORKFLOW_SMOKE", "class_name": "SmokeWorkflow" }],
+    "workflows": [
+        { "name": "smoke-workflow", "binding": "WORKFLOW_SMOKE", "class_name": "SmokeWorkflow" },
+        { "name": "decline-workflow", "binding": "WORKFLOW_DECLINE", "class_name": "DeclineWorkflow" },
+    ],
+    // `ctx.run` dispatches to this origin; the test worker answers it in-process
+    // (see `originFetch` in test-worker.ts), so no network is involved.
+    "vars": { "LUNORA_ADMIN_TOKEN": "test-token", "LUNORA_ORIGIN_URL": "https://origin.test" },
 }

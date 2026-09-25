@@ -17,7 +17,7 @@
  */
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
+import { DISPATCH_CLAIM_CEILING_MS, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline } from "@lunora/dispatch";
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
@@ -431,6 +431,71 @@ const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike
 };
 
 /**
+ * How long a declined message waits before its next delivery: the shard's
+ * claim ceiling, in the seconds `message.retry` takes. Past it the claim that
+ * declined the message is gone — released with a cached result, or stale and
+ * run over — so that delivery cannot be declined by it again.
+ */
+const DECLINE_RETRY_DELAY_SECONDS = DISPATCH_CLAIM_CEILING_MS / 1000;
+
+/**
+ * Settle a batch whose handler threw a `409 DISPATCH_IN_PROGRESS` decline: the
+ * message's own earlier delivery is still running the call on the shard.
+ *
+ * Rethrowing it — what every other retryable failure gets — redelivers the
+ * batch at the queue's `retry_delay`, which codegen leaves at Cloudflare's
+ * default of zero. The redelivery meets the same live claim, so a `maxRetries:
+ * 3` queue spent its whole budget on declines within seconds of a slow action
+ * (a `ctx.run` gives up after 30s while the shard keeps running it) and then
+ * dropped the message, or dead-lettered it, while that action was still going.
+ *
+ * Cloudflare Queues has no uncounted retry, so a decline still costs one
+ * attempt. What this bounds is how MANY: the declined message is retried after
+ * {@link DECLINE_RETRY_DELAY_SECONDS}, by which point the claim cannot still
+ * stand, so one claim costs at most one attempt. The next delivery is then
+ * served the finished call from the replay cache, or runs it if the first
+ * attempt died. It is never acked, so at-least-once holds.
+ *
+ * A decline scoped to one message (`message.run` scopes every call) delays just
+ * that one and retries the handler's other undecided messages normally. A
+ * decline from a bare `ctx.run` carrying its own `dedupId` names no message, so
+ * every undecided message waits the ceiling out. A message the handler already
+ * acked or retried keeps its decision.
+ */
+const resolveDeclinedBatch = (harness: CaptureHarness, handlerError: unknown, entry: QueueRegistryEntry, queue: string): void => {
+    const declinedId = getDispatchMessageId(handlerError);
+    const scoped = harness.originals.find((candidate) => candidate.id === declinedId && !harness.dispositions.has(candidate));
+    const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
+
+    for (const candidate of harness.originals) {
+        if (harness.dispositions.has(candidate)) {
+            continue;
+        }
+
+        harness.dispositions.set(candidate, "retry");
+
+        if (scoped !== undefined && candidate !== scoped) {
+            candidate.retry();
+
+            continue;
+        }
+
+        candidate.retry({ delaySeconds: DECLINE_RETRY_DELAY_SECONDS });
+
+        // The one case a delay cannot save: the decline landed on the message's
+        // last delivery, and a retry the broker will not grant ends in the DLQ
+        // or, without one, in a drop. Say so, since the call that declined it may
+        // still be running.
+        if (typeof candidate.attempts === "number" && candidate.attempts > maxRetries) {
+            // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on the dispatch path
+            console.error(
+                `@lunora/queue: message ${candidate.id} on queue "${queue}" (${entry.exportName}) was declined (DISPATCH_IN_PROGRESS) on its last delivery (attempt ${String(candidate.attempts)} of ${String(maxRetries + 1)}) — its earlier delivery is still running the call. It is retried anyway, but its retries are exhausted, so it will be dead-lettered if the queue has a deadLetterQueue and dropped if not. Raise maxRetries so a slow call cannot exhaust it.`,
+            );
+        }
+    }
+};
+
+/**
  * Look up the handler for `batch.queue` and invoke it with a fresh
  * `QueueRunContext`. Throws a directed error when no push handler is registered
  * for the delivered queue (a misconfiguration — the consumer was declared
@@ -526,12 +591,20 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         );
     }
 
+    // A decline is not a failure of the call (see resolveDeclinedBatch). It is
+    // never deterministic, so it cannot also have been attributed above.
+    const declined = threw && isDispatchDecline(handlerError);
+
+    if (declined) {
+        resolveDeclinedBatch(harness, handlerError, entry, batch.queue);
+    }
+
     // `threw` stays truthful (the handler DID fail, and the records say so);
     // whether the failure propagates is a separate question, and an attributed
     // one does not — the attributed message is acked and every other message
     // has an explicit disposition, so there is nothing left for workerd to
-    // redeliver the batch for.
-    const rethrow = threw && attributed === undefined;
+    // redeliver the batch for. A declined batch is likewise fully settled.
+    const rethrow = threw && attributed === undefined && !declined;
 
     if (options.capture !== undefined) {
         // Best-effort by contract: build the records AND run the sink inside one guard

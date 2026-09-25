@@ -20,6 +20,7 @@ import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
 import type { WorkflowBindingLike, WorkflowEventLike, WorkflowRunContext, WorkflowRunFunction, WorkflowStepLike } from "./types";
 import { createWaitForEvent } from "./wait-for-event";
+import { waitOutDeclines } from "./wait-out-decline";
 
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
@@ -41,7 +42,13 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // dispatch is identical — only the arg type narrows — hence the cast. (The
     // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
     // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
-    const dispatch = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    //
+    // Every dispatch, top-level and in-step, waits out a `DISPATCH_IN_PROGRESS`
+    // decline in place rather than throwing it into the engine's retry budget
+    // (see `wait-out-decline.ts`).
+    const dispatch = waitOutDeclines(
+        createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction,
+    );
 
     // A top-level `ctx.run` is not durable — the body re-executes from the top on
     // every activation (after a `step.sleep`, a `waitForEvent`, an eviction) — so

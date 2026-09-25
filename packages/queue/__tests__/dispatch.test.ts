@@ -951,3 +951,83 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
         ).rejects.toBeUndefined();
     });
 });
+
+describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
+    const retryOptions = (m: MessageLike): unknown[] => (m.retry as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]);
+
+    it("retries the declined message after the claim ceiling instead of rethrowing into the same decline", async () => {
+        expect.assertions(5);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: perMessageRunQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 409, "DISPATCH_IN_PROGRESS") },
+            ),
+        ).resolves.toBeUndefined();
+
+        // Never acked: a decline is not "done". Retried exactly once each — the
+        // declined one delayed past the claim, the rest at the queue's own delay.
+        expect([m1.acked, m2.acked, m3.acked]).toStrictEqual([false, false, false]);
+        expect(retryOptions(m2)).toStrictEqual([{ delaySeconds: 900 }]);
+        expect([retryOptions(m1), retryOptions(m3)]).toStrictEqual([[undefined], [undefined]]);
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+
+        expect(records.map((record) => record.outcome)).toStrictEqual(["retry", "retry", "retry"]);
+    });
+
+    it("delays every undecided message when the decline names none (a bare ctx.run with its own dedupId)", async () => {
+        expect.assertions(1);
+
+        const unscoped = defineQueue({
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "fn" }, { id: "m1" }, { dedupId: "order-1:charge" });
+            },
+        });
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await dispatchQueueBatch(
+            batch("q", [m1, m2]),
+            { q: { definition: unscoped, exportName: "q" } },
+            { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS") },
+        );
+
+        expect([retryOptions(m1), retryOptions(m2)]).toStrictEqual([[{ delaySeconds: 900 }], [{ delaySeconds: 900 }]]);
+    });
+
+    it("says so when the decline lands on the message's last delivery", async () => {
+        expect.assertions(3);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            // `maxRetries` defaults to 3: attempt 3 still has a retry left, attempt 4 does not.
+            const early = captureMessage({ id: "m1" }, { attempts: 3, id: "m1" });
+            const last = captureMessage({ id: "m1" }, { attempts: 4, id: "m1" });
+            const run = async (m: MessageLike): Promise<void> =>
+                dispatchQueueBatch(
+                    batch("q", [m]),
+                    { q: { definition: perMessageRunQueue, exportName: "q" } },
+                    { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m1", 409, "DISPATCH_IN_PROGRESS") },
+                );
+
+            await run(early);
+
+            expect(error).not.toHaveBeenCalled();
+
+            await run(last);
+
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(String(error.mock.calls[0]?.[0])).toMatch(/declined \(DISPATCH_IN_PROGRESS\) on its last delivery \(attempt 4 of 4\)/u);
+        } finally {
+            error.mockRestore();
+        }
+    });
+});

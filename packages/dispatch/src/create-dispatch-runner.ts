@@ -181,6 +181,35 @@ const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
     !INFRASTRUCTURE_DISPATCH_CODES.has(error.code);
 
 /**
+ * The longest a shard's in-flight claim can make it decline a dispatch id:
+ * fifteen minutes.
+ *
+ * A `409 DISPATCH_IN_PROGRESS` means an earlier dispatch of the same id is
+ * still running, and the claim behind it is released when that dispatch
+ * settles or, for a handler that never settles, once it is this old — past
+ * it the next delivery runs. So a dispatch retried this long after a decline
+ * is never declined by the same claim again. Consumers that cannot retry a
+ * decline without spending budget use this as their bound: `@lunora/queue`
+ * delays a declined message's retry by it, `@lunora/workflow` stops waiting a
+ * decline out after it.
+ *
+ * Mirrors `IN_FLIGHT_CLAIM_CEILING_MS` in `@lunora/do` (which carries the
+ * reasoning for the number); this package takes no dependency on that one, so
+ * `__tests__/create-dispatch-runner.test.ts` pins the two equal.
+ */
+const DISPATCH_CLAIM_CEILING_MS = 900_000;
+
+/**
+ * True when `error` is a shard's `409 DISPATCH_IN_PROGRESS` decline, rebuilt
+ * from a real dispatch envelope: the id this call carries is already running on
+ * the shard. It is never a failure of the call. Once that run settles, the same
+ * id is served from the replay cache. A consumer should wait it out, bounded by
+ * {@link DISPATCH_CLAIM_CEILING_MS}, and must never treat it as done.
+ */
+const isDispatchDecline = (error: unknown): error is LunoraError =>
+    isLunoraError(error) && (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true && error.code === "DISPATCH_IN_PROGRESS";
+
+/**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class
  * status (503, not one of {@link DETERMINISTIC_DISPATCH_STATUSES}) — a timeout is
  * transient by definition, so a consumer classifying on status must keep it
@@ -446,4 +475,4 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
     };
 };
 
-export { createDispatchRunner, getDispatchMessageId, isDeterministicDispatchFailure };
+export { createDispatchRunner, DISPATCH_CLAIM_CEILING_MS, getDispatchMessageId, isDeterministicDispatchFailure, isDispatchDecline };
