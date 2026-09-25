@@ -12,13 +12,32 @@
  * range, across paginate cursor boundaries, and for a policy shape that cannot
  * be pushed into SQL (a `NOT`) and takes the batched in-memory fallback.
  */
-import { StatementSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 
 import type { Middleware, Policy } from "@lunora/server";
 import { definePolicies, definePolicy, defineSchema, defineTable, initLunora, rls, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
+
+/**
+ * Whether this Node build's `node:sqlite` carries FTS5. It was switched on in
+ * Node 22.16, so the repo's 22.15 floor has none and the search terminal reads
+ * nothing there; the search case gates on it rather than failing on that leg.
+ */
+const FTS5_IN_BUILD = ((): boolean => {
+    const database = new DatabaseSync(":memory:");
+
+    try {
+        database.prepare(`CREATE VIRTUAL TABLE "__fts5_build_probe__" USING fts5(x)`).all();
+
+        return true;
+    } catch {
+        return false;
+    } finally {
+        database.close();
+    }
+})();
 
 const { query } = initLunora.dataModel().create();
 
@@ -332,7 +351,7 @@ describe("rls() legacy reader keeps its LIMIT (#822)", () => {
         expect(near.every((document) => document.userId === "u1")).toBe(true);
     });
 
-    it("keeps the search terminal's LIMIT behind a policy pushed into SQL", async () => {
+    it.skipIf(!FTS5_IN_BUILD)("keeps the search terminal's LIMIT behind a policy pushed into SQL", async () => {
         expect.assertions(2);
 
         const t = await seed();
