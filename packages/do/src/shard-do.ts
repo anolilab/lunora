@@ -331,6 +331,8 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
+import type { InFlightClaim } from "./in-flight-claims";
+import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
@@ -1993,40 +1995,12 @@ abstract class ShardDO {
     private lastIdempotencyTrimAt = 0;
 
     /**
-     * Dedup keys (`<namespace>\u0000<mutationId>`) whose handler is running in
-     * THIS instance right now, on the UNGATED dispatch path — an action or query
-     * carrying an `x-lunora-mutation-id`. A second delivery of a key in this set
-     * is declined (`DISPATCH_IN_PROGRESS`, 409) instead of being run alongside
-     * the first.
-     *
-     * It closes the one hole the scheduler's dispatch lease cannot see. That
-     * lease bounds how long a CLAIM is held by pinning it to the dispatcher's own
-     * invocation ceiling; it says nothing about a receiver that is still
-     * executing after the dispatcher's side of the fetch is gone, which is
-     * exactly the shape a long `action` takes. The receiver can answer that
-     * question exactly, because the handler and this set live in the same
-     * isolate.
-     *
-     * **In-memory ON PURPOSE — this is the staleness rule, not a shortcut.** The
-     * only thing a durable claim row could add is an answer for a claim written
-     * by an instance that is gone, and that answer is always "stale": a Durable
-     * Object is single-instance, and an isolate that is torn down takes every
-     * handler executing inside it with it. So a claim that is absent here is a
-     * claim whose writer no longer exists, and re-running is correct. A durable
-     * claim would have to guess a horizon instead, and would then BLOCK recovery
-     * for the length of that guess in precisely the case where the work is
-     * provably dead. Cloudflare's own numbers say the same thing from the other
-     * side: a request's wall clock is unbounded while its caller stays connected
-     * (so no fixed horizon is derivable), and once the caller disconnects the
-     * request is cancelled with at most a 30s grace (so nothing outlives its
-     * isolate by a margin worth storing).
-     *
-     * The MUTATION path never reaches this set. Its dedup read and its handler
-     * run inside one `ShardHost.runSerialized` span, which already makes two
-     * concurrent deliveries of the same id impossible; leaving it untouched keeps
-     * that proven path exactly as it was.
+     * Claims on idempotency ids whose handler is running on the UNGATED
+     * dispatch path right now. See {@link InFlightClaims} for the whole
+     * at-least-once argument, the staleness ceiling, and the single-live-instance
+     * requirement it places on the `ShardHost`.
      */
-    private readonly inFlightDedupKeys = new Set<string>();
+    private readonly inFlightClaims = new InFlightClaims();
 
     /**
      * Changelog retention: the throttled sweep that bounds `__cdc_log` and the
@@ -4472,8 +4446,8 @@ abstract class ShardDO {
      * A non-mutation DOES still dedup: it takes the same cache read, and
      * {@link ShardDO.recordPostDispatchBookkeeping} writes its row once the
      * handler resolves. Only the GATE is skipped — and the concurrency that
-     * skipping it admits is handled by {@link ShardDO.inFlightDedupKeys}
-     * instead, which is one in-memory claim rather than a shard-wide stall.
+     * skipping it admits is handled by {@link ShardDO.inFlightClaims} instead,
+     * which is one in-memory claim rather than a shard-wide stall.
      *
      * The base class has no function registry, so the default is `true` — the
      * conservative answer, preserving the gate wherever the kind is unknown.
@@ -6819,13 +6793,9 @@ abstract class ShardDO {
         // hand the thrown value straight through to the span's error classifier.
         let dispatchError: { thrown: unknown } | undefined;
 
-        // The {@link ShardDO.inFlightDedupKeys} entry this dispatch owns, if it
-        // took one. Hoisted so the `finally` can release it: the release has to
-        // happen AFTER the tail has written the dedup row, or a re-delivery
-        // landing between the two would find neither a claim nor a result and
-        // run the handler a second time — reopening the window this closes, one
-        // statement narrower.
-        let claimedDedupKey: string | undefined;
+        // The {@link ShardDO.inFlightClaims} claim this dispatch holds, if any.
+        // Hoisted so the `finally` releases it — after the tail's dedup row.
+        let heldClaim: InFlightClaim | undefined;
 
         // Hoisted for the `catch` in the same way and for the same reason: the
         // error path files a durable `__lunora_reqlog__` row (and a Logpush/SIEM
@@ -6922,11 +6892,10 @@ abstract class ShardDO {
             // whole shard for that long — repeatedly, and for free — by attaching
             // an `x-lunora-mutation-id` header the runtime forwards verbatim for
             // every kind. See {@link isMutationFunction}. What an action gets
-            // instead is {@link ShardDO.inFlightDedupKeys}: the ungated branch
+            // instead is {@link ShardDO.inFlightClaims}: the ungated branch
             // below claims the key before running and declines a second delivery
-            // of a live key, so two concurrent dispatches of the same id cannot
-            // both run — without holding anything the rest of the shard waits
-            // on.
+            // of a live key, without holding anything the rest of the shard
+            // waits on.
             //
             // `(identity, mutationId)` is captured into a LOCAL scope here and
             // re-pinned onto the instance fields as the FIRST statement inside
@@ -6994,53 +6963,29 @@ abstract class ShardDO {
                 });
             } else {
                 // The UNGATED path: an action or query carrying an
-                // `x-lunora-mutation-id`. Nothing serialises two deliveries of
-                // the same id here (see the comment on the gate above for why
-                // gating an action is not an option), so the cache read is the
-                // only guard — and the row it reads is written only after the
-                // handler resolves. A delivery that overlaps a live first
-                // attempt therefore finds nothing and runs concurrently.
-                //
-                // Claim the key before running and decline a second delivery of
-                // a key still in flight. Read, test and claim are all
-                // synchronous and there is no `await` between them, so on this
-                // single-threaded isolate the three are atomic with respect to
-                // every sibling dispatch.
+                // `x-lunora-mutation-id`. The cache read, the claim and the
+                // handler start are synchronous with no `await` between them, so
+                // they are atomic against every sibling dispatch.
                 const cached = this.readIdempotentResult(dedupMutationId);
 
                 if (cached === undefined) {
-                    // Composed inline: one call site, and the namespace is the
-                    // same "fails open, never suppresses" value the cache read
-                    // above already skipped on, so a request that cannot be
-                    // deduped is never declined either. `\u0000` separates the
-                    // halves because neither is length-prefixed and both are
-                    // caller-influenced (a userId ending in `:` and an id
-                    // starting with one must not collide with the reverse
-                    // split); a NUL can appear in neither.
-                    const claimNamespace = this.idempotencyNamespace();
-                    const claimKey = claimNamespace === undefined ? undefined : `${claimNamespace}\u0000${dedupMutationId}`;
+                    const claim = this.inFlightClaims.claim(this.idempotencyNamespace(), dedupMutationId);
 
-                    if (claimKey !== undefined) {
-                        if (this.inFlightDedupKeys.has(claimKey)) {
-                            // TEMPORARY, never terminal. A 409 is not in
-                            // `@lunora/dispatch`'s deterministic set, so every
-                            // caller keeps retrying: the scheduler's `dispatch()`
-                            // reads `response.ok === false` and routes the record
-                            // through `recordRetry`, which re-arms it rather than
-                            // clearing its header. Reporting success here would
-                            // delete the record and convert the contract to
-                            // at-most-once — a first attempt that then died would
-                            // mean the job never ran, which is exactly what the
-                            // dispatch lease refused to do.
-                            throw new LunoraError(
+                    if (claim === "declined") {
+                        // Returned, not thrown: an expected at-least-once
+                        // re-delivery is not a failed call, so it must skip the
+                        // `catch` (error metrics, an error reqlog row, the
+                        // Issues view). Temporary by construction — a 409 is not
+                        // 2xx, so every caller keeps the work and retries.
+                        return this.errorToResponse(
+                            new LunoraError(
                                 "DISPATCH_IN_PROGRESS",
                                 `A dispatch of "${payload.functionPath}" carrying this idempotency id is already running on this shard`,
-                            );
-                        }
-
-                        this.inFlightDedupKeys.add(claimKey);
-                        claimedDedupKey = claimKey;
+                            ),
+                        );
                     }
+
+                    heldClaim = claim;
 
                     dispatchOutcome = { kind: "ran", result: await runHandler() };
                 } else {
@@ -7242,12 +7187,11 @@ abstract class ShardDO {
             // spans already streamed live).
             this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
             this.traceSampling.delete(dispatchTrace.traceId);
-            // Released LAST, after the tail's post-dispatch bookkeeping has
-            // written the dedup row (or the `catch` has decided there is nothing
-            // to write). A handler that threw leaves no row and no claim, so the
-            // next delivery runs it — at-least-once, unchanged.
-            if (claimedDedupKey !== undefined) {
-                this.inFlightDedupKeys.delete(claimedDedupKey);
+            // Released LAST, after the tail has written the dedup row (or the
+            // `catch` has decided there is none). A handler that threw leaves
+            // neither, so the next delivery runs it — at-least-once.
+            if (heldClaim !== undefined) {
+                this.inFlightClaims.release(heldClaim);
             }
 
             this.endDispatch();

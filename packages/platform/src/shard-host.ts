@@ -118,6 +118,17 @@ export interface ShardAlarms {
 
 /**
  * The core shard host contract. One instance per shard key.
+ *
+ * **At most one LIVE instance per shard key, at any moment — a requirement,
+ * not a convention.** `ShardDO` keeps correctness-bearing state in memory on
+ * that basis: its in-flight dispatch claim (`@lunora/do`'s `InFlightClaims`)
+ * declines a second concurrent delivery of the same idempotency id only because
+ * every delivery for the shard reaches the same instance, and treats a missing
+ * claim as "the holder is gone" only because a replaced instance takes its
+ * running handlers with it. A host that could run two instances of one shard
+ * side by side (a second Node process, a celld failover that overlaps the old
+ * cell) would let an action run twice concurrently. Cloudflare Durable Objects
+ * provide this natively; every other host must enforce it.
  */
 export interface ShardHost {
     /** Durable alarm scheduling for the shard. */
