@@ -11,7 +11,7 @@
  * returns (and deliberately takes no single-writer gate for a non-mutation), so
  * a long action re-fired mid-flight ran a second time CONCURRENTLY with the
  * first. (The receiver now declines such a delivery outright — see
- * `scheduler-do.receiver-decline.test.ts` — but the lease is still what keeps
+ * `packages/do/__tests__/shard-do.dispatch-claim.test.ts` — but the lease is still what keeps
  * the two from being minted in the first place, which is what this file pins.)
  *
  * The claim now re-arms the record at `now + DISPATCH_LEASE_MS` instead. The

@@ -254,11 +254,11 @@ an `action` short-circuits too.
 from exactly one source: the Durable Object that owns the schedule being evicted
 or crashing while a dispatch is open. **Every target kind now survives it.**
 
-| Target             | Overlapping re-delivery                                                         |
-| ------------------ | ------------------------------------------------------------------------------- |
-| `mutation`         | Runs once. The dedup read holds the shard's single-writer gate.                 |
-| `workflow` / agent | Runs once. The record id is the instance id; a second create is a no-op.        |
-| `action`           | Runs once. The shard declines the second delivery while the first is in flight. |
+| Target             | Overlapping re-delivery                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `mutation`         | Runs once. The dedup read holds the shard's single-writer gate.                  |
+| `workflow` / agent | Runs once. The record id is the instance id; a second create is a no-op.         |
+| `action`           | Runs once. The shard declines the second delivery while the first is in flight¹. |
 
 `action` used to be the exception. It is dispatched without the shard's
 single-writer gate — taking it would let any caller freeze a whole shard for the
@@ -271,16 +271,32 @@ the claim with the result afterwards. A delivery that arrives while the claim is
 live is answered `409 DISPATCH_IN_PROGRESS` and the handler is not entered a
 second time.
 
-**The decline is temporary, never terminal.** A 409 is not a success, so the
-scheduler keeps the record and re-arms it on the ordinary retry ladder — the job
-is still delivered at least once. What it no longer does is run twice at the
-same time. The retry that follows lands after the first attempt has settled and
-is served that attempt's cached result.
+¹ For up to 15 minutes — see the staleness ceiling below.
 
-Staleness needs no timeout, because the claim lives in the same isolate as the
-handler. A Durable Object is single-instance: if the isolate that took a claim is
-gone, so is the handler it was running, so a successor instance finds no claim
-and runs the job. Nothing waits out a guessed horizon.
+**The decline is temporary, never terminal.** A 409 is not a success, so the
+scheduler keeps the record and re-arms it — the job is still delivered at least
+once. What it no longer does is run twice at the same time. The retry that
+follows lands after the first attempt has settled and is served that attempt's
+cached result.
+
+**A decline does not spend the retry budget.** The scheduler re-arms a
+`DISPATCH_IN_PROGRESS` decline without counting it as an attempt, at the backoff
+the next real attempt would get and never sooner than 30 seconds. A decline says
+the first attempt is still doing the work; charging it would let a slow action
+use up `maxAttempts` while running fine, and if that attempt then failed the job
+would be parked in `/dead` having failed only once.
+
+**Staleness.** A claim is released when its dispatch finishes — success or
+throw — and it cannot outlive the Durable Object instance that holds it: if that
+instance is gone, so is the handler it was running, and a successor finds no
+claim and runs the job. What a claim _can_ outlive is its handler hanging while
+the instance stays up (an outbound call with no timeout, a promise nothing
+resolves). So a claim older than **15 minutes** — the same bound as the lease
+below — is treated as stale, and the next delivery runs.
+
+That ceiling is also where the guarantee ends. An action still legitimately
+running after 15 minutes is no longer protected: a re-delivery past that point
+runs alongside it.
 
 Two reservations still bound how _soon_ a lost job is retried, and neither is a
 correctness gap:
@@ -290,14 +306,20 @@ correctness gap:
   scheduler started can still be open (an alarm invocation, and the fetch it
   owns, are torn down at that mark). A job whose instance genuinely died waits
   that out. It is delayed, never dropped.
-- A job whose handler keeps declining because it really is still running rides
-  the retry ladder like any other unsuccessful attempt, and is parked in the
-  dead-letter once its `maxAttempts` budget is spent. The work itself completed;
-  the record is in `/dead` and can be retried from there.
+- A job whose handler hangs is declined until its claim goes stale, then runs
+  again and is charged as usual if that attempt fails. The dead-letter is
+  reached only by attempts that actually ran and failed.
 
-<Callout type="info">
-    **A scheduled `action` no longer has to be idempotent to survive an overlapping re-delivery** — the shard refuses the second one. It still has to be
-    idempotent to survive an ordinary **sequential** retry whose first attempt's response was lost in transit before its dedup row was written, which is the
-    plain at-least-once case every scheduled job has. For genuinely long work, `createQueueWorkpool` + `createQueueConsumer` remains the better fit: it bounds
-    each job at five minutes and reports completion explicitly.
+Queue consumers and workflow steps that call an action through `ctx.run` treat
+the 409 as retryable too, but they do count it against their own retry budget
+(`max_retries` for a queue, the step's `retries` for a workflow). Give an action
+that can overlap its own re-delivery enough budget — or a retry delay — to
+outlast one run.
+
+<Callout type="warn">
+    **A scheduled `action` that can run longer than 15 minutes must still be idempotent**, or mark its own completion — a row it writes first and checks on
+    entry, a provider-side idempotency key. Past that point the shard's claim is stale and an overlapping re-delivery runs. Every action also has to be
+    idempotent against an ordinary **sequential** retry whose first attempt's response was lost before its dedup row was written, which is the plain
+    at-least-once case every scheduled job has. For genuinely long work, `createQueueWorkpool` + `createQueueConsumer` remains the better fit: it bounds each
+    job at five minutes and reports completion explicitly.
 </Callout>

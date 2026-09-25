@@ -168,10 +168,11 @@ const MAX_CONCURRENT_DISPATCHES = 6;
  * request), no lease length can see that — so the answer is not a lease length.
  * The RECEIVER answers it: `@lunora/do` claims a dispatch's dedup key before
  * running the handler and declines a second delivery of a live key with
- * `409 DISPATCH_IN_PROGRESS` (#803). That claim needs no horizon of its own,
- * because it lives in the same isolate as the handler and a Durable Object is
- * single-instance. This constant therefore governs only how soon a genuinely
- * lost job is retried, not whether an overlapping one runs twice.
+ * `409 DISPATCH_IN_PROGRESS` (#803). That claim dies with the isolate that
+ * holds it, and carries its own staleness ceiling — equal to this constant —
+ * for a handler that hangs while the isolate lives on. This constant therefore
+ * governs only how soon a genuinely lost job is retried, not whether an
+ * overlapping one runs twice.
  */
 const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
@@ -642,13 +643,18 @@ class SchedulerDO {
      * drop. After {@link MAX_RETRY_ATTEMPTS} the record is parked under a
      * `dead:` key for inspection — never silently deleted.
      *
+     * One non-2xx is told apart: a `409` carrying `DISPATCH_IN_PROGRESS` returns
+     * `"in-progress"`. The shard is saying the first attempt of this very record
+     * is still running, so {@link recordRetry} re-arms it without charging an
+     * attempt — see there.
+     *
      * The dispatch target is taken from `env.LUNORA_ORIGIN_URL` (NOT from the
      * stored record) so a schedule request can never name where the DO calls
      * back — that would be SSRF. If that env var is missing at fire time (a deploy/binding
      * regression — schedule time already enforced its presence) we return
      * `false` so the record is retried rather than silently dropped.
      */
-    protected async dispatch(record: ScheduleRecord): Promise<boolean> {
+    protected async dispatch(record: ScheduleRecord): Promise<boolean | "in-progress"> {
         const originUrl = typeof this.env.LUNORA_ORIGIN_URL === "string" && this.env.LUNORA_ORIGIN_URL.length > 0 ? this.env.LUNORA_ORIGIN_URL : undefined;
 
         if (!originUrl) {
@@ -729,8 +735,19 @@ class SchedulerDO {
             // workflow through its instance id, and an ACTION because the shard
             // claims its dedup key before running the handler and answers a
             // second delivery `409 DISPATCH_IN_PROGRESS` (#803). A 409 is not
-            // 2xx, so it lands here as a failure and the record is re-armed —
-            // which is the point: the decline is "come back later", never "done".
+            // 2xx, so the record is re-armed — which is the point: the decline
+            // is "come back later", never "done".
+            if (response.status === 409) {
+                const declined = await response.json().then(
+                    (envelope: unknown) => (envelope as { error?: { code?: unknown } } | null)?.error?.code === "DISPATCH_IN_PROGRESS",
+                    () => false,
+                );
+
+                if (declined) {
+                    return "in-progress";
+                }
+            }
+
             return response.ok;
         } catch {
             return false;
@@ -988,7 +1005,8 @@ class SchedulerDO {
             return false;
         }
 
-        const ok = await this.dispatch(record);
+        const outcome = await this.dispatch(record);
+        const ok = outcome === true;
         const poolName = record.pool;
 
         if (!ok && poolName !== undefined) {
@@ -1029,7 +1047,7 @@ class SchedulerDO {
         // Dispatch failed (or the pool kick was released): re-arm for retry. A
         // throw here propagates to the caller, which re-claims the time index so
         // the job stays re-fireable (at-least-once).
-        await this.recordRetry(record);
+        await this.recordRetry(record, outcome === "in-progress");
 
         return false;
     }
@@ -1233,12 +1251,29 @@ class SchedulerDO {
      * The retry budget/backoff comes from the record's {@link RetryPolicy}
      * (falling back to the DO defaults); on exhaustion the record is parked
      * under a `dead:` key for manual inspection.
+     *
+     * **A `DISPATCH_IN_PROGRESS` decline (`inProgress`) is not charged.** It
+     * means the record's first attempt is still running on the shard, not that
+     * anything failed; charging it would spend the budget while that attempt is
+     * doing the work, and if it then failed the job would dead-letter having
+     * run once. It still re-arms at the backoff of the NEXT charged attempt, at
+     * least {@link RETRY_BASE_DELAY_MS} apart — nothing else rate-limits an
+     * uncharged retry, and polling a running attempt faster gains nothing.
+     *
+     * It is bounded, not forever, only because the shard's claim is: a claim
+     * older than the shard's fifteen-minute ceiling is treated as stale and the
+     * next delivery runs (and is charged as usual if it fails). A handler that
+     * hangs therefore costs at most that long in declines before the ordinary
+     * budget applies again. Without that ceiling, not charging would let one hung
+     * handler keep its record retrying and never dead-letter.
      */
-    private async recordRetry(record: ScheduleRecord): Promise<void> {
-        const attempts = (record.attempts ?? 0) + 1;
+    private async recordRetry(record: ScheduleRecord, inProgress = false): Promise<void> {
+        const attempts = (record.attempts ?? 0) + (inProgress ? 0 : 1);
+        const step = (record.attempts ?? 0) + 1;
         const { backoff, baseMs, maxAttempts, maxMs } = SchedulerDO.resolveRetry(record);
-        const rawDelay = backoff === "linear" ? baseMs * attempts : baseMs * 2 ** (attempts - 1);
-        const delayMs = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
+        const rawDelay = backoff === "linear" ? baseMs * step : baseMs * 2 ** (step - 1);
+        const cappedDelay = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
+        const delayMs = inProgress ? Math.max(cappedDelay, RETRY_BASE_DELAY_MS) : cappedDelay;
         // Round: `baseMs`/`maxMs` are only validated as finite and non-negative,
         // so a fractional one (0.5) yields a fractional instant whose `String()`
         // carries a '.' and therefore does NOT pad to TIME_PAD digits — the key
