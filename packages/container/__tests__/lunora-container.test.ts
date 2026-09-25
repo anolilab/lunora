@@ -250,27 +250,30 @@ describe("lunoraContainer secretsStore resolution", () => {
         expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info" });
     });
 
-    it("skips Secrets Store resolution when start() supplies its own envVars", async () => {
-        expect.assertions(2);
+    it("merges a start({ envVars }) over the declared env and Secrets Store values instead of replacing them", async () => {
+        expect.assertions(1);
 
-        // The binding is missing from the worker env, so resolution *would* throw
-        // — proving it's skipped when the caller overrides `envVars` (which
-        // replace the env set wholesale, discarding any resolved secret anyway).
-        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
-        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
-
-        const probe = instance as unknown as SecretsStoreProbe & { start: (options?: { envVars?: Record<string, string> }) => Promise<void> };
-        const resolveSpy = vi.spyOn(probe, "resolveSecretsStoreEnv");
+        const definition = defineContainer({
+            env: { LOG_LEVEL: "info", TENANT: "default" },
+            image: "./app",
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { STRIPE_SECRET: { get: async () => "sk_live_123" } },
+            definition,
+            "transcoder",
+        );
         // Stub the upstream `Container.start` (two prototypes up) — it would try
         // to boot a real container otherwise.
         const baseStart = vi
-            .spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: () => Promise<void> }, "start")
+            .spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: (options?: unknown) => Promise<void> }, "start")
             .mockResolvedValue(undefined);
 
-        await probe.start({ envVars: { STRIPE_KEY: "override" } });
+        await (instance as unknown as { start: (options?: { envVars?: Record<string, string> }) => Promise<void> }).start({ envVars: { TENANT: "t1" } });
 
-        expect(resolveSpy).not.toHaveBeenCalled();
-        expect(baseStart).toHaveBeenCalledTimes(1);
+        // The per-instance value wins; the declared env and the resolved secret survive.
+        expect(baseStart.mock.calls[0]![0]).toStrictEqual({ envVars: { LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123", TENANT: "t1" } });
 
         baseStart.mockRestore();
     });
