@@ -79,6 +79,21 @@ const d1Exec = (gate?: Gate, onRun?: (text: string, rowsRead: number) => void): 
 
             return result.results;
         },
+        // D1's own `batch`: the statements run in order, as one transaction. A
+        // gate sees each statement before any of them runs, so a batch is held
+        // whole — nothing can land between its statements, as in production.
+        batch: async (statements) => {
+            for (const statement of statements) {
+                // eslint-disable-next-line no-await-in-loop -- each statement is offered to the gate in order
+                await gate?.(statement.sql, statement.params);
+            }
+
+            const results = await env.DB.batch(statements.map((statement) => env.DB.prepare(statement.sql).bind(...statement.params)));
+
+            for (const [position, result] of results.entries()) {
+                onRun?.(statements[position]!.sql, result.meta.rows_read);
+            }
+        },
         run: async (query, parameters) => {
             await gate?.(query, parameters);
 
@@ -148,7 +163,8 @@ const holdPoints = (table: string, target: string): [string, (text: string, para
 
 const companionRows = async (table: string, id?: string): Promise<number> => {
     const companion = companionOf(table);
-    const where = id === undefined ? "" : ` WHERE "${companion}"."__id__" = ?`;
+    // Documents only: the companion also holds a text-less sentinel row with an empty id.
+    const where = id === undefined ? ` WHERE "${companion}"."__id__" <> ''` : ` WHERE "${companion}"."__id__" = ?`;
     const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}"${where}`)
         .bind(...(id === undefined ? [] : [id]))
         .first<{ n: number }>();
@@ -158,7 +174,9 @@ const companionRows = async (table: string, id?: string): Promise<number> => {
 
 const distinctIndexed = async (table: string): Promise<number> => {
     const companion = companionOf(table);
-    const row = await env.DB.prepare(`SELECT COUNT(DISTINCT "${companion}"."__id__") AS n FROM "${companion}"`).first<{ n: number }>();
+    const row = await env.DB.prepare(`SELECT COUNT(DISTINCT "${companion}"."__id__") AS n FROM "${companion}" WHERE "${companion}"."__id__" <> ''`).first<{
+        n: number;
+    }>();
 
     return row?.n ?? -1;
 };
@@ -359,30 +377,78 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         expect(large).toBe(small);
     });
 
-    it("migrates a companion built before the rowid map: adopts its rows, drops a duplicate, keeps serving", async () => {
-        expect.assertions(8);
+    it("leaves no entry the map cannot reach when a delete races a write of the same document", async () => {
+        expect.assertions(2);
 
-        const table = "legacy_docs";
+        const table = "write_vs_delete";
+        const companion = companionOf(table);
+        const target = pad(40);
+
+        await seed(table, (n) => `word${String(n)} common`);
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+        // Writer A held at the statement that writes the entry, deleter B held at
+        // the one that drops the mapping — the points a pair of separate
+        // statements on each side can interleave at.
+        const holdA = holdAt((text, parameters) => text.startsWith(`INSERT OR REPLACE INTO "${companion}" `) && parameters.includes(target));
+        const holdB = holdAt((text, parameters) => text.startsWith(`DELETE FROM "${companion}__ids"`) && parameters.includes(target));
+        const patching = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(holdA.gate), schema: schemaFor(table, INDEX) }).patch(target, {
+            body: "patched common",
+        });
+
+        await holdA.reached;
+
+        const deleting = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(holdB.gate), schema: schemaFor(table, INDEX) }).delete(target);
+
+        await holdB.reached;
+        holdA.release();
+        await patching;
+        holdB.release();
+        await deleting;
+
+        // Every entry must be one the map points at, or no later write or purge
+        // can ever reach it again.
+        const unreachable = await env.DB.prepare(
+            `SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."__id__" <> '' AND NOT EXISTS (SELECT 1 FROM "${companion}__ids" WHERE "${companion}__ids"."__rowid__" = "${companion}"."rowid" AND "${companion}__ids"."__id__" = "${companion}"."__id__")`,
+        ).first<{ n: number }>();
+
+        expect(unreachable?.n).toBe(0);
+        await expect(companionRows(table, target)).resolves.toBe(0);
+    });
+
+    /**
+     * The layout the previous build left: an FTS5 table with auto rowids, no
+     * map, and a finished backfill — plus whatever extra rows `extra` adds.
+     */
+    const legacyCompanion = async (table: string, body: (n: number) => string, extra: [text: string, id: string][] = []): Promise<void> => {
         const companion = companionOf(table);
 
-        await seed(table, (n) => (n === 5 || n === 10 ? "apple common" : `other${String(n)} common`));
-
-        // The layout as the previous build left it: an FTS5 table with auto
-        // rowids, a finished backfill, and the duplicate two racing cold starts
-        // used to leave behind.
+        await seed(table, body);
         await env.DB.prepare(`CREATE VIRTUAL TABLE "${companion}" USING fts5("__text__", "__id__" UNINDEXED)`).run();
         await env.DB.prepare(`CREATE VIRTUAL TABLE "${companion}__vocab" USING fts5vocab("${companion}", instance)`).run();
-        await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") SELECT "${table}"."body", "${table}"."id" FROM "${table}"`).run();
-        await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES ('apple common', ?)`).bind(pad(10)).run();
+        await env.DB.prepare(
+            `INSERT INTO "${companion}" ("__text__", "__id__") SELECT "${table}"."body", "${table}"."id" FROM "${table}" ORDER BY "${table}"."id"`,
+        ).run();
+
+        for (const [text, id] of extra) {
+            // eslint-disable-next-line no-await-in-loop -- inserted in order, so each lands at a higher rowid
+            await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES (?, ?)`).bind(text, id).run();
+        }
+
         await migrateSearchState(d1Exec(), d1Dialect);
         await writeSearchBackfillState(d1Exec(), d1Dialect, companion, pad(ROWS - 1), true, companionProfile(INDEX, d1Dialect));
+    };
 
-        await expect(companionRows(table, pad(10))).resolves.toBe(2);
+    it("migrates a companion built before the rowid map, and serves throughout", async () => {
+        expect.assertions(7);
 
+        const table = "legacy_docs";
+
+        await legacyCompanion(table, (n) => (n === 5 || n === 10 ? "apple common" : `other${String(n)} common`));
         await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
 
-        await expect(companionRows(table, pad(10))).resolves.toBe(1);
         await expect(companionRows(table)).resolves.toBe(ROWS);
+        await expect(distinctIndexed(table)).resolves.toBe(ROWS);
         await expect(search(table, "apple")).resolves.toStrictEqual([pad(5), pad(10)]);
 
         const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
@@ -394,5 +460,135 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         await expect(companionRows(table, pad(20))).resolves.toBe(0);
         await expect(search(table, "apple")).resolves.toStrictEqual([pad(5)]);
         await expect(search(table, "banana")).resolves.toStrictEqual([pad(10)]);
+    });
+
+    it("repairs a legacy duplicate from the source row, even when the newer duplicate is the stale one", async () => {
+        expect.assertions(4);
+
+        // A backfill that read v1 raced a v2 write and inserted last, so the
+        // HIGHER rowid holds the stale text. Keeping the newest row keeps it.
+        const table = "legacy_stale_dup";
+
+        await legacyCompanion(table, (n) => (n === 10 ? "freshword common" : `other${String(n)} common`), [["staleword common", pad(10)]]);
+        // The duplicate sits past the first bounded page, so it takes the whole walk.
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+        await expect(search(table, "staleword")).resolves.toStrictEqual([]);
+        await expect(search(table, "freshword")).resolves.toStrictEqual([pad(10)]);
+        await expect(companionRows(table, pad(10))).resolves.toBe(1);
+        await expect(companionRows(table)).resolves.toBe(ROWS);
+    });
+
+    it("does not hand a new document a legacy row's rowid when a cold start died mid-migration", async () => {
+        expect.assertions(4);
+
+        // The cold start that created the map died before it adopted anything:
+        // the map exists, and every legacy row is still unknown to it.
+        const table = "legacy_interrupted";
+        const companion = companionOf(table);
+
+        await legacyCompanion(table, (n) => (n === 0 ? "apple common" : `other${String(n)} common`));
+        await env.DB.prepare(`CREATE TABLE "${companion}__ids" ("__rowid__" INTEGER PRIMARY KEY, "__id__" TEXT NOT NULL UNIQUE)`).run();
+
+        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+
+        await writer.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
+
+        await expect(search(table, "apple")).resolves.toStrictEqual([pad(0)]);
+        await expect(search(table, "zebra")).resolves.toStrictEqual(["z_new"]);
+        await expect(companionRows(table)).resolves.toBe(ROWS + 1);
+        await expect(distinctIndexed(table)).resolves.toBe(ROWS + 1);
+    });
+
+    it("converges when two cold starts migrate the same legacy companion at once", async () => {
+        expect.assertions(4);
+
+        const table = "legacy_overlap";
+        const companion = companionOf(table);
+
+        await legacyCompanion(table, (n) => (n === 0 ? "apple common" : `other${String(n)} common`));
+
+        // A is held at its first statement that touches the new map; B runs its
+        // whole cold start and writes a new document meanwhile.
+        const hold = holdAt((text) => text.includes(`"${companion}__ids"`) && !text.startsWith("CREATE") && !text.startsWith("SELECT name"));
+        const isolateA = runSqlSearchMigrations(d1Exec(hold.gate), schemaFor(table, INDEX), d1Dialect);
+
+        await hold.reached;
+
+        const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+
+        await isolateB.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
+        hold.release();
+        await isolateA;
+
+        await expect(search(table, "apple")).resolves.toStrictEqual([pad(0)]);
+        await expect(search(table, "zebra")).resolves.toStrictEqual(["z_new"]);
+        await expect(companionRows(table)).resolves.toBe(ROWS + 1);
+        await expect(distinctIndexed(table)).resolves.toBe(ROWS + 1);
+    });
+
+    it("stays correct while isolates still running the previous build write during the rollout", async () => {
+        expect.assertions(6);
+
+        const table = "rollout";
+        const companion = companionOf(table);
+
+        await legacyCompanion(table, (n) => `other${String(n)} common`);
+        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+        // What the previous build does on a write: purge by `__id__`, insert at
+        // an FTS5-assigned rowid the map has never seen.
+        const previousBuildWrite = async (id: string, text: string): Promise<void> => {
+            await env.DB.prepare(`UPDATE "${table}" SET "body" = ? WHERE "id" = ?`).bind(text, id).run();
+            await env.DB.prepare(`DELETE FROM "${companion}" WHERE "__id__" = ?`).bind(id).run();
+            await env.DB.prepare(`INSERT INTO "${companion}" ("__text__", "__id__") VALUES (?, ?)`).bind(text, id).run();
+        };
+
+        await previousBuildWrite(pad(7), "oldbuild common");
+
+        const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1Dialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
+
+        // A new document right after: its entry must not land on the row above.
+        await writer.insert(table, { _id: "z_new", body: "zebra common", title: "t" }, { allowExplicitId: true });
+
+        await expect(search(table, "oldbuild")).resolves.toStrictEqual([pad(7)]);
+        await expect(search(table, "zebra")).resolves.toStrictEqual(["z_new"]);
+
+        // And the current build rewriting that document drops the previous
+        // build's row, as the previous build's own purge-by-id would have.
+        await writer.patch(pad(7), { body: "fresh common" });
+
+        await expect(search(table, "oldbuild")).resolves.toStrictEqual([]);
+        await expect(search(table, "fresh")).resolves.toStrictEqual([pad(7)]);
+        await expect(companionRows(table, pad(7))).resolves.toBe(1);
+        await expect(companionRows(table)).resolves.toBe(ROWS + 1);
+    });
+
+    it("migrates a large companion a bounded page per cold start", async () => {
+        expect.assertions(3);
+
+        const table = "legacy_large";
+        const companion = companionOf(table);
+        // Rows the previous build left that no current-build write has touched yet.
+        const unmigrated = async (): Promise<number> => {
+            const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM "${companion}" WHERE "${companion}"."rowid" > 0`).first<{ n: number }>();
+
+            return row?.n ?? -1;
+        };
+
+        await legacyCompanion(table, (n) => `other${String(n)} common`);
+
+        const before = await unmigrated();
+
+        await runSqlSearchMigrations(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+        const afterOne = await unmigrated();
+
+        await backfillSqlSearchIndexes(d1Exec(), schemaFor(table, INDEX), d1Dialect);
+
+        expect(before).toBe(ROWS);
+        // One cold start moves one bounded page, and leaves the rest for later.
+        expect(afterOne).toBeGreaterThan(0);
+        await expect(unmigrated()).resolves.toBe(0);
     });
 });

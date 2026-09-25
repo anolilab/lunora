@@ -38,7 +38,7 @@
 
 import { sqliteDialect } from "@lunora/d1";
 import type { SchemaLike } from "@lunora/shard-engine";
-import type { SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
+import type { SqlCtxDbOptions, SqlCtxExec, SqlDialect } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,
     createSqlCtxDb,
@@ -78,6 +78,12 @@ const preparedStatement = (database: Database.Database, statement: string): Data
 
     return prepared;
 };
+
+/**
+ * D1's dialect, with the one thing that differs on this host: how a search index
+ * still backfilling is completed. `migrate()` here walks every index to the end.
+ */
+const nodeDialect: SqlDialect = { ...sqliteDialect, searchBackfillHint: "run the global store's migrate(), which backfills every search index to completion" };
 
 /**
  * The Node store options — the shared store options minus the two this binding
@@ -167,20 +173,20 @@ export const createNodeGlobalStore = (options: NodeGlobalStoreOptions = {}): Nod
         },
         exec,
         migrate: async (schema, migrateOptions = {}) => {
-            await runSqlGlobalTableMigrations(exec, schema, sqliteDialect);
-            await runSqlAggregateMigrations(exec, schema, sqliteDialect);
-            await runSqlRankMigrations(exec, schema, sqliteDialect);
-            await runSqlSearchMigrations(exec, schema, sqliteDialect);
-            await backfillSqlSearchIndexes(exec, schema, sqliteDialect);
+            await runSqlGlobalTableMigrations(exec, schema, nodeDialect);
+            await runSqlAggregateMigrations(exec, schema, nodeDialect);
+            await runSqlRankMigrations(exec, schema, nodeDialect);
+            await runSqlSearchMigrations(exec, schema, nodeDialect);
+            await backfillSqlSearchIndexes(exec, schema, nodeDialect);
 
             if (migrateOptions.cdc === true) {
-                await runSqlCdcMigration(exec, sqliteDialect);
+                await runSqlCdcMigration(exec, nodeDialect);
             }
         },
         // `exec` doubles as the provisioning scope: it is built once per store
         // (closed over above, not per call), while the host builds a writer per
         // request — so without it each writer would re-run the whole
         // CREATE-IF-NOT-EXISTS sweep before its first `.global()` access.
-        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: sqliteDialect, exec, provisionScope: exec }),
+        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: nodeDialect, exec, provisionScope: exec }),
     };
 };

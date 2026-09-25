@@ -337,20 +337,23 @@ describe("global search provisioning", () => {
             await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
         });
 
-        it("points a refused read at the backfill entry point a .global() index actually has", async () => {
-            expect.assertions(2);
+        it("points a refused read at the backfill entry point the backend in use names", async () => {
+            expect.assertions(3);
 
             createNotesTable();
             insertPastOnePage();
             await runSqlSearchMigrations(exec, searchSchema, dialect);
 
-            const refusal = runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300);
+            const hinted = { ...dialect, searchBackfillHint: "call the example backfill" };
 
-            // The `backfillSearch` admin op is wired only for shard-local
-            // indexes; on an app whose only search index is global it answers
-            // NOT_IMPLEMENTED, so naming it here sent operators nowhere.
-            await expect(refusal).rejects.toThrow(/backfillD1SearchIndexes \(backfillSqlSearchIndexes on a Hyperdrive backend\)/u);
-            await expect(refusal).rejects.not.toThrow(/backfillSearch admin/u);
+            // Each backend completes a `.global()` index its own way — D1, Hyperdrive
+            // and the Node store all differ — and the `backfillSearch` admin op is
+            // wired only for shard-local indexes, so naming it sent operators to a 501.
+            await expect(runSqlSearch(exec, hinted, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(
+                /still backfilling .* retry once it finishes, or complete it now: call the example backfill$/u,
+            );
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/retry once it finishes$/u);
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.not.toThrow(/backfillSearch admin/u);
         });
 
         it("serves a staged index declared over an empty table", async () => {

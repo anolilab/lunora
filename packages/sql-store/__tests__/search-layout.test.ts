@@ -586,7 +586,9 @@ describe("search layouts", () => {
 
             // Feeding FTS5 raw text would leave its own tokenizer to decide about
             // case, punctuation and accents — and it decides differently than we do.
-            expect(harness.raw(`SELECT "__text__" FROM "notes__fts_by_body"`).map((row) => row["__text__"])).toStrictEqual(["cafe reopened"]);
+            expect(
+                harness.raw(`SELECT "__text__" FROM "notes__fts_by_body" WHERE "notes__fts_by_body"."__id__" <> ''`).map((row) => row["__text__"]),
+            ).toStrictEqual(["cafe reopened"]);
         });
 
         it("replaces a document's row rather than adding a second one", async () => {
@@ -598,7 +600,9 @@ describe("search layouts", () => {
 
             // A duplicate here surfaces as the same document twice in a result set:
             // the MATCH query has no GROUP BY to collapse it.
-            expect(harness.raw(`SELECT "__text__" FROM "notes__fts_by_body"`).map((row) => row["__text__"])).toStrictEqual(["after"]);
+            expect(
+                harness.raw(`SELECT "__text__" FROM "notes__fts_by_body" WHERE "notes__fts_by_body"."__id__" <> ''`).map((row) => row["__text__"]),
+            ).toStrictEqual(["after"]);
         });
 
         it("ranks by the shared scorer, so a repeated term outranks a single one", async () => {

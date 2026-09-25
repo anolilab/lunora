@@ -21,9 +21,13 @@ interface Recorded {
     sql: string;
 }
 
+const COMPANION = '"docs__fts_by_body"';
 const MAP = '"docs__fts_by_body__ids"';
-const CLAIM_ROWID = `INSERT OR IGNORE INTO ${MAP} ("__id__") VALUES (?)`;
-const PURGE_ENTRY = `DELETE FROM "docs__fts_by_body" WHERE "docs__fts_by_body"."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?)`;
+/** Drops the document's rows a previous build wrote (positive rowids), by `__id__`. */
+const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND ${COMPANION}."__id__" = ?`;
+/** Drops the document's mapped row — only if it still holds this document. */
+const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
+const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;
 const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
 
 /**
@@ -147,11 +151,13 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
         // No purge by `__id__`: that column is UNINDEXED, so it was a full scan.
-        // (The writer's own cold start re-runs the idempotent DDL; that is not the write.)
-        const ftsWrites = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body") && !statement.sql.startsWith("CREATE"));
+        // (Only this document's statements: the writer's own cold start re-runs the idempotent DDL.)
+        const ftsWrites = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body") && statement.params.includes("d1"));
 
         expect(ftsWrites.map((statement) => (isEntryWrite(statement) ? ["entry", ...entryOf(statement)] : [statement.sql, ...statement.params]))).toStrictEqual(
             [
+                [DROP_UNMAPPED, "d1"],
+                [DROP_MAPPED, "d1", "d1"],
                 [CLAIM_ROWID, "d1"],
                 ["entry", "hello world", "d1"],
             ],
@@ -223,8 +229,8 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([PURGE_ENTRY, PURGE_MAPPING]);
-        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1"]]);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([DROP_UNMAPPED, DROP_MAPPED, PURGE_MAPPING]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1", "d1"], ["d1"]]);
     });
 
     it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {
