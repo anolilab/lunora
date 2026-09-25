@@ -246,6 +246,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
@@ -7091,12 +7092,20 @@ abstract class ShardDO {
                         // `catch` (error metrics, an error reqlog row, the
                         // Issues view). Temporary by construction — a 409 is not
                         // 2xx, so every caller keeps the work and retries.
-                        return this.errorToResponse(
+                        //
+                        // Marked with a header only this path sets: the code
+                        // alone is forgeable, since a handler-thrown error's
+                        // code is echoed as-is (see shared/dispatch-claim.ts).
+                        const declined = this.errorToResponse(
                             new LunoraError(
-                                "DISPATCH_IN_PROGRESS",
+                                DISPATCH_IN_PROGRESS,
                                 `A dispatch of "${payload.functionPath}" carrying this idempotency id is already running on this shard`,
                             ),
                         );
+
+                        declined.headers.set(DISPATCH_DECLINED_HEADER, "1");
+
+                        return declined;
                     }
 
                     heldClaim = claim;

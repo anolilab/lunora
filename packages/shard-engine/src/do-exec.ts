@@ -64,6 +64,13 @@ export const runDrizzle = <Row = Record<string, unknown>>(exec: SqlExec, query: 
     return runSql<Row>(exec, text, ...params);
 };
 
+/** Run statements in order on the DO's SQLite — a Durable Object runs one event at a time, so nothing lands between them. */
+export const runAll = (exec: SqlExec, queries: ReadonlyArray<SQL>): void => {
+    for (const query of queries) {
+        runDrizzle(exec, query);
+    }
+};
+
 /** A string value or SQL NULL for an absent column. */
 export const orNull = (value: string | undefined): null | string =>
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for an absent column.

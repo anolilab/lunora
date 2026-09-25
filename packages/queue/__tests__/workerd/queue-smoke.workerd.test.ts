@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import createQueues from "../../src/create-queues";
 import type { QueueBindingLike } from "../../src/types";
 import type { SmokeBody } from "./test-worker";
-import testWorker, { deliveries } from "./test-worker";
+import testWorker, { declineDeliveries, deliveries } from "./test-worker";
 
 describe("@lunora/queue (workerd)", () => {
     it("ctx.queues producer sends through a real Queue binding", async () => {
@@ -73,4 +73,34 @@ describe("@lunora/queue (workerd)", () => {
             { interval: 50, timeout: 5000 },
         );
     });
+
+    // A `409 DISPATCH_IN_PROGRESS` means the message's first attempt is still
+    // running on the shard. The broker has no uncounted retry, so an immediate
+    // redelivery just meets the same decline: with `max_retries: 2` and no DLQ,
+    // three deliveries within a second or so and the message is gone while its
+    // work may still be running (or may yet fail). The retry has to wait the
+    // decline out instead — the claim cannot outlive its fifteen-minute ceiling.
+    it("a declined message is retried after the in-flight claim ceiling, not redelivered into the same decline", async () => {
+        expect.hasAssertions();
+
+        await env.QUEUE_DECLINE_QUEUE.send({ text: "slow-action" });
+
+        await vi.waitFor(
+            () => {
+                expect(declineDeliveries).not.toHaveLength(0);
+            },
+            { interval: 50, timeout: 5000 },
+        );
+
+        const [first] = declineDeliveries;
+
+        // Long enough for the broker to redeliver several times at the default zero retry delay.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 3000);
+        });
+
+        // COUNT: one delivery, then the message is parked on a delayed retry — not three and dropped.
+        // (The delay's value is asserted in the Node suite: `getQueueResult` does not report `delaySeconds`.)
+        expect(declineDeliveries.filter((delivery) => delivery.id === first!.id)).toHaveLength(1);
+    }, 15_000);
 });

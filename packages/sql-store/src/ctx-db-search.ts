@@ -20,6 +20,7 @@ import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { planBackfillPass, searchTextUnchanged } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
+import { ftsRowidMapName } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 
 import {
@@ -31,9 +32,17 @@ import {
 } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import type { SearchStage } from "./search-layout";
-import { companionFor, companionProfile, globalSearchIndexes, purgeDocument, resolveSearchLayout } from "./search-layout";
+import {
+    companionFor,
+    companionProfile,
+    globalSearchIndexes,
+    indexDocumentAsRead,
+    migrateUnmappedEntries,
+    resolveSearchLayout,
+    ROW_VERSION_COLUMNS,
+} from "./search-layout";
 import type { SqlCtxExec } from "./sql-exec";
-import { forEachRowPaged, queryAll, queryRun } from "./sql-exec";
+import { decodeRow, forEachRowPaged, queryAll, queryRun, readRowsPage } from "./sql-exec";
 
 /**
  * Does this companion hold a row for every document in its table?
@@ -83,7 +92,7 @@ const runSqlSearch = async (
     if (!(await searchIndexCoversTable(exec, dialect, tableName, stage.definition))) {
         throw new LunoraError(
             "SEARCH_INDEX_BUILDING",
-            `search index "${stage.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes, or run the backfillSearch admin operation to complete it now`,
+            `search index "${stage.indexName}" on table "${tableName}" is still backfilling and currently covers only part of the table — retry once it finishes${dialect.searchBackfillHint === undefined ? "" : `, or complete it now: ${dialect.searchBackfillHint}`}`,
         );
     }
 
@@ -109,6 +118,105 @@ const layoutOf = (profile: string): string => profile.slice(profile.lastIndexOf(
 const SEARCH_BACKFILL_BATCH_ROWS = 200;
 
 /**
+ * Write-then-recheck rounds per backfill page. Each extra round happens only for
+ * rows written concurrently with the page, so the second is already rare.
+ *
+ * ponytail: a row rewritten on every round past this is left to its writers — it
+ * stays unindexed only if every one of those writes left the indexed text alone.
+ */
+const SEARCH_BACKFILL_ATTEMPTS = 5;
+
+/**
+ * Re-read the `pending` rows and return the ones written since they were read,
+ * in their current state. A row absent from the re-read was deleted, and the
+ * delete purged its entry. Versions are compared as strings: drivers disagree
+ * on number types.
+ */
+const rowsMovedSince = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    pending: ReadonlyMap<string, Record<string, unknown>>,
+): Promise<Map<string, Record<string, unknown>>> => {
+    const ids = [...pending.keys()];
+    const current = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} >= ${ids[0]} AND ${sql.identifier("id")} <= ${ids.at(-1)} ORDER BY ${sql.identifier("id")} ASC`,
+    );
+    const moved = new Map<string, Record<string, unknown>>();
+
+    for (const row of current) {
+        const id = row["id"] as string;
+        const read = pending.get(id);
+
+        if (read && ROW_VERSION_COLUMNS.some((column) => String(read[column]) !== String(row[column]))) {
+            moved.set(id, row);
+        }
+    }
+
+    return moved;
+};
+
+/**
+ * Index one backfill page's rows into a companion, safely against writers in
+ * other isolates.
+ *
+ * The page read its rows in one SELECT and writes them one at a time, and
+ * another isolate may write any of them in between — the per-isolate
+ * single-flight memo does not reach across isolates. So each write carries the
+ * row as read (`indexDocumentAsRead`). On FTS5 the write lands only if that row
+ * is still current, checked inside the write itself, so a fresher entry is
+ * never replaced by a stale one — not even for the moment between this page's
+ * write and its re-check, which is all the guard buys over the re-check below.
+ * On the other layouts it lands regardless.
+ *
+ * Either way a write can lose to a concurrent one, and that writer re-indexes
+ * only if it changed the indexed text. So the page is re-read afterwards, and
+ * every row whose version moved is indexed again from its new state, until
+ * none did — the re-check is what makes the result correct on every layout.
+ */
+const indexPageRows = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    companion: string,
+    index: SearchIndexDefinitionLike,
+    rows: ReadonlyArray<Record<string, unknown>>,
+): Promise<void> => {
+    const layout = resolveSearchLayout(index, dialect);
+    let pending = new Map<string, Record<string, unknown>>();
+
+    for (const row of rows) {
+        if (typeof row["id"] === "string") {
+            pending.set(row["id"], row);
+        }
+    }
+
+    for (let attempt = 0; pending.size > 0 && attempt < SEARCH_BACKFILL_ATTEMPTS; attempt += 1) {
+        for (const row of pending.values()) {
+            const document = decodeRow(definition, row);
+
+            if (document) {
+                // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection.
+                await indexDocumentAsRead(layout, exec, dialect, companion, document, index, { row, table: tableName });
+            }
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- the re-check has to follow the writes it checks.
+        pending = await rowsMovedSince(exec, dialect, tableName, pending);
+    }
+
+    if (pending.size > 0) {
+        // eslint-disable-next-line no-console -- the only channel a backfill pass has
+        console.warn(
+            `[@lunora/sql-store] search backfill of "${companion}": ${String(pending.size)} row(s) were rewritten on every one of ${String(SEARCH_BACKFILL_ATTEMPTS)} re-check rounds and were left to their writers — each stays unindexed only if none of those writes changed its indexed text.`,
+        );
+    }
+};
+
+/**
  * Index one page of `tableName` into a search companion, resuming from the
  * recorded cursor. Returns `true` when the table is fully indexed.
  *
@@ -126,7 +234,6 @@ const backfillSearchIndexPage = async (
     index: SearchIndexDefinitionLike,
 ): Promise<boolean> => {
     const companion = companionFor(tableName, index);
-    const layout = resolveSearchLayout(index, dialect);
     const profile = companionProfile(index, dialect);
     const pass = planBackfillPass(await readSearchBackfillState(exec, dialect, companion), profile);
 
@@ -144,9 +251,9 @@ const backfillSearchIndexPage = async (
         // request — on a large table, thousands of requests answered from an
         // index covering a fraction of the rows, with the read path querying it
         // either way; on a `staged` index, which the migration pass never
-        // backfills, it never refilled at all. Every layout writes a document
-        // DELETE-then-INSERT, so the re-walk converges on the new profile in
-        // place while each row keeps serving the old one until its turn: stale
+        // backfills, it never refilled at all. Every layout replaces a
+        // document's rows in place, so the re-walk converges on the new profile
+        // while each row keeps serving the old one until its turn: stale
         // analysis on a shrinking suffix, rather than no row at all.
         await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
     }
@@ -163,36 +270,17 @@ const backfillSearchIndexPage = async (
         return true;
     }
 
-    // Counts rows *walked*, not rows indexed: a page whose rows are missing an
-    // id (or fail to decode) would otherwise look short and be mistaken for the
-    // end of the table, permanently stranding everything after it.
-    let walked = 0;
-    let lastId = pass.cursor;
+    const pageRows = await readRowsPage(exec, dialect, tableName, pass.cursor, SEARCH_BACKFILL_BATCH_ROWS);
+    const lastId = pageRows.findLast((row) => typeof row["id"] === "string")?.["id"] as string | undefined;
 
-    await forEachRowPaged(
-        exec,
-        dialect,
-        definition,
-        tableName,
-        async (document) => {
-            walked += 1;
+    await indexPageRows(exec, dialect, definition, tableName, companion, index, pageRows);
 
-            const id = document["_id"];
+    // Rows walked, not rows indexed: a page with undecodable rows is not short.
+    const done = pageRows.length < SEARCH_BACKFILL_BATCH_ROWS;
 
-            if (typeof id !== "string") {
-                return;
-            }
-
-            lastId = id;
-
-            await layout.indexDocument(exec, dialect, companion, id, document, index);
-        },
-        { after: pass.cursor, limit: SEARCH_BACKFILL_BATCH_ROWS },
-    );
-
-    const done = walked < SEARCH_BACKFILL_BATCH_ROWS;
-
-    await writeSearchBackfillState(exec, dialect, companion, lastId, done, profile);
+    // A page whose ids are all unusable keeps the resume point, rather than
+    // sending the next pass back to the top of the table.
+    await writeSearchBackfillState(exec, dialect, companion, lastId ?? pass.cursor, done, profile);
 
     return done;
 };
@@ -233,6 +321,8 @@ const ensureSearchCompanions = async (exec: SqlCtxExec, schema: SchemaLike, dial
         if (recorded.profile !== undefined && layoutOf(recorded.profile) !== layoutOf(profile)) {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
             await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(companion)}`);
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
+            await queryRun(exec, dialect, sql`DROP TABLE IF EXISTS ${sql.identifier(ftsRowidMapName(companion))}`);
             // eslint-disable-next-line no-await-in-loop -- state writes run sequentially on the shared connection.
             await clearSearchBackfillState(exec, dialect, companion);
         }
@@ -305,6 +395,10 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
     await ensureSearchCompanions(exec, schema, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
+        // One bounded page of a previous build's FTS5 rows per cold start.
+        // eslint-disable-next-line no-await-in-loop -- sequential on the shared connection.
+        await migrateUnmappedEntries(exec, dialect, definition, tableName, index);
+
         if (index.staged) {
             // eslint-disable-next-line no-await-in-loop -- one indexed probe per staged index, on the shared connection.
             await recordStagedIndexBaseline(exec, dialect, definition, tableName, index);
@@ -318,6 +412,59 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
 };
 
 /**
+ * Attempts at one page of a previous build's rows before the drain moves past
+ * the ones that keep losing to a concurrent write. A loser is left in place:
+ * the next cold start's pass retries it, and a write that changes its text
+ * drops it anyway.
+ */
+const UNMAPPED_PAGE_ATTEMPTS = 3;
+
+/** What {@link backfillSqlSearchIndexes} could not finish. */
+interface SqlSearchBackfillResult {
+    /** A previous build's rows left unmigrated because every attempt at them lost to a concurrent write. */
+    unmappedSkipped: number;
+}
+
+/**
+ * Rewrite all of a companion's unmapped rows, a page at a time, retrying each
+ * page a bounded number of times. Returns how many rows it gave up on.
+ */
+const drainUnmappedEntries = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+): Promise<number> => {
+    let after = 0;
+    let skipped = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- pages are sequential: each starts where the last one ended.
+        let pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
+
+        for (let attempt = 1; pass.left > 0 && attempt < UNMAPPED_PAGE_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- a retry re-reads the page's losers from their newer source rows.
+            pass = await migrateUnmappedEntries(exec, dialect, definition, tableName, index, after);
+        }
+
+        if (pass.left > 0) {
+            skipped += pass.left;
+            // eslint-disable-next-line no-console -- the only channel a backfill pass has
+            console.warn(
+                `[@lunora/sql-store] search migration of "${companionFor(tableName, index)}": ${String(pass.left)} row(s) lost every one of ${String(UNMAPPED_PAGE_ATTEMPTS)} attempts to a concurrent write and were left for a later pass.`,
+            );
+        }
+
+        if (pass.done) {
+            return skipped;
+        }
+
+        after = pass.last;
+    }
+};
+
+/**
  * Run every declared search index — including the `staged: true` ones the
  * migration pass skips — through to completion. The entry point a host calls
  * out-of-band after deploying a search index over a table too large to index a
@@ -326,13 +473,18 @@ const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dial
  * Idempotent and resumable: an index recorded as complete is skipped, and an
  * interrupted run picks up from its cursor.
  */
-const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
+const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<SqlSearchBackfillResult> => {
+    let unmappedSkipped = 0;
+
     // Self-sufficient: a host may run this before any ctx-db has migrated this
     // binding, and "the documented remedy throws unless you happened to migrate
     // first" is not a remedy.
     await ensureSearchCompanions(exec, schema, dialect);
 
     for (const [tableName, definition, index] of globalSearchIndexes(schema)) {
+        // eslint-disable-next-line no-await-in-loop -- one companion at a time on the shared connection.
+        unmappedSkipped += await drainUnmappedEntries(exec, dialect, definition, tableName, index);
+
         let done = false;
 
         while (!done) {
@@ -340,6 +492,8 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
             done = await backfillSearchIndexPage(exec, dialect, definition, tableName, index);
         }
     }
+
+    return { unmappedSkipped };
 };
 
 /**
@@ -380,10 +534,11 @@ const createSearchSync = (deps: {
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
-            await purgeDocument(exec, dialect, companion, id);
+            await resolveSearchLayout(index, dialect).purgeDocument(exec, dialect, companion, id);
         }
     };
 };
 
 export type { SearchStage } from "./search-layout";
+export type { SqlSearchBackfillResult };
 export { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations };

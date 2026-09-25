@@ -6,8 +6,10 @@
  * the `LunoraWorkflow` base (`@lunora/workflow/do`), registered under the
  * wrangler `workflows[]` class name.
  */
+import { LunoraError, toErrorBody } from "@lunora/errors";
 import type { WorkflowEntrypoint } from "cloudflare:workers";
 
+import { defineStep } from "../../src/define-step";
 import { defineWorkflow } from "../../src/define-workflow";
 import LunoraWorkflow from "../../src/do";
 import type { WorkflowDefinition } from "../../src/types";
@@ -22,7 +24,13 @@ interface SmokeOutput {
 }
 
 interface Env {
+    WORKFLOW_DECLINE: Workflow<DeclineParams>;
     WORKFLOW_SMOKE: Workflow<SmokeParams>;
+}
+
+interface DeclineParams {
+    /** How many dispatches the origin declines with `409 DISPATCH_IN_PROGRESS` before it answers. */
+    declines: number;
 }
 
 /**
@@ -38,6 +46,72 @@ const smokeWorkflow: WorkflowDefinition<SmokeParams, SmokeOutput> = defineWorkfl
     },
 });
 
+/**
+ * What the dispatch origin saw and what the step body saw, for assertions: one
+ * entry per `ctx.run` POST, and the engine's attempt number on every entry into
+ * the step body.
+ */
+const declineLog = { attempts: [] as number[], dispatches: 0 };
+
+/**
+ * The worker's `/_lunora/scheduler/dispatch` hop, answered in-process. It
+ * declines the first `declines` calls exactly the way `ShardDO` declines a
+ * re-delivery whose first attempt is still running, then serves the result.
+ */
+const origin = { pendingDeclines: 0 };
+
+const originFetch = (): Response => {
+    declineLog.dispatches += 1;
+
+    if (origin.pendingDeclines > 0) {
+        origin.pendingDeclines -= 1;
+
+        const { body, status } = toErrorBody(new LunoraError("DISPATCH_IN_PROGRESS", "a dispatch carrying this idempotency id is already running"));
+
+        // The header only the shard's claim path sets — what makes this a decline and not a handler error.
+        return Response.json({ error: body }, { headers: { "x-lunora-dispatch-declined": "1" }, status });
+    }
+
+    return Response.json({ result: "charged" });
+};
+
+const realFetch = globalThis.fetch.bind(globalThis);
+
+// Route `https://origin.test` (the `LUNORA_ORIGIN_URL` var) to `originFetch`;
+// everything else reaches the real `fetch`. Installed once, at module scope:
+// the engine runs the entrypoint in this isolate, so the dispatch its `ctx.run`
+// makes goes through this module's global `fetch`.
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+
+    return url.origin === "https://origin.test" ? originFetch() : realFetch(input, init);
+};
+
+/** One durable step whose only work is a `ctx.run`, with a small, fast retry budget so an exhausted budget shows up in seconds. */
+const chargeStep = defineStep("charge", {
+    args: {},
+    config: { retries: { backoff: "constant", delay: "1 second", limit: 2 } },
+    handler: async (context) => {
+        declineLog.attempts.push(context.attempt);
+
+        return context.run({ __lunoraRef: "orders:slowCharge" });
+    },
+});
+
+const declineWorkflow: WorkflowDefinition<DeclineParams> = defineWorkflow<DeclineParams>({
+    handler: async (context) => {
+        origin.pendingDeclines = context.params.declines;
+
+        return context.runStep(chargeStep, {});
+    },
+});
+
+class DeclineWorkflow extends LunoraWorkflow<DeclineParams> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(context, env, declineWorkflow, "declineWorkflow");
+    }
+}
+
 /** The generated one-line entrypoint subclass, exactly as codegen emits it. */
 class SmokeWorkflow extends LunoraWorkflow<SmokeParams, SmokeOutput> {
     public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
@@ -52,5 +126,5 @@ const testWorker = {
 };
 
 export default testWorker;
-export { SmokeWorkflow, smokeWorkflow };
-export type { Env, SmokeOutput, SmokeParams };
+export { declineLog, DeclineWorkflow, SmokeWorkflow, smokeWorkflow };
+export type { DeclineParams, Env, SmokeOutput, SmokeParams };

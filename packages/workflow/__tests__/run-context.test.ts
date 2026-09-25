@@ -199,7 +199,7 @@ describe("createWorkflowRunContext", () => {
         await activation();
         await activation();
 
-        expect(ids).toStrictEqual(["inst-1#body.1", "inst-1#body.2", "inst-1#body.1", "inst-1#body.2"]);
+        expect(ids).toStrictEqual(["orderPipeline/inst-1#body.1", "orderPipeline/inst-1#body.2", "orderPipeline/inst-1#body.1", "orderPipeline/inst-1#body.2"]);
 
         // A caller-supplied id wins — the escape hatch for a body whose call order
         // is not deterministic, and the only way to make a bare `ctx.run` inside a
@@ -209,6 +209,100 @@ describe("createWorkflowRunContext", () => {
         await ctx.run({ __lunoraRef: "payments:charge" }, {}, { dedupId: "charge:o1" });
 
         expect(ids.at(-1)).toBe("charge:o1");
+    });
+
+    it("keeps two workflows whose instances share an id apart: each dispatched handler runs exactly once", async () => {
+        expect.assertions(2);
+
+        // Instance ids are unique only WITHIN one workflow, and callers pass
+        // business keys, so `chargeOrder` and `notifyCustomer` both running as
+        // `order-42` is ordinary. The shard dedups on `(identity, mutationId)`
+        // with no function path, and every system dispatch shares one identity —
+        // modelled here: a repeated id is answered from the cache, its handler
+        // never entered.
+        const runs = new Map<string, number>();
+        const cache = new Map<string, string>();
+        const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+            const { functionPath, id } = JSON.parse((init as RequestInit).body as string) as { functionPath: string; id?: string };
+            const cached = id === undefined ? undefined : cache.get(id);
+
+            if (cached !== undefined) {
+                return okResponse(cached);
+            }
+
+            runs.set(functionPath, (runs.get(functionPath) ?? 0) + 1);
+
+            const body = JSON.stringify({ result: functionPath });
+
+            if (id !== undefined) {
+                cache.set(id, body);
+            }
+
+            return okResponse(body);
+        });
+        const step = {
+            ...makeStep(),
+            do: async (name: string, callback: (context: WorkflowStepContextLike) => Promise<unknown>) =>
+                callback({ attempt: 1, config: {}, step: { count: 1, name } }),
+        } as unknown as WorkflowStepLike;
+        const env = { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" };
+        const event = { ...makeEvent(), instanceId: "order-42" };
+        const dispatchStep = (functionPath: string) =>
+            defineStep(functionPath, {
+                args: {},
+                handler: async (context) => context.run({ __lunoraRef: functionPath }),
+            });
+
+        const runWorkflow = async (exportName: string, prefix: string): Promise<void> => {
+            const ctx = createWorkflowRunContext({ env, event, exportName, fetchImpl, step });
+
+            await ctx.run({ __lunoraRef: `${prefix}:body` });
+            await ctx.runStep(dispatchStep(`${prefix}:step`), {});
+        };
+
+        await runWorkflow("chargeOrder", "billing");
+        await runWorkflow("notifyCustomer", "email");
+
+        // COUNTS, per handler: an unscoped id serves `email:*` from `billing:*`'s cache and reads 0 there.
+        expect(Object.fromEntries(runs)).toStrictEqual({ "billing:body": 1, "billing:step": 1, "email:body": 1, "email:step": 1 });
+        expect(fetchImpl).toHaveBeenCalledTimes(4);
+    });
+
+    it("gives the children of two workflows whose instances share an id distinct instance ids", async () => {
+        expect.assertions(1);
+
+        // A child's derived id is `create`d on the CHILD's binding, where a
+        // duplicate is taken over as "a previous attempt already started it". Two
+        // parents minting the same id there would attach to each other's child.
+        const created: string[] = [];
+        const binding = {
+            create: async (options?: { id?: string }) => {
+                if (created.includes(options?.id ?? "")) {
+                    throw new Error("instance already exists");
+                }
+
+                created.push(options?.id ?? "");
+
+                return { id: options?.id ?? "" };
+            },
+            get: async (id: string) => {
+                return { id };
+            },
+        };
+        const step = {
+            ...makeStep(),
+            do: async (_name: string, callback: () => Promise<unknown>) => callback(),
+        } as unknown as WorkflowStepLike;
+        const event = { ...makeEvent(), instanceId: "order-42" };
+
+        const spawnFrom = async (exportName: string): Promise<void> => {
+            await createWorkflowRunContext({ env: { WORKFLOW_SEND_RECEIPT: binding }, event, exportName, step }).spawn("sendReceipt", {});
+        };
+
+        await spawnFrom("chargeOrder");
+        await spawnFrom("notifyCustomer");
+
+        expect(new Set(created).size).toBe(2);
     });
 
     it("re-exposes the injected fetch so a body building its own dispatcher uses the same transport", () => {

@@ -117,6 +117,25 @@ const queryBatch = async (exec: SqlCtxExec, dialect: SqlDialect, queries: Readon
 };
 
 /**
+ * Run statements that must not be separated: in order, and on the `sqlite`
+ * dialect, where an exec's `batch` is D1's ordered transaction, as one atomic
+ * unit — no other writer lands between them. An exec without `batch` runs them
+ * sequentially, which leaves them open to interleaving with another writer.
+ */
+const runInOrder = async (exec: SqlCtxExec, dialect: SqlDialect, queries: ReadonlyArray<SQL>): Promise<void> => {
+    if (exec.batch && dialect.name === "sqlite") {
+        await exec.batch(queries.map((query) => renderSql(dialect.name, query)));
+
+        return;
+    }
+
+    for (const query of queries) {
+        // eslint-disable-next-line no-await-in-loop -- the statements depend on each other's effects; order is the point.
+        await queryRun(exec, dialect, query);
+    }
+};
+
+/**
  * Create an index idempotently across engines. SQLite/Postgres support
  * `CREATE [UNIQUE] INDEX IF NOT EXISTS`; **MySQL does not** (only `CREATE TABLE`
  * takes `IF NOT EXISTS`), so it creates unconditionally and swallows the
@@ -375,6 +394,20 @@ const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<
 /** Fixed page size for the keyset-paged table scans the backfill helpers use. */
 const BACKFILL_BATCH_SIZE = 500;
 
+/** One keyset page of `tableName`'s raw rows in `id` order, past `after` when given. */
+const readRowsPage = (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    after: string | undefined,
+    limit: number,
+): Promise<Record<string, unknown>[]> => {
+    const id = sql`${sql.identifier(tableName)}.${sql.identifier("id")}`;
+    const seek = after === undefined ? sql`` : sql` WHERE ${id} > ${after}`;
+
+    return queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)}${seek} ORDER BY ${id} ASC LIMIT ${sql.raw(String(limit))}`);
+};
+
 /**
  * Stream rows of `tableName` to `onDoc` in `id`-keyset order, decoding each row
  * into a document first. Pages by the last row's `id` (not OFFSET) so an
@@ -405,13 +438,8 @@ const forEachRowPaged = async (
 
     while (hasMore && (remaining === undefined || remaining > 0)) {
         const pageSize = remaining === undefined ? BACKFILL_BATCH_SIZE : Math.min(BACKFILL_BATCH_SIZE, remaining);
-        const seek = cursorId === undefined ? sql`` : sql` WHERE ${sql.identifier("id")} > ${cursorId}`;
         // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-        const pageRows = await queryAll(
-            exec,
-            dialect,
-            sql`SELECT * FROM ${sql.identifier(tableName)}${seek} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(pageSize))}`,
-        );
+        const pageRows = await readRowsPage(exec, dialect, tableName, cursorId, pageSize);
 
         for (const row of pageRows) {
             const decoded = decodeRow(definition, row);
@@ -442,6 +470,8 @@ export {
     queryAll,
     queryBatch,
     queryRun,
+    readRowsPage,
+    runInOrder,
     serializeColumnValue,
     serializeDocumentColumn,
     tableColumns,

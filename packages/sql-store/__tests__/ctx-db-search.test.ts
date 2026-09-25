@@ -337,6 +337,25 @@ describe("global search provisioning", () => {
             await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
         });
 
+        it("points a refused read at the backfill entry point the backend in use names", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+            insertPastOnePage();
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const hinted = { ...dialect, searchBackfillHint: "call the example backfill" };
+
+            // Each backend completes a `.global()` index its own way — D1, Hyperdrive
+            // and the Node store all differ — and the `backfillSearch` admin op is
+            // wired only for shard-local indexes, so naming it sent operators to a 501.
+            await expect(runSqlSearch(exec, hinted, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(
+                /still backfilling .* retry once it finishes, or complete it now: call the example backfill$/u,
+            );
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/retry once it finishes$/u);
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.not.toThrow(/backfillSearch admin/u);
+        });
+
         it("serves a staged index declared over an empty table", async () => {
             expect.assertions(2);
 
@@ -459,7 +478,7 @@ describe("global search provisioning", () => {
 
             // "The documented remedy throws unless you happened to migrate first"
             // is not a remedy.
-            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toBeUndefined();
+            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toStrictEqual({ unmappedSkipped: 0 });
         });
 
         it("walks a table larger than one backfill page", async () => {

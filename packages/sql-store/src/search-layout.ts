@@ -26,7 +26,6 @@ import {
     createSearchAnalyzer,
     FTS_COUNT_COLUMN,
     FTS_ID_COLUMN,
-    FTS_TEXT_COLUMN,
     FTS_TOKEN_COLUMN,
     ftsTableName,
     searchIndexProfile,
@@ -34,13 +33,24 @@ import {
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
-import { unionAll } from "@lunora/shard-engine";
+import { ftsCompanionDdl, ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows, unionAll } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
-import { columnRefSql, createIndexIfNotExists, decodeRows, queryAll, queryBatch, queryRun, serializeColumnValue } from "./sql-exec";
+import {
+    columnRefSql,
+    createIndexIfNotExists,
+    decodeRow,
+    decodeRows,
+    OCC_VERSION_COLUMN,
+    queryAll,
+    queryBatch,
+    queryRun,
+    runInOrder,
+    serializeColumnValue,
+} from "./sql-exec";
 
 /** The staged `.withSearchIndex().search()` query a layout executes. */
 interface SearchStage {
@@ -77,6 +87,9 @@ interface SearchLayout {
      */
     readonly name: "fts5" | "inverted" | "native";
 
+    /** Delete every companion row for one document. */
+    purgeDocument: (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string) => Promise<void>;
+
     /** Execute a staged search against this companion, ordered and bounded. */
     runSearch: (
         exec: SqlCtxExec,
@@ -88,7 +101,24 @@ interface SearchLayout {
     ) => Promise<Record<string, unknown>[]>;
 }
 
-/** Delete every companion row for one document — the first half of every write. */
+/** A source-table row exactly as it was read, with the table it was read from. */
+interface SourceRow {
+    row: Record<string, unknown>;
+    table: string;
+}
+
+/**
+ * The columns that say whether a source row changed since it was read: every
+ * guarded write bumps `_version`, and `_creationTime` tells a delete-and-reinsert
+ * under the same id apart, whose version restarts at NULL. Read by both the SQL
+ * guard ({@link unchangedSince}) and the backfill's re-check.
+ */
+const ROW_VERSION_COLUMNS: ReadonlyArray<string> = [OCC_VERSION_COLUMN, "_creationTime"];
+
+/**
+ * Delete every companion row for one document by its `__id__` column — the
+ * first half of every write on the layouts whose `__id__` is indexed.
+ */
 const purgeDocument = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string, id: string): Promise<void> => {
     await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(companion)} WHERE ${sql.identifier(FTS_ID_COLUMN)} = ${id}`);
 };
@@ -348,9 +378,11 @@ const invertedLayout: SearchLayout = {
             sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(FTS_TOKEN_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_ID_COLUMN)} ${sql.raw(key)} NOT NULL, ${sql.identifier(FTS_COUNT_COLUMN)} ${sql.raw(integer)} NOT NULL)`,
         );
 
-        // Not unique: a concurrent cold-start backfill could briefly double a
-        // row, which the delete-then-insert write repairs, whereas a unique
-        // violation would fail the request outright.
+        // Not unique, so two cold-start backfills whose purge-then-insert pairs
+        // interleave can double a document's rows — and nothing repairs that
+        // until the document is written again. A unique index would turn the
+        // same race into a failed request instead; fixing it properly needs a
+        // per-dialect insert-or-ignore, and this layout only serves Hyperdrive.
         await createIndexIfNotExists(exec, dialect, {
             columns: sql`${invertedIndexColumn(dialect, FTS_TOKEN_COLUMN)}, ${invertedIndexColumn(dialect, FTS_ID_COLUMN)}`,
             name: `${companion}__btree`,
@@ -392,37 +424,41 @@ const invertedLayout: SearchLayout = {
         await queryBatch(exec, dialect, chunks);
     },
     name: "inverted",
+    purgeDocument,
     runSearch: runInvertedSearch,
 };
 
-/** The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`. */
+/** `<table>.<column>`, qualified so an unknown name errors instead of reading as a string. */
+const qualified = (table: string, name: string): SQL => sql`${sql.identifier(table)}.${sql.identifier(name)}`;
+
+/**
+ * Whether the source row is still the one that was read, by
+ * {@link ROW_VERSION_COLUMNS}. SQLite's `IS`, since only the FTS5 layout
+ * evaluates it.
+ */
+const unchangedSince = ({ row, table }: SourceRow): SQL =>
+    sql`EXISTS (SELECT 1 FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} = ${row["id"]}${sql.join(
+        // eslint-disable-next-line unicorn/no-null -- SQL bind value: a NULL column compares with `IS NULL`
+        ROW_VERSION_COLUMNS.map((column) => sql` AND ${qualified(table, column)} IS ${row[column] ?? null}`),
+    )})`;
+
+/**
+ * The FTS5 shadow: one row of analyzed text per document, matched with `MATCH`,
+ * reached through the `__ids` rowid map — see `fts-companion.ts` in
+ * `@lunora/shard-engine`, which the Durable Object store shares. Every write is
+ * an ordered statement list, run by {@link runInOrder}.
+ */
 const fts5Layout: SearchLayout = {
     ensureCompanion: async (exec, dialect, companion) => {
-        await queryRun(
-            exec,
-            dialect,
-            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(companion)} USING fts5(${sql.identifier(FTS_TEXT_COLUMN)}, ${sql.identifier(FTS_ID_COLUMN)} UNINDEXED)`,
-        );
-        // The vocabulary view over that index: one row per term *instance*, so a
-        // term's frequency in a document is a COUNT. It is what lets this layout
-        // rank by the shared scorer in SQL rather than approximating it — see
-        // `runFtsSearch`. Part of the FTS5 extension, so wherever the virtual
-        // table above can be created this can too.
-        await queryRun(
-            exec,
-            dialect,
-            sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(`${companion}__vocab`)} USING fts5vocab(${sql.identifier(companion)}, ${sql.raw("instance")})`,
-        );
+        await runInOrder(exec, dialect, ftsCompanionDdl(companion));
     },
     indexDocument: async (exec, dialect, companion, id, document, index) => {
-        await purgeDocument(exec, dialect, companion, id);
-        await queryRun(
-            exec,
-            dialect,
-            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__text__")}, ${sql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
-        );
+        await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index)));
     },
     name: "fts5",
+    purgeDocument: async (exec, dialect, companion, id) => {
+        await runInOrder(exec, dialect, ftsPurgeDocument(companion, id));
+    },
     runSearch: runFtsSearch,
 };
 
@@ -453,6 +489,7 @@ const nativeLayout: SearchLayout = {
         await queryRun(exec, dialect, native.indexDocument(companion, id, analyzedSearchText(document, index)));
     },
     name: "native",
+    purgeDocument,
     runSearch: runNativeSearch,
 };
 
@@ -515,5 +552,158 @@ const globalSearchIndexes = function* (schema: SchemaLike): Generator<[string, T
 /** The companion table backing one index. */
 const companionFor = (tableName: string, index: SearchIndexDefinitionLike): string => ftsTableName(tableName, index.name);
 
-export type { SearchLayout, SearchStage };
-export { companionFor, companionProfile, fts5Layout, globalSearchIndexes, invertedLayout, nativeLayout, purgeDocument, resolveSearchLayout };
+/** One {@link migrateUnmappedEntries} pass over a page of unmapped rows. */
+interface UnmappedPass {
+    /** No unmapped rows past this page. */
+    done: boolean;
+    /** The highest rowid the page covered: where the next page starts. */
+    last: number;
+    /** Rows of this page still unmapped — each one lost its write to a concurrent one. */
+    left: number;
+}
+
+/** FTS5 rows rewritten per migration pass — the bound on one cold start's share of it. */
+const FTS_UNMAPPED_PAGE_ROWS = 100;
+
+/** Ids per source-row lookup in {@link migrateUnmappedEntries}. */
+const SOURCE_LOOKUP_IDS = 50;
+
+/**
+ * Index a document the caller read some time ago — the backfill — so that the
+ * write lands only if that source row is still current.
+ *
+ * On FTS5 the check runs inside the write's own statements, so no concurrent
+ * writer can land between the check and the write, and a fresher entry is never
+ * replaced — not even for the moment until the caller's re-check catches it.
+ * The other layouts write regardless and rely on that re-check alone.
+ */
+const indexDocumentAsRead = async (
+    layout: SearchLayout,
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    companion: string,
+    document: Record<string, unknown>,
+    index: SearchIndexDefinitionLike,
+    readAs: SourceRow,
+): Promise<void> => {
+    const id = String(readAs.row["id"]);
+
+    if (layout !== fts5Layout) {
+        await layout.indexDocument(exec, dialect, companion, id, document, index);
+
+        return;
+    }
+
+    await runInOrder(exec, dialect, ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard: unchangedSince(readAs) }));
+};
+
+/**
+ * Rewrite one bounded page of the FTS5 rows the rowid map does not know about —
+ * a previous build's, including any it wrote during the rollout — from the
+ * source table, starting past rowid `after`, and report how the page went (see
+ * {@link UnmappedPass}). Once none are left, a pass costs two reads: the source
+ * table's existence probe and an empty rowid-range read. A no-op on the other
+ * layouts.
+ *
+ * Rewriting from the source row, rather than adopting the stored text, is what
+ * repairs a document indexed twice: which copy is stale cannot be told from the
+ * companion, but the source row says what the entry should be. Each write is
+ * guarded like the backfill's; one that loses to a concurrent write leaves its
+ * rows in place, and the next pass rewrites them from the newer source row.
+ */
+const migrateUnmappedEntries = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    definition: TableDefinitionLike,
+    tableName: string,
+    index: SearchIndexDefinitionLike,
+    after = 0,
+): Promise<UnmappedPass> => {
+    const nothing: UnmappedPass = { done: true, last: after, left: 0 };
+
+    if (resolveSearchLayout(index, dialect) !== fts5Layout) {
+        return nothing;
+    }
+
+    const source = await queryAll(exec, dialect, dialect.tableExists(tableName));
+
+    if (source.length === 0) {
+        return nothing;
+    }
+
+    const companion = companionFor(tableName, index);
+    const unmapped = await queryAll(exec, dialect, ftsUnmappedPage(companion, FTS_UNMAPPED_PAGE_ROWS, after));
+
+    if (unmapped.length === 0) {
+        return nothing;
+    }
+
+    const last = Math.max(...unmapped.map((row) => Number(row["rowid"])));
+    const byId = groupUnmappedRows(unmapped);
+    const ids = [...byId.keys()];
+    const sources = new Map<string, Record<string, unknown>>();
+
+    // Bound parameters stay under the engine's 100 per statement.
+    for (let start = 0; start < ids.length; start += SOURCE_LOOKUP_IDS) {
+        const chunk = ids.slice(start, start + SOURCE_LOOKUP_IDS);
+        // eslint-disable-next-line no-await-in-loop -- chunked lookups on the shared connection.
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} IN (${sql.join(
+                chunk.map((id) => sql`${id}`),
+                sql`, `,
+            )})`,
+        );
+
+        for (const row of rows) {
+            // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
+            sources.set(String(row["id"]), row);
+        }
+    }
+
+    const statements: SQL[] = [];
+
+    for (const [id, unmappedRowids] of byId) {
+        const row = sources.get(id);
+        const document = row === undefined ? undefined : decodeRow(definition, row);
+        // Absent from the source table: its entry goes, unless the row reappears first.
+        const guard =
+            row === undefined
+                ? sql`NOT EXISTS (SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${qualified(tableName, "id")} = ${id})`
+                : unchangedSince({ row, table: tableName });
+        statements.push(
+            ...(document
+                ? ftsWriteDocument(companion, id, analyzedSearchText(document, index), { guard, unmappedRowids })
+                : ftsPurgeDocument(companion, id, { guard, unmappedRowids })),
+        );
+    }
+
+    // The whole page in one batch: one D1 round trip, not one per document.
+    // Each document's statements carry their own guard, so one losing to a
+    // concurrent write leaves only its own rows in place.
+    await runInOrder(exec, dialect, statements);
+
+    // What lost to a concurrent write stays in the page's range.
+    const left = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(companion)} WHERE ${qualified(companion, "rowid")} > ${Math.max(0, after)} AND ${qualified(companion, "rowid")} <= ${last}`,
+    );
+
+    return { done: unmapped.length < FTS_UNMAPPED_PAGE_ROWS, last, left: Number(left[0]?.["n"] ?? 0) };
+};
+
+export type { SearchLayout, SearchStage, SourceRow, UnmappedPass };
+export {
+    companionFor,
+    companionProfile,
+    fts5Layout,
+    globalSearchIndexes,
+    indexDocumentAsRead,
+    invertedLayout,
+    migrateUnmappedEntries,
+    nativeLayout,
+    resolveSearchLayout,
+    ROW_VERSION_COLUMNS,
+};

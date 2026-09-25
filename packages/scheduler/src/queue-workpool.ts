@@ -19,7 +19,7 @@
  * `createDispatchRunner`, authenticated with the admin bearer).
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { createDispatchRunner } from "@lunora/dispatch";
+import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { encodeWire } from "../../../shared/wire-codec";
@@ -162,7 +162,19 @@ const createQueueConsumer =
 
                     await options.dispatch(message.body, message.id);
                     message.ack();
-                } catch {
+                } catch (error: unknown) {
+                    // A `DISPATCH_IN_PROGRESS` decline is this job's own earlier
+                    // delivery still running on the shard (a job past the
+                    // dispatch deadline). Retried at once it meets the same
+                    // claim and spends the queue's budget in seconds, so wait
+                    // the claim's ceiling out: the next delivery is then served
+                    // the finished result, or runs the job if that run died.
+                    if (isDispatchDecline(error)) {
+                        retryDeclinedMessage(message, { maxRetries: options.maxRetries, where: `@lunora/scheduler: queue "${batch.queue}"` });
+
+                        return;
+                    }
+
                     // Hand off to Queues' retry/dead-letter machinery.
                     message.retry();
                 }

@@ -991,6 +991,15 @@ interface FlagsResult {
 }
 ```
 
+### `FtsWriteOptions` (interface)
+
+```ts
+interface FtsWriteOptions {
+    guard?: SQL;
+    unmappedRowids?: ReadonlyArray<number>;
+}
+```
+
 ### `FunctionCallStat` (interface)
 
 ```ts
@@ -4058,6 +4067,36 @@ const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string
 const forgetScheduleOutbox: (sql: SqlExec, id: string) => void;
 ```
 
+### `ftsCompanionDdl` (const)
+
+```ts
+const ftsCompanionDdl: (companion: string) => SQL[];
+```
+
+### `ftsPurgeDocument` (const)
+
+```ts
+const ftsPurgeDocument: (companion: string, id: string, options?: FtsWriteOptions) => SQL[];
+```
+
+### `ftsRowidMapName` (const)
+
+```ts
+const ftsRowidMapName: (companion: string) => string;
+```
+
+### `ftsUnmappedPage` (const)
+
+```ts
+const ftsUnmappedPage: (companion: string, limit: number, after?: number) => SQL;
+```
+
+### `ftsWriteDocument` (const)
+
+```ts
+const ftsWriteDocument: (companion: string, id: string, text: string, options?: FtsWriteOptions) => SQL[];
+```
+
 ### `gateReplicaDispatch` (const)
 
 ```ts
@@ -4074,6 +4113,12 @@ const geoTableName: (table: string, indexName: string) => string;
 
 ```ts
 const globalShapeReadKey: (resolved: ResolvedShape, identity: SubscriptionIdentity) => string | undefined;
+```
+
+### `groupUnmappedRows` (const)
+
+```ts
+const groupUnmappedRows: (rows: ReadonlyArray<Record<string, unknown>>) => Map<string, number[]>;
 ```
 
 ### `guardWriter` (const)

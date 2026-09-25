@@ -10,10 +10,19 @@
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "queues": {
-        "producers": [{ "binding": "QUEUE_SMOKE_QUEUE", "queue": "smoke-queue" }],
+        "producers": [
+            { "binding": "QUEUE_SMOKE_QUEUE", "queue": "smoke-queue" },
+            { "binding": "QUEUE_DECLINE_QUEUE", "queue": "decline-queue" },
+        ],
         // `max_batch_timeout: 0` so a produced message is delivered to the
         // worker's `queue()` consumer immediately instead of after the default
         // batching window — keeps the end-to-end test fast and deterministic.
-        "consumers": [{ "queue": "smoke-queue", "max_batch_size": 5, "max_batch_timeout": 0 }],
+        "consumers": [
+            { "queue": "smoke-queue", "max_batch_size": 5, "max_batch_timeout": 0 },
+            // A real retry budget with no DLQ and the default (zero) retry
+            // delay — the shape codegen writes for `defineQueue({ maxRetries: 2 })`
+            // — so the broker's own attempt counting is what the decline test sees.
+            { "queue": "decline-queue", "max_batch_size": 1, "max_batch_timeout": 0, "max_retries": 2 },
+        ],
     },
 }

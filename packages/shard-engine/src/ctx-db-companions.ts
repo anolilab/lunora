@@ -26,7 +26,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
+import { analyzedSearchText, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -36,9 +36,10 @@ import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggr
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import { isLiveForCompanion } from "./query-args";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
@@ -646,8 +647,8 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     /**
      * Keep the FTS5 shadow tables in step with a row write. A no-op when the
      * table declares no search indexes or when FTS5 is unavailable (the scan
-     * fallback reads the live document table, so nothing to mirror). Delete then
-     * insert makes it idempotent across insert/update; `doc === undefined`
+     * fallback reads the live document table, so nothing to mirror). A write
+     * replaces the document's one row at its mapped rowid; `doc === undefined`
      * deletes only (row removal).
      */
     const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>): void => {
@@ -669,14 +670,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
             const ftName = ftsTableName(tableName, index.name);
 
-            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
-            if (document) {
-                runDrizzle(
-                    sql,
-                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
-                );
-            }
+            runAll(sql, document ? ftsWriteDocument(ftName, id, analyzedSearchText(document, index)) : ftsPurgeDocument(ftName, id));
         }
     };
 

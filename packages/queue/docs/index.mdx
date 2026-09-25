@@ -67,6 +67,20 @@ Attribution needs the pin **and the throw**. A bare `ctx.run(api.x.y, args)` ins
 
 Because an isolated message is acked, it never reaches the dead-letter queue. It is recorded with outcome `error` (and the failure message) in the Studio **Queues** log, which is where you see it — so keep dev capture on, or log it in a `catch` that re-throws.
 
+## Redeliveries and exactly-once calls
+
+A redelivered message runs its handler again from the top. Every call made through `message.run(...)` carries a replay-dedup id, `<messageId>#<n>`, where `n` counts that message's calls in order. The shard applies each id once, so a redelivery gets the first delivery's results back instead of charging the customer twice. The handler must make its calls in the same order on every delivery. A handler that branches on something non-deterministic should pass its own `{ dedupId }`. A bare `ctx.run(...)` carries no id and is at-least-once.
+
+**The dedup window is 24 hours.** The shard prunes dedup rows older than that, so a redelivery that arrives more than 24 hours after the first delivery applies its calls again. Keep `retryDelay × maxRetries` well under a day, or make the called functions idempotent on their own key.
+
+### Slow calls and the retry budget
+
+`message.run(...)` gives up on a call after 30 seconds, but the shard keeps running it. The message fails, and its redelivery re-issues the same id while the first run is still going. The shard answers that with `409 DISPATCH_IN_PROGRESS` instead of running the call twice.
+
+Cloudflare Queues has no retry that does not count against `maxRetries`, so a decline still costs one attempt. What the consumer bounds is how many it costs. A declined message is not rethrown into an immediate redelivery, which would meet the same decline again. It is retried with a 15-minute delay, the longest the shard's claim can stand. So one slow call costs at most one extra attempt. The price is latency: a declined message always waits the full 15 minutes, even when the action behind it finishes 31 seconds after it started. The consumer cannot see the action finish, so it cannot retry any sooner without risking another decline. The next delivery is then served the finished result from the replay cache, or runs the call if the first run died. A declined message is never acked, so delivery stays at-least-once.
+
+One case cannot be saved. If the decline lands on the message's **last** delivery, the retry takes it to the `deadLetterQueue`, or drops it if the queue has none. The consumer logs an error when this happens. Give a queue that calls slow actions a `maxRetries` of at least 2, plus a `deadLetterQueue`.
+
 ## Enqueue from a mutation or action
 
 `ctx.queues.<exportName>` is a typed producer on **Mutation** and **Action** contexts (enqueue is a side effect, so it's excluded from the deterministic query context):
@@ -90,7 +104,7 @@ By default a queue is a **push** consumer: Cloudflare delivers batches to the wo
 export const reports = defineQueue({ mode: "pull", name: "reports" });
 ```
 
-`lunora dev` / `lunora deploy` reconcile the wrangler config for you: every queue gets a `queues.producers[]` entry; push queues add a worker consumer, pull queues add a `type: "http_pull"` consumer (with any batch/retry/dead-letter tuning carried through).
+`lunora dev` / `lunora deploy` reconcile the wrangler config for you: every queue gets a `queues.producers[]` entry; push queues add a worker consumer, pull queues add a `type: "http_pull"` consumer (with any batch/retry/dead-letter tuning carried through). The tuning is kept in step after that too: adding a `deadLetterQueue` or changing `maxRetries` on an existing queue updates its consumer on the next `dev`/`deploy`. Only the options `defineQueue` sets are written. A consumer field you set by hand and `defineQueue` leaves unset is not touched. Two things are never reconciled. Removing an option from `defineQueue` leaves the deployed value in place, so delete it from `wrangler.jsonc` as well. Reconcile writes only the top-level config, never an `env.<name>` block, so a `--env` deploy uses whatever that block declares.
 
 ## Studio
 

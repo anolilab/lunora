@@ -19,12 +19,13 @@
  * execute. A collision is strictly worse than no id at all.
  *
  * The scheme is `<scope>.<n>`, `n` counting the calls made through one pinned
- * runner in order. The scope carries the instance id (ids are global to the
- * shard, so two instances must not share a namespace) plus what part of the
- * body is calling. Three scopes exist, and they are mutually disjoint:
+ * runner in order. The scope starts with the instance's {@link dedupNamespace}
+ * — ids are global to the shard, so two instances must not share a namespace —
+ * followed by what part of the body is calling. Three scopes exist, and they are
+ * mutually disjoint:
  *
- * - `<instanceId>#body` — top-level `ctx.run` in the handler body.
- * - `<instanceId>#step<i>` — `ctx.run` inside the i-th `ctx.runStep` call.
+ * - `<namespace>#body` — top-level `ctx.run` in the handler body.
+ * - `<namespace>#step<i>` — `ctx.run` inside the i-th `ctx.runStep` call.
  * - that same scope suffixed `rollback` — `ctx.run` inside the step's rollback
  * handler, which must never share the forward call's ids or a refund would
  * dedup against the charge and silently never run.
@@ -60,6 +61,20 @@ import type { ArgsOf, FunctionReference } from "../../../shared/function-referen
 import type { RunFunctionOptions, WorkflowRunFunction } from "./types";
 
 /**
+ * The per-instance prefix of every dedup id: `<workflow export name>/<instance id>`.
+ *
+ * The instance id alone is not unique. The engine scopes it to ONE workflow,
+ * and callers commonly pass a business key, so `chargeOrder` and
+ * `notifyCustomer` both running as `order-42` is ordinary — and with the id
+ * alone their first body calls were both `order-42#body.1`, so the second
+ * workflow's call was answered from the first one's cached result and its
+ * handler never ran. The export name is unique per project (it derives the
+ * `WORKFLOW_*` binding) and, being an identifier, never contains `/`, so the
+ * prefix splits unambiguously.
+ */
+const dedupNamespace = (exportName: string, instanceId: string): string => `${exportName}/${instanceId}`;
+
+/**
  * Wrap a runner so every call it makes carries `<scope>.<n>` as its dedup id.
  *
  * Build one per scope INSTANCE, not per scope name: the counter restarting is
@@ -79,5 +94,4 @@ const pinDedupId = (run: WorkflowRunFunction, scope: string): WorkflowRunFunctio
     };
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export by package convention
-export { pinDedupId };
+export { dedupNamespace, pinDedupId };

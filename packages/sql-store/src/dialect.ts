@@ -57,6 +57,11 @@ export interface SqlExec {
      * longer serialized one full RTT at a time, and with no ordering between
      * elements. Safe only for statements whose effects don't depend on each
      * other (distinct-keyed rows), which is what every current caller batches.
+     *
+     * The one exception is the `sqlite` dialect, whose engines ship FTS5: there
+     * an implementation MUST run the array in order, as one transaction, as
+     * D1's does. The FTS5 search companion's writes are ordered statement
+     * lists that must not interleave with another writer's (`runInOrder`).
      */
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
@@ -174,6 +179,14 @@ export interface SqlDialect {
         /** The `ORDER BY` expression, best first. */
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+
+    /**
+     * How an operator completes a search index that is still backfilling on
+     * this backend, in words, for the refusal a read against it raises: each
+     * backend's entry point differs. Absent, the refusal says only to retry
+     * once the backfill finishes.
+     */
+    searchBackfillHint?: string;
 
     /**
      * True when the engine ships SQLite's FTS5 module, which decides whether a

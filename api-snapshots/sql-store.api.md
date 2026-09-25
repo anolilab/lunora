@@ -78,6 +78,7 @@ interface SqlDialect {
         matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+    searchBackfillHint?: string;
     supportsFts5: boolean;
     supportsReturning: boolean;
     tableExists: (table: string) => SQL;
@@ -106,10 +107,18 @@ interface SqlRunResult {
 }
 ```
 
+### `SqlSearchBackfillResult` (interface)
+
+```ts
+interface SqlSearchBackfillResult {
+    unmappedSkipped: number;
+}
+```
+
 ### `backfillSqlSearchIndexes` (const)
 
 ```ts
-const backfillSqlSearchIndexes: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<void>;
+const backfillSqlSearchIndexes: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<SqlSearchBackfillResult>;
 ```
 
 ### `createSqlCtxDb` (const)

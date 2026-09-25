@@ -52,7 +52,7 @@ const make = (overrides?: { nonRetryableErrorClass?: NativeNonRetryableErrorCons
     const run = vi.fn<WorkflowRunFunction>(async () => undefined);
     const runStep = createRunStep({
         env: { BUCKET: "bucket" },
-        instanceId: "inst-1",
+        dedupNamespace: "orderPipeline/inst-1",
         log: noopLog,
         nonRetryableErrorClass: overrides?.nonRetryableErrorClass,
         run,
@@ -298,7 +298,7 @@ describe("createRunStep", () => {
                 // it delegates each call with this step's replay-dedup id.
                 await ctx.run({ __lunoraRef: "a:b" });
 
-                expect(run).toHaveBeenCalledWith({ __lunoraRef: "a:b" }, undefined, { dedupId: "inst-1#step0.1" });
+                expect(run).toHaveBeenCalledWith({ __lunoraRef: "a:b" }, undefined, { dedupId: "orderPipeline/inst-1#step0.1" });
 
                 return "done";
             },
@@ -481,7 +481,7 @@ describe("createRunStep — replay-dedup ids", () => {
         // id is the only thing standing between a retried step body and a second
         // charge.
         const run = vi.fn<WorkflowRunFunction>(async () => undefined);
-        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: makeRetryingStep(2) });
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: makeRetryingStep(2) });
         const charge = defineStep("charge", {
             args: {},
             handler: async (context) => {
@@ -493,7 +493,7 @@ describe("createRunStep — replay-dedup ids", () => {
 
         await runStep(charge, {});
 
-        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0.1"]);
+        expect(dedupIds(run)).toStrictEqual(["orderPipeline/inst-1#step0.1", "orderPipeline/inst-1#step0.1"]);
     });
 
     it("gives each step call, and each call inside it, a distinct id — including two calls of one step name", async () => {
@@ -502,7 +502,7 @@ describe("createRunStep — replay-dedup ids", () => {
         // Two ids that collide are worse than none: the shard answers the second
         // call with the FIRST one's cached result and never executes it.
         const run = vi.fn<WorkflowRunFunction>(async () => undefined);
-        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: makeRetryingStep(1) });
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: makeRetryingStep(1) });
         const charge = defineStep("charge", {
             args: {},
             handler: async (context) => {
@@ -516,7 +516,12 @@ describe("createRunStep — replay-dedup ids", () => {
         await runStep(charge, {});
         await runStep(charge, {});
 
-        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0.2", "inst-1#step1.1", "inst-1#step1.2"]);
+        expect(dedupIds(run)).toStrictEqual([
+            "orderPipeline/inst-1#step0.1",
+            "orderPipeline/inst-1#step0.2",
+            "orderPipeline/inst-1#step1.1",
+            "orderPipeline/inst-1#step1.2",
+        ]);
     });
 
     it("pins the rollback's own ids — stable across a retried rollback, distinct from the forward step", async () => {
@@ -528,7 +533,7 @@ describe("createRunStep — replay-dedup ids", () => {
         // the charge and silently never run.
         const run = vi.fn<WorkflowRunFunction>(async () => undefined);
         const fake = makeFakeStep();
-        const runStep = createRunStep({ env: {}, instanceId: "inst-1", log: noopLog, run, step: fake.step });
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: fake.step });
         const charge = defineStep("charge", {
             args: {},
             handler: async (context) => {
@@ -556,6 +561,6 @@ describe("createRunStep — replay-dedup ids", () => {
         await rollback?.(rollbackContext(1));
         await rollback?.(rollbackContext(2));
 
-        expect(dedupIds(run)).toStrictEqual(["inst-1#step0.1", "inst-1#step0rollback.1", "inst-1#step0rollback.1"]);
+        expect(dedupIds(run)).toStrictEqual(["orderPipeline/inst-1#step0.1", "orderPipeline/inst-1#step0rollback.1", "orderPipeline/inst-1#step0rollback.1"]);
     });
 });

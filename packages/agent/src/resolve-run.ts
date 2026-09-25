@@ -19,7 +19,7 @@ import type { AgentRunFunction } from "./types";
  * ungated, so forwarding the identity to them is inert.
  *
  * **Replay-dedup ids.** `context.run` numbers the calls a workflow body makes
- * (`<instanceId>#body.<n>`) and sends that as the shard's replay-dedup
+ * (`<workflow>/<instanceId>#body.<n>`) and sends that as the shard's replay-dedup
  * `mutationId`. That numbering is only replay-stable for a body that issues
  * the same calls in the same order on every activation — and this loop does
  * not: most of its dispatches sit inside memoized `step.do` callbacks

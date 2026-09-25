@@ -1,3 +1,5 @@
+import { DISPATCH_CLAIM_CEILING_MS } from "../../../shared/dispatch-claim";
+
 /**
  * How long a claim may stand before a new delivery of the same key is allowed
  * to run over it: fifteen minutes.
@@ -17,6 +19,10 @@
  * scheduler will not re-fire the record before its own lease lapses anyway, so
  * a shorter ceiling would buy that caller nothing.
  *
+ * The value lives in `shared/dispatch-claim.ts` because the callers that wait
+ * a decline out (`@lunora/dispatch` and its consumers) bound themselves by it
+ * and have no dependency edge on this package.
+ *
  * **The boundary, stated plainly.** Past the ceiling a new delivery RUNS, even
  * if the old handler is in fact still executing — the double-run this claim
  * exists to prevent re-opens for that action. The ceiling therefore has to sit
@@ -25,7 +31,7 @@
  * idempotency key). Erring long costs only recovery latency for a genuinely
  * hung handler; erring short costs a concurrent double-run of a healthy one.
  */
-const IN_FLIGHT_CLAIM_CEILING_MS = 900_000;
+const IN_FLIGHT_CLAIM_CEILING_MS = DISPATCH_CLAIM_CEILING_MS;
 
 /** A held claim. Compared by identity on release, so a superseded holder cannot free its successor's claim. */
 interface InFlightClaim {

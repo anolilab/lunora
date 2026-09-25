@@ -599,8 +599,14 @@ const provisionBindings = async (
         const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred, environment);
 
-        if (reconciled.changed) {
-            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";
+
+        if (reconciled.added.length > 0) {
+            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${writtenTo}`);
+        }
+
+        if (reconciled.updated.length > 0) {
+            logger.success(`updated bindings: ${reconciled.updated.join(", ")} → ${writtenTo}`);
         }
 
         for (const warning of reconciled.warnings) {
