@@ -9,6 +9,7 @@ import { LunoraError } from "@lunora/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraContainer } from "../src/do/index";
+import { CONTAINER_EXEC_HEADER } from "../src/exec";
 import { defineContainer } from "../src/index";
 
 /** Overrides for the pieces the readiness/hard-timeout paths read off the ctx. */
@@ -120,6 +121,41 @@ describe(LunoraContainer, () => {
 
 /** Cast onto the private Secrets Store resolver + `envVars` the start path reads. */
 type SecretsStoreProbe = { envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<void> };
+
+describe("lunoraContainer reserved routes", () => {
+    it("refuses /__lunora/* unless the request came from exec, however the path is spelled", async () => {
+        expect.assertions(3);
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "runner");
+        const proxied: string[] = [];
+
+        vi.spyOn(instance, "containerFetch").mockImplementation(async (request) => {
+            proxied.push(new URL((request as Request).url).pathname);
+
+            return new Response("ok");
+        });
+
+        const statuses: number[] = [];
+
+        for (const path of ["/__lunora/exec", "/__LUNORA/exec", "/__lunora;x/exec", "/%5F%5FLunora/exec", "/api/__lunora/exec"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential probes against one instance
+            const response = await instance.fetch(new Request(`https://container${path}`, { method: "POST" }));
+
+            statuses.push(response.status);
+        }
+
+        // The client-side guard is the first line; the DO is the second, so a
+        // spelling the guard misses still never reaches the container's router.
+        expect(statuses).toStrictEqual([403, 403, 403, 403, 403]);
+
+        await instance.fetch(new Request("https://container/__lunora/exec", { headers: { [CONTAINER_EXEC_HEADER]: "1" }, method: "POST" }));
+        await instance.fetch(new Request("https://container/api/status"));
+
+        expect(proxied).toStrictEqual(["/__lunora/exec", "/api/status"]);
+        expect(proxied).toHaveLength(2);
+    });
+});
 
 describe("lunoraContainer secretsStore resolution", () => {
     it("resolves Secrets Store bindings and merges them into envVars before start", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CONTAINER_EXEC_HEADER } from "../src/exec";
 import type { ContainerNamespaceLike } from "../src/index";
 import { createContainerContext, createContainerTestContext } from "../src/index";
 
@@ -411,6 +412,40 @@ describe("containerHandle.exec", () => {
         await handle.fetch("/__lunora-status");
 
         expect(requests).toHaveLength(1);
+    });
+
+    it("refuses the reserved namespace in any letter case or with ;params", async () => {
+        expect.assertions(6);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        // Express (and most routers) match case-insensitively, and servlet-style
+        // routers drop `;params` from a segment — both reach the exec route.
+        await expect(handle.fetch("/__LUNORA/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/__Lunora/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/__lunora;x/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/%5F%5FLUNORA/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(containers.runner!.pool().fetch("/__LUNORA;x/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+
+        expect(requests).toHaveLength(0);
+    });
+
+    it("marks exec requests for the container DO and strips the mark from a caller's fetch", async () => {
+        expect.assertions(3);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        await handle.exec("ls");
+        await handle.fetch("/status", { headers: { [CONTAINER_EXEC_HEADER]: "1" } });
+        await containers.runner!.pool().fetch(new Request("https://container/status", { headers: { [CONTAINER_EXEC_HEADER]: "1" } }));
+
+        expect(requests.map((request) => request.headers.get(CONTAINER_EXEC_HEADER))).toStrictEqual(["1", null, null]);
+        expect(new URL(requests[1]!.url).pathname).toBe("/status");
+        expect(requests).toHaveLength(3);
     });
 
     it("rejects a maxOutputBytes that is not a cap, before running anything", async () => {

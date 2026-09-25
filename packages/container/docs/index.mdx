@@ -250,8 +250,11 @@ Run the command directly — do not concatenate `args` into a shell string, whic
 would make every argument an injection point.
 
 `/__lunora/*` is **reserved** for Lunora's own container routes. `handle.fetch`
-refuses any path resolving into it, so serve your application's routes elsewhere
-and reach exec through `exec`.
+refuses any path resolving into it — in any letter case, percent-encoded, or
+with `;params` on the segment — so serve your application's routes elsewhere and
+reach exec through `exec`. The container Durable Object enforces it a second
+time: a request into `/__lunora/*` (any segment, same spellings) that `exec`
+did not send is answered `403` and never reaches your container.
 
 <Callout type="warn">
     `exec` runs whatever it is given. When a model chooses the command — an `@lunora/agent` `containerTool`, say — gate it: that tool's default approval policy

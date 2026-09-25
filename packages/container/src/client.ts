@@ -13,7 +13,7 @@ import { readCapped } from "../../../shared/read-capped";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { containerBindingName } from "./define-container";
 import type { ContainerExecOptions, ContainerExecResult } from "./exec";
-import { execViaFetch } from "./exec";
+import { CONTAINER_EXEC_HEADER, execViaFetch } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
 
@@ -309,8 +309,24 @@ const TARGET_PORT_HEADER = "cf-container-target-port";
  */
 const RESERVED_PATH_SEGMENT = "__lunora";
 
-/** The leading path segment of `pathname`, ignoring empty ones. `"//__lunora//exec"` → `"__lunora"`. */
-const firstSegment = (pathname: string): string => pathname.split("/").find((segment) => segment !== "") ?? "";
+/** A path segment without its `;params` suffix (`__lunora;x` → `__lunora`). */
+const withoutSegmentParams = (segment: string): string => {
+    const semicolon = segment.indexOf(";");
+
+    return semicolon === -1 ? segment : segment.slice(0, semicolon);
+};
+
+/**
+ * The leading path segment of `pathname` as a router would match it: empty
+ * segments skipped, `;params` dropped (servlet-style routers strip them before
+ * matching) and letter case folded (Express and most Node routers match
+ * case-insensitively by default). `"//__LUNORA;x//exec"` → `"__lunora"`.
+ */
+const firstSegment = (pathname: string): string => {
+    const segment = pathname.split("/").find((part) => part !== "") ?? "";
+
+    return withoutSegmentParams(segment).toLowerCase();
+};
 
 /**
  * Refuse a caller-supplied `fetch` into the reserved namespace.
@@ -322,7 +338,10 @@ const firstSegment = (pathname: string): string => pathname.split("/").find((seg
  * in the gate is what makes that total — this is the last place that sees the
  * request before the container does, and it compares the same resolved
  * pathname the container's own router will, including the percent-decoded
- * spelling, since routers commonly unescape before matching.
+ * spelling (routers commonly unescape before matching), in any letter case and
+ * with `;params` removed. The container Durable Object refuses the namespace
+ * too unless the request carries the exec mark, so a spelling this misses still
+ * does not reach the route.
  */
 const assertPathNotReserved = (input: Request | string, label: string): void => {
     // Resolved exactly the way `toRequest` resolves it, or the guard reads a
@@ -355,6 +374,30 @@ const assertPathNotReserved = (input: Request | string, label: string): void => 
                 `Use \`exec\` to run a command.`,
         );
     }
+};
+
+/**
+ * A caller's `fetch` arguments with the exec mark removed, so only `exec`
+ * itself can present it to the container Durable Object.
+ */
+const withoutExecMark = (input: Request | string, init?: RequestInit): [Request | string, RequestInit | undefined] => {
+    if (typeof input !== "string") {
+        const request = new Request(input, init);
+
+        request.headers.delete(CONTAINER_EXEC_HEADER);
+
+        return [request, undefined];
+    }
+
+    if (init?.headers === undefined) {
+        return [input, init];
+    }
+
+    const headers = new Headers(init.headers);
+
+    headers.delete(CONTAINER_EXEC_HEADER);
+
+    return [input, { ...init, headers }];
 };
 
 /**
@@ -540,7 +583,7 @@ const coldStartRetryingHandle = (
         fetch: async (input, init) => {
             assertPathNotReserved(input, label);
 
-            return fetchWithRetry(input, init);
+            return fetchWithRetry(...withoutExecMark(input, init));
         },
         port: (targetPort) => coldStartRetryingHandle(send, label, options, targetPort, trace),
     };
@@ -698,7 +741,7 @@ const poolHandleFor = (
         fetch: async (input, init) => {
             assertPathNotReserved(input, poolLabel);
 
-            return poolFetch(input, init);
+            return poolFetch(...withoutExecMark(input, init));
         },
         port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, trace),
     };

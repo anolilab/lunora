@@ -98,6 +98,15 @@ interface ContainerExecResult {
  */
 const CONTAINER_EXEC_PATH = "/__lunora/exec";
 
+/**
+ * Header `execViaFetch` stamps on its request so the container Durable Object
+ * can tell an `exec` from a caller's `fetch`. The DO refuses any `/__lunora/*`
+ * request that lacks it, and every handle's `fetch` strips it from what the
+ * caller passed — so the client-side path guard is not the only thing standing
+ * between a caller-chosen path and the exec route.
+ */
+const CONTAINER_EXEC_HEADER = "x-lunora-container-exec";
+
 /** How much of a failed exec response body is quoted back in the thrown error. */
 const EXEC_ERROR_BODY_LIMIT = 512;
 
@@ -210,7 +219,7 @@ const execViaFetch =
                     ...(options.env === undefined ? {} : { env: options.env }),
                     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
                 }),
-                headers: { "content-type": "application/json" },
+                headers: { "content-type": "application/json", [CONTAINER_EXEC_HEADER]: "1" },
                 method: "POST",
                 ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
             });
@@ -265,4 +274,4 @@ const execViaFetch =
     };
 
 export type { ContainerExecOptions, ContainerExecResult };
-export { CONTAINER_EXEC_PATH, execViaFetch };
+export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, execViaFetch };

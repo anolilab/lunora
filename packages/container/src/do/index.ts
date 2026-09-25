@@ -12,6 +12,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
+import { CONTAINER_EXEC_HEADER } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
@@ -42,6 +43,40 @@ const READINESS_TIMEOUT_MS = 30_000;
  * then restarted) is recognised and ignored instead of killing the fresh run.
  */
 const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
+
+/** Lower-cased marker of Lunora's reserved container namespace (`/__lunora/*`). */
+const RESERVED_PATH_MARKER = "__lunora";
+
+/** Path separators a router may split on — `/`, and `\` for the ones that normalise it. */
+const PATH_SEPARATORS = /[/\\]/u;
+
+/** A path segment without its `;params` suffix (`__lunora;x` → `__lunora`). */
+const withoutSegmentParams = (segment: string): string => {
+    const semicolon = segment.indexOf(";");
+
+    return semicolon === -1 ? segment : segment.slice(0, semicolon);
+};
+
+/**
+ * Whether a path could reach Lunora's reserved container routes under a
+ * router's reading of it. Deliberately coarser than the client guard, which
+ * only looks at the first segment: ANY segment of the raw or once-decoded path
+ * (split on `/` and `\`) that is `__lunora` once `;params` are dropped and case
+ * is folded counts — so a router mounted under a prefix is covered too.
+ */
+const touchesReservedNamespace = (pathname: string): boolean => {
+    let decoded = pathname;
+
+    try {
+        decoded = decodeURIComponent(pathname);
+    } catch {
+        // Malformed escape: the raw spelling is still checked.
+    }
+
+    return [pathname, decoded].some((path) =>
+        path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER),
+    );
+};
 
 /**
  * Base class for the generated Container DO classes. Applies a
@@ -141,6 +176,23 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraReadyOn = definition.readyOn ? [...definition.readyOn] : [];
         this.lunoraHardTimeoutSeconds = definition.hardTimeout === undefined ? undefined : parseDurationSeconds(definition.hardTimeout);
         this.lunoraSecretsStore = definition.secretsStore;
+    }
+
+    /**
+     * Entry for every request to this Durable Object. Refuses the reserved
+     * `/__lunora/*` namespace unless the request carries the mark only
+     * `handle.exec` sets (and every `handle.fetch` strips), so the client-side
+     * path guard is not the only thing between a caller-chosen path and the
+     * exec route.
+     */
+    public override async fetch(request: Request): Promise<Response> {
+        if (request.headers.get(CONTAINER_EXEC_HEADER) !== "1" && touchesReservedNamespace(new URL(request.url).pathname)) {
+            return new Response(`container "${this.lunoraName}": /${RESERVED_PATH_MARKER}/* is reserved for Lunora's own container routes; use exec.`, {
+                status: 403,
+            });
+        }
+
+        return super.fetch(request);
     }
 
     /**
