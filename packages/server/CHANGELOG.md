@@ -1,3 +1,15 @@
+## @lunora/server [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.143...@lunora/server@1.0.0-alpha.144) (2026-09-25)
+
+### Bug Fixes
+
+* **server:** keep the legacy reader's LIMIT behind rls() ([#824](https://github.com/anolilab/lunora/issues/824)) ([7b00d5a](https://github.com/anolilab/lunora/commit/7b00d5a8fb3288619169bab9ad262e2f483f9b60)), closes [#822](https://github.com/anolilab/lunora/issues/822) [#822](https://github.com/anolilab/lunora/issues/822)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.84
+* **@lunora/observability:** upgraded to 1.0.0-alpha.93
+
 ## @lunora/server [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.142...@lunora/server@1.0.0-alpha.143) (2026-09-25)
 
 ### Features
