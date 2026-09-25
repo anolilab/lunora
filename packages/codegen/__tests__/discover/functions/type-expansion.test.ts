@@ -52,6 +52,16 @@ const unreachable = (source: string, siblings: Record<string, string> = {}): boo
     return referencesUnreachableLocalType(type, node, path);
 };
 
+/** The diagnostic codes a strict compile of `source` raises — to check a rendering means what it says, not only that it parses. */
+const typeErrorsIn = (source: string): number[] => {
+    const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+    return project
+        .createSourceFile("/probe.ts", `export {};\n${source}`)
+        .getPreEmitDiagnostics()
+        .map((diagnostic) => diagnostic.getCode());
+};
+
 const unencodable = (source: string, siblings: Record<string, string> = {}): boolean => {
     const { node, type } = subjectOf(source, siblings);
 
@@ -238,6 +248,40 @@ describe("expandUnreachableType", () => {
         ).toBe("{ id: string }");
     });
 
+    it("declines an inlined alias whose text spells a module-scoped value name", () => {
+        expect.assertions(2);
+
+        // An inlined alias is self-contained only in TYPE space. Its text can
+        // still carry a VALUE name — the unique-symbol brand's `[brand]` key, a
+        // `typeof helper` — that resolves nowhere from `_generated/`: a TS2304
+        // with `lunora codegen` exiting 0. `unknown` compiles; that text does not.
+        expect(
+            expand(`import { make } from "./leaf";\ndeclare const subject: ReturnType<typeof make>;`, {
+                "/app/leaf.ts": [
+                    "declare const brand: unique symbol;",
+                    "type Id = string & { readonly [brand]: true };",
+                    "interface Leaf { id: Id; name: string }",
+                    "export declare function make(): Leaf;",
+                ].join("\n"),
+            }),
+        ).toBeUndefined();
+        expect(
+            expand(`import { make } from "./helper";\ndeclare const subject: ReturnType<typeof make>;`, {
+                "/app/helper.ts": ["declare function helper(): void;", "type Holder = { run: typeof helper };", "export declare function make(): Holder;"].join(
+                    "\n",
+                ),
+            }),
+        ).toBeUndefined();
+    });
+
+    it("keeps a symbol-keyed property whose key is GLOBAL", () => {
+        expect.assertions(1);
+
+        // `Symbol.iterator` resolves from anywhere, so a type naming it is as
+        // printable from `_generated/` as from the handler.
+        expect(expand(`declare const subject: { [Symbol.iterator](): Iterator<string> } | null;`)).toBe("{ [Symbol.iterator](): Iterator<string>; } | null");
+    });
+
     it("expands an INTERSECTION rather than declining it", () => {
         expect.assertions(2);
 
@@ -253,6 +297,24 @@ describe("expandUnreachableType", () => {
         expect(expand(`interface A { a: string }\ninterface B { b: number }\ntype Both = A & B;\ndeclare const subject: Both[];`)).toBe(
             "({ a: string } & { b: number })[]",
         );
+    });
+
+    it("parenthesises a FUNCTION-type member of an intersection or array, keeping the type it describes", () => {
+        expect.assertions(4);
+
+        // `=>` binds looser than `&` and `[]`, so unparenthesised text reads as a
+        // function RETURNING `void & { meta: … }` (or `void[]`) — a different
+        // type that compiles, so no gate downstream would notice.
+        const intersection = expand(`interface Inner { v: string }\ndeclare const subject: { f: (() => void) & { meta: Inner } };`);
+        const array = expand(`interface Inner { v: string }\ndeclare const subject: { fs: (() => string)[]; inner: Inner };`);
+
+        expect(intersection).toBe("{ f: (() => void) & { meta: { v: string } } }");
+        expect(array).toBe("{ fs: (() => string)[]; inner: { v: string } }");
+
+        // And the text means what the checker meant: `meta` is on the function,
+        // and the array holds functions.
+        expect(typeErrorsIn(`declare const r: ${String(intersection)};\nconst meta: string = r.f.meta.v;\nr.f();`)).toStrictEqual([]);
+        expect(typeErrorsIn(`declare const r: ${String(array)};\nconst first: string | undefined = r.fs[0]?.();`)).toStrictEqual([]);
     });
 
     it("expands an anonymous object that embeds an unreachable local interface", () => {

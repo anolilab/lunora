@@ -1,7 +1,7 @@
 import type { Node, Type } from "ts-morph";
 
+import { recordErasedOutput } from "../erased-returns";
 import isAnyDegraded from "./internal/any-token";
-import { recordErasedOutput } from "./internal/erased-returns";
 import { expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
 
 /**

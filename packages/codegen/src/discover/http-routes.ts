@@ -4,7 +4,6 @@ import { Node } from "ts-morph";
 import type { HttpRouteIR, ValidatorIR } from "../ir";
 import { parseObjectShape, parseValidator } from "../parse-validator";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { parseOutput } from "./functions/internal/erased-returns";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /**
@@ -135,7 +134,10 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
             const argument = node.getArguments()[0];
 
             if (argument && Node.isExpression(argument)) {
-                state.output = parseOutput(node, () => parseValidator(argument));
+                // Not through `parseOutput`: a route's output feeds only its
+                // OpenAPI JSON Schema, which never reads the recovered TS type,
+                // so an erasure here reaches no generated type to report.
+                state.output = parseValidator(argument);
             }
         }
 

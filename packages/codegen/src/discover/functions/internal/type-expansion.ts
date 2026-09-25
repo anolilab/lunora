@@ -32,8 +32,10 @@ const childTypes = (type: Type): Type[] => {
 
 /**
  * An object type whose members we can faithfully reproduce structurally: a plain
- * object/interface with no call/construct signatures and no index signatures
- * (those can't be re-expressed as `{ name: type; … }` without losing meaning).
+ * object/interface with no call/construct signatures, no index signatures, and
+ * no symbol-keyed members (none of those can be re-expressed as
+ * `{ name: type; … }` without losing meaning — a symbol key's name is the
+ * checker's internal `__@brand@12`, which would render as a STRING key).
  */
 const isExpandableObject = (type: Type): boolean => {
     if (!type.isObject() || type.isArray() || type.isTuple()) {
@@ -44,7 +46,11 @@ const isExpandableObject = (type: Type): boolean => {
         return false;
     }
 
-    return type.getStringIndexType() === undefined && type.getNumberIndexType() === undefined;
+    return (
+        type.getStringIndexType() === undefined &&
+        type.getNumberIndexType() === undefined &&
+        !type.getProperties().some((property) => property.getName().startsWith("__@"))
+    );
 };
 
 /**
@@ -96,6 +102,41 @@ const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => 
     return propertyType.isUnion() && propertyType.getUnionTypes().some((member) => member.isUndefined());
 };
 
+/**
+ * `rendered` — the text of `type` — parenthesised unless it is a plain object or
+ * a primitive, the only renderings nothing can split.
+ *
+ * Needed wherever the text lands next to an operator that binds tighter than
+ * something inside it: an array suffix or an intersection member. Unparenthesised,
+ * `A & B[]` reads as `A & (B[])`, `A & B | C` as `(A & B) | C`, and
+ * `() => void & { meta: M }` as a function returning `void & { meta: M }` —
+ * each a DIFFERENT type that still compiles, which is the worst kind of wrong.
+ * An allowlist rather than a list of the operators that bind loosely, so a
+ * rendering this function has not met (a `readonly T[]`, a conditional) is
+ * grouped rather than trusted.
+ */
+const groupedUnlessAtomic = (type: Type | undefined, rendered: string): string => {
+    const atomic =
+        type !== undefined &&
+        (isExpandableObject(type) ||
+            type.isString() ||
+            type.isNumber() ||
+            type.isBigInt() ||
+            type.isBoolean() ||
+            type.isLiteral() ||
+            type.isBooleanLiteral() ||
+            type.isEnumLiteral() ||
+            type.isTemplateLiteral() ||
+            type.isNull() ||
+            type.isUndefined() ||
+            type.isAny() ||
+            type.isUnknown() ||
+            type.isNever() ||
+            type.isVoid());
+
+    return atomic ? rendered : `(${rendered})`;
+};
+
 /** Ceiling for the encodability walk — see `containsUnencodableMember` for why it is not `MAX_EXPANSION_DEPTH`, and what it is still load-bearing for. */
 const ENCODABILITY_WALK_LIMIT = 32;
 
@@ -117,10 +158,7 @@ const expandArrayType = (type: Type, node: Node, handlerFilePath: string, depth:
         return undefined;
     }
 
-    // `[]` binds tighter than both `|` and `&`, so a composite element has to be
-    // parenthesised or `A & B[]` reads as `A & (B[])` — a different type that
-    // still compiles, which is the worst kind of wrong.
-    return element?.isUnion() === true || element?.isIntersection() === true ? `(${rendered})[]` : `${rendered}[]`;
+    return `${groupedUnlessAtomic(element, rendered)}[]`;
 };
 
 /**
@@ -171,9 +209,7 @@ const expandIntersectionType = (
             return undefined;
         }
 
-        // `&` binds tighter than `|`, so a union member needs parentheses or
-        // `A & B | C` silently becomes `(A & B) | C`.
-        parts.push(member.isUnion() ? `(${rendered})` : rendered);
+        parts.push(groupedUnlessAtomic(member, rendered));
     }
 
     return parts.join(" & ");

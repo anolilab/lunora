@@ -1,8 +1,137 @@
 import type { Finding } from "@lunora/advisor";
+import type { Node as TsNode } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { lunoraRelativePath } from "./ast";
-import type { ErasedReturn } from "./functions/internal/erased-returns";
-import { takeErasedReturns } from "./functions/internal/erased-returns";
+
+/** One return/output type that could not be rendered into `_generated/` and became `unknown`. */
+interface ErasedReturn {
+    /** The exported binding the type belongs to, when the node sits inside one. */
+    exportName?: string;
+    /** Absolute path of the file declaring the procedure. */
+    filePath: string;
+    /** 1-based line of the node whose type was erased. */
+    line: number;
+    /** What the checker printed, before the fallback replaced it — the whole point of reporting. */
+    rendered: string;
+}
+
+/**
+ * Where erasures go right now: the innermost {@link collectErasures} call's list,
+ * or `undefined` outside every one — and then a record is dropped.
+ *
+ * Module state rather than a threaded return value: the two places that detect
+ * an erasure (`unwrap-handler-return.ts` and `resolve-standard-schema-type.ts`)
+ * are reached through `discoverFunctions`, `discoverMutators`,
+ * `discoverHttpRoutes`, the builder-chain walker and the validator parser, each
+ * of which returns a rendered STRING. Threading a finding back out would change
+ * six signatures to carry something only one caller reads.
+ *
+ * Scoped to a callback and restored in a `finally`, so nothing outlives the call
+ * that wanted it: a run that throws discards its records with its stack frame,
+ * and no reset, drain or rewind has to be remembered anywhere else.
+ */
+let collector: ErasedReturn[] | undefined;
+
+/**
+ * The `.output(...)` call whose validator is being parsed, or `undefined` outside
+ * one. The `v.from(...)` resolver runs for table fields and `.input(...)` too,
+ * where an erasure is not a RETURN type and must not be reported as one.
+ *
+ * Carried as context rather than found by an ancestor walk because
+ * `.output(sharedSchema)` resolves an identifier: the `v.from` node then sits
+ * under the shared `const`, nowhere near the procedure. Recording against that
+ * node would name the schema, not the procedure, and fold every procedure sharing
+ * it into one finding — so the record anchors here instead.
+ */
+let outputSite: TsNode | undefined;
+
+/**
+ * Call `run` and return what it produced alongside every erasure recorded while it
+ * ran. Nests: an inner call takes its own records, and they reach an outer one
+ * only if the caller passes them on with {@link reportErasures}.
+ */
+const collectErasures = <T>(run: () => T): { erased: ErasedReturn[]; value: T } => {
+    const previous = collector;
+    const erased: ErasedReturn[] = [];
+
+    collector = erased;
+
+    try {
+        return { erased, value: run() };
+    } finally {
+        collector = previous;
+    }
+};
+
+/** Pass records taken by an inner {@link collectErasures} on to the enclosing one. */
+const reportErasures = (records: ReadonlyArray<ErasedReturn>): void => {
+    collector?.push(...records);
+};
+
+/**
+ * The nearest enclosing variable binding — `export const getDoc = query…` — so
+ * the report names the procedure rather than only a line. `undefined` for a
+ * handler that is not bound to a name at all, which stays reportable by file and
+ * line.
+ */
+const enclosingBindingName = (node: TsNode): string | undefined => {
+    for (const ancestor of node.getAncestors()) {
+        if (Node.isVariableDeclaration(ancestor)) {
+            return ancestor.getName();
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Record that `node`'s type erased to `unknown`.
+ *
+ * Called only from the expansion-failure paths — never from the deliberate
+ * fallbacks (`any`-degraded inference, a value `encodeWire` refuses), which have
+ * their own reasons and would turn this into noise.
+ */
+const recordErasedReturn = (node: TsNode, rendered: string): void => {
+    collector?.push({
+        exportName: enclosingBindingName(node),
+        filePath: node.getSourceFile().getFilePath(),
+        line: node.getStartLineNumber(),
+        rendered,
+    });
+};
+
+/**
+ * Record that a `v.from(...)` schema's output type erased — against the
+ * `.output(...)` call {@link parseOutput} is parsing, and only then, since only
+ * there is it a return type.
+ */
+const recordErasedOutput = (rendered: string): void => {
+    if (outputSite !== undefined) {
+        recordErasedReturn(outputSite, rendered);
+    }
+};
+
+/**
+ * Run `parse` over the validator of the `.output(...)` call `site`, so its
+ * erasures are reported there.
+ *
+ * Opt-in, and the only way in: an erasure recorded outside this context is
+ * DROPPED, because the same resolver also runs for table fields and `.input()`.
+ * So every `.output(...)` parse site whose type reaches a generated file must
+ * go through here, or its erasures are silently never reported.
+ */
+const parseOutput = <T>(site: TsNode, parse: () => T): T => {
+    const previous = outputSite;
+
+    outputSite = site;
+
+    try {
+        return parse();
+    } finally {
+        outputSite = previous;
+    }
+};
 
 /**
  * Report a procedure whose return/output type could not be rendered into
@@ -40,18 +169,18 @@ const findingFor = (record: ErasedReturn, relativePath: string): Finding => {
 };
 
 /**
- * Drain the erasures this codegen run recorded and turn them into findings.
+ * Turn the erasures one discovery pass collected into findings.
  *
- * Reads a buffer the discovery passes filled rather than re-deriving anything —
- * the signal is "expansion was attempted and produced nothing", which exists
- * only at the moment of the fallback. Deduplicated on the cache key, because one
- * procedure reaches the render path more than once (the declaration surface is
- * emitted before handler types are inferred against it, so discovery runs twice).
+ * The records come from the pass rather than being re-derived here — the signal
+ * is "expansion was attempted and produced nothing", which exists only at the
+ * moment of the fallback. Deduplicated on the cache key, because one procedure
+ * can record several erasures in a single pass: one per erasing `v.from(...)`
+ * inside its `.output(...)`.
  */
-const discoverErasedReturns = (lunoraDirectory: string): Finding[] => {
+const erasedReturnFindings = (records: ReadonlyArray<ErasedReturn>, lunoraDirectory: string): Finding[] => {
     const byKey = new Map<string, Finding>();
 
-    for (const record of takeErasedReturns()) {
+    for (const record of records) {
         const finding = findingFor(record, lunoraRelativePath(lunoraDirectory, record.filePath));
 
         byKey.set(finding.cacheKey, finding);
@@ -60,13 +189,5 @@ const discoverErasedReturns = (lunoraDirectory: string): Finding[] => {
     return [...byKey.values()].toSorted((a, b) => a.cacheKey.localeCompare(b.cacheKey));
 };
 
-/**
- * Discard anything recorded before this run started. The buffer is module-level,
- * so a run that threw before draining it would otherwise report its erasures
- * against the next project.
- */
-const resetErasedReturns = (): void => {
-    takeErasedReturns();
-};
-
-export { discoverErasedReturns, resetErasedReturns };
+export type { ErasedReturn };
+export { collectErasures, erasedReturnFindings, parseOutput, recordErasedOutput, recordErasedReturn, reportErasures };

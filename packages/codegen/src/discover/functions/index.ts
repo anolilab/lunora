@@ -1,8 +1,10 @@
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 
+import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
 import sanitizeNamespace from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { collectErasures, reportErasures } from "../erased-returns";
 import type { LifecycleMoment } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
@@ -35,16 +37,26 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     }
 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
-    if (classified.receiver) {
-        const expose = exposeFromBuilderChain(classified.receiver);
-        const output = outputFromBuilderChain(classified.receiver);
+    const { receiver } = classified;
+
+    if (receiver) {
+        const expose = exposeFromBuilderChain(receiver);
+        // Both types are computed, but `api.ts` carries only one of them — see
+        // `declaredOutputWins`. An erasure in the other reaches nothing, so it is
+        // not reported: the handler behind a declared output, or the inert
+        // `.output()` of a `stream`.
+        const output = collectErasures(() => outputFromBuilderChain(receiver));
+        const returnType = collectErasures(() => returnTypeFromBuilderCall(call));
+        const outputWins = declaredOutputWins({ kind: classified.kind, output: output.value });
+
+        reportErasures(outputWins ? output.erased : returnType.erased);
 
         return {
-            args: argsFromBuilderChain(classified.receiver),
+            args: argsFromBuilderChain(receiver),
             ...(expose ? { expose } : {}),
             kind: classified.kind,
-            ...(output ? { output } : {}),
-            returnType: returnTypeFromBuilderCall(call),
+            ...(output.value ? { output: output.value } : {}),
+            returnType: returnType.value,
             visibility: classified.visibility,
         };
     }
