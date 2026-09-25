@@ -8,7 +8,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR } from "../ir";
-import { findObjectProperty,stringPropertyFor } from "./ast";
+import { findObjectProperty, stringPropertyFor } from "./ast";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
 const QUEUES_FILENAME = "queues.ts";

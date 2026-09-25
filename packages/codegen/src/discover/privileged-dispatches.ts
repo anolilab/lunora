@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { PrivilegedDispatchIR } from "../ir";
-import { findObjectProperty,listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The privileged-dispatch handler factories. A `defineQueue` push handler and a

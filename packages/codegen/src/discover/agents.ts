@@ -10,7 +10,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { AgentIR } from "../ir";
-import { findObjectProperty,stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";

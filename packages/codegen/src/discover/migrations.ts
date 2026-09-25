@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { MigrationIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
-import { findObjectProperty,listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Decide whether a callee identifier refers to `@lunora/server`'s

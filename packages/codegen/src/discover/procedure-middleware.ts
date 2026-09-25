@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { findObjectProperty,isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { calleeName } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 

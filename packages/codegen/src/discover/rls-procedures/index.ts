@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsProcedureIR } from "../../ir";
-import { findObjectProperty,listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { rlsCallsInChain } from "./internal/chain";
 

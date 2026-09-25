@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { FailOpenGuardIR } from "../ir";
-import { collectCallRows, findObjectProperty,limitNameOf, optionsObjectLiteral } from "./ast";
+import { collectCallRows, findObjectProperty, limitNameOf, optionsObjectLiteral } from "./ast";
 import { calleeName } from "./callee";
 
 /**

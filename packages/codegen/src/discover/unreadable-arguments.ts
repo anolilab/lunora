@@ -3,7 +3,7 @@ import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDecla
 import { Node } from "ts-morph";
 
 import { procedureArgumentObjects } from "../procedure-argument-objects";
-import { findObjectProperty,listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**

@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { findObjectProperty,propertyKeyName } from "./discover/ast";
+import { findObjectProperty, propertyKeyName } from "./discover/ast";
 import { resolveObjectLiteral } from "./parse-validator";
 
 /**

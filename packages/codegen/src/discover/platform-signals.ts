@@ -1,7 +1,7 @@
 import type { Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, propertyKeyName,unwrapExpression } from "./ast";
+import { listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**

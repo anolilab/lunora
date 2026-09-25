@@ -5,7 +5,7 @@ import type { CallExpression, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { MutatorWriteIR } from "../ir";
-import { findObjectProperty,isDatabaseAccessor } from "./ast";
+import { findObjectProperty, isDatabaseAccessor } from "./ast";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
