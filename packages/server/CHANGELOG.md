@@ -1,3 +1,12 @@
+## @lunora/server [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.146...@lunora/server@1.0.0-alpha.147) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.87
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+* **@lunora/observability:** upgraded to 1.0.0-alpha.96
+
 ## @lunora/server [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.145...@lunora/server@1.0.0-alpha.146) (2026-09-25)
 
 ### Bug Fixes
