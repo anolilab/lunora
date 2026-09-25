@@ -374,11 +374,34 @@ const isExportedFromItsModule = (declaration: Node): boolean =>
     ambientModuleSpecifier(declaration) !== undefined || (Node.isExportable(declaration) && declaration.isExported());
 
 /**
+ * Whether `printed` actually spells `name` as an identifier of its own, rather
+ * than as a fragment of a longer one (`Shape` inside `ObjectShapeType`).
+ *
+ * The question a rename answers is "does the emitted TEXT carry a name that does
+ * not resolve from `_generated/`?", and only the checker can say. It does not
+ * always print an alias it was handed: for one it has already INLINED it prints
+ * the structure instead (`{ … } & { … }`), which is self-contained and needs no
+ * renaming at all.
+ *
+ * The name is escaped before it becomes a pattern: `$` is a legal identifier
+ * character AND a regex anchor, so an unescaped `QueryPage$1` would match
+ * nothing and read as "already inlined" — the exact bare name #781 exists to
+ * catch, waved through.
+ */
+const mentionsBareName = (printed: string, name: string): boolean =>
+    new RegExp(String.raw`(?<![$\w])${name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`)}(?![$\w])`, "u").test(printed);
+
+/**
  * Classify one declaration. {@link classifyType} lifts this to a type and
  * {@link annotationRendering} to a syntactic annotation; both defer here so the
  * rule has one statement rather than three that must agree.
+ *
+ * `printedText` is the text the checker produces at `node` for whatever is being
+ * classified — the resolved type, or the annotation's own syntax. A THUNK,
+ * because only the one branch that asks about a bare name needs it and
+ * `Type.getText` is expensive enough to matter inside a per-property recursion.
  */
-const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: string): NameRendering => {
+const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: string, printedText: () => string): NameRendering => {
     const declarationFile = declaration.getSourceFile();
 
     // A GLOBAL declaration prints bare AND resolves bare from anywhere — `Date`,
@@ -440,8 +463,18 @@ const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: str
     // to itself has no such spelling, so the checker falls back to the bare name,
     // which resolves nowhere from `_generated/` (TS2304, in both `api.ts` and
     // `functions.ts`). Expand it instead: its structure, or `unknown`.
+    //
+    // Unless the checker did not print the name at all. An alias it has already
+    // INLINED reaches the output as its structure, which is self-contained and
+    // wants no renaming — and renaming it anyway is not free: the expander
+    // reproduces plain object types, so an alias resolving to an INTERSECTION
+    // (`v.object(...)`'s `ObjectShapeType`, hence every `Infer<v.object(…)>`)
+    // could not be rendered at all and the whole return type erased to `unknown`
+    // (issue #810). Asking the printed text restores the original rule — rename
+    // what the checker printed unqualified — rather than "expand everything
+    // unexported".
     if (qualified === undefined) {
-        return isExportedFromItsModule(named) ? VERBATIM : EXPAND;
+        return isExportedFromItsModule(named) || !mentionsBareName(printedText(), named.getName()) ? VERBATIM : EXPAND;
     }
 
     return isUnresolvableSpecifier(qualified.specifier, node) ? EXPAND : { kind: "qualify", qualified };
@@ -461,9 +494,17 @@ const classifyType = (type: Type, node: Node, handlerFilePath: string): NameRend
     const printedDeclarations = new Set<Node>((aliasSymbol ?? symbol)?.getDeclarations());
 
     let needsRenaming = false;
+    // One render for the whole loop, and only if a branch asks for it — this
+    // runs once per type in a per-property recursion.
+    let printed: string | undefined;
+    const printedText = (): string => {
+        printed ??= type.getText(node);
+
+        return printed;
+    };
 
     for (const declaration of [symbol, aliasSymbol].flatMap((candidate) => candidate?.getDeclarations() ?? [])) {
-        const rendering = classifyDeclaration(declaration, node, handlerFilePath);
+        const rendering = classifyDeclaration(declaration, node, handlerFilePath, printedText);
 
         if (rendering.kind === "qualify" && printedDeclarations.has(declaration)) {
             return rendering;
@@ -510,7 +551,10 @@ const annotationRendering = (declaration: Node, node: Node, handlerFilePath: str
         const symbol = reference.getTypeName().getSymbol();
 
         for (const referenced of (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? []) {
-            const rendering = classifyDeclaration(referenced, node, handlerFilePath);
+            // The annotation's own syntax IS what the printer reuses here, so it
+            // is the text to ask about — a reference written `AuditAction` spells
+            // the name on its face.
+            const rendering = classifyDeclaration(referenced, node, handlerFilePath, () => reference.getText());
 
             if (rendering.kind === "qualify") {
                 return rendering;

@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.80...@lunora/scheduler@1.0.0-alpha.81) (2026-09-24)
+
+### Bug Fixes
+
+* **do:** decline a dispatch whose idempotency id is still running ([#812](https://github.com/anolilab/lunora/issues/812)) ([f45963f](https://github.com/anolilab/lunora/commit/f45963f3f41f11afc70ecb96f2906be2c9908b0c))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
 ## @lunora/scheduler [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.79...@lunora/scheduler@1.0.0-alpha.80) (2026-09-24)
 
 ### Bug Fixes

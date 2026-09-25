@@ -163,11 +163,15 @@ const MAX_CONCURRENT_DISPATCHES = 6;
  * running elsewhere" from "lost" without a signal from the receiver: the job is
  * delayed, never dropped, and the delay is bounded by this constant.
  *
- * **What it does NOT bound.** If the receiver keeps executing after the DO's
- * side of the fetch is gone (a handler that outlives its request), no lease
- * length can see that. An action long enough to reach past this horizon must
- * still be idempotent — the ceiling `packages/scheduler/docs/index.mdx`
- * documents.
+ * **What it does NOT bound, and who does.** If the receiver keeps executing
+ * after the DO's side of the fetch is gone (a handler that outlives its
+ * request), no lease length can see that — so the answer is not a lease length.
+ * The RECEIVER answers it: `@lunora/do` claims a dispatch's dedup key before
+ * running the handler and declines a second delivery of a live key with
+ * `409 DISPATCH_IN_PROGRESS` (#803). That claim needs no horizon of its own,
+ * because it lives in the same isolate as the handler and a Durable Object is
+ * single-instance. This constant therefore governs only how soon a genuinely
+ * lost job is retried, not whether an overlapping one runs twice.
  */
 const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
 // Largest accepted `scheduledFor`, in epoch milliseconds: the biggest value
@@ -720,10 +724,13 @@ class SchedulerDO {
             // this attempt is over before the next begins, so the dedup row (or
             // the existing instance) is already there. The hard case is a
             // re-fire that OVERLAPS a live attempt, which only an eviction can
-            // produce and which DISPATCH_LEASE_MS exists to prevent: a mutation
-            // survives it (its dedup read holds the shard's single-writer gate)
-            // and so does a workflow, but an action does not — see
-            // `reindexOrphanedRecords`.
+            // produce and which DISPATCH_LEASE_MS narrows. Every target kind now
+            // survives it: a mutation through the shard's single-writer gate, a
+            // workflow through its instance id, and an ACTION because the shard
+            // claims its dedup key before running the handler and answers a
+            // second delivery `409 DISPATCH_IN_PROGRESS` (#803). A 409 is not
+            // 2xx, so it lands here as a failure and the record is re-armed —
+            // which is the point: the decline is "come back later", never "done".
             return response.ok;
         } catch {
             return false;
@@ -1786,13 +1793,14 @@ class SchedulerDO {
      * INSTANCE id for a `workflow` target. A mutation's dedup read runs inside
      * the shard's single-writer gate, so a mutation is exactly-once even under a
      * genuinely concurrent re-fire; a workflow re-attaches to the running
-     * instance rather than starting a second one. An ACTION is weaker:
-     * `@lunora/do` deliberately does NOT take the gate for a non-mutation —
+     * instance rather than starting a second one. An ACTION takes no gate —
      * gating one would let any caller freeze a whole shard for the length of an
      * action's outbound I/O — and its dedup row is written only after the
-     * handler returns, so two dispatches genuinely overlapping in time can both
-     * miss the cache. The lease exists to keep them from overlapping; an action
-     * that can outlive it must still be idempotent.
+     * handler returns, so the cache alone could not tell "already ran" from
+     * "still running". The shard closes that itself (#803): it claims the dedup
+     * key before entering the handler and answers a second delivery of a live
+     * key `409 DISPATCH_IN_PROGRESS`, which is a non-2xx, so the record is
+     * re-armed rather than cleared.
      *
      * Two bounded walks (all `t:` values, then all `id:` headers) rather than a
      * per-header `get`, so the cost is one pass over each prefix.

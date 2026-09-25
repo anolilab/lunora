@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.206...@lunora/codegen@1.0.0-alpha.207) (2026-09-24)
+
+### Bug Fixes
+
+* **codegen:** expand only names the checker prints bare ([#811](https://github.com/anolilab/lunora/issues/811)) ([b887e4e](https://github.com/anolilab/lunora/commit/b887e4e9299c2d6cc9ee54779f47c8c56a2b9d88))
+
+## @lunora/codegen [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.205...@lunora/codegen@1.0.0-alpha.206) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.150
+* **@lunora/agent:** upgraded to 1.0.0-alpha.131
+* **@lunora/container:** upgraded to 1.0.0-alpha.56
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/queue:** upgraded to 1.0.0-alpha.62
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.81
+* **@lunora/values:** upgraded to 1.0.0-alpha.51
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.158
+* **@lunora/server:** upgraded to 1.0.0-alpha.139
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.79
+
 ## @lunora/codegen [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.204...@lunora/codegen@1.0.0-alpha.205) (2026-09-24)
 
 
