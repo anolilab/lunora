@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.215...@lunora/codegen@1.0.0-alpha.216) (2026-09-25)
+
+### Features
+
+* **codegen:** add advisor.minSeverity to lunora.config ([#831](https://github.com/anolilab/lunora/issues/831)) ([4fd96c3](https://github.com/anolilab/lunora/commit/4fd96c3d76362ae95e538edd18bef385e5b7f538)), closes [#823](https://github.com/anolilab/lunora/issues/823)
+
 ## @lunora/codegen [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.214...@lunora/codegen@1.0.0-alpha.215) (2026-09-25)
 
 
