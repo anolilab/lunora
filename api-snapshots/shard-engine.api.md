@@ -692,7 +692,9 @@ interface DatabaseWriterLike {
     }) => Promise<{
         patched: number;
     }>;
-    query: (tableName: string) => TableReaderLike;
+    query: (tableName: string, options?: {
+        baseWhere?: WhereInput;
+    }) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;

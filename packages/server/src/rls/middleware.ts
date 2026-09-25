@@ -78,7 +78,7 @@ import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
-import { containsRelationPredicate, matchesWhere } from "./where-match";
+import { containsRelationPredicate, isSqlPushable, matchesWhere } from "./where-match";
 
 /**
  * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
@@ -283,7 +283,7 @@ interface DatabaseWriterLike {
         expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
-    query: (tableName: string) => TableReaderLike;
+    query: (tableName: string, options?: { baseWhere?: WhereInput }) => TableReaderLike;
 
     /**
      * Rank a row within its partition. A position is a count-of-rows-before, so
@@ -1518,18 +1518,21 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         query(tableName) {
             const { baseWhere } = readBase(tableName);
 
-            const reader = route(tableName).query(tableName);
-
             if (!baseWhere) {
-                return reader;
+                return route(tableName).query(tableName);
             }
 
-            // The legacy reader doesn't take a `baseWhere` — push the
-            // predicate down as an in-memory `.filter()`. This trades the
-            // SQL-side prune for a row-by-row JS check, but the legacy
-            // `query()` path is already an iterator-style reader.
-            //
-            // We compile the predicate once into a JS-side checker.
+            // Two layers, on purpose. An eligible policy (see `isSqlPushable`)
+            // rides into the reader's SQL like `findMany`'s `baseWhere`, so
+            // `take` / `first` / `paginate` read about `n` rows instead of the
+            // whole range. The JS `.filter()` then still runs over every row
+            // returned: it is what the policy MEANS on this path, so the SQL
+            // push-down can only ever narrow the read, never widen it — including
+            // on a writer that ignores the option. An ineligible policy is
+            // filtered in memory alone, and the reader serves bounded terminals
+            // from LIMIT-ed batches rather than the whole range.
+            const reader = route(tableName).query(tableName, isSqlPushable(baseWhere) ? { baseWhere } : undefined);
+
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
 

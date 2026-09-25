@@ -462,6 +462,15 @@ const MAX_PROBE_BRANCHES = WORKERD_SQLITE_LIMITS.boundParams;
 const ITERATOR_PAGE_SIZE = 128;
 
 /**
+ * Largest keyset batch a bounded read with in-memory `.filter()` predicates
+ * pulls at once — see `scanFilteredBatches`. The first batch is exactly the
+ * rows still wanted, then each one doubles up to this, so a predicate that
+ * passes (nearly) every row costs about `n` rows, and one that rejects most of
+ * the range costs a logarithmic number of statements rather than one per row.
+ */
+const MAX_FILTER_BATCH = 1024;
+
+/**
  * Reject an over-cap batch write before any row is touched. Enforced by the
  * writer below; the RLS guard delegates its batch methods straight to this
  * writer, so the cap holds whether the guard or the raw writer is outermost.
@@ -1532,6 +1541,16 @@ const buildReader = (
     onIndexUse: IndexUseHook = () => undefined,
     onTerminal: (range: KeyRange | undefined) => void = () => undefined,
     meterRows: (count: number) => void = () => undefined,
+
+    /**
+     * A flat `where` the caller (the RLS middleware) requires every returned row
+     * to satisfy. It rides the soft-delete scope into every terminal's SQL —
+     * plain fetch, keyset page, search and geo alike — so a bounded read keeps
+     * its `LIMIT` instead of filtering the whole range in memory. The companion
+     * tables those terminals join carry only `__`-prefixed columns, so the
+     * unqualified `id` / `_creationTime` / document references stay unambiguous.
+     */
+    baseWhere?: WhereInput,
 ): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
@@ -1542,7 +1561,7 @@ const buildReader = (
     // Soft delete: the fluent reader (`ctx.db.query(table)...`) always hides
     // soft-deleted rows — the object-form `findMany({ includeDeleted: true })` is
     // the opt-in to see them. Compiled once and ANDed into every fetch/search/page.
-    const scopeWhere = softDeleteScope(tableDefinition.softDeleteMode, undefined);
+    const scopeWhere = mergeWhere(softDeleteScope(tableDefinition.softDeleteMode, undefined), baseWhere);
     const scopeCondition = scopeWhere ? compileWhereSql(scopeWhere, doWhereSqlStrategy) : undefined;
     // The paginated read assembles text; the search and fetch terminals still
     // build drizzle. Compiled once per query builder either way, so keeping both
@@ -1679,6 +1698,64 @@ const buildReader = (
         compileOrderBySql(paginateOrderKeys(stage, tableDefinition));
 
     /**
+     * Serve up to `want` rows that pass the in-memory `.filter()` predicates,
+     * starting after `cursor`, by reading the staged range in LIMIT-ed keyset
+     * batches — never the whole range up front.
+     *
+     * A predicate the SQL cannot see means a `LIMIT n` may return fewer than
+     * `n` survivors, which is why the single-statement terminals drop it. This
+     * keeps it and reads on instead: each batch seeks past the last row it READ
+     * (not the last survivor), in the same `paginateOrderKeys` order `.collect()`
+     * and `.paginate()` use, so no row is read twice and none is skipped. It stops
+     * as soon as `want` rows passed or a short batch shows the range is spent.
+     * @returns the survivors, in order, and the order keys their cursors encode with
+     */
+    const scanFilteredBatches = (
+        want: number,
+        cursor: null | string | undefined,
+        onScanned: (count: number) => void,
+    ): { docs: Record<string, unknown>[]; orderKeys: OrderKey[] } => {
+        const orderKeys = paginateOrderKeys(stage, tableDefinition);
+        const order = compileOrderByText(orderKeys);
+        const docs: Record<string, unknown>[] = [];
+        let seek = cursor ?? undefined;
+        let batch = Math.min(Math.max(1, want), MAX_FILTER_BATCH);
+
+        while (docs.length < want) {
+            const rangeWhere = compileWhereSql(paginateWhere(stage, orderKeys, seek), doWhereTextStrategy, textFragments);
+            const where = scopeConditionText && rangeWhere ? joinText(rangeWhere, " AND ", scopeConditionText) : (scopeConditionText ?? rangeWhere);
+            const statement = selectPageSql(tableName, where, order, batch);
+            const rows = runSql(sql, statement.text, ...statement.params).toArray();
+            let lastRead: Record<string, unknown> | undefined;
+
+            onScanned(rows.length);
+
+            for (const row of rows) {
+                const record = rowToDocument(row);
+
+                if (!record) {
+                    continue;
+                }
+
+                lastRead = record;
+
+                if (stage.inMemoryFilters.every((predicate) => predicate(record)) && docs.push(record) >= want) {
+                    break;
+                }
+            }
+
+            if (rows.length < batch || lastRead === undefined) {
+                break;
+            }
+
+            seek = encodeCursor(lastRead, orderKeys);
+            batch = Math.min(batch * 2, MAX_FILTER_BATCH);
+        }
+
+        return { docs, orderKeys };
+    };
+
+    /**
      * Report this read's dependency footprint, once per terminal.
      *
      * Deferred to the terminal on purpose: at `ctx.db.query(table)` time the
@@ -1724,6 +1801,12 @@ const buildReader = (
                 return runGeoTerminal(sql, tableName, stage, scopeCondition, limit, (count) => {
                     scanned = count;
                 });
+            }
+
+            if (limit !== undefined && stage.inMemoryFilters.length > 0) {
+                return scanFilteredBatches(Math.max(0, Math.floor(limit)), undefined, (count) => {
+                    scanned += count;
+                }).docs;
             }
 
             return runPlainFetch(sql, tableName, stage, scopeCondition, buildOrderClause(), limit, (count) => {
@@ -1865,7 +1948,7 @@ const buildReader = (
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async first() {
-            const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 1);
+            const rows = runFetch(1);
 
             // eslint-disable-next-line unicorn/no-null -- documented `first()` result shape (Doc | null) returned to callers
             return rows[0] ?? null;
@@ -1896,6 +1979,28 @@ const buildReader = (
                 throw new LunoraError("INTERNAL", "pagination is not supported on geo queries; use .take(n) or .collect()");
             }
 
+            // Filtered, open-ended page: batch until one survivor past the page
+            // proves `hasMore`. The cursor is the last row RETURNED, so the next
+            // page re-reads (and re-rejects) whatever this one read past it.
+            if (stage.inMemoryFilters.length > 0 && typeof options.endCursor !== "string") {
+                const numberItems = Math.max(0, Math.floor(options.numItems));
+                const { docs, orderKeys } = scanFilteredBatches(numberItems + 1, options.cursor, (count) => {
+                    scanned += count;
+                });
+                const hasMore = docs.length > numberItems;
+                const filteredPage = hasMore ? docs.slice(0, numberItems) : docs;
+                const last = filteredPage.at(-1);
+
+                meterRows(Math.max(scanned, filteredPage.length));
+
+                return {
+                    // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
+                    continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+                    isDone: !hasMore,
+                    page: filteredPage,
+                };
+            }
+
             const page = paginateStage(sql, tableName, tableDefinition, stage, options, scopeConditionText, (count) => {
                 scanned = count;
             });
@@ -1914,7 +2019,7 @@ const buildReader = (
         async unique() {
             // Over-fetch one past the single row we expect: 0 → null, 1 → the
             // row, ≥2 → ambiguous, which is an error (mirrors Convex).
-            const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 2);
+            const rows = runFetch(2);
 
             if (rows.length > 1) {
                 throw new NotUniqueError(`unique() on table "${tableName}" matched ${String(rows.length)} documents; expected at most one`);
@@ -4464,7 +4569,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
          */
         relationEdges,
 
-        query(tableName) {
+        query(tableName, queryOptions) {
             const global = globalWriterFor(tableName, "query");
 
             if (global) {
@@ -4504,6 +4609,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         headroom?.recordRead(count);
                     }
                 },
+                queryOptions?.baseWhere,
             );
         },
 

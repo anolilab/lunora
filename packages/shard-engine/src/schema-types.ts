@@ -782,7 +782,15 @@ export interface DatabaseWriterLike {
         expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
-    query: (tableName: string) => TableReaderLike;
+
+    /**
+     * The fluent reader. `options.baseWhere` is a flat `where` tree AND-merged
+     * into the SQL of every terminal, exactly as `findMany`'s `baseWhere` is, so
+     * `take` / `first` / `paginate` keep their `LIMIT`. The RLS middleware passes
+     * the read policy here; it is not a user-facing option. A writer that cannot
+     * push it down may ignore it — the middleware still verifies every row.
+     */
+    query: (tableName: string, options?: { baseWhere?: WhereInput }) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
