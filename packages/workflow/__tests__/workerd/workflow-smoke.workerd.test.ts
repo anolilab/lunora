@@ -120,4 +120,39 @@ describe("@lunora/workflow (workerd)", () => {
             await instance.dispose();
         }
     }, 60_000);
+
+    // The wait above can outlast a step's own `timeout`. Cut short by the engine,
+    // the attempt fails either way, but the abandoned wait keeps re-dispatching
+    // next to the retry. It has to end with the decline before the timeout, so
+    // the attempt is charged once and nothing from it runs on afterwards.
+    it("ends a decline wait before the step's timeout, so the attempt fails once and stops dispatching", async () => {
+        expect.hasAssertions();
+
+        const id = "timed-decline-run-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_TIMED_DECLINE, id);
+
+        declineLog.attempts.length = 0;
+        declineLog.configs.length = 0;
+        declineLog.dispatchedBy.length = 0;
+
+        try {
+            // Eight declines outlast two 6s attempts (each wait gives up 2s before
+            // its timeout) and are gone by the third.
+            await env.WORKFLOW_TIMED_DECLINE.create({ id, params: { declines: 8 } });
+
+            await instance.waitForStatus("complete");
+
+            await expect(instance.getOutput()).resolves.toBe("charged");
+            // The engine hands the step its timeout, which is what the wait reads.
+            expect(declineLog.configs).toHaveLength(3);
+            expect(declineLog.configs).toStrictEqual(Array.from({ length: 3 }, () => expect.objectContaining({ timeout: "6 seconds" })));
+            // COUNTS: attempts 1 and 2 each re-checked at +0s, +1s, +3s and +4s,
+            // then gave up with the decline; attempt 3 was served on its first
+            // call. No attempt dispatched after the next one began.
+            expect(declineLog.attempts).toStrictEqual([1, 2, 3]);
+            expect(declineLog.dispatchedBy).toStrictEqual([1, 1, 1, 1, 2, 2, 2, 2, 3]);
+        } finally {
+            await instance.dispose();
+        }
+    }, 60_000);
 });

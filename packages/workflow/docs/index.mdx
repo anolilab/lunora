@@ -167,11 +167,18 @@ the first decline. A decline after that is rethrown and retried like any other
 failure. The guarantee stays at-least-once: a decline is never treated as
 success.
 
-Two things can still spend an attempt. The first is the step's own `timeout`
-(Cloudflare's default is 10 minutes), which can end a long wait. The second is
-the 30-second give-up itself, which is a retryable failure like any other.
-Give a slow action's step a `timeout` above its expected runtime, or raise the
-call's `timeoutMs`.
+Inside `context.runStep`, the wait is also bounded by the step's own `timeout`
+(Cloudflare's default is 10 minutes). It stops 2 seconds before that timeout
+and rethrows the decline, so the attempt fails once, with the decline, and the
+next attempt picks the wait up. Without that, the engine would time the attempt
+out anyway and the abandoned wait would keep re-dispatching next to the retry.
+A `context.run` inside a raw `context.step.do(...)` cannot see its step's timeout and is
+bounded by the claim alone.
+
+Two things can still spend an attempt, then: a wait that reaches the step's
+timeout, and the 30-second give-up itself, which is a retryable failure like any
+other. Give a slow action's step a `timeout` above its expected runtime, or
+raise the call's `timeoutMs`.
 
 ### Declared events (`defineWorkflowEvent`)
 

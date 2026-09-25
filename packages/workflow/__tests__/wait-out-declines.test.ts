@@ -1,8 +1,9 @@
 import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";
-import type { WorkflowEventLike, WorkflowStepLike } from "../src/types";
+import type { WorkflowEventLike, WorkflowStepConfigLike, WorkflowStepLike } from "../src/types";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "secret", LUNORA_ORIGIN_URL: "https://app.example.com" };
 const EVENT: WorkflowEventLike<Record<string, never>> = { instanceId: "inst-1", payload: {}, timestamp: new Date(0), workflowName: "order-pipeline" };
@@ -74,6 +75,45 @@ describe("ctx.run — a DISPATCH_IN_PROGRESS decline", () => {
         await vi.advanceTimersByTimeAsync(60 * 60_000);
 
         expect(fetchImpl).toHaveBeenCalledTimes(calls);
+    });
+
+    describe("inside ctx.runStep", () => {
+        /** A native step double that runs the callback once, handing it `config` the way the engine does. */
+        const stepApi = {
+            do: async (name: string, config: unknown, callback: unknown) =>
+                (callback as (context: unknown) => Promise<unknown>)({ attempt: 1, config, step: { count: 1, name } }),
+        } as unknown as WorkflowStepLike;
+
+        const runCharge = (fetchImpl: typeof fetch, config: WorkflowStepConfigLike) =>
+            createWorkflowRunContext({ env: ENV, event: EVENT, exportName: "orderPipeline", fetchImpl, step: stepApi }).runStep(
+                defineStep("charge", { args: {}, handler: async (context) => context.run({ __lunoraRef: "orders:charge" }) }),
+                {},
+                { config },
+            );
+
+        it.each([
+            // The wait gives up 2s before the timeout: re-checks at 0s, 1s, 3s and 4s.
+            ["6 seconds", 6000, 4],
+            [6000, 6000, 4],
+            // Unset: Cloudflare's ten-minute default. Re-checks at 0s, 1s, 3s, 7s, 15s and 31s, every
+            // 30s after that to 571s, and a last one cut short to 598s.
+            [undefined, 600_000, 25],
+        ])("ends the wait with the decline before a %s timeout", async (timeout, timeoutMs, dispatches) => {
+            expect.assertions(3);
+
+            const fetchImpl = origin(Number.POSITIVE_INFINITY);
+            const pending = runCharge(fetchImpl, timeout === undefined ? {} : { timeout }).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(timeoutMs - 2000);
+
+            await expect(pending).resolves.toMatchObject({ code: "DISPATCH_IN_PROGRESS" });
+            // COUNT, and nothing after: the abandoned attempt does not keep dispatching.
+            expect(fetchImpl).toHaveBeenCalledTimes(dispatches);
+
+            await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(dispatches);
+        });
     });
 
     it("rethrows any other failure at once", async () => {

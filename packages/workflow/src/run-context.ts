@@ -45,10 +45,10 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     //
     // Every dispatch, top-level and in-step, waits out a `DISPATCH_IN_PROGRESS`
     // decline in place rather than throwing it into the engine's retry budget
-    // (see `wait-out-declines.ts`).
-    const dispatch = waitOutDeclines(
-        createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction,
-    );
+    // (see `wait-out-declines.ts`). `createRunStep` gets the bare runner and
+    // wraps it per attempt, because only there is the step's timeout known.
+    const runner = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    const dispatch = waitOutDeclines(runner);
 
     // A top-level `ctx.run` is not durable — the body re-executes from the top on
     // every activation (after a `step.sleep`, a `waitForEvent`, an eviction) — so
@@ -163,7 +163,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
             env: options.env,
             log,
             nonRetryableErrorClass: options.nonRetryableErrorClass,
-            run: dispatch,
+            run: runner,
             step: options.step,
         }),
         spawn: createSpawn(fanOutDeps),

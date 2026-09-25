@@ -27,6 +27,7 @@ import type {
     WorkflowStepLike,
     WorkflowStepRollbackOptionsLike,
 } from "./types";
+import { stepWaitDeadline, waitOutDeclines } from "./wait-out-declines";
 
 /**
  * Validate a step's args through its validator map, prefixing any
@@ -48,7 +49,12 @@ interface RunStepDeps {
     log: WorkflowLogger;
     /** Native `cloudflare:workflows` `NonRetryableError` constructor — injected by `src/do`; absent in Node tests. */
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
-    /** The Lunora function runner, surfaced on the step context. */
+
+    /**
+     * The bare Lunora function runner. Each step attempt (and each rollback)
+     * surfaces it wrapped in `waitOutDeclines`, bounded by that attempt's own
+     * timeout.
+     */
     run: WorkflowRunFunction;
     /** The native Cloudflare durable-step API. */
     step: WorkflowStepLike;
@@ -108,8 +114,9 @@ const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
                 // failed step body in place, so the counter has to restart at
                 // `.1` for each attempt. That is what makes attempt 2 re-issue
                 // attempt 1's ids and the shard apply the mutation once instead
-                // of once per attempt — the double-charge this closes.
-                run: pinDedupId(deps.run, dedupScope),
+                // of once per attempt — the double-charge this closes. A decline
+                // is waited out only until just before this attempt's timeout.
+                run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(nativeContext.config, Date.now())), dedupScope),
                 step: nativeContext.step,
             };
 
@@ -168,7 +175,7 @@ const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
                           // its ids. Its own scope, never the forward step's: a
                           // refund sharing the charge's id would dedup against it
                           // and silently never run.
-                          run: pinDedupId(deps.run, `${dedupScope}rollback`),
+                          run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(rollbackContext.ctx.config, Date.now())), `${dedupScope}rollback`),
                       });
                   },
                   rollbackConfig: step.rollbackConfig,

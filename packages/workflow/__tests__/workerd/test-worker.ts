@@ -26,6 +26,7 @@ interface SmokeOutput {
 interface Env {
     WORKFLOW_DECLINE: Workflow<DeclineParams>;
     WORKFLOW_SMOKE: Workflow<SmokeParams>;
+    WORKFLOW_TIMED_DECLINE: Workflow<DeclineParams>;
 }
 
 interface DeclineParams {
@@ -51,7 +52,14 @@ const smokeWorkflow: WorkflowDefinition<SmokeParams, SmokeOutput> = defineWorkfl
  * entry per `ctx.run` POST, and the engine's attempt number on every entry into
  * the step body.
  */
-const declineLog = { attempts: [] as number[], dispatches: 0 };
+const declineLog = {
+    attempts: [] as number[],
+    /** The step config the engine handed each attempt of the timed step. */
+    configs: [] as unknown[],
+    dispatches: 0,
+    /** For the timed step: the attempt that made each dispatch, in arrival order. */
+    dispatchedBy: [] as number[],
+};
 
 /**
  * The worker's `/_lunora/scheduler/dispatch` hop, answered in-process. It
@@ -60,8 +68,14 @@ const declineLog = { attempts: [] as number[], dispatches: 0 };
  */
 const origin = { pendingDeclines: 0 };
 
-const originFetch = (): Response => {
+const originFetch = async (request: Request): Promise<Response> => {
+    const { args } = await request.json<{ args?: { attempt?: number } }>();
+
     declineLog.dispatches += 1;
+
+    if (typeof args?.attempt === "number") {
+        declineLog.dispatchedBy.push(args.attempt);
+    }
 
     if (origin.pendingDeclines > 0) {
         origin.pendingDeclines -= 1;
@@ -82,9 +96,9 @@ const realFetch = globalThis.fetch.bind(globalThis);
 // the engine runs the entrypoint in this isolate, so the dispatch its `ctx.run`
 // makes goes through this module's global `fetch`.
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
+    const request = new Request(input, init);
 
-    return url.origin === "https://origin.test" ? originFetch() : realFetch(input, init);
+    return new URL(request.url).origin === "https://origin.test" ? originFetch(request) : realFetch(request);
 };
 
 /** One durable step whose only work is a `ctx.run`, with a small, fast retry budget so an exhausted budget shows up in seconds. */
@@ -106,6 +120,36 @@ const declineWorkflow: WorkflowDefinition<DeclineParams> = defineWorkflow<Declin
     },
 });
 
+/**
+ * The same call in a step whose `timeout` (6s) is shorter than the declines
+ * last. Each dispatch names the attempt that made it, so a wait that outlives
+ * its attempt shows up as an earlier attempt dispatching after a later one.
+ */
+const timedChargeStep = defineStep("timed-charge", {
+    args: {},
+    config: { retries: { backoff: "constant", delay: "1 second", limit: 2 }, timeout: "6 seconds" },
+    handler: async (context) => {
+        declineLog.attempts.push(context.attempt);
+        declineLog.configs.push(context.config);
+
+        return context.run({ __lunoraRef: "orders:slowCharge" }, { attempt: context.attempt });
+    },
+});
+
+const timedDeclineWorkflow: WorkflowDefinition<DeclineParams> = defineWorkflow<DeclineParams>({
+    handler: async (context) => {
+        origin.pendingDeclines = context.params.declines;
+
+        return context.runStep(timedChargeStep, {});
+    },
+});
+
+class TimedDeclineWorkflow extends LunoraWorkflow<DeclineParams> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(context, env, timedDeclineWorkflow, "timedDeclineWorkflow");
+    }
+}
+
 class DeclineWorkflow extends LunoraWorkflow<DeclineParams> {
     public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
         super(context, env, declineWorkflow, "declineWorkflow");
@@ -126,5 +170,5 @@ const testWorker = {
 };
 
 export default testWorker;
-export { declineLog, DeclineWorkflow, SmokeWorkflow, smokeWorkflow };
+export { declineLog, DeclineWorkflow, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
 export type { DeclineParams, Env, SmokeOutput, SmokeParams };
