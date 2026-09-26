@@ -84,6 +84,9 @@ public enum LunoraJSON {
         mutating func object(depth: Int) throws -> Any {
             index += 1
             var result: [String: Any] = [:]
+            // Set once two keys collide as `String`s but not as UTF-16: from then
+            // on the object is keyed by code unit.
+            var wide: [WireKey: Any]?
             skipWhitespace()
 
             if current == UInt8(ascii: "}") {
@@ -102,20 +105,26 @@ public enum LunoraJSON {
 
                 // Last duplicate wins, as `JSON.parse` does. But Swift compares a
                 // lone surrogate as U+FFFD, so `"\ud800"` and `"\ud801"` are ONE
-                // `[String: Any]` key here and two to JavaScript: merging them
-                // would silently drop a member, so such an object is refused.
-                if let existing = result.index(forKey: key), Wire.utf16Units(result[existing].key) != Wire.utf16Units(key) {
-                    throw failure()
+                // `[String: Any]` key here and two to JavaScript. Merging them
+                // would drop a member, so the object becomes a `[WireKey: Any]`,
+                // which tells them apart as JavaScript does.
+                if wide == nil, let existing = result.index(forKey: key), Wire.utf16Units(result[existing].key) != Wire.utf16Units(key) {
+                    wide = Dictionary(uniqueKeysWithValues: result.map { (WireKey($0.key), $0.value) })
                 }
 
-                result[key] = item
+                if wide != nil {
+                    wide?[WireKey(key)] = item
+                } else {
+                    result[key] = item
+                }
+
                 skipWhitespace()
 
                 switch current {
                 case UInt8(ascii: ","): index += 1
                 case UInt8(ascii: "}"):
                     index += 1
-                    return result
+                    return wide ?? result
                 default: throw failure()
                 }
             }
