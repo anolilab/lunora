@@ -1,3 +1,4 @@
+import { defaultParseSearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
 
 import { dataViewToSearch, searchToDataView, validateDataViewSearch, validateSchemaVersionSearch } from "../../src/lib/data-view-params";
@@ -203,5 +204,16 @@ describe("validateSchemaVersionSearch", () => {
         expect.assertions(1);
 
         expect(validateSchemaVersionSearch({ table: "logs", version: "deadbeefdeadbeef" })).toStrictEqual({ version: "deadbeefdeadbeef" });
+    });
+});
+
+describe("dataViewParams — values the router or JSON cannot carry verbatim", () => {
+    it("keeps a numeric shard key from a hand-written link", () => {
+        expect.assertions(2);
+
+        // `?shard=42` reaches `validateSearch` as the NUMBER 42 after the router's JSON parse.
+        expect(searchToDataView(validateDataViewSearch(defaultParseSearch("?table=messages&shard=42"))).shard).toBe("42");
+        // Past 2^53 the parse already rounded it to a different key, so it is dropped rather than guessed.
+        expect(validateDataViewSearch({ shard: 2 ** 60 }).shard).toBeUndefined();
     });
 });

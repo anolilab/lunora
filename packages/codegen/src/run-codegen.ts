@@ -645,10 +645,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflows,
     } = buildDeclarationSurface({ lunoraDirectory, project, projectRoot: options.projectRoot, schema, target: options.target });
 
-    // Before anything is written: pinning voice sessions / DO-backed auth that
-    // were unpinned before would start them out empty, and nothing else about
-    // the upgrade changes the schema, so this is the one place that can stop it.
-    assertJurisdictionMoveAcknowledged(schema, agents, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
+    // Before anything is written: pinning DO-backed auth that was unpinned
+    // before would start it out empty, and nothing else about the upgrade
+    // changes the schema, so this is the one place that can stop it.
+    assertJurisdictionMoveAcknowledged(schema, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
 
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
@@ -1023,8 +1023,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
-        // `{ pinAuthAndVoice: true }` — only then is DO-backed auth pinned too.
-        jurisdictionPinsAuthAndVoice: schema.jurisdictionPinsAuthAndVoice === true,
+        // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
+        jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
         // Drives the emitted `listSchemaTables` — export's seed for "every table".
         tableNames: schema.tables.map((table) => table.name),
         useUmbrella,

@@ -53,6 +53,7 @@ export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomain
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { createSignUpInvitation, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation } from "./invite-only";
+export type { AuthJurisdictionMove, AuthMoveResult, AuthMoveTableReport } from "./jurisdiction-move";
 export { legacyIssuerCleanupStatements } from "./legacy-issuer";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";

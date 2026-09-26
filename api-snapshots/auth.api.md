@@ -405,6 +405,19 @@ interface AuthInvitation {
 type AuthJurisdiction = "eu" | "fedramp" | "us";
 ```
 
+### `AuthJurisdictionMove` (interface)
+
+```ts
+interface AuthJurisdictionMove {
+    copy: (options?: {
+        force?: boolean;
+    }) => Promise<AuthMoveResult>;
+    purge: () => Promise<{
+        dropped: string[];
+    }>;
+}
+```
+
 ### `AuthMember` (interface)
 
 ```ts
@@ -415,6 +428,30 @@ interface AuthMember {
     organizationId: string;
     role?: null | string;
     userId: string;
+}
+```
+
+### `AuthMoveResult` (interface)
+
+```ts
+interface AuthMoveResult {
+    done: boolean;
+    tables: AuthMoveTableReport[];
+}
+```
+
+### `AuthMoveTableReport` (interface)
+
+```ts
+interface AuthMoveTableReport {
+    conflicts: number;
+    copied: number;
+    deleted: number;
+    sourceRows: number;
+    table: string;
+    targetRows: number;
+    unchanged: number;
+    updated: number;
 }
 ```
 
@@ -596,6 +633,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<null | {
         email?: string;
         expiresAtMs?: number;

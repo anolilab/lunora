@@ -1,3 +1,143 @@
+## @lunora/errors [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.43...@lunora/errors@1.0.0-alpha.44) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** the per-table copy report replaces `skipped` with `unchanged`,
+`updated`, `deleted` and `conflicts`.
+
+Tests (workerd, each failing on the previous implementation and against a
+sabotaged variant): copy order; a resume refused after a mid-copy sign-up; a
+colliding row failing its page; purge refused after a reused rowid, an update
+and a delete, each then carried by the next copy; the rollback, password reset,
+session revoke and re-pin sequence ending in a verified purge; the per-call
+fetch budget; missing indexes; the step, table and cause on failure; the source
+serving requests again after a purge.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(auth): say the auth copy is a snapshot reconciled by fingerprint
+
+The "Pinning auth and voice" steps claimed the copy could not miss a write
+and that `skipped` was 0 unless forced; neither held. The page now says:
+
+- the copy captures a snapshot, and updates or deletes made on the un-pinned
+  object afterwards are reconciled only through the fingerprint check
+- the un-pinned object can still take writes during a gradual rollout or after
+  a rollback
+- both refusals run on every call, including collisions with plugin state the
+  pinned object created on its own
+- one call copies at most 16 pages and `done: true` means every table matches
+- the report fields, and the purge refusals: incomplete copy vs source changed
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): gate only DO-backed auth on a jurisdiction move
+
+Codegen refused a voice-only app that declared `.jurisdiction()` until it
+added `{ pinAuthAndVoice: true }`, although nothing is at risk there. A
+VoiceSessionDO keeps no storage: it holds the live socket and the utterance in
+progress, and every transcript turn is an agent-thread row in the shards, which
+the jurisdiction already pins. Pinning voice only drops the sessions live at the
+deploy.
+
+The JURISDICTION_MOVE gate now fires only for DO-backed auth, whose pinned
+object does start empty until its rows are copied. A voice-only app passes
+codegen and its voice namespaces are pinned through the worker's jurisdiction,
+as they already were at runtime.
+
+The acknowledgement is renamed `pinAuthAndVoice` -> `pinAuth` (and the IR field
+`jurisdictionPinsAuthAndVoice` -> `jurisdictionPinsAuth`). It no longer
+governs voice, and a name that says it does would tell a voice-only app it
+needs it. On the pre-release branch that is a straight rename: the schema
+option, the codegen discovery, the IR and emit option, the error hints, the
+runtime message, the capability note and the docs all change here, with no
+alias.
+
+The JURISDICTION_MOVE hint and the "Pinning auth and voice" docs now describe
+voice as pinned automatically and the acknowledgement as auth-only; the errors
+reference is regenerated.
+* **auth:** `.jurisdiction(j, { pinAuthAndVoice: true })` is now
+`.jurisdiction(j, { pinAuth: true })`. The codegen IR field and `emitApp`
+option `jurisdictionPinsAuthAndVoice` are now `jurisdictionPinsAuth`.
+
+Tests (failing on the previous code first): a voice-only app with a
+jurisdiction passes codegen and its generated worker carries the jurisdiction
+and the voice agents; DO-backed auth is still refused without the
+acknowledgement, and accepted with it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* perf(auth): fingerprint the auth copy once per pass and stream it
+
+The change check scanned the copied prefix of every table on every copy
+call: the source digested each table up to its cursor, the target read its
+whole record back, and the user check loaded every copied and every pinned
+user key into memory. One call moves at most 1,600 rows, so a large table
+needed many calls, each scanning a prefix that grew toward the whole table:
+quadratic, and holding full tables in isolate memory.
+
+- Fingerprints now run once per pass: only on the call that reaches the end of
+  every table (and in purge). A table found changed there is marked for a
+  re-scan (`rescan` op), and the next call reconciles it. Resuming a partial
+  pass no longer re-reads what was already copied; a re-run after a finished
+  copy still checks, since it reaches the end at once.
+- Fingerprints stream from the SQL cursor, one row in memory at a time.
+- The user check looks only at user rows above a stored `rowid` watermark
+  and matches keys in SQL (`json_array`), so each call checks the sign-ups
+  since the last one instead of the whole table.
+- `status` computes the target's fingerprints only when asked.
+
+A node:sqlite suite covers the move on the default run as well, which the
+auth package's coverage floor needs now that the module is larger.
+
+Test (workerd): a copy over several calls fingerprints on one call only; it
+fails with a fingerprint added to every call.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): regenerate the auth and errors snapshots after merging alpha
+
+The merge kept this branch's side of `api-snapshots/auth.api.md` and
+`errors.api.md` whole and dropped the entries alpha added (the session-sync
+client plugin and IDENTITY_MISMATCH). Regenerated from a fresh build so both
+sides are present; `api:check` passes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(auth): refuse to copy from an un-pinned auth object after its purge
+
+After a purge the un-pinned object materialises its schema again on its next
+request, so a rollback to a build without the pin re-creates its tables empty.
+A copy from it then read every table as fully deleted: the fingerprint check
+marked them changed, the re-scan swept every row the pinned object still held
+unchanged from the copy, and those users were deleted with no source left to
+restore them from.
+
+The purge now writes a tombstone (`__lunora_auth_purged__`) in the same
+transaction as the drop. Every source-side step (manifest, page, fingerprints,
+purge) refuses with the new AUTH_MOVE_SOURCE_PURGED (409) while it exists, and
+the tombstone is excluded from the tables a copy or purge sees.
+
+The purge also left the audit table's single-flight "already created" cache
+pointing at the dropped table, so the first audit read after a purge failed
+with "no such table". The object takes a fresh audit executor on purge.
+
+Test (workerd, failing without the tombstone): copy, purge, the un-pinned object
+serves again and takes a sign-up; copy and purge both refuse, and the pinned
+object keeps every copied user and account.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Features
+
+* **auth:** copy DO-backed auth into its jurisdiction-pinned object ([#841](https://github.com/anolilab/lunora/issues/841)) ([ea1a3d4](https://github.com/anolilab/lunora/commit/ea1a3d40ff7fc084d3340d2d75c2bfb2f2bb1300))
+
 ## @lunora/errors [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.42...@lunora/errors@1.0.0-alpha.43) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES

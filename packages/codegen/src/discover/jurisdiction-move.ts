@@ -1,9 +1,8 @@
-import { LunoraError } from "@lunora/errors";
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { AgentIR, SchemaIR } from "../ir";
+import type { SchemaIR } from "../ir";
 import { listSecurityScanFiles } from "./ast";
 
 /** The key a property-name node spells, or `undefined` when it is computed from something other than a string literal. */
@@ -61,46 +60,37 @@ const findDoAuthDeclaration = (project: Project, lunoraDirectory: string): CallE
     return undefined;
 };
 
-/** Where the unacknowledged objects are documented, including how to move their data. */
+/** Where the move is documented, including how to copy the auth rows across. */
 const UPGRADE_DOCS = "https://lunora.sh/docs/concepts/data-residency#pinning-auth-and-voice";
 
 /**
- * Refuse a project whose schema declares `.jurisdiction(…)` and which reaches
- * voice sessions or DO-backed auth, unless the schema acknowledges the move
- * with `{ pinAuthAndVoice: true }`.
+ * Refuse a project whose schema declares `.jurisdiction(…)` and which has
+ * DO-backed auth, unless the schema acknowledges the move with
+ * `{ pinAuth: true }`.
  *
- * Those objects were not pinned before, and a Durable Object name maps to a
- * different id in each jurisdiction: pinning them resolves every user, session,
- * credential and transcript to a new, empty object. Nothing else fires on this
- * upgrade — the schema itself did not change — so without this check the first
- * deploy silently locks every user out.
+ * The auth object was not pinned before, and a Durable Object name maps to a
+ * different id in each jurisdiction: pinning it resolves every user, account,
+ * session and credential to a new, empty object until the rows are copied.
+ * Nothing else fires on this upgrade — the schema itself did not change — so
+ * without this check the first deploy silently locks every user out.
+ *
+ * Voice sessions are not gated. A `VoiceSessionDO` keeps no storage: it holds
+ * the live socket and the utterance in progress, and every transcript turn is a
+ * row in the app's shards, which the jurisdiction already pins. Pinning voice
+ * only drops the sessions live at the deploy, so the worker pins it outright.
  */
-const assertJurisdictionMoveAcknowledged = (schema: SchemaIR, agents: ReadonlyArray<AgentIR>, doAuthDeclaration: CallExpression | undefined): void => {
-    if (schema.jurisdiction === undefined || schema.jurisdictionPinsAuthAndVoice === true) {
+const assertJurisdictionMoveAcknowledged = (schema: SchemaIR, doAuthDeclaration: CallExpression | undefined): void => {
+    if (schema.jurisdiction === undefined || schema.jurisdictionPinsAuth === true || doAuthDeclaration === undefined) {
         return;
     }
 
-    const voiceAgents = agents.filter((agent) => agent.voice === true).map((agent) => `"${agent.exportName}"`);
-    const affected = [
-        ...(doAuthDeclaration === undefined ? [] : ["DO-backed auth (users, sessions, accounts, credentials)"]),
-        ...(voiceAgents.length === 0 ? [] : [`the voice sessions of agent(s) ${voiceAgents.join(", ")} (transcripts)`]),
-    ];
-
-    if (affected.length === 0) {
-        return;
-    }
-
-    const detail =
-        `the schema pins Durable Objects to the "${schema.jurisdiction}" jurisdiction, and this project also has ${affected.join(" and ")}. ` +
-        `Those objects are now pinned too, which resolves them to NEW, EMPTY objects: existing data stays in the unpinned ones. ` +
-        `Move or discard that data first (${UPGRADE_DOCS}), then acknowledge with \`.jurisdiction("${schema.jurisdiction}", { pinAuthAndVoice: true })\`. ` +
-        `For D1-mode auth the acknowledgement changes nothing.`;
-
-    if (doAuthDeclaration !== undefined) {
-        throw diagnosticAt(doAuthDeclaration, detail, { code: "JURISDICTION_MOVE", status: 422 });
-    }
-
-    throw new LunoraError("JURISDICTION_MOVE", `@lunora/codegen: ${detail}`, { status: 422 });
+    throw diagnosticAt(
+        doAuthDeclaration,
+        `the schema pins Durable Objects to the "${schema.jurisdiction}" jurisdiction, and this project also has DO-backed auth (users, sessions, accounts, credentials). ` +
+            `Pinning the auth object resolves it to a NEW, EMPTY object: existing users stay in the unpinned one until you copy them across (${UPGRADE_DOCS}). ` +
+            `Acknowledge with \`.jurisdiction("${schema.jurisdiction}", { pinAuth: true })\`, deploy, then run the copy. For D1-mode auth the acknowledgement changes nothing.`,
+        { code: "JURISDICTION_MOVE", status: 422 },
+    );
 };
 
 export { assertJurisdictionMoveAcknowledged, findDoAuthDeclaration };

@@ -14,6 +14,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
+import { AuthPager } from "./auth-pager";
 import SignUpInvitationsPanel from "./sign-up-invitations-panel";
 import { UserCreateDialog } from "./user-create-dialog";
 import { UserDetailDrawer } from "./user-detail-drawer";
@@ -39,6 +40,9 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
     const [search, setSearch] = useState<string>("");
     const [roleFilter, setRoleFilter] = useState<string>("");
+    // Reset to the first page by the handlers that narrow the list, so an offset
+    // can never point past a smaller filtered total.
+    const [offset, setOffset] = useState<number>(0);
     const debouncedSearch = useDebounced(search);
 
     const [selectedUserId, setSelectedUserId] = useState<null | string>(null);
@@ -51,14 +55,22 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
     // over `client.listAuthUsers`, keyed on the search / role / page size.
     const usersQuery = useClientQuery(
-        ["lunora-auth-users", trimmedSearch, trimmedRole, pageSize],
+        ["lunora-auth-users", trimmedSearch, trimmedRole, pageSize, offset],
         () =>
-            client.listAuthUsers({
-                filterField: trimmedRole === "" ? undefined : "role",
-                filterValue: trimmedRole === "" ? undefined : trimmedRole,
-                limit: pageSize,
-                search: trimmedSearch === "" ? undefined : trimmedSearch,
-            }),
+            client
+                .listAuthUsers({
+                    filterField: trimmedRole === "" ? undefined : "role",
+                    filterValue: trimmedRole === "" ? undefined : trimmedRole,
+                    limit: pageSize,
+                    offset,
+                    search: trimmedSearch === "" ? undefined : trimmedSearch,
+                })
+                .then((page) => {
+                    // Tagged with the offset it was read at: `keepPreviousData` shows this
+                    // page while the next one loads, and the pager must describe (and page
+                    // from) the rows on screen, not the offset already requested.
+                    return { ...page, offset };
+                }),
         { keepPreviousData: true },
     );
     const users = usersQuery.data?.rows ?? null;
@@ -88,6 +100,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     data-testid="us-search"
                     onChange={(event) => {
                         setSearch(event.target.value);
+                        setOffset(0);
                     }}
                     placeholder={t("Search by email or name…")}
                     value={search}
@@ -98,6 +111,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     data-testid="us-role-filter"
                     onChange={(event) => {
                         setRoleFilter(event.target.value);
+                        setOffset(0);
                     }}
                     placeholder={t("Filter by role")}
                     value={roleFilter}
@@ -200,6 +214,17 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {users !== null && (
+                <AuthPager
+                    count={users.length}
+                    offset={usersQuery.data?.offset ?? 0}
+                    onOffsetChange={setOffset}
+                    pageSize={pageSize}
+                    prefix="us"
+                    total={usersQuery.data?.total}
+                />
             )}
 
             {selectedUser !== null && (

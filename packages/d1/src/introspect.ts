@@ -20,7 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
-import { sqliteEncode } from "@lunora/sql-store";
+import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "@lunora/sql-store";
 
 import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
@@ -196,6 +196,37 @@ const countRows = async (exec: D1Exec, quotedTable: string, whereSql = "", where
 const physicalColumnName = (schema: SchemaLike, table: string, displayColumn: string): string =>
     globalTableDefinition(schema, table) !== undefined && displayColumn === "_id" ? "id" : displayColumn;
 
+/** Declared storage kind of a `.global()` table's field, or `undefined` for a framework column or an external table. */
+const globalColumnKind = (schema: SchemaLike, table: string, column: string): string | undefined => {
+    const validator = globalTableDefinition(schema, table)?.shape[column];
+
+    return validator === undefined ? undefined : effectiveColumnKind(validator);
+};
+
+/** An integer literal a `v.bigint()` filter accepts as typed text. */
+const INTEGER_TEXT = /^-?\d+$/u;
+
+/**
+ * The bound form of an eq filter value: the writer's own {@link sqliteEncode},
+ * given the column's kind. A `v.bigint()` column stores a zero-padded TEXT sort
+ * key, and a browser sends the operator's `10` as a number (or, past 2^53, as the
+ * exact digit string) — bound raw, that never equals the key. Integer input is
+ * parsed to a `bigint` first so it encodes to the key the row was written with.
+ */
+const bindGlobalFilterValue = (value: unknown, kind: string | undefined): unknown => {
+    if (kind !== "bigint") {
+        // Only bigint needs its kind here. An untyped column (`union`/`any`/
+        // `from`) stores its scalars in the marked form, and the facet hands that
+        // stored text straight back as the clicked value: encoding it again with
+        // the kind would mark it a second time and it would never match.
+        return sqliteEncode(value);
+    }
+
+    const text = typeof value === "number" || typeof value === "string" ? String(value).trim() : undefined;
+
+    return sqliteEncode(text !== undefined && INTEGER_TEXT.test(text) ? BigInt(text) : value, kind);
+};
+
 /**
  * Compile a list of eq constraints into a bound ` WHERE …` fragment for the
  * global read/facet paths. Each clause's column is validated against the table's
@@ -237,7 +268,7 @@ const buildEqPredicate = (
             clauses.push(`${quoted} IS NULL`);
         } else {
             clauses.push(`${quoted} = ?`);
-            params.push(sqliteEncode(filter.value));
+            params.push(bindGlobalFilterValue(filter.value, globalColumnKind(schema, table, filter.column)));
         }
     }
 
@@ -465,8 +496,12 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const truncated = rows.length > limit;
     const kept = truncated ? rows.slice(0, limit) : rows;
 
+    // A `v.bigint()` value is stored as its 40-character sort key; the facet reads
+    // `4200n`, not that key, and a click on it re-encodes to the same key. Every
+    // other kind stays the raw stored scalar, which already binds back as-is.
+    const isBigint = globalColumnKind(schema, table, column) === "bigint";
     const values = kept.map((row) => {
-        return { count: Number(row["count"]), value: row["value"] };
+        return { count: Number(row["count"]), value: isBigint ? sqliteDecode(row["value"], "bigint") : row["value"] };
     });
 
     return { truncated, values: needsWireEncoding(values) ? (encodeWire(values) as GlobalFacetValue[]) : values };

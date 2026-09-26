@@ -8,6 +8,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
+import { facetFilterValue } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
@@ -181,7 +182,7 @@ export const GlobalDataBrowser = ({
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing the
     // view. Replaces any existing clause for the same column so repeated clicks don't stack.
     const onFacetFilter = (column: string, value: unknown): void => {
-        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value }]);
+        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value: facetFilterValue(value) }]);
     };
 
     // Remove one active drill-down filter (its chip's ✕).

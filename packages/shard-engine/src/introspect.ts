@@ -7,6 +7,8 @@ import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
 import { DOC_ORIGINALS_KEY } from "./do-sql";
 import type { SortDirection } from "./schema-types";
+import { serializeSqlValue } from "./serialize-sql";
+import { decodeBigintSqlKey } from "./sql-projection";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel
@@ -814,6 +816,16 @@ interface TablePage {
     total?: number;
 }
 
+/**
+ * Declared validator kind per `__doc__` field (`{ amountMinor: "bigint" }`), from
+ * the schema. A `v.bigint()` / `v.bytes()` field is stored at `$.field` as a
+ * projected sort key rather than as its value, so a filter value has to be bound
+ * in that same projected form and a facet value decoded out of it — which only a
+ * caller that knows the column's kind can do. Absent (the schema-free base DO) →
+ * values bind as they arrive, which is right for every other kind.
+ */
+type ColumnKinds = Readonly<Record<string, string>>;
+
 /** Comparison a {@link FilterClause} applies. `contains` is a case-insensitive substring test (see {@link containsSql}); the rest are direct SQL comparisons. */
 type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
 
@@ -843,6 +855,9 @@ interface OrderByClause {
 }
 
 interface ReadTablePageOptions {
+    /** Declared kind per doc field, so filter values bind in the stored projection — see {@link ColumnKinds}. */
+    columnKinds?: ColumnKinds;
+
     /**
      * Structured column filters, AND-combined with each other and with `search`.
      * Each clause's value (and any `__doc__` path) is a bound parameter; the
@@ -901,6 +916,8 @@ interface SelectMatchingIdsOptions {
      * which turns the ordering off and makes the returned cursor meaningless.
      */
     after?: string;
+    /** Declared kind per doc field, so filter values bind in the stored projection — see {@link ColumnKinds}. */
+    columnKinds?: ColumnKinds;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -919,6 +936,8 @@ interface SelectMatchingIdsOptions {
  */
 interface FacetColumnOptions {
     column: string;
+    /** Declared kind per doc field: filter values bind, and facet values decode, through the stored projection — see {@link ColumnKinds}. */
+    columnKinds?: ColumnKinds;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -1163,6 +1182,56 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
         : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$.${jsonPathSegment(column)}`] };
 };
 
+/** An integer literal a `v.bigint()` filter accepts as typed text. */
+const INTEGER_TEXT = /^-?\d+$/u;
+
+/**
+ * The bound form of a filter value: the writer's own {@link serializeSqlValue}
+ * projection, so it compares against what is stored at `$.field`.
+ *
+ * A `v.bigint()` field stores a zero-padded TEXT sort key. A browser sends the
+ * operator's `10` as a NUMBER (or, past 2^53, as the exact digit STRING), and
+ * bound raw that compares against the key under SQLite's cross-type rules — TEXT
+ * ranks above every INTEGER — so `= 10` matched nothing and `> 100` matched every
+ * row, which "delete matching" then deleted. Integer input is parsed to a
+ * `bigint` first so it projects to the key; anything else is refused rather than
+ * compared against a key it can never be ordered against honestly.
+ * @throws LunoraError `BAD_REQUEST` when a bigint column is filtered by a value that is not an integer
+ */
+const filterBindValue = (clause: FilterClause, kind: string | undefined): unknown => {
+    const { value } = clause;
+
+    if (kind === "bigint" && (typeof value === "number" || typeof value === "string")) {
+        const text = typeof value === "number" && Number.isInteger(value) ? BigInt(value).toString() : String(value).trim();
+
+        if (!INTEGER_TEXT.test(text)) {
+            throw new LunoraError("BAD_REQUEST", `bigint column ${clause.column} can only be filtered by an integer, got ${JSON.stringify(value)}`);
+        }
+
+        return serializeSqlValue(BigInt(text));
+    }
+
+    // Any other value on a bigint column (a boolean, array, object) would bind as
+    // INTEGER or JSON text against the TEXT sort key, where `gt`/`ne`/`lt` match
+    // every row — and this clause also selects the rows a bulk delete removes.
+    if (kind === "bigint" && typeof value !== "bigint") {
+        throw new LunoraError("BAD_REQUEST", `bigint column ${clause.column} can only be filtered by an integer, got ${JSON.stringify(value)}`);
+    }
+
+    return serializeSqlValue(value);
+};
+
+/**
+ * Reverse the stored sort key of a faceted `v.bigint()` value into the value
+ * itself, so the facet reads `4200n` rather than 40 characters of padding — and a
+ * click on it sends back a value {@link filterBindValue} re-projects to the same
+ * key. Every other kind is returned as stored: a `v.bytes()` key is its base64
+ * text, which is both readable and what a click binds straight back against.
+ * @returns the decoded value, or `value` unchanged when it is not a bigint key
+ */
+const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
+    kind === "bigint" && typeof value === "string" ? (decodeBigintSqlKey(value) ?? value) : value;
+
 /**
  * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
  * `undefined` to skip it (an unknown column on a non-doc table). The compared
@@ -1180,9 +1249,12 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
  * `json_extract` returns NULL both when the key is absent and when it holds JSON
  * `null`, and the facet groups those together too — so the clause matches
  * exactly the rows the facet counted.
+ *
+ * Every other value binds through {@link filterBindValue}, the writer's own
+ * projection, so it compares against the form actually stored at `$.field`.
  * @returns the SQL conjunct and bound params, or `undefined` for an unknown column on a non-doc table
  */
-const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { params: unknown[]; sql: string } | undefined => {
+const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kinds: ColumnKinds | undefined): { params: unknown[]; sql: string } | undefined => {
     const resolved = resolveColumnExpression(clause.column, physicalColumns);
 
     if (resolved === undefined) {
@@ -1190,8 +1262,15 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
     }
 
     const { expression, params: pathParameters } = resolved;
+    const kind = physicalColumns.includes(clause.column) ? undefined : kinds?.[clause.column];
 
     if (clause.operator === "contains") {
+        // The stored text of a bigint is a zero-padded sort key, so a substring
+        // test over it matches on the padding: `contains 100` hits every value.
+        if (kind === "bigint") {
+            throw new LunoraError("BAD_REQUEST", `"contains" is not supported on bigint column ${clause.column} — use =, <, > instead`);
+        }
+
         return { params: [...pathParameters, filterValueText(clause.value)], sql: containsSql(expression) };
     }
 
@@ -1199,7 +1278,7 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
         return { params: pathParameters, sql: `${expression} IS ${clause.operator === "ne" ? "NOT " : ""}NULL` };
     }
 
-    return { params: [...pathParameters, clause.value], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
+    return { params: [...pathParameters, filterBindValue(clause, kind)], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
 };
 
 /** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
@@ -1276,7 +1355,12 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
  * text happens to contain that substring, which for an epoch-millis or ISO
  * timestamp is an accident rather than a month filter.
  */
-const buildTablePredicate = (columns: string[], needle: string, filters: FilterClause[] | undefined): undefined | { parameters: unknown[]; where: string } => {
+const buildTablePredicate = (
+    columns: string[],
+    needle: string,
+    filters: FilterClause[] | undefined,
+    kinds?: ColumnKinds,
+): undefined | { parameters: unknown[]; where: string } => {
     const conjuncts: string[] = [];
     const parameters: unknown[] = [];
 
@@ -1301,7 +1385,7 @@ const buildTablePredicate = (columns: string[], needle: string, filters: FilterC
     }
 
     for (const clause of filters ?? []) {
-        const built = buildFilterClause(clause, columns);
+        const built = buildFilterClause(clause, columns, kinds);
 
         if (built !== undefined) {
             conjuncts.push(`(${built.sql})`);
@@ -1375,7 +1459,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
         return Object.keys(references).length > 0 ? { ...page, refs: references } : page;
     };
 
-    const predicate = buildTablePredicate(columns, needle, options.filters);
+    const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
     const order = buildOrderBy(options.orderBy, columns);
 
     // Assemble WHERE / ORDER BY fragments and their bound params in SQL order
@@ -1439,7 +1523,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const columns = physicalColumnNames(sql, quoted);
 
     const needle = options.search?.trim() ?? "";
-    const predicate = buildTablePredicate(columns, needle, options.filters);
+    const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
 
     const conditions: string[] = [];
     const parameters: unknown[] = [];
@@ -1539,7 +1623,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
     const needle = options.search?.trim() ?? "";
-    const predicate = buildTablePredicate(physicalColumns, needle, options.filters);
+    const predicate = buildTablePredicate(physicalColumns, needle, options.filters, options.columnKinds);
 
     const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
     const whereParams = predicate?.parameters ?? [];
@@ -1561,11 +1645,12 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
         .toArray();
 
     const truncated = rows.length > limit;
+    const kind = physicalColumns.includes(column) ? undefined : options.columnKinds?.[column];
 
     return {
         truncated,
         values: rows.slice(0, limit).map((row) => {
-            return { count: Number(row.count), value: row.value };
+            return { count: Number(row.count), value: decodeFacetValue(row.value, kind) };
         }),
     };
 };

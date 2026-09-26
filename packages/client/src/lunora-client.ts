@@ -1670,8 +1670,9 @@ class LunoraClient {
 
         // A cookie sign-in or sign-out happens in a request this client never
         // sees. Whoever makes it (the better-auth plugin in
-        // `@lunora/auth/plugins/client`, `@lunora/auth-ui`) says so here, and
-        // this client asks who is signed in now. Browser only: a server-side
+        // `@lunora/auth/plugins/client`, `@lunora/auth-ui`) says so here — in
+        // this tab or another one, which shares the cookie — and this client
+        // asks who is signed in now. Browser only: a server-side
         // client has no cookie of its own and would leak its registration.
         if ("document" in globalThis) {
             // Returns the probe, so a caller of the signal can wait until this

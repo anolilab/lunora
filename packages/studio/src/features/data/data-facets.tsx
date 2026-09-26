@@ -1,6 +1,7 @@
 import type { MouseEvent, ReactElement } from "react";
 
 import { useT } from "../../i18n/i18n-context";
+import { formatCell } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
 import type { FacetState } from "./hooks/use-data-browser";
 
@@ -14,12 +15,9 @@ const formatValue = (value: unknown): string => {
         return "(empty)";
     }
 
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives (string/number/boolean/bigint) stringify meaningfully; objects are handled above
-    return String(value);
+    // `formatCell`, not `JSON.stringify`: a `v.bytes()` facet value is an
+    // ArrayBuffer, which JSON renders as `{}`.
+    return formatCell(value);
 };
 
 /**

@@ -1,3 +1,4 @@
+import { encodeWire } from "../../../../../shared/wire-codec";
 import type { FunctionArgumentDescriptor } from "../../lib/types";
 
 /**
@@ -35,18 +36,25 @@ const placeholderValue = (kind: string): unknown => {
         case "array": {
             return [];
         }
-        case "bigint":
-        case "number": {
-            return 0;
+        // A `v.bigint()` / `v.bytes()` arg rejects a number or string, so the
+        // template shows the tagged form the runner wire-decodes before sending.
+        case "bigint": {
+            return encodeWire(0n);
         }
         case "boolean": {
             return false;
+        }
+        case "bytes": {
+            return encodeWire(new ArrayBuffer(0));
+        }
+        case "number": {
+            return 0;
         }
         case "object":
         case "record": {
             return {};
         }
-        // string / id / literal / bytes / date / timestamp / any / unknown
+        // string / id / literal / date / timestamp / any / unknown
         default: {
             return "";
         }

@@ -182,10 +182,15 @@ const readAdminQueueMessages = (sql: SqlExec, args: Record<string, unknown>): { 
  * `column` is validated + bound inside {@link facetColumn} (never interpolated).
  * Read-only `SELECT … GROUP BY`. Depends on its table like `readAdminTablePage`.
  */
-const readAdminFacetColumn = (sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } => {
+const readAdminFacetColumn = (
+    sql: SqlExec,
+    args: Record<string, unknown>,
+    columnKinds: Record<string, string> | undefined,
+): { result: unknown; tables: Set<string> } => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
     const result = facetColumn(sql, {
         column: typeof args["column"] === "string" ? args["column"] : "",
+        columnKinds,
         filters: parseTablePageFilters(args["filters"]),
         limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
         search: typeof args["search"] === "string" ? args["search"] : undefined,

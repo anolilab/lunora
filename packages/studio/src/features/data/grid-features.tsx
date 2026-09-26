@@ -24,8 +24,8 @@ type GridRow = Record<string, unknown>;
 
 // ── Export ───────────────────────────────────────────────────────────────────
 
-/** Characters that force a CSV field to be quoted (comma, quote, newline), per RFC 4180. */
-const CSV_QUOTE_RE = /["\n,]/u;
+/** Characters that force a CSV field to be quoted (comma, quote, CR or LF — a bare CR is a line break to most readers), per RFC 4180. */
+const CSV_QUOTE_RE = /["\n\r,]/u;
 
 /** Leading characters a spreadsheet treats as a formula trigger (OWASP CSV-injection / CWE-1236). */
 const CSV_FORMULA_RE = /^[=+\-@\t\r]/u;
