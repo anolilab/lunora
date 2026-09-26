@@ -380,22 +380,72 @@ class TestTokenDigestIdentity(unittest.TestCase):
 
         self.assertEqual(posts, [("Bearer token-a", MAX_BATCH_ENTRIES), ("Bearer token-a", 1)])
 
-    def test_an_identity_shaped_like_a_token_digest_is_refused(self):
-        # An identity is stored as given, so one spelled like a digest would
-        # match a write stamped under that token: user "7:lbbjyc:1ujs3qs" could
-        # replay what token-a queued.
+    def test_any_string_is_accepted_as_an_identity(self):
+        for identity in ("org:team:u1", "tenant:42:user", "a:b:c", token_digest("token-a")):
+            with self.subTest(identity):
+                self.assertEqual(LunoraClient("https://app.example", identity=identity).identity, identity)
+                client = LunoraClient("https://app.example")
+                client.identity = identity
+                self.assertEqual(client.identity, identity)
+
+    def _flush_after(self, queue_as, replay_as):
+        """Queue one write under ``queue_as`` and flush it under ``replay_as``.
+
+        Each is ``(identity, token)``; returns the authorization headers sent.
+        """
+
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(headers.get("authorization"))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", identity=queue_as[0], auth_token=queue_as[1], http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        client.identity, client.auth_token = replay_as
+        asyncio.run(client.flush_offline_queue())
+
+        return posts
+
+    def test_an_identity_spelled_like_a_digest_never_matches_that_tokens_writes(self):
+        # A token write is stamped as a token digest, an identity as itself, so
+        # neither can be taken for the other however the identity is spelled.
         digest = token_digest("token-a")
 
-        with self.assertRaises(ValueError):
-            LunoraClient("https://app.example", identity=digest)
+        self.assertEqual(self._flush_after((None, "token-a"), (digest, None)), [])
+        self.assertEqual(self._flush_after((digest, None), (None, "token-a")), [])
+        self.assertEqual(replay_identity_verdict({"tokenDigest": digest}, digest, None), "mismatch")
+        self.assertEqual(replay_identity_verdict(digest, {"tokenDigest": digest}, "token-a"), "mismatch")
 
-        client = LunoraClient("https://app.example")
-        with self.assertRaises(ValueError):
-            client.identity = digest
-        self.assertIsNone(client.identity)
+    def test_a_token_stamp_survives_persistence(self):
+        client = LunoraClient("https://app.example", auth_token="token-a")
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        [item] = client.offline_queue.items()
+        stamp = {"tokenDigest": token_digest("token-a")}
+        self.assertEqual(item.identity, stamp)
 
-        client.identity = "user:42"  # two segments is not the digest's shape
-        self.assertEqual(client.identity, "user:42")
+        restored = QueuedMutation.from_record(json.loads(json.dumps(item.to_record())))
+
+        self.assertEqual(restored.identity, stamp)
+        self.assertEqual(replay_identity_verdict(restored.identity, stamp, "token-a"), "match")
+
+    def test_plain_string_and_none_stamps_are_judged_as_before(self):
+        cases = [
+            # (stamped, current, token, verdict)
+            ("user-a", "user-a", None, "match"),
+            ("user-a", "user-b", None, "mismatch"),
+            ("user-a", None, None, "unknown"),
+            (None, None, None, "match"),
+            (None, "user-a", None, "mismatch"),
+            (None, {"tokenDigest": token_digest("token-b")}, "token-b", "mismatch"),
+            (ABSENT_IDENTITY, "user-a", None, "match"),
+        ]
+
+        for stamped, current, token, verdict in cases:
+            with self.subTest(stamped=stamped, current=current):
+                self.assertEqual(replay_identity_verdict(stamped, current, token), verdict)
 
     def test_the_digest_matches_the_reference_client(self):
         for spec in FIXTURES["tokenIdentity"]["digests"]:

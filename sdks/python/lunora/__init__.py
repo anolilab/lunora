@@ -31,6 +31,7 @@ from .offline import (
     random_id,
     replay_identity_verdict,
     token_digest,
+    token_stamp,
 )
 from .optimistic import (
     OptimisticHandle,
@@ -123,6 +124,7 @@ __all__ = [
     "stable_stringify",
     "stable_wire_key",
     "token_digest",
+    "token_stamp",
 ]
 
 __version__ = "0.1.0"

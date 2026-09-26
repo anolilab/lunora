@@ -25,7 +25,6 @@ import contextlib
 import inspect
 import json
 import logging
-import re
 import threading
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable
@@ -33,7 +32,7 @@ from functools import partial
 from typing import Any, Callable, Optional, Union
 
 from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_failed, reply_error
-from .offline import OfflineQueue, random_id, token_digest
+from .offline import Identity, OfflineQueue, random_id, token_stamp
 from .optimistic import drop_confirmed_layers, fold_optimistic
 from .submit import (
     FlushReport,
@@ -245,15 +244,6 @@ _DELETE = object()
 #: Sentinel a :meth:`LunoraClient.stream` buffer receives when the client closes.
 _CLOSED = object()
 
-_DIGEST_SHAPE = re.compile(r"[0-9a-z]+:[0-9a-z]+:[0-9a-z]+")
-
-
-def _checked_identity(value: Optional[str]) -> Optional[str]:
-    if value is not None and _DIGEST_SHAPE.fullmatch(value):
-        raise ValueError(f"identity {value!r} has the shape of a token digest (<base36>:<base36>:<base36>); use another spelling")
-    return value
-
-
 #: Default for an RPC's ``token``: send the bearer held when the request goes
 #: out. ``None`` cannot mean that, since it is a real value: no bearer at all.
 LIVE_TOKEN = object()
@@ -355,7 +345,7 @@ class LunoraClient:
         #: adapter, app version) or take the in-memory default.
         self.offline_queue = offline_queue if offline_queue is not None else OfflineQueue()
         #: See :attr:`identity`. Set directly here: a first identity evicts nothing.
-        self._identity = _checked_identity(identity)
+        self._identity = identity
         #: Run by :meth:`close` so every live stream and ``connect_and_run`` ends.
         self._close_hooks: list[Callable[[], None]] = []
         self._settled_listeners: list[Callable[[MutationSettled], None]] = []
@@ -482,10 +472,10 @@ class LunoraClient:
         if changed:
             _run_callbacks(listeners)
 
-    def _identity_fingerprint(self) -> Optional[str]:
+    def _identity_fingerprint(self) -> Identity:
         """Who a write queued now belongs to; call with the lock held.
 
-        :attr:`identity` when set, else :func:`~lunora.offline.token_digest` of
+        :attr:`identity` when set, else :func:`~lunora.offline.token_stamp` of
         :attr:`auth_token`, else ``None`` — the reference's
         ``identityFingerprint``. Without the digest branch every write made with
         no identity was stamped ``None`` and matched any token, so a flush after
@@ -496,7 +486,7 @@ class LunoraClient:
         if self._identity is not None:
             return self._identity
 
-        return None if self._auth_token is None else token_digest(self._auth_token)
+        return None if self._auth_token is None else token_stamp(self._auth_token)
 
     @property
     def identity(self) -> Optional[str]:
@@ -508,8 +498,8 @@ class LunoraClient:
         with a digest of :attr:`auth_token` instead (``None`` with no token
         either), so a new token is a new identity: a token refresh rejects the
         writes queued under the old one and evicts its session. Set this to keep
-        them across a refresh. A value shaped like a digest is refused (see the
-        setter).
+        them across a refresh. Any string is accepted: a token write is stamped
+        ``{"tokenDigest": ...}``, which no identity string can equal.
         """
 
         with self._lock:
@@ -530,14 +520,8 @@ class LunoraClient:
         identity evict nothing. Mirrors ``evictPreviousIdentitySession`` in
         ``@lunora/client``. With no identity set, :attr:`auth_token` evicts the
         same way when a new token changes the digest.
-
-        Raises ``ValueError`` for a value shaped like a token digest
-        (``<base36>:<base36>:<base36>``): an identity is stored as given, not
-        under the reference's ``subj:`` namespace, so one spelled that way would
-        match a write queued under the token it happens to equal.
         """
 
-        value = _checked_identity(value)
         deferred: list[Callable[[], None]] = []
         with self._lock:
             previous, self._identity = self._identity, value

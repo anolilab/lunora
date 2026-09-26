@@ -20,11 +20,12 @@ its own reconnect logic.
 - The identity stamp is the consumer's own ``LunoraClient.identity`` when set
   (a stable, non-secret subject such as a user id), stored as given rather than
   under the reference's ``subj:`` namespace, so records persisted before token
-  digests existed keep matching. Without the namespace an identity could spell
-  a digest and match that token's writes, so ``LunoraClient`` refuses a
-  digest-shaped one instead. With none set it is :func:`token_digest` of the
-  bearer token, exactly as the reference derives it, so a different token is a
-  different identity; with neither it is ``None``.
+  digests existed keep matching. With none set it is :func:`token_stamp`,
+  ``{"tokenDigest": <digest>}`` over the reference's digest of the bearer token,
+  so a different token is a different identity; with neither it is ``None``. The
+  token stamp is a dict rather than the reference's bare string because the
+  identity carries no ``subj:`` namespace: no identity string, however it is
+  spelled, can equal a dict, so neither can be taken for the other.
 - There is no multi-tab leader election. There are no tabs.
 """
 
@@ -72,11 +73,11 @@ class _AbsentIdentity:
 
 ABSENT_IDENTITY = _AbsentIdentity()
 
-#: The three-case identity stamp: a subject, ``None`` (signed out), or
-#: :data:`ABSENT_IDENTITY` (an unstamped legacy record). Spelled as the union
-#: rather than ``Any`` — the alias for a three-case sum must not type-check
-#: against every argument in the language.
-Identity = Union[str, None, _AbsentIdentity]
+#: The identity stamp: a subject string, a :func:`token_stamp` dict, ``None``
+#: (signed out), or :data:`ABSENT_IDENTITY` (an unstamped legacy record).
+#: Spelled as the union rather than ``Any`` — the alias for a sum type must not
+#: type-check against every argument in the language.
+Identity = Union[str, dict, None, _AbsentIdentity]
 
 
 class OfflineError(Exception):
@@ -325,6 +326,17 @@ def token_digest(token: str) -> str:
     return f"{_base36(len(encoded) // 2)}:{_base36(fnv)}:{_base36(djb2)}"
 
 
+def token_stamp(token: str) -> dict:
+    """The stamp a write made with ``token`` and no identity carries.
+
+    Typed, not the digest string itself: an identity is any string the app
+    chooses, and one spelled like a digest must not match that token's writes.
+    Survives the JSON round trip every persistence adapter makes.
+    """
+
+    return {"tokenDigest": token_digest(token)}
+
+
 def _base36(value: int) -> str:
     digits = ""
 
@@ -336,15 +348,16 @@ def _base36(value: int) -> str:
             return digits
 
 
-def replay_identity_verdict(stamped: Identity, current: Optional[str], token: Optional[str]) -> str:
+def replay_identity_verdict(stamped: Identity, current: Identity, token: Optional[str]) -> str:
     """``"match"``, ``"unknown"`` or ``"mismatch"`` for a write stamped ``stamped``.
 
     ``current`` is the identity in effect now (see ``LunoraClient``), ``token``
     the bearer now held. Mirrors the reference's ``replayIdentityVerdict``:
 
     - ``"match"`` — the same identity, ``None`` (signed out) included, or a
-      token-digest stamp of the very token held now (the write was queued under
-      this credential before an identity named it). A record with no stamp at
+      :func:`token_stamp` of the very token held now (the write was queued under
+      this credential before an identity named it). A token stamp only ever
+      equals a token stamp, and an identity string only an identity string. A record with no stamp at
       all predates stamping and replays ambiently: there is nothing to wait for.
     - ``"unknown"`` — nobody is signed in, so whose write it is cannot be told.
       The write is HELD, neither sent nor dropped, until someone is.
@@ -355,7 +368,7 @@ def replay_identity_verdict(stamped: Identity, current: Optional[str], token: Op
     if stamped is ABSENT_IDENTITY or stamped == current:
         return "match"
 
-    if stamped is not None and token is not None and token_digest(token) == stamped:
+    if isinstance(stamped, dict) and token is not None and token_stamp(token) == stamped:
         return "match"
 
     return "unknown" if current is None else "mismatch"

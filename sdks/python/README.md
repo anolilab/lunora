@@ -136,8 +136,9 @@ has no caller left to tell — is reported to `client.on_mutation_settled`.
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
 replays, so a restart cannot push one user's queued writes as another. Left
-`None`, a write is stamped with a digest of `client.auth_token` instead (the
-reference client's, never the token itself), and `None` only when there is no
+`None`, a write is stamped `{"tokenDigest": …}` with a digest of
+`client.auth_token` instead (the reference client's, never the token itself),
+and `None` only when there is no
 token either — so a write queued under one token is never sent with another.
 Under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token
 at all it is held, unsettled, until one is set. A flush sends each write with
@@ -145,9 +146,9 @@ the token its identity was checked against, so a token set mid-flush applies
 from the next pass, never to the rest of the current one. Setting `identity` is
 what lets a token refresh keep the queue. A record persisted by an earlier build
 with a `None` stamp is rejected the same way once a token is held, since `None`
-then said nothing about whose write it was. `identity` is stored as given, so a
-value shaped like a digest (`<base36>:<base36>:<base36>`, e.g. `org:team:u1`)
-raises `ValueError` rather than risk matching a token's writes.
+then said nothing about whose write it was. `identity` may be any string: a
+token stamp is a dict, so no identity, however it is spelled, can match a
+token's writes, nor a token stamp an identity's.
 Changing it FROM a set value (a sign-out, or another user signing in) evicts the
 previous session: every query and shape subscription drops its resume cursor and
 epoch, each query's callbacks receive its blanked value (`None` unless an
