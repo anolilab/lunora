@@ -1,3 +1,12 @@
+## @lunora/solid [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.141...@lunora/solid@1.0.0-alpha.142) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.138
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.83
+
 ## @lunora/solid [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.140...@lunora/solid@1.0.0-alpha.141) (2026-09-26)
 
 
