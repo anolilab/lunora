@@ -104,8 +104,8 @@ describe.each(sinks)("%s redaction by key", (_sink, redact) => {
 
 describe.each(sinks)("%s redaction of strings", (_sink, redact) => {
     it.each([
-        ["Authorization: Basic YWRtaW46aHVudGVyMg==", "Authorization: <REDACTED>"],
-        ["Authorization: Bearer abc.def.ghi", "Authorization: <REDACTED>"],
+        ["Authorization: Basic dXNlcjpwdy1maXh0dXJl", "Authorization: <REDACTED>"], // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
+        ["Authorization: Bearer fixture.bearer.value", "Authorization: <REDACTED>"], // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
         ["password: hunter2", "password: <REDACTED>"],
         ['login failed {"password":"hunter2","user":"a"}', 'login failed {"password":"<REDACTED>","user":"a"}'],
         // eslint-disable-next-line no-secrets/no-secrets -- a fabricated credential-bearing fixture, not a secret
@@ -245,18 +245,18 @@ describe.each(sinks)("%s redaction of more string forms", (_sink, redact) => {
     it("masks a PEM private key body, not only its header", () => {
         expect.assertions(2);
 
-        const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nSECRETBODYLINE\n-----END PRIVATE KEY-----";
+        const pem = "-----BEGIN PRIVATE KEY-----\nFIXTUREBODYLINEONE\nSECRETBODYLINE\n-----END PRIVATE KEY-----"; // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
         const redacted = redact(`privateKey: ${pem}\ntail`) as string;
 
-        expect(redacted).not.toMatch(/MIIEv|SECRETBODYLINE/);
+        expect(redacted).not.toMatch(/FIXTUREBODYLINEONE|SECRETBODYLINE/);
         expect(redacted).toContain("tail");
     });
 
-    it("masks a curl -u credential", () => {
+    it("masks the credential after a CLI user flag", () => {
         expect.assertions(1);
 
         // The log sink also masks the host; the credential is what matters here.
-        expect(redact("run curl -u admin:hunter2 https://api.example.test/x")).toMatch(/^run curl -u <REDACTED> https:\/\/\S+\/x$/);
+        expect(redact("run curl -u user:pw-fixture https://api.example.test/x")).toMatch(/^run curl -u <REDACTED> https:\/\/\S+\/x$/); // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
     });
 
     it.each(["https://user:pa?ss@api.example.test/x", "https://user:pa#ss@api.example.test/x"])(

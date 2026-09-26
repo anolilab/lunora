@@ -276,8 +276,8 @@ const PEM_PRIVATE_KEY = /-----BEGIN ([A-Z ]{0,32}PRIVATE KEY)-----[\s\S]*?(?:---
 /** Tokens recognisable by shape alone: an auth scheme and its credential, a JWT, an AWS access-key id. */
 const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}|\beyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*|\bAKIA[\dA-Z]{16}\b/g;
 
-/** CLI credential flags: `curl -u user:pass`, `--password hunter2`. */
-const CLI_CREDENTIAL = /(\s|^)(-u|--user|--password|--pass|--token|--api-key)(\s+|=)[^\s"']+/g;
+/** CLI credential flags: curl's `-u <user>:<password>`, `--password <value>`. */
+const CLI_CREDENTIAL = /(\s|^)(-u|--user|--password|--pass|--token|--api-key)(\s+|=)[^\s"']+/g; // secret-scanner:allow -- the pattern that masks CLI credentials, not a secret
 
 /** A `name` + separator (`=`, `:`, with optional — possibly escaped — quotes around the name). The value is read separately, only when the name is a credential. */
 const ASSIGNMENT_NAME = /(?<![\w.-])(\\?["']?)([A-Za-z_][\w.-]{0,63})\1[ \t]{0,4}([:=])[ \t]{0,4}/g;
