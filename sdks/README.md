@@ -265,8 +265,13 @@ writes are held, neither sent nor dropped, until `authSubject` is set again for
 it (the same id replays them, another id rejects them). With no subject the
 identity is the token's digest, so a new token is a new identity and the writes
 are rejected `OFFLINE_IDENTITY_CHANGED`, exactly as the reference rejects them;
-supplying `authSubject` is how a refresh keeps them. Python's identity is an
-explicit stamp, so on an account switch set it before the token.
+supplying `authSubject` is how a refresh keeps them. Python's identity is the
+app's own stamp, not derived from the token, so python flushes on a new token
+only when an identity is set (with none, every write is stamped `None` and would
+match the next user's token) and never on a token cleared to `None`; on an
+account switch set the identity before the token. Both run one flush per shard
+at a time, and a flush asked for mid-flush makes the running one pass again, so
+a token that lands while the refused request is in flight is not lost.
 `offline_write_held_for_credential_replays_after_token_refresh` runs the refresh
 in all eight and in the reference.
 
