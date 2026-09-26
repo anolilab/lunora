@@ -1,5 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -9,8 +10,9 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp } from "../../lib/internal";
+import { AuthPager } from "./auth-pager";
 
-/** How many sessions to pull for the global browser. */
+/** Sessions per page of the global browser. */
 const SESSION_LIMIT = 200;
 
 /**
@@ -27,7 +29,8 @@ const AuthSessionsPanel = (): ReactElement => {
 
     // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
     // over `client.listAuthSessions`.
-    const sessionsQuery = useClientQuery(["lunora-auth-sessions", SESSION_LIMIT], () => client.listAuthSessions({ limit: SESSION_LIMIT }));
+    const [offset, setOffset] = useState<number>(0);
+    const sessionsQuery = useClientQuery(["lunora-auth-sessions", SESSION_LIMIT, offset], () => client.listAuthSessions({ limit: SESSION_LIMIT, offset }));
     const { error } = sessionsQuery;
     const sessions = sessionsQuery.data?.rows ?? null;
 
@@ -98,6 +101,17 @@ const AuthSessionsPanel = (): ReactElement => {
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {sessions !== null && (
+                <AuthPager
+                    count={sessions.length}
+                    offset={offset}
+                    onOffsetChange={setOffset}
+                    pageSize={SESSION_LIMIT}
+                    prefix="auth-sessions"
+                    total={sessionsQuery.data?.total}
+                />
             )}
         </div>
     );

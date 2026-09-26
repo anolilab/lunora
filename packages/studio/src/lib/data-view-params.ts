@@ -53,6 +53,14 @@ interface DataViewSearch {
 const VALID_OPERATORS = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
 
 /**
+ * The router JSON-parses each param, so a hand-written `?shard=42` (or
+ * `?search=2026`) arrives as the NUMBER. Take it back as text — but only while
+ * the number is exact: past 2^53 the parse has already rounded it to a
+ * different key, and guessing would point the view at another shard.
+ */
+const numericText = (raw: unknown): unknown => (typeof raw === "number" && Number.isSafeInteger(raw) ? String(raw) : raw);
+
+/**
  * Read a non-blank string off the raw search record, else `undefined`. Trims so a
  * whitespace-only value (e.g. `?table=%20%20`) is rejected here at the router
  * boundary rather than flowing downstream as a real table name.
@@ -166,13 +174,13 @@ export const validateDataViewSearch = (search: Record<string, unknown>): DataVie
         validated.table = table;
     }
 
-    const shard = stringParameter(search["shard"]);
+    const shard = stringParameter(numericText(search["shard"]));
 
     if (shard !== undefined) {
         validated.shard = shard;
     }
 
-    const searchText = stringParameter(search["search"]);
+    const searchText = stringParameter(numericText(search["search"]));
 
     if (searchText !== undefined) {
         validated.search = searchText;
@@ -207,9 +215,9 @@ export const searchToDataView = (search: DataViewSearch | Record<string, unknown
     return {
         filters: filters.length > 0 ? filters : undefined,
         orderBy,
-        search: typeof search["search"] === "string" && search["search"] !== "" ? search["search"] : undefined,
-        shard: typeof search["shard"] === "string" && search["shard"] !== "" ? search["shard"] : undefined,
-        table: typeof search["table"] === "string" && search["table"] !== "" ? search["table"] : undefined,
+        search: stringParameter(numericText(search["search"])),
+        shard: stringParameter(numericText(search["shard"])),
+        table: stringParameter(search["table"]),
         tier: search["schema"] === "global" ? "global" : "shard",
     };
 };

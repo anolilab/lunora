@@ -164,6 +164,15 @@ export const jsonRowReplacer = (_key: string, value: unknown): unknown => {
 };
 
 /**
+ * The filter value a facet click sends for `value`. A `v.bigint()` facet value
+ * arrives as a real `bigint`, which no query key, URL or saved view can hold
+ * (`JSON.stringify` throws) — so it travels as its exact decimal text, which the
+ * server's filter binding parses back to the stored key. Everything else is sent
+ * as-is.
+ */
+export const facetFilterValue = (value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value);
+
+/**
  * Render a single table-cell value as text without throwing on objects or null.
  * Shared by the shard and global data browsers so cell rendering can't drift
  * between them.
@@ -245,6 +254,21 @@ export const resolveOrigin = (explicit?: string): string => {
     }
 
     return "http://localhost:5173";
+};
+
+/**
+ * The base URL of the worker the studio's client talks to — `client.url`, which
+ * is NOT the page's own origin when the studio is served on its own host — with
+ * trailing slashes dropped so `${base}/path` never doubles one.
+ */
+export const workerBaseUrl = (clientUrl: string): string => {
+    let base = resolveOrigin(clientUrl);
+
+    while (base.endsWith("/")) {
+        base = base.slice(0, -1);
+    }
+
+    return base;
 };
 
 /**

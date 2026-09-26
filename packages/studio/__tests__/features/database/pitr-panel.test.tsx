@@ -99,6 +99,67 @@ describe("pitrPanel", () => {
         expect(mock.mutation).toHaveBeenCalledTimes(1);
     });
 
+    it("sends typed epoch-ms and ISO times as epoch-ms numbers", async () => {
+        expect.hasAssertions();
+
+        const times: unknown[] = [];
+        const mock = createMockClient({
+            query: (_reference, args): unknown => {
+                const { time } = args as { time?: unknown };
+
+                if (time !== undefined) {
+                    times.push(time);
+                }
+
+                return { current: "bm-current", forTime: "bm-for-time" } satisfies PitrBookmarkResult;
+            },
+        });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+
+        // The worker `Date.parse`s a string, which is NaN for a run of digits.
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "1717200000000" } });
+
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("2024-06-01T00:00:00.000Z");
+
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await waitFor(() => {
+            expect(times).toStrictEqual([1_717_200_000_000]);
+        });
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await waitFor(() => {
+            expect(times).toStrictEqual([1_717_200_000_000, Date.UTC(2026, 5, 1)]);
+        });
+    });
+
+    it("refuses text that is not a time before sending anything", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "yesterday-ish" } });
+
+        expect(screen.getByTestId<HTMLButtonElement>("pitr-preview").disabled).toBe(true);
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
+    });
+
+    it("treats epoch-ms past the Date range as not a time instead of crashing", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({ query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "8640000000000001" } });
+
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
+    });
+
     it("names the shard and the target in the restore confirmation", async () => {
         expect.assertions(3);
 

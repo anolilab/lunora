@@ -21,6 +21,47 @@ interface PitrPanelProps {
 const GET_BOOKMARK = adminRef(ADMIN_FUNCTIONS.getPitrBookmark);
 const PITR_RESTORE = adminRef(ADMIN_FUNCTIONS.pitrRestore);
 
+/** A run of digits: an epoch-ms timestamp rather than a date string. */
+const EPOCH_MS_RE = /^\d+$/u;
+
+/**
+ * The typed restore target as epoch-ms, parsed HERE rather than on the worker:
+ * the worker `Date.parse`s a string, so digits (`"1717200000000"`) came back NaN,
+ * and an ISO time with no offset was read in the WORKER's time zone. A run of
+ * digits is epoch-ms; anything else goes through the browser's `Date.parse`, so
+ * an offset-less time means this browser's local time — and the panel shows the
+ * resolved UTC instant before anything is sent.
+ * @returns epoch-ms and its UTC ISO form, or `undefined` when the text is not a time
+ */
+const parsePitrTime = (text: string): undefined | { epochMs: number; iso: string } => {
+    const trimmed = text.trim();
+    const epochMs = EPOCH_MS_RE.test(trimmed) ? Number(trimmed) : Date.parse(trimmed);
+
+    const date = new Date(epochMs);
+
+    // `Date`'s own range, not `isFinite`: past ±8.64e15 ms `toISOString` throws.
+    return Number.isNaN(date.getTime()) ? undefined : { epochMs, iso: date.toISOString() };
+};
+
+/** What the typed time resolves to, in UTC — shown before a preview or restore so an offset-less time can't silently mean a different instant. */
+const ResolvedTimeHint = ({ text }: { readonly text: string }): ReactElement | null => {
+    const t = useT();
+
+    if (text.trim() === "") {
+        return null;
+    }
+
+    const resolved = parsePitrTime(text);
+
+    return (
+        <p className="font-mono text-xs text-muted-foreground" data-testid="pitr-time-resolved">
+            {resolved === undefined
+                ? t("Not a time — use epoch-ms or ISO 8601.")
+                : t("Resolves to {instant} (a date-time without an offset is read in this browser's time zone; a bare date is UTC)", { instant: resolved.iso })}
+        </p>
+    );
+};
+
 /**
  * Native Durable-Object point-in-time recovery for one shard — the **Time
  * Travel** view.
@@ -61,7 +102,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         }
 
         setBusy(false);
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the read targets `shardKey` (state seeded from the prop), which is listed; depending on the prop would ignore the operator's own shard edit
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `shardKey` is derived from the `initialShardKey` prop (this view has no shard input of its own) and is listed, so a prop change re-targets the read
     }, [client, shardKey]);
 
     useEffect(() => {
@@ -98,8 +139,10 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         setRestart(event.target.checked);
     };
 
+    const resolvedTime = parsePitrTime(time);
+
     const onPreview = (): void => {
-        if (time.trim() === "") {
+        if (resolvedTime === undefined) {
             return;
         }
 
@@ -109,7 +152,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 setError(null);
 
                 try {
-                    const result = (await client.query(GET_BOOKMARK, { time: time.trim() }, callOptions(shardKey))) as PitrBookmarkResult;
+                    const result = (await client.query(GET_BOOKMARK, { time: resolvedTime.epochMs }, callOptions(shardKey))) as PitrBookmarkResult;
 
                     setPreview(result.forTime ?? null);
                     setCurrent(result.current);
@@ -123,7 +166,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         );
     };
 
-    const runRestore = (args: { bookmark?: string; restart?: boolean; time?: string }): void => {
+    const runRestore = (args: { bookmark?: string; restart?: boolean; time?: number }): void => {
         fireAndForget(
             (async (): Promise<void> => {
                 setBusy(true);
@@ -144,7 +187,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     };
 
     // A restore needs an explicit bookmark or a time to aim at.
-    const canRestore = bookmark.trim() !== "" || time.trim() !== "";
+    const canRestore = bookmark.trim() !== "" || resolvedTime !== undefined;
 
     // Name what is about to happen. The most destructive action here used to
     // confirm with a bare "Confirm restore", which said neither WHICH shard would
@@ -153,14 +196,14 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     // precedence, so the label can't promise a different target than the one sent.
     const confirmRestoreLabel = t("Restore {shard} to {target}?", {
         shard: shardKey === "" ? t("root") : shardKey,
-        target: bookmark.trim() === "" ? time.trim() : t("the given bookmark"),
+        target: bookmark.trim() === "" ? (resolvedTime?.iso ?? "") : t("the given bookmark"),
     });
 
     const onConfirmRestore = (): void => {
-        const args: { bookmark?: string; restart?: boolean; time?: string } = restart ? { restart: true } : {};
+        const args: { bookmark?: string; restart?: boolean; time?: number } = restart ? { restart: true } : {};
 
         if (bookmark.trim() === "") {
-            args.time = time.trim();
+            args.time = resolvedTime?.epochMs;
         } else {
             args.bookmark = bookmark.trim();
         }
@@ -208,10 +251,18 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     <Label htmlFor="pitr-time">{t("Time (ISO or epoch-ms, last 30 days)")}</Label>
                     <div className="flex items-center gap-2">
                         <Input data-testid="pitr-time" id="pitr-time" onChange={onTimeChange} placeholder="2026-06-01T00:00:00.000Z" value={time} />
-                        <Button data-testid="pitr-preview" disabled={busy || time.trim() === ""} onClick={onPreview} size="sm" type="button" variant="outline">
+                        <Button
+                            data-testid="pitr-preview"
+                            disabled={busy || resolvedTime === undefined}
+                            onClick={onPreview}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
                             {t("Preview")}
                         </Button>
                     </div>
+                    <ResolvedTimeHint text={time} />
                     {preview !== null && (
                         <p className="font-mono text-xs break-all text-muted-foreground" data-testid="pitr-preview-bookmark">
                             {t("Bookmark for that time")}: {preview}

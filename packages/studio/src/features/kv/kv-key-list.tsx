@@ -39,9 +39,10 @@ interface KeyListState {
 }
 
 type KeyListAction =
-    | { cursor: null | string; keys: KvKeyEntry[]; listComplete: boolean; type: "appendPage" | "firstPage" }
+    | { cursor: null | string; keys: KvKeyEntry[]; listComplete: boolean; type: "firstPage" }
+    | { cursor: null | string; generation: number; keys: KvKeyEntry[]; listComplete: boolean; type: "appendPage" }
     | { deleted: string[]; error: null | string; type: "bulkDeleted" }
-    | { error: string; type: "loadFailed" }
+    | { error: string; generation?: number; type: "loadFailed" }
     | { name: string; type: "keyDeleted" | "toggleBulk" }
     | { name: null | string; type: "selectKey" }
     | { names: string[]; type: "toggleAllBulk" }
@@ -66,6 +67,13 @@ const INITIAL_KEY_LIST_STATE: KeyListState = {
 const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListState => {
     switch (action.type) {
         case "appendPage": {
+            // A "Load more" issued before a filter change or reload belongs to the
+            // listing that was replaced: appending it would splice the old prefix's
+            // keys (and its cursor) onto the new list.
+            if (action.generation !== state.reloadNonce) {
+                return state;
+            }
+
             return { ...state, cursor: action.cursor, keys: [...(state.keys ?? []), ...action.keys], listComplete: action.listComplete, loading: false };
         }
         case "applyFilter": {
@@ -116,6 +124,10 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
             };
         }
         case "loadFailed": {
+            if (action.generation !== undefined && action.generation !== state.reloadNonce) {
+                return state;
+            }
+
             return { ...state, loadError: action.error, loading: false };
         }
         case "loadStart": {
@@ -210,6 +222,8 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
 
         dispatch({ type: "loadStart" });
 
+        const generation = reloadNonce;
+
         fireAndForget(
             (async (): Promise<void> => {
                 try {
@@ -220,9 +234,9 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
                         prefix: appliedPrefix === "" ? undefined : appliedPrefix,
                     });
 
-                    dispatch({ cursor: result.cursor ?? null, keys: result.keys, listComplete: result.listComplete, type: "appendPage" });
+                    dispatch({ cursor: result.cursor ?? null, generation, keys: result.keys, listComplete: result.listComplete, type: "appendPage" });
                 } catch (error_) {
-                    dispatch({ error: errorMessage(error_), type: "loadFailed" });
+                    dispatch({ error: errorMessage(error_), generation, type: "loadFailed" });
                 }
             })(),
         );

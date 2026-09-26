@@ -28,9 +28,10 @@ describe("toCsv", () => {
     it("quotes (and doubles embedded quotes for) values with commas, quotes, or newlines", () => {
         expect.assertions(1);
 
-        const csv = toCsv(["v"], [{ v: "a,b" }, { v: 'say "hi"' }, { v: "line1\nline2" }]);
+        const csv = toCsv(["v"], [{ v: "a,b" }, { v: 'say "hi"' }, { v: "line1\nline2" }, { v: "old-mac\rline" }]);
 
-        expect(csv).toBe('v\n"a,b"\n"say ""hi"""\n"line1\nline2"');
+        // A bare CR is a row break to most CSV readers, so it has to be quoted too.
+        expect(csv).toBe('v\n"a,b"\n"say ""hi"""\n"line1\nline2"\n"old-mac\rline"');
     });
 
     it("neutralizes spreadsheet formula-injection triggers with a leading tab", () => {
@@ -38,7 +39,8 @@ describe("toCsv", () => {
 
         const csv = toCsv(["v"], [{ v: "=WEBSERVICE(1)" }, { v: "+1" }, { v: "-1+2" }, { v: "@foo" }, { v: "\tleading tab" }, { v: "\rleading cr" }]);
 
-        expect(csv).toBe("v\n\t=WEBSERVICE(1)\n\t+1\n\t-1+2\n\t@foo\n\t\tleading tab\n\t\rleading cr");
+        // The CR one is also quoted: a bare CR breaks the row in most CSV readers.
+        expect(csv).toBe('v\n\t=WEBSERVICE(1)\n\t+1\n\t-1+2\n\t@foo\n\t\tleading tab\n"\t\rleading cr"');
     });
 
     it("does not alter number-typed negative values (neutralization is scoped to strings)", () => {

@@ -2,6 +2,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { decodeWire } from "../../../../../shared/wire-codec";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import type { FunctionDescriptor } from "../../lib/types";
 import type { ProbeOutcome } from "./use-run-as-probe";
 import useRunAsProbe from "./use-run-as-probe";
@@ -39,7 +40,7 @@ interface PermissionsPlaygroundProps {
     readonly runAsIdentity?: boolean;
 }
 
-const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, null, 2));
+const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, jsonRowReplacer, 2));
 
 /**
  * The Permissions Playground — pick a registered function and an identity
@@ -130,7 +131,8 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         let parsedArgs: Record<string, unknown>;
 
         try {
-            parsedArgs = argsText.trim() === "" ? {} : (JSON.parse(argsText) as Record<string, unknown>);
+            // Wire-decoded like the row editor, so a `v.bigint()` / `v.bytes()` arg can be sent in its tagged form.
+            parsedArgs = argsText.trim() === "" ? {} : (decodeWire(JSON.parse(argsText)) as Record<string, unknown>);
         } catch (parseError) {
             setArgsError(t("Invalid JSON args: {message}", { message: (parseError as Error).message }));
             setOutcome(null);

@@ -4020,6 +4020,7 @@ abstract class ShardDO {
         // each through the writer.
         const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
             after,
+            columnKinds: this.columnKinds(args.table),
             filters: args.filters,
             limit,
             search: args.search,
@@ -10069,7 +10070,7 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.facetColumn) {
-            return readAdminFacetColumn(sql, args);
+            return readAdminFacetColumn(sql, args, this.columnKinds(typeof args["table"] === "string" ? args["table"] : ""));
         }
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
@@ -10353,6 +10354,18 @@ abstract class ShardDO {
         };
     }
 
+    /**
+     * Declared kind per field of `table` (`{ amountMinor: "bigint" }`), from
+     * {@link tableColumns}. The admin filter/facet/bulk paths need it to bind a
+     * filter value in the projected form a `v.bigint()`/`v.bytes()` field is
+     * stored in; `undefined` on the schema-free base class.
+     */
+    private columnKinds(table: string): Record<string, string> | undefined {
+        const columns = this.tableColumns(table);
+
+        return columns.length === 0 ? undefined : Object.fromEntries(columns.map((column) => [column.name, column.type]));
+    }
+
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */
     private readAdminTablePage(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
         const table = typeof args["table"] === "string" ? args["table"] : "";
@@ -10361,6 +10374,7 @@ abstract class ShardDO {
             limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
             offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
             orderBy: parseTablePageOrderBy(args["orderBy"]),
+            columnKinds: this.columnKinds(table),
             refs: this.tableRefs(table),
             search: typeof args["search"] === "string" ? args["search"] : undefined,
             skipCount: typeof args["skipCount"] === "boolean" ? args["skipCount"] : undefined,

@@ -3,6 +3,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
+import { decodeWire } from "../../../../../shared/wire-codec";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -11,7 +12,7 @@ import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
 import { argumentsTemplate, formatSignature } from "./function-signature";
@@ -69,7 +70,7 @@ const formatResult = (value: unknown): string => {
         return "undefined";
     }
 
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value, jsonRowReplacer, 2);
 };
 
 /**
@@ -149,7 +150,9 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         let parsedArgs: unknown;
 
         try {
-            parsedArgs = argsText.trim() === "" ? {} : JSON.parse(argsText);
+            // Wire-decoded like the row editor, so a `v.bigint()` / `v.bytes()` arg can be
+            // sent as its tagged form (`["$lunora.wire$","bigint","10"]`); plain JSON is untouched.
+            parsedArgs = argsText.trim() === "" ? {} : decodeWire(JSON.parse(argsText));
         } catch (parseError) {
             setStatus("error");
             setResult(undefined);

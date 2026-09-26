@@ -8,7 +8,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 
 /** The status values offered as table filters (the common lifecycle states). */
 const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "paused", "waiting", "complete", "errored", "terminated"];
@@ -43,7 +43,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         return "(unserializable)";
     }

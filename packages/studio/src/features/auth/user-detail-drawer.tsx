@@ -26,8 +26,89 @@ interface UserDetailDrawerProps {
 
 const TIMESTAMP_RE = /(?:at|expires)$/iu;
 
+/** A positive whole number of days — the only ban length that is not permanent. */
+const WHOLE_DAYS_RE = /^[1-9]\d*$/u;
+
 /** Fields shown as dedicated summary chips / forms, so the raw field list skips them. */
 const SUMMARY_FIELDS = new Set(["banExpires", "banned", "banReason", "email", "emailVerified", "id", "name", "role"]);
+
+/** What a ban sends: no `expiresInSeconds` means permanent. */
+interface BanInput {
+    expiresInSeconds?: number;
+    reason?: string;
+}
+
+/**
+ * The ban controls. A ban with no expiry is permanent, so "permanent" is its own
+ * explicit choice and the length must be a whole number of days: `0`, `0.5`,
+ * `-1` or a blank box used to fall through to a permanent ban.
+ */
+const BanForm = ({ busy, onBan }: { readonly busy: boolean; readonly onBan: (ban: BanInput) => void }): ReactElement => {
+    const t = useT();
+    const [reason, setReason] = useState<string>("");
+    const [days, setDays] = useState<string>("");
+    const [permanent, setPermanent] = useState<boolean>(false);
+
+    // Capped at a safe expiry: a long digit string becomes `Infinity`, which JSON
+    // sends as `null` — and a null expiry is a PERMANENT ban.
+    const wholeDays = WHOLE_DAYS_RE.test(days.trim()) && Number.isSafeInteger(Number(days.trim()) * 86_400) ? Number(days.trim()) : undefined;
+    const canBan = permanent || wholeDays !== undefined;
+
+    const onSubmit = (): void => {
+        onBan({
+            expiresInSeconds: permanent || wholeDays === undefined ? undefined : wholeDays * 86_400,
+            reason: reason.trim() === "" ? undefined : reason.trim(),
+        });
+    };
+
+    return (
+        <div className="flex items-end gap-2">
+            <div className="flex flex-1 flex-col gap-1">
+                <Label htmlFor="ud-ban-reason">{t("Ban reason (optional)")}</Label>
+                <Input
+                    data-testid="ud-ban-reason"
+                    id="ud-ban-reason"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        setReason(event.target.value);
+                    }}
+                    value={reason}
+                />
+            </div>
+            <div className="flex w-24 flex-col gap-1">
+                <Label htmlFor="ud-ban-days">{t("Days")}</Label>
+                <Input
+                    aria-invalid={days.trim() !== "" && wholeDays === undefined}
+                    data-testid="ud-ban-days"
+                    disabled={permanent}
+                    id="ud-ban-days"
+                    min={1}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        setDays(event.target.value);
+                    }}
+                    step={1}
+                    type="number"
+                    value={days}
+                />
+            </div>
+            <Label className="flex items-center gap-1.5 pb-2 text-xs font-normal" htmlFor="ud-ban-permanent">
+                <input
+                    checked={permanent}
+                    className="size-4 accent-destructive"
+                    data-testid="ud-ban-permanent"
+                    id="ud-ban-permanent"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        setPermanent(event.target.checked);
+                    }}
+                    type="checkbox"
+                />
+                {t("Permanent")}
+            </Label>
+            <Button data-testid="ud-ban" disabled={busy || !canBan} onClick={onSubmit} size="sm" type="button" variant="destructive">
+                {t("Ban user")}
+            </Button>
+        </div>
+    );
+};
 
 /** Format one raw field value for display, rendering epoch-ms timestamps readably. */
 const formatField = (key: string, value: unknown): string => {
@@ -58,8 +139,6 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     const [version, setVersion] = useState<number>(0);
 
     const [roleInput, setRoleInput] = useState<string>(typeof user.role === "string" ? user.role : "");
-    const [banReason, setBanReason] = useState<string>("");
-    const [banDays, setBanDays] = useState<string>("");
     const [newPassword, setNewPassword] = useState<string>("");
     const [impersonationToken, setImpersonationToken] = useState<null | string>(null);
     const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
@@ -97,12 +176,6 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     const onRoleInputChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setRoleInput(event.target.value);
     };
-    const onBanReasonChange = (event: ChangeEvent<HTMLInputElement>): void => {
-        setBanReason(event.target.value);
-    };
-    const onBanDaysChange = (event: ChangeEvent<HTMLInputElement>): void => {
-        setBanDays(event.target.value);
-    };
     const onNewPasswordChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setNewPassword(event.target.value);
     };
@@ -119,12 +192,9 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
         });
     };
 
-    const onBan = (): void => {
-        const days = Number.parseInt(banDays, 10);
-        const expiresInSeconds = Number.isFinite(days) && days > 0 ? days * 86_400 : undefined;
-
+    const onBan = (ban: BanInput): void => {
         runAction(async () => {
-            await client.banAuthUser({ expiresInSeconds, reason: banReason.trim() === "" ? undefined : banReason.trim(), userId: user.id });
+            await client.banAuthUser({ ...ban, userId: user.id });
         });
     };
 
@@ -226,19 +296,7 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
                                 {t("Unban")}
                             </Button>
                         ) : (
-                            <div className="flex items-end gap-2">
-                                <div className="flex flex-1 flex-col gap-1">
-                                    <Label htmlFor="ud-ban-reason">{t("Ban reason (optional)")}</Label>
-                                    <Input data-testid="ud-ban-reason" id="ud-ban-reason" onChange={onBanReasonChange} value={banReason} />
-                                </div>
-                                <div className="flex w-24 flex-col gap-1">
-                                    <Label htmlFor="ud-ban-days">{t("Days")}</Label>
-                                    <Input data-testid="ud-ban-days" id="ud-ban-days" onChange={onBanDaysChange} type="number" value={banDays} />
-                                </div>
-                                <Button data-testid="ud-ban" disabled={busy} onClick={onBan} size="sm" type="button" variant="destructive">
-                                    {t("Ban user")}
-                                </Button>
-                            </div>
+                            <BanForm busy={busy} onBan={onBan} />
                         )}
 
                         <div className="flex items-end gap-2">
