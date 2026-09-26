@@ -54,6 +54,7 @@ final class OptimisticOfflineTest {
         loneWriteSurvivesAnEnvelopeLess502();
         rateLimitedReplayRequeuesAndDefersTheNextFlush();
         offlineQueueIdentityGateRejectsReplay();
+        offlineWriteHeldForCredentialReplaysAfterTokenRefresh();
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
         batchEntryCapMatchesProtocol();
@@ -1641,6 +1642,83 @@ final class OptimisticOfflineTest {
         // the current one.
         check(posts.isEmpty(), "the write never reaches the server");
         check(codes.equals(List.of(testCase.get("code"))), "and it carries the documented code");
+    }
+
+    /**
+     * A write refused for its CREDENTIAL is held, and replays under the next token set for the same
+     * user: the bearer is read when the replay is SENT, never the one the write was queued under.
+     * This port never flushes on its own, so the app's second flush follows the refresh.
+     */
+    private static void offlineWriteHeldForCredentialReplaysAfterTokenRefresh() throws IOException {
+        covers("offline_write_held_for_credential_replays_after_token_refresh");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "credentialRefresh");
+        String identity = (String) testCase.get("identity");
+        String staleBearer = "Bearer " + testCase.get("staleToken");
+        Map<String, Object> refusal = map(testCase.get("refusal"));
+        int refusalStatus = count(refusal.get("status"));
+        String refusalBody = Json.write(refusal.get("body"));
+        List<String> authorizations = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            String authorization = headers.get("authorization");
+
+                            authorizations.add(authorization);
+
+                            return staleBearer.equals(authorization)
+                                    ? new Response(refusalStatus, refusalBody)
+                                    : new Response(200, "{\"result\":null}");
+                        });
+
+        client.identity(identity);
+        client.authToken = (String) testCase.get("staleToken");
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        for (String id : strings(testCase.get("queued"))) {
+            QueuedMutation queued =
+                    new QueuedMutation("messages:send", new LinkedHashMap<>(), null, id);
+
+            queued.identity = Identity.of(identity);
+            client.offlineQueue().enqueue(queued);
+        }
+
+        Map<String, Object> afterRefusal = map(testCase.get("afterRefusal"));
+        FlushReport refused = client.flushOfflineQueue(null);
+
+        check(
+                refused.committed.equals(strings(afterRefusal.get("committed"))),
+                "refused: committed, got " + refused.committed);
+        check(
+                refused.rejected.equals(strings(afterRefusal.get("rejected"))),
+                "refused: rejected, got " + refused.rejected);
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(afterRefusal.get("queuedAfterFlush"))),
+                "refused: the write is held, got " + ids(client.offlineQueue().items()));
+        check(store.removed.isEmpty(), "refused: the durable record survives");
+
+        // A refresh, not an account switch: same identity, new token, then the app's own flush.
+        client.authToken = (String) testCase.get("freshToken");
+
+        Map<String, Object> afterRefresh = map(testCase.get("afterRefresh"));
+        FlushReport replayed = client.flushOfflineQueue(null);
+
+        check(
+                replayed.committed.equals(strings(afterRefresh.get("committed"))),
+                "refreshed: committed, got " + replayed.committed);
+        check(
+                replayed.rejected.equals(strings(afterRefresh.get("rejected"))),
+                "refreshed: rejected, got " + replayed.rejected);
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(afterRefresh.get("queuedAfterFlush"))),
+                "refreshed: nothing left queued, got " + ids(client.offlineQueue().items()));
+        check(
+                authorizations.equals(strings(testCase.get("authorizationHeaders"))),
+                "the replay carries the token current when it is sent, got " + authorizations);
     }
 
     private static void offlineFlushReplaysAndConfirmsOptimistic() throws IOException {

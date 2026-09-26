@@ -109,7 +109,19 @@ class LunoraClient {
   late final OfflineReplayer _replayer;
 
   /// The bearer token sent on every RPC. Rotate it at any time; the next call
-  /// picks it up.
+  /// picks it up, and queued writes a stale token was refused for replay.
+  ///
+  /// With an [authSubject] set, set it again after the new token to say whose
+  /// token it is:
+  ///
+  /// ```dart
+  /// client
+  ///   ..authToken = refreshed
+  ///   ..authSubject = userId; // the same id for a refresh, the new one for a switch
+  /// ```
+  ///
+  /// Until it is, queued writes are held rather than sent under a subject the
+  /// new token may not belong to; setting it re-flushes them.
   String? get authToken => transport.authToken;
 
   set authToken(String? value) => _changeIdentity(() => transport.authToken = value);
@@ -132,12 +144,29 @@ class LunoraClient {
   /// the next resubscribe is a cold one — and every shape view is emptied, its
   /// callbacks told `[]`. A first sign-in (from unset) and a re-assertion of the
   /// same identity evict nothing.
+  ///
+  /// It also re-flushes. A write refused for its credential, or held while the
+  /// identity could not be told, waits for exactly this: nothing else would
+  /// replay it while the socket stays up, since only a reconnect flushes. So
+  /// when anything the replay gate reads changed — the token, the identity, or
+  /// a subject re-set for a new token — every connected shard with writes queued
+  /// flushes. In a microtask, so `authToken` and `authSubject` set one after the
+  /// other are judged together: the gate holds a write while a new token's
+  /// subject is unconfirmed, and never sends it as the previous user.
   void _changeIdentity(void Function() change) {
     final previous = transport.identityFingerprint();
+    final previousToken = transport.authToken;
+    final wasAwaitingReconfirm = transport.subjectAwaitingReconfirm;
 
     change();
 
-    if (previous == null || previous == transport.identityFingerprint()) {
+    final identityChanged = previous != transport.identityFingerprint();
+
+    if ((identityChanged || previousToken != transport.authToken || wasAwaitingReconfirm) && _queue.size > 0) {
+      scheduleMicrotask(_flushConnectedShards);
+    }
+
+    if (previous == null || !identityChanged) {
       return;
     }
 
@@ -260,16 +289,24 @@ class LunoraClient {
       return restored;
     }
 
-    // One flush per SHARD the restored writes belong to, and only for the ones
-    // already connected. A single global flush would drain another shard's
-    // writes down this shard's connection.
+    _flushConnectedShards();
+
+    return restored;
+  }
+
+  /// One flush per SHARD with writes queued, and only for the ones already
+  /// connected. A single global flush would drain another shard's writes down
+  /// this shard's connection.
+  void _flushConnectedShards() {
+    if (_closed) {
+      return;
+    }
+
     for (final shard in <String>{for (final item in _queue.items) item.shardKey ?? ''}) {
       if (_connectedShards.contains(shard)) {
         unawaited(flushOfflineQueue(shardKey: shard.isEmpty ? null : shard));
       }
     }
-
-    return restored;
   }
 
   /// Whether [close] has been called. A closed client accepts no further calls.

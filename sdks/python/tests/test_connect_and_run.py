@@ -14,6 +14,7 @@ that library's framing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -22,6 +23,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import MAX_WS_FRAME_BYTES, LunoraClient
+from lunora.offline import OfflineQueue
+from lunora.submit import SubmitOptions
 
 # Generous: every wait below is satisfied in microseconds when the loop is
 # correct, and this only bounds how long a REGRESSION hangs the suite.
@@ -181,6 +184,152 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StopAsyncIteration):
             await asyncio.wait_for(values.__anext__(), TIMEOUT)
         self.assertFalse(client.online)
+
+    async def test_a_new_token_replays_a_write_held_for_its_credential(self):
+        """A write refused ``TOKEN_EXPIRED`` is held; the next token replays it.
+
+        This loop flushes when its socket connects, and a healthy socket never
+        connects again, so without a flush on the new token the held write
+        waited for a disconnect that might never come.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        headers = []
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            if sent.get("authorization") == "Bearer stale":
+                return 401, {"error": {"code": "TOKEN_EXPIRED", "message": "token expired"}}
+            return 200, {"result": None}
+
+        client = LunoraClient("http://example.invalid", auth_token="stale", identity="user-a", http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: headers)
+        self.assertEqual(client.pending_mutation_count, 1, "the refused write is held")
+
+        client.auth_token = "fresh"
+        with contextlib.suppress(asyncio.TimeoutError):
+            await _wait_for(lambda: len(headers) == 2)
+        self.assertEqual(headers, ["Bearer stale", "Bearer fresh"])
+        await _wait_for(lambda: client.pending_mutation_count == 0)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_token_set_while_the_stale_request_is_in_flight_is_not_lost(self):
+        """The refresh lands while the flush still holds the write it drained.
+
+        A second flush started then finds the queue empty, and the first one
+        puts the refused write back after it has finished, so nothing is left
+        to replay it. The running flush must run again instead.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        headers = []
+        client = None
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            if sent.get("authorization") == "Bearer stale":
+                client.auth_token = "fresh"  # lands mid-request
+                return 401, {"error": {"code": "TOKEN_EXPIRED", "message": "token expired"}}
+            return 200, {"result": None}
+
+        client = LunoraClient("http://example.invalid", auth_token="stale", identity="user-a", http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await _wait_for(lambda: len(headers) == 2)
+        self.assertEqual(headers, ["Bearer stale", "Bearer fresh"])
+        await _wait_for(lambda: client.pending_mutation_count == 0)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_new_token_without_an_identity_does_not_replay_the_held_write(self):
+        """With no identity set, nothing says the new token is the same user's.
+
+        Replaying on it would send user A's held write with user B's credential,
+        so a token change flushes nothing until an identity is set.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        headers = []
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            if sent.get("authorization") == "Bearer token-a":
+                return 401, {"error": {"code": "TOKEN_EXPIRED", "message": "token expired"}}
+            return 200, {"result": None}
+
+        client = LunoraClient("http://example.invalid", auth_token="token-a", http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: headers)
+        client.auth_token = "token-b"
+        client.auth_token = None
+        await asyncio.sleep(0.2)
+        self.assertEqual(headers, ["Bearer token-a"], "the held write never travels with another token")
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_clearing_the_token_does_not_replay_the_held_write(self):
+        """A sign-out is not a fresh credential: nothing is sent without one."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        headers = []
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            return 401, {"error": {"code": "TOKEN_EXPIRED", "message": "token expired"}}
+
+        client = LunoraClient("http://example.invalid", auth_token="stale", identity="user-a", http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: headers)
+        client.auth_token = None
+        await asyncio.sleep(0.2)
+        self.assertEqual(headers, ["Bearer stale"])
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_failing_flush_after_a_token_change_is_logged(self):
+        """The flush a token change starts has no awaiter, so its failure is logged."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        client = LunoraClient("http://example.invalid", auth_token="stale", identity="user-a", http_post=lambda *_: (200, {"result": None}))
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: socket.sent)
+
+        async def broken(_shard_key=None):
+            raise RuntimeError("flush blew up")
+
+        client.flush_offline_queue = broken
+        with self.assertLogs("lunora", level="WARNING") as logs:
+            client.auth_token = "fresh"
+            await asyncio.sleep(0.1)
+        self.assertIn("flush blew up", "\n".join(logs.output))
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
 
     async def test_frames_past_the_library_default_size_are_accepted(self):
         """``websockets`` closes on any message over 1 MiB (1009) unless told otherwise.

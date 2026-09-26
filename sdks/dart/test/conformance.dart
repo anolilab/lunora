@@ -107,6 +107,9 @@ Future<void> main() async {
   await run(caseUndecodableResultSettlesCommitted);
   await run(caseReplayClassifiesSingleAndBatchAlike);
   await run(caseBatchSplitsOnEnvelopelessPayloadTooLarge);
+  await run(caseHeldWriteReplaysAfterTokenRefresh);
+  await run(caseTokenChangeGatesHeldWrites);
+  await run(caseHeldWritesAreReported);
   await run(caseUnexpectedFailureRequeuesUnsettledWrites);
   await run(caseShapePokeWithUndecodableRowIsRefusedWhole);
   await run(caseMalformedFramesAreIgnoredWithoutRaising);

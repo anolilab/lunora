@@ -416,6 +416,17 @@
                 "rejected": ["l1"],
                 "queuedAfterFlush": []
             }
+        },
+        "credentialRefresh": {
+            "$comment": "A write refused for its CREDENTIAL is held, and replays under the next token set for the same user. The client is signed in as `identity` with `staleToken` and connected; `queued` holds one write. The poster answers `refusal` to every request carrying `authorization: Bearer <staleToken>` and `{\"result\": null}` to the rest. The first flush sends the stale token and is refused: the write stays queued and persisted, unsettled (`afterRefusal`). Then `freshToken` is set with the identity unchanged — a refresh, not an account switch — and the write replays once more, under it (`afterRefresh`). `authorizationHeaders` is every request's header in order: the fresh token is read when the replay is SENT, never the one the write was queued under. A port that flushes on its own when its socket connects (the reference, dart) also flushes when a new token lands, so there nothing but the token is set; the ports whose flushes are always the app's call (python outside `connect_and_run`, go, ruby, rust, swift, java, kotlin) flush once more after setting it. Where the identity is a subject kept apart from the token (the reference, dart), setting the token alone leaves it unconfirmed — the new token could be another user's — so the subject is set again beside it, as a refresh does.",
+            "identity": "user-a",
+            "staleToken": "token-stale",
+            "freshToken": "token-fresh",
+            "queued": ["r1"],
+            "refusal": { "status": 401, "body": { "error": { "code": "TOKEN_EXPIRED", "message": "token expired" } } },
+            "afterRefusal": { "committed": [], "rejected": [], "queuedAfterFlush": ["r1"] },
+            "afterRefresh": { "committed": ["r1"], "rejected": [], "queuedAfterFlush": [] },
+            "authorizationHeaders": ["Bearer token-stale", "Bearer token-fresh"]
         }
     }
 }
