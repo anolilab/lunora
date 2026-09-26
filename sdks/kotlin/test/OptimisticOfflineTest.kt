@@ -1314,6 +1314,238 @@ private fun emptyShardKeyNeverReachesTheWire() {
     check(client.wsUrl("room-1").contains("shard=room-1"), "and the socket URL")
 }
 
+/** The code a settled event's error carries, whichever SDK error type it is. */
+private fun errorCode(error: Exception?): String? = (error as? ApiException)?.code ?: (error as? OfflineException)?.code
+
+/** How many calls a request carries: its batch entries, or one for a single call. */
+private fun callCount(body: ByteArray): Int = batchCalls(body).size.takeIf { it > 0 } ?: 1
+
+/** A client over [poster] with a recording durable store and settled log. */
+private class Flush(poster: (String, Map<String, String>, ByteArray) -> HttpResponse) {
+    val store = MemoryStore()
+    val settled = mutableListOf<MutationSettled>()
+    val confirmed = mutableListOf<String>()
+    val client = Client("https://app.example", poster)
+
+    init {
+        client.offlineQueue = OfflineQueue(persistence = store)
+        client.onMutationSettled { settled.add(it) }
+    }
+
+    fun enqueue(ids: List<String?>, shardKey: String? = null) {
+        for (id in ids) {
+            val item = QueuedMutation(id!!, "messages:send", WireValue.Obj(emptyList()), shardKey)
+
+            item.onCommit = { confirmed.add(id) }
+            client.offlineQueue.enqueue(item)
+        }
+    }
+}
+
+/**
+ * An EMPTY shard key is the default shard on the wire too, on BOTH replay paths:
+ * no single-call body and no batch entry carries a `shardKey` key.
+ */
+private fun offlineFlushEmptyShardKeyRoutesToDefault() {
+    covers("offline_flush_empty_shard_key_routes_to_default")
+
+    val case = scenario("offlineQueue", "emptyShardKey")
+
+    for (path in listOf("batch", "lone")) {
+        val spec = case[path] as Map<*, *>
+        val sent = mutableListOf<Map<*, *>>()
+        val flush = Flush { _, _, body ->
+            val calls = batchCalls(body)
+
+            if (calls.isEmpty()) sent.add(Json.parse(String(body, Charsets.UTF_8)) as Map<*, *>) else sent.addAll(calls)
+
+            HttpResponse(200, echoBatchSlots(body, commitCursor = 1))
+        }
+
+        for (raw in spec["queued"] as List<*>) {
+            val queued = raw as Map<*, *>
+
+            flush.enqueue(listOf(queued["id"] as String), queued["shardKey"] as String?)
+        }
+
+        val report = flush.client.flushOfflineQueue(spec["flushShardKey"] as String?)
+
+        check(report.committed == ids(spec["committed"]), "$path: every write commits: ${report.committed}")
+        check(sent.size == (spec["queued"] as List<*>).size, "$path: one body or entry per write")
+        check(sent.none { it.containsKey("shardKey") }, "$path: no body or entry carries a shardKey: $sent")
+    }
+}
+
+/**
+ * A SUCCESS whose result does not decode is a commit: settled `COMMITTED` with the
+ * coded decode error, its record removed, never retried — and on the batch path a
+ * bad slot never takes the slots after it down.
+ */
+private fun offlineFlushUndecodableResultSettlesCommitted() {
+    covers("offline_flush_undecodable_result_settles_committed")
+
+    val case = scenario("offlineQueue", "undecodableResult")
+    val raw = Json.write(case["rawResult"])
+    val code = case["code"] as String
+    val batch = case["batch"] as Map<*, *>
+    val bad = count(batch["undecodableSlot"])
+    val batched = Flush { _, _, body ->
+        val slots = batchCalls(body).indices.joinToString(",") { index ->
+            val result = if (index == bad) raw else "\"ok\""
+
+            "{\"id\":$index,\"body\":{\"result\":$result,\"commitCursor\":${index + 1}}}"
+        }
+
+        HttpResponse(200, "{\"results\":[$slots]}")
+    }
+
+    batched.enqueue(ids(batch["queued"]))
+
+    val report = batched.client.flushOfflineQueue()
+
+    check(report.committed == ids(batch["committed"]), "batch: every slot commits: ${report.committed}")
+    check(report.rejected == ids(batch["rejected"]), "batch: nothing is rejected")
+    check(queuedIds(batched.client.offlineQueue.items()) == ids(batch["queuedAfterFlush"]), "batch: nothing stays queued")
+    check(batched.store.removed == ids(batch["persistRemoveCalls"]), "batch: every record is removed")
+    check(batched.confirmed == ids(batch["committed"]), "batch: every overlay is confirmed, the undecodable one included")
+    check(batched.settled.all { it.status == MutationStatus.COMMITTED }, "batch: all settle committed")
+    check(
+        batched.settled.filter { errorCode(it.error) == code }.map { it.mutationId } == ids(batch["decodeFailed"]),
+        "batch: only the undecodable slot carries $code",
+    )
+    check(batched.settled.first { it.error != null }.value == null, "batch: with no value")
+
+    val lone = case["lone"] as Map<*, *>
+    var requests = 0
+    val single = Flush { _, _, _ ->
+        requests++
+
+        HttpResponse(200, "{\"result\":$raw,\"commitCursor\":1}")
+    }
+
+    single.enqueue(ids(lone["queued"]))
+
+    val first = single.client.flushOfflineQueue()
+
+    single.client.flushOfflineQueue()
+
+    check(first.committed == ids(lone["committed"]), "lone: the write commits: ${first.committed} ${first.rejected} ${first.requeued}")
+    check(first.rejected == ids(lone["rejected"]), "lone: and is not rejected")
+    check(queuedIds(single.client.offlineQueue.items()) == ids(lone["queuedAfterFlush"]), "lone: nothing stays queued")
+    check(single.store.removed == ids(lone["persistRemoveCalls"]), "lone: its record is removed")
+    check(single.confirmed == ids(lone["committed"]), "lone: its overlay is confirmed")
+    check(single.settled.map { errorCode(it.error) } == listOf(code), "lone: it carries $code")
+    check(single.settled[0].status == MutationStatus.COMMITTED && single.settled[0].value == null, "lone: committed, with no value")
+    check(requests == count(lone["requestsAfterSecondFlush"]), "lone: a second flush sends nothing")
+
+    // The direct path fails with the SDK's own error, distinguishable from a
+    // transport failure, rather than the codec's exception.
+    var direct: ApiException? = null
+
+    try {
+        single.client.mutation("messages:send")
+    } catch (error: ApiException) {
+        direct = error
+    }
+
+    check(direct?.code == code && direct.transient == false, "a direct mutation throws $code: ${direct?.code}")
+
+    drainedWritesSurviveAnUnexpectedException()
+}
+
+/**
+ * A flush never loses a drained write. An `Error` escaping a consumer's settled
+ * callback after the first slot is not an `Exception` any replay catch sees, so it
+ * leaves the loop with the later slots neither settled nor requeued; the finally
+ * guard puts them back at the front, in order, with their records intact.
+ */
+private fun drainedWritesSurviveAnUnexpectedException() {
+    val flush = Flush { _, _, body -> HttpResponse(200, echoBatchSlots(body, commitCursor = 1)) }
+
+    flush.enqueue(listOf("f1", "f2", "f3"))
+    flush.client.offlineQueue.items()[0].onSettled = { throw AssertionError("a consumer bug") }
+
+    var escaped: Throwable? = null
+
+    try {
+        flush.client.flushOfflineQueue()
+    } catch (error: AssertionError) {
+        escaped = error
+    }
+
+    check(escaped?.message == "a consumer bug", "the unexpected failure still propagates")
+    check(
+        queuedIds(flush.client.offlineQueue.items()) == listOf("f2", "f3"),
+        "the unsettled writes are back in the queue, in order: ${queuedIds(flush.client.offlineQueue.items())}",
+    )
+    check(flush.store.removed == listOf("f1"), "and only the settled write's record was removed: ${flush.store.removed}")
+}
+
+/**
+ * ONE predicate for both replay paths: a coded envelope by its code alone, an
+ * envelope-less reply by its status.
+ */
+private fun offlineFlushClassifiesSingleAndBatchAlike() {
+    covers("offline_flush_classifies_single_and_batch_alike")
+
+    val case = scenario("offlineQueue", "replayClassification")
+    val paths = case["paths"] as Map<*, *>
+
+    for (raw in case["cases"] as List<*>) {
+        val spec = raw as Map<*, *>
+        val status = count(spec["status"])
+        val body = spec["rawBody"] as? String ?: Json.write(spec["body"])
+
+        for (path in listOf("single", "batch")) {
+            val queued = ids(paths[path])
+            val label = "${spec["name"]} ($path)"
+            val flush = Flush { _, _, _ -> HttpResponse(status, body) }
+
+            flush.enqueue(queued)
+
+            val report = flush.client.flushOfflineQueue()
+
+            if (spec["outcome"] == "rejected") {
+                check(report.rejected == queued, "$label: rejected, got ${report.rejected} / requeued ${report.requeued}")
+                check(flush.settled.map { errorCode(it.error) } == queued.map { spec["code"] }, "$label: with the envelope's code")
+                check(flush.client.offlineQueue.size == 0, "$label: nothing stays queued")
+            } else {
+                check(report.requeued == queued, "$label: requeued, got ${report.requeued} / rejected ${report.rejected}")
+                check(queuedIds(flush.client.offlineQueue.items()) == queued, "$label: still queued, in order")
+                check(flush.settled.isEmpty(), "$label: nothing settles")
+            }
+        }
+    }
+}
+
+/**
+ * A 413 splits a batch whatever its body, and a lone write still refused by one
+ * settles terminally with `PAYLOAD_TOO_LARGE` instead of re-queueing forever.
+ */
+private fun offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge() {
+    covers("offline_flush_batch_splits_on_envelopeless_413")
+
+    val case = scenario("offlineQueue", "envelopelessPayloadTooLarge")
+    val html = case["rawBody"] as String
+
+    for (name in listOf("split", "alwaysRefused", "lone")) {
+        val spec = case[name] as Map<*, *>
+        val limit = (spec["refuseCallsAbove"] as? Number)?.toInt() ?: -1
+        val flush = Flush { _, _, body ->
+            if (callCount(body) > limit) HttpResponse(413, html) else HttpResponse(200, echoBatchSlots(body, commitCursor = 1))
+        }
+
+        flush.enqueue(ids(spec["queued"]))
+
+        val report = flush.client.flushOfflineQueue()
+
+        check(report.committed == ids(spec["committed"]), "$name: committed ${report.committed}")
+        check(report.rejected == ids(spec["rejected"]), "$name: rejected ${report.rejected} (requeued ${report.requeued})")
+        check(queuedIds(flush.client.offlineQueue.items()) == ids(spec["queuedAfterFlush"]), "$name: queue after the flush")
+        check(flush.settled.filter { it.status == MutationStatus.REJECTED }.all { errorCode(it.error) == case["code"] }, "$name: refused with ${case["code"]}")
+    }
+}
+
 /** Runs every optimistic-layer and offline-queue case. */
 internal fun runOptimisticOfflineCases() {
     optimisticLayerRebasesOntoServerFrame()
@@ -1336,4 +1568,8 @@ internal fun runOptimisticOfflineCases() {
     loneQueuedWriteSurvivesAnEnvelopeLess502()
     rateLimitedReplayDefersTheNextFlush()
     offlineFlushUnencodableWriteSettlesTerminal()
+    offlineFlushEmptyShardKeyRoutesToDefault()
+    offlineFlushUndecodableResultSettlesCommitted()
+    offlineFlushClassifiesSingleAndBatchAlike()
+    offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge()
 }
