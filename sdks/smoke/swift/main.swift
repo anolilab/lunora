@@ -20,14 +20,16 @@ import Lunora
 import LunoraApi
 
 var captured: Data?
+var reply = #"{"result":{"ok":true}}"#
 
 let client = LunoraClient(url: "https://app.example") { _, _, body in
     captured = body
 
-    return (200, Data(#"{"result":{"ok":true}}"#.utf8))
+    return (200, Data(reply.utf8))
 }
+let api = API(client: client)
 
-_ = try API(client: client).messages.list(MessagesListArgs(channelID: "chan_1", limit: nil))
+_ = try api.messages.list(MessagesListArgs(channelID: "chan_1", limit: nil))
 
 guard let body = captured else {
     fatalError("the poster was never called")
@@ -41,4 +43,43 @@ guard got == want else {
     fatalError("generated call produced \(got), want \(want)")
 }
 
-print("OK — the generated surface reaches the wire")
+// A typed result is re-read into its model through `Wire.stableStringify` and
+// `JSONDecoder`, and this is the only place that generated call site runs.
+// `extra-methods.json` adds the method; the shared fixture has no typed result.
+reply = #"{"result":{"total":3}}"#
+
+let summary = try api.stats.summary()
+
+guard summary.total == 3 else {
+    fatalError("typed result decoded total \(summary.total), want 3")
+}
+
+// Two keys differing only by a lone surrogate are one Swift `String`, so the
+// transport hands this result back as a `[WireKey: Any]`.
+// `JSONSerialization.data(withJSONObject:)` crashed the process on that, past
+// any `catch`. A model cannot hold a lone surrogate and `JSONDecoder` refuses the
+// escape, so the documented outcome is a DecodingError the caller can catch.
+reply = #"{"result":{"total":3,"\ud800":1,"\ud801":2}}"#
+
+guard try client.query("stats:summary", args: nil, shardKey: nil) is [WireKey: Any] else {
+    fatalError("the reply no longer decodes to [WireKey: Any], so this no longer exercises that path")
+}
+
+expectDecodingError("a result with lone-surrogate keys")
+
+// A result the model cannot hold is the same thrown DecodingError.
+reply = #"{"result":{"total":"three"}}"#
+expectDecodingError("a result whose total is not a number")
+
+func expectDecodingError(_ what: String) {
+    do {
+        _ = try api.stats.summary()
+        fatalError("\(what) decoded into the model")
+    } catch is DecodingError {
+        // The documented failure.
+    } catch {
+        fatalError("\(what) threw \(error), want a DecodingError")
+    }
+}
+
+print("OK — the generated surface reaches the wire and decodes its typed result")

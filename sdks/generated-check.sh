@@ -244,7 +244,20 @@ check_one() {
     # consumer's manifests is not the layout a user gets.
     local out="$work/sdk"
 
-    node "$CLI" sdk generate --lang "$lang" --spec "$SPEC" --out "$out" --from "$ROOT/sdks" \
+    # A leg may append methods the shared fixture has none of, from
+    # `sdks/smoke/<lang>/extra-methods.json` — swift's typed-result call site,
+    # which the fixture's untyped results never generate. Appended at run time
+    # rather than kept as a second copy of the spec, which would drift from it.
+    local spec="$SPEC"
+    local extra="$ROOT/sdks/smoke/$lang/extra-methods.json"
+
+    if [ -f "$extra" ]; then
+        spec="$work/openrpc.json"
+        node -e 'const fs = require("node:fs"); const [base, extra, out] = process.argv.slice(1); const doc = JSON.parse(fs.readFileSync(base, "utf8")); doc.methods.push(...JSON.parse(fs.readFileSync(extra, "utf8"))); fs.writeFileSync(out, JSON.stringify(doc));' "$SPEC" "$extra" "$spec"
+    fi
+
+    [ -f "$spec" ] \
+        && node "$CLI" sdk generate --lang "$lang" --spec "$spec" --out "$out" --from "$ROOT/sdks" \
         && run_consumer "$lang" "$work" "$out"
 
     local status=$?

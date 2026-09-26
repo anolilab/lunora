@@ -205,7 +205,10 @@ where code that casts to `[String: Any]` finds nil. An `Error`'s props are still
 a `[String: Any]`, so props whose keys differ only by a lone surrogate are refused
 as a malformed frame. Generated typed results are decoded from the transport's own
 writer rather than `JSONSerialization`, which crashes on a `[WireKey: Any]` or a
-NaN instead of throwing.
+NaN instead of throwing. A model cannot hold a lone surrogate, and `JSONDecoder`
+refuses its escape, so a typed result carrying one throws a `DecodingError`, as
+any result the model cannot hold does; the untyped `client.query` still returns
+it whole. `sdks/generated-check.sh swift` runs both.
 
 ### One thing to know about generated models
 
