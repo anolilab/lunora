@@ -1,3 +1,146 @@
+## @lunora/codegen [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.218...@lunora/codegen@1.0.0-alpha.219) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** defineSchema throws for a table that is both .global()
+and .ttl(). Drop .ttl() and expire those rows from a cron. Codegen now
+fails on a container config key it cannot read statically instead of
+omitting it, and on two containers whose names map to one binding.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(values): say what $type<T>() does and does not override
+
+The JSDoc said $type<T>() overrides "the inferred select/insert type".
+It overrides Infer<> only. The runtime parser is unchanged, so codegen's
+Doc_* / Insert_* / procedure-arg types keep the base kind, which is the
+type a stored value is actually guaranteed to have. The example used
+Id<"users">, the one case with a checked alternative (v.id), so it now
+points there instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* style(codegen): format the imports the key-name codemod touched
+
+The codemod that routed object-literal keys through propertyKeyName /
+findObjectProperty merged names into existing import lists without a space
+after the comma; ESLint's import sort then ran after Prettier and left 16
+files unformatted. Prettier, then ESLint, over packages/codegen/src.
+
+The previous fix(codegen) commit's footer left one break out: nullable
+columns are now typed nullable everywhere codegen renders a type.
+* **codegen:** Doc_*, Insert_* and procedure-argument types now include
+`| null` for `.nullable()` columns (and the injected `.softDelete()` marker
+is `number | null`). Code that reads such a column without a null check,
+e.g. `doc.note.length`, no longer typechecks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): refuse container settings codegen would misread
+
+Four shapes still let a wrangler-relevant container setting be dropped or
+read with a value the app does not run with:
+
+- A spread typed `T | undefined` or `any` has no properties to list, so the
+  opaque-spread check found no guarded key and skipped it, dropping
+  `max_instances`. Keys now come from the non-nullable apparent type (every
+  member of a union), and an `any` / `unknown` spread is refused outright.
+- `const base = { maxInstances: 2 }; base.maxInstances = 10;` wrote 2 to
+  wrangler while the container ran with 10. A const object that is assigned
+  through, incremented, deleted from or `Object.assign`ed anywhere in its
+  file is now refused with a located error.
+- `const a: any = { ...b }; const b: any = { ...a };` overflowed the stack.
+  Spread resolution tracks the literals it is inside and reports the cycle.
+- `const maxInstances = 3 as const` (or `satisfies`, a type assertion or
+  parentheses) failed the "static number literal" check. Type-only wrappers
+  are unwrapped before reading.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): read quoted destructuring keys without their quotes
+
+The object-literal fix left the pattern side: destructuring readers took
+`getPropertyNameNode().getText()`, which keeps a string-literal key's
+quotes, so `({ "ctx": c })` or `const { "storage": bucket } = ctx` read as
+the property `"ctx"` / `"storage"` and the read went unseen.
+
+A `bindingKeyName` helper in discover/ast.ts reads the key through the same
+`propertyNameText` as `propertyKeyName`. It replaces all seven sites:
+argument-taint, ai-tool-side-effects, feature-usage (two),
+functions/internal/resolve-call and http-action-guards (two). A
+feature-usage test covers both spellings and fails without the fix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(server): hold extension tables to the table-mode rules
+
+`defineSchema` validates only the tables it is called with, and
+`mergeSchemaExtension` re-ran only the index and vector checks. A table
+contributed through `.extend()` or `installPlugins` could therefore be
+`.global()` together with `.ttl()`, a `v.bigint()` column or
+`.dropStalePatches()` — every combination `defineSchema` refuses for an
+app's own tables — and the refusal silently did not apply.
+
+The per-table mode checks (commitOrdered, dropStalePatches, global bigint,
+global ttl, memory) are grouped as `validateTableModes`, run by
+`defineSchema` and again by `mergeSchemaExtension` over the merged set.
+Tests cover ttl, bigint and dropStalePatches through both `.extend()` and
+`installPlugins`; all fail without the merge-time call.
+* **codegen:** `.extend()` / `installPlugins` now throw for an extension
+table combining `.global()` with `.ttl()`, `.commitOrdered()`,
+`.dropStalePatches()` or a `v.bigint()` column, or `.memory()` with a
+companion index, as `defineSchema` already did for app tables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): resolve a shorthand container setting through const aliases
+
+`{ maxInstances: LIMIT }` resolved LIMIT to its value, but the shorthand
+`{ maxInstances }` over `const maxInstances = LIMIT` stopped at the first
+initializer, handed the identifier `LIMIT` to the per-key reader, and
+failed the static-number check. The same applied to guarded keys inside
+`rollout`.
+
+Both forms now go through one `resolveBinding`, which follows
+`const a = b` aliases (and type-only wrappers) to the value, up to 16
+hops, and applies the written-through check at each const object it
+passes. A test covers a shorthand `maxInstances` and a two-hop,
+`as const` `rollout.gracePeriodSeconds`; it fails without the change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(codegen): pin numeric object keys to their runtime spelling
+
+`{ 0x10: … }` is the key "16" at runtime, `{ 1e3: … }` "1000", `{ 1.50: … }`
+"1.5". `propertyNameText` reads a numeric key through `getLiteralText()`,
+and TypeScript's scanner already stores a numeric literal's text in that
+normalised form (verified for hex, binary, exponent, separator, trailing
+zero and >2^53 literals against `Object.keys` of the same object), so no
+code change is needed. This test keeps it that way.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **codegen:** read keys, nullability and ttl as the runtime does ([#838](https://github.com/anolilab/lunora/issues/838)) ([57c54d8](https://github.com/anolilab/lunora/commit/57c54d801da44dbbed2380b6b33976a6d8e078a4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.159
+* **@lunora/agent:** upgraded to 1.0.0-alpha.140
+* **@lunora/values:** upgraded to 1.0.0-alpha.52
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.63
+* **@lunora/server:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/codegen [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.217...@lunora/codegen@1.0.0-alpha.218) (2026-09-25)
 
 ### ⚠ BREAKING CHANGES
