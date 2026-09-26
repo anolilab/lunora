@@ -26,13 +26,15 @@
  * continues from it. One call does at most {@link MAX_PAGES_PER_CALL} pages and answers
  * `done: false` until the last.
  *
- * **Change-checked.** Before resuming, the source fingerprints the rows the copy
- * already read (count plus an order-independent sum of row digests) and compares it
- * with the target's record. An update, a delete, or a new row reusing a freed `rowid`
- * changes it; the table is then re-scanned, and each row reconciled three-way against
- * the record: a row the source changed is updated in the target when the target still
- * holds the copied version, and a row the source deleted is deleted from the target on
- * the same condition. Anything the pinned object changed on its own side is a conflict.
+ * **Change-checked.** When a call reaches the end of every table, the source
+ * fingerprints each table (count plus an order-independent sum of row digests,
+ * streamed from the cursor, never collected) and compares it with the target's record.
+ * That runs once per pass, not once per call, so a large table stays linear. An
+ * update, a delete, or a new row reusing a freed `rowid` changes it; the table is then
+ * re-scanned, and each row reconciled three-way against the record: a row the source
+ * changed is updated in the target when the target still holds the copied version, and
+ * a row the source deleted is deleted from the target on the same condition. Anything
+ * the pinned object changed on its own side is a conflict.
  *
  * **Loud conflicts.** A source row that collides with a row the copy did not write (a
  * different row with the same key or unique value, such as a user who signed up in the
@@ -87,8 +89,6 @@ type Row = Record<string, unknown>;
 /** One source table, as the target needs it to recreate, fill and check it. */
 interface MovableTable {
     columns: string[];
-    /** Fingerprint of the source rows with `rowid` at or below the cursor the target reported. */
-    fingerprint: string;
     indexes: { name: string; sql: string }[];
     name: string;
     rows: number;
@@ -158,6 +158,8 @@ interface Marker {
     columns: string[];
     done: boolean;
     pass: number;
+    /** On the user table's marker: the highest user `rowid` already checked for sign-ups the copy did not write. */
+    watermark: number;
 }
 
 type Counts = Pick<AuthMoveTableReport, "conflicts" | "copied" | "deleted" | "unchanged" | "updated">;
@@ -206,32 +208,31 @@ const encodeValues = (values: unknown[]): string => JSON.stringify(encodeWire(va
 /** Digest of a row's values over `columns` (sorted), as a 64-bit integer. */
 const rowDigest = (row: Row, columns: string[]): bigint => BigInt(`0x${contentDigest(encodeValues(columns.map((column) => row[column] ?? null)))}`);
 
-/** Count plus an order-independent sum of digests. */
-const fingerprintOf = (digests: Iterable<bigint>): string => {
+/**
+ * Count plus an order-independent sum of row digests, streamed: `rows` is a SQL cursor,
+ * read one row at a time and never collected, so memory stays at one row.
+ */
+const fingerprintOf = (rows: Iterable<Row>, toDigest: (row: Row) => bigint): string => {
     let count = 0;
     let sum = 0n;
 
-    for (const digest of digests) {
+    for (const row of rows) {
         count += 1;
-        sum = (sum + digest) % DIGEST_MODULUS;
+        sum = (sum + toDigest(row)) % DIGEST_MODULUS;
     }
 
     return `${String(count)}:${sum.toString(16)}`;
 };
 
-/** Source: fingerprint of a table's rows, up to `upTo` by `rowid` when given. */
-const sourceFingerprint = (storage: DoStorageLike, table: string, upTo?: number): string => {
+/** Source: fingerprint of a table's rows. */
+const sourceFingerprint = (storage: DoStorageLike, table: string): string => {
     const columns = columnNames(storage, table).toSorted((a, b) => a.localeCompare(b));
-    const rows =
-        upTo === undefined
-            ? all(storage, `SELECT * FROM ${quoteIdentifier(table)}`)
-            : all(storage, `SELECT * FROM ${quoteIdentifier(table)} WHERE rowid <= ?`, upTo);
 
-    return fingerprintOf(rows.map((row) => rowDigest(row, columns)));
+    return fingerprintOf(storage.sql.exec(`SELECT * FROM ${quoteIdentifier(table)}`), (row) => rowDigest(row, columns));
 };
 
-/** Source: every table, with what the target needs to recreate and check it. */
-const listMovableTables = (storage: DoStorageLike, cursors: Record<string, number>): MovableTable[] =>
+/** Source: every table, with what the target needs to recreate it. */
+const listMovableTables = (storage: DoStorageLike): MovableTable[] =>
     tableNames(storage).map((name) => {
         const definition = all(storage, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, name)[0]?.["sql"];
         const indexes = all(storage, `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`, name).map((row) => {
@@ -240,7 +241,6 @@ const listMovableTables = (storage: DoStorageLike, cursors: Record<string, numbe
 
         return {
             columns: columnNames(storage, name),
-            fingerprint: sourceFingerprint(storage, name, cursors[name] ?? 0),
             indexes,
             name,
             rows: countRows(storage, name),
@@ -275,23 +275,29 @@ const markers = (storage: DoStorageLike): Record<string, Marker> => {
     }
 
     return Object.fromEntries(
-        all(storage, `SELECT tbl, after, done, pass, cols FROM ${quoteIdentifier(MARKER_TABLE)}`).map((row) => [
+        all(storage, `SELECT tbl, after, done, pass, cols, watermark FROM ${quoteIdentifier(MARKER_TABLE)}`).map((row) => [
             String(row["tbl"]),
-            { after: Number(row["after"]), columns: JSON.parse(String(row["cols"])) as string[], done: row["done"] === 1, pass: Number(row["pass"]) },
+            {
+                after: Number(row["after"]),
+                columns: JSON.parse(String(row["cols"])) as string[],
+                done: row["done"] === 1,
+                pass: Number(row["pass"]),
+                watermark: Number(row["watermark"]),
+            },
         ]),
     );
 };
 
 /** Target: fingerprint of the rows the current pass has applied for `table`. */
 const copiedFingerprint = (storage: DoStorageLike, table: string, pass: number): string =>
-    fingerprintOf(
-        all(storage, `SELECT h FROM ${quoteIdentifier(COPIED_TABLE)} WHERE tbl = ? AND pass = ?`, table, pass).map((row) => BigInt(`0x${String(row["h"])}`)),
+    fingerprintOf(storage.sql.exec(`SELECT h FROM ${quoteIdentifier(COPIED_TABLE)} WHERE tbl = ? AND pass = ?`, table, pass), (row) =>
+        BigInt(`0x${String(row["h"])}`),
     );
 
 const ensureMoveTables = (storage: DoStorageLike): void => {
     run(
         storage,
-        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(MARKER_TABLE)} (tbl TEXT NOT NULL PRIMARY KEY, after INTEGER NOT NULL, done INTEGER NOT NULL, pass INTEGER NOT NULL, cols TEXT NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(MARKER_TABLE)} (tbl TEXT NOT NULL PRIMARY KEY, after INTEGER NOT NULL, done INTEGER NOT NULL, pass INTEGER NOT NULL, cols TEXT NOT NULL, watermark INTEGER NOT NULL DEFAULT 0)`,
     );
     run(
         storage,
@@ -299,20 +305,29 @@ const ensureMoveTables = (storage: DoStorageLike): void => {
     );
 };
 
-/** Target: the user rows the copy did not write — someone who signed up in the pinned object. */
-const foreignUsers = (storage: DoStorageLike, userTable: string): number => {
+/**
+ * Target: user rows above `watermark` the copy did not write — someone who signed up in
+ * the pinned object. Only rows added since the last check are looked at, so this stays
+ * cheap on every call. The key is matched in SQL: `json_array` of a text or integer key
+ * spells what {@link encodeValues} records for it.
+ */
+const foreignUsers = (storage: DoStorageLike, userTable: string, watermark: number): number => {
     if (!tableNames(storage).includes(userTable)) {
         return 0;
     }
 
-    const key = keyColumns(storage, userTable);
-    const copied = new Set(
-        hasMarkers(storage) ? all(storage, `SELECT k FROM ${quoteIdentifier(COPIED_TABLE)} WHERE tbl = ?`, userTable).map((row) => String(row["k"])) : [],
-    );
+    const key = keyColumns(storage, userTable)
+        .map((column) => `u.${quoteIdentifier(column)}`)
+        .join(", ");
 
-    return all(storage, `SELECT ${key.map((column) => quoteIdentifier(column)).join(", ")} FROM ${quoteIdentifier(userTable)}`).filter(
-        (row) => !copied.has(encodeValues(key.map((column) => row[column]))),
-    ).length;
+    return Number(
+        all(
+            storage,
+            `SELECT count(*) AS n FROM ${quoteIdentifier(userTable)} u WHERE u.rowid > ? AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(COPIED_TABLE)} c WHERE c.tbl = ? AND c.k = json_array(${key}))`,
+            watermark,
+            userTable,
+        )[0]?.["n"] ?? 0,
+    );
 };
 
 const DDL_TABLE = /^CREATE TABLE /iu;
@@ -352,16 +367,17 @@ const ensureTable = (storage: DoStorageLike, table: MovableTable, existing: Set<
 };
 
 /**
- * Target: prepare a call — refuse users the copy did not write unless forced, give
- * every table somewhere to land, and restart the scan of any table whose already-read
- * rows changed in the source since they were copied.
+ * Target: prepare a call — refuse users the copy did not write unless forced, and give
+ * every table somewhere to land.
  */
 const beginMove = (
     storage: DoStorageLike,
     tables: MovableTable[],
     options: { force: boolean; userTable: string },
 ): { cursors: Record<string, number>; done: Record<string, boolean>; targetRows: Record<string, number> } => {
-    const users = foreignUsers(storage, options.userTable);
+    ensureMoveTables(storage);
+
+    const users = foreignUsers(storage, options.userTable, markers(storage)[options.userTable]?.watermark ?? 0);
 
     if (users > 0 && !options.force) {
         throw new LunoraError(
@@ -370,8 +386,6 @@ const beginMove = (
             { data: { users } },
         );
     }
-
-    ensureMoveTables(storage);
 
     const existing = new Set(tableNames(storage));
     const known = markers(storage);
@@ -384,12 +398,17 @@ const beginMove = (
 
         if (marker === undefined) {
             run(storage, `INSERT INTO ${quoteIdentifier(MARKER_TABLE)} (tbl, after, done, pass, cols) VALUES (?, 0, 0, 1, ?)`, table.name, columns);
-        } else if (copiedFingerprint(storage, table.name, marker.pass) !== table.fingerprint) {
-            // Rows the copy already read changed in the source (an update, a delete, a
-            // reused rowid): scan the table again from the start under a new pass.
-            run(storage, `UPDATE ${quoteIdentifier(MARKER_TABLE)} SET after = 0, done = 0, pass = pass + 1, cols = ? WHERE tbl = ?`, columns, table.name);
+        } else {
+            run(storage, `UPDATE ${quoteIdentifier(MARKER_TABLE)} SET cols = ? WHERE tbl = ?`, columns, table.name);
         }
     }
+
+    // Every user row present now was checked (or forced): the next call looks only above it.
+    run(
+        storage,
+        `UPDATE ${quoteIdentifier(MARKER_TABLE)} SET watermark = (SELECT coalesce(max(rowid), 0) FROM ${quoteIdentifier(options.userTable)}) WHERE tbl = ?`,
+        options.userTable,
+    );
 
     const now = markers(storage);
 
@@ -602,17 +621,35 @@ const purgeSource = async (storage: DoStorageLike, expected: Record<string, stri
     return { dropped };
 };
 
-/** Target: markers, the fingerprint of what each table's current pass copied, and the copy order. */
-const status = (storage: DoStorageLike, context: MoveContext): { copied: Record<string, string>; markers: Record<string, Marker>; order: MoveOrder } => {
+/**
+ * Target: markers and the copy order, plus — only when asked, since it reads every
+ * copied row — the fingerprint of what each table's current pass copied.
+ */
+const status = (
+    storage: DoStorageLike,
+    context: MoveContext,
+    withFingerprints: boolean,
+): { copied: Record<string, string>; markers: Record<string, Marker>; order: MoveOrder } => {
     context.prepare();
 
     const current = markers(storage);
 
     return {
-        copied: Object.fromEntries(Object.entries(current).map(([table, marker]) => [table, copiedFingerprint(storage, table, marker.pass)])),
+        copied: withFingerprints
+            ? Object.fromEntries(Object.entries(current).map(([table, marker]) => [table, copiedFingerprint(storage, table, marker.pass)]))
+            : {},
         markers: current,
         order: context.order(),
     };
+};
+
+/** Target: scan these tables again from the start, under a new pass, because the source changed them after they were copied. */
+const rescan = (storage: DoStorageLike, tables: string[]): Record<string, never> => {
+    for (const table of tables) {
+        run(storage, `UPDATE ${quoteIdentifier(MARKER_TABLE)} SET after = 0, done = 0, pass = pass + 1 WHERE tbl = ?`, table);
+    }
+
+    return {};
 };
 
 const SAFE_CAUSES = [
@@ -648,7 +685,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
             return { fingerprints: Object.fromEntries(tableNames(storage).map((table) => [table, sourceFingerprint(storage, table)])) };
         }
         case "manifest": {
-            return { tables: listMovableTables(storage, (body["cursors"] ?? {}) as Record<string, number>) };
+            return { tables: listMovableTables(storage) };
         }
         case "page": {
             const page = readPage(storage, assertKnownTable(storage, body["table"]), Number(body["after"] ?? 0));
@@ -662,8 +699,11 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
 
             return result;
         }
+        case "rescan": {
+            return rescan(storage, (body["tables"] ?? []) as string[]);
+        }
         case "status": {
-            return status(storage, context);
+            return status(storage, context, body["fingerprints"] === true);
         }
         case "write": {
             return writePage(storage, assertKnownTable(storage, body["table"]), {
@@ -766,8 +806,7 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
         copy: async (options = {}) => {
             const force = options.force === true;
             const before = await call<StatusReply>("target", { op: "status" });
-            const cursors = Object.fromEntries(Object.entries(before.markers).map(([table, marker]) => [table, marker.after]));
-            const { tables } = await call<{ tables: MovableTable[] }>("source", { cursors, op: "manifest" });
+            const { tables } = await call<{ tables: MovableTable[] }>("source", { op: "manifest" });
             const begun = await call<ReturnType<typeof beginMove>>("target", { force, op: "begin", tables });
             const reports: AuthMoveTableReport[] = [];
             let pages = 0;
@@ -811,18 +850,22 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
                 }
             }
 
-            // Done only when every table's copy matches the source as it is now: a row
-            // changed mid-copy leaves this false, and the next call reconciles it.
+            // Every table reached its end in this pass: the one point that checks the
+            // copy against the source as it is now. A table that changed after its rows
+            // were read (mid-copy, or since a finished copy) is scanned again, and the
+            // next call reconciles it.
             const { fingerprints } = await call<{ fingerprints: Record<string, string> }>("source", { op: "fingerprints" });
-            const after = await call<StatusReply>("target", { op: "status" });
-            const done = Object.entries(fingerprints).every(
-                ([table, fingerprint]) => after.markers[table]?.done === true && after.copied[table] === fingerprint,
-            );
+            const after = await call<StatusReply>("target", { fingerprints: true, op: "status" });
+            const changed = Object.keys(fingerprints).filter((table) => after.copied[table] !== fingerprints[table]);
 
-            return { done, tables: reports };
+            if (changed.length > 0) {
+                await call("target", { op: "rescan", tables: changed });
+            }
+
+            return { done: changed.length === 0, tables: reports };
         },
         purge: async () => {
-            const { copied, markers: current } = await call<StatusReply>("target", { op: "status" });
+            const { copied, markers: current } = await call<StatusReply>("target", { fingerprints: true, op: "status" });
             const expected = Object.fromEntries(
                 Object.entries(current)
                     .filter(([, marker]) => marker.done)

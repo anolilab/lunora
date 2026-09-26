@@ -116,9 +116,10 @@ the admin bearer like every other `__lunora_admin__:*` op:
 - `__lunora_admin__:purgeUnpinnedAuth` drops every table in the un-pinned object.
 
 The copy takes a **snapshot**: each row as the un-pinned object held it when the
-copy read it. The pinned object records every row it copied, and every later copy
-call and the purge compare a fingerprint of the un-pinned object against that
-record. That check is the only thing that reconciles an update or delete made on
+copy read it. The pinned object records every row it copied. The copy call that
+reaches the end of every table, and the purge, compare a fingerprint of the
+un-pinned object against that record, so a copy re-run after it finished checks
+again. That check is the only thing that reconciles an update or delete made on
 the un-pinned object after its rows were read: when it finds one, the next copy
 re-scans the changed table and applies it — a changed row is updated and a
 deleted row is deleted in the pinned object, as long as the pinned object still

@@ -242,8 +242,8 @@ describe("auth jurisdiction move in workerd", () => {
         await expect(count("eu:move-rerun", "user")).resolves.toBe(USERS);
     });
 
-    it("stays inside a Free-plan subrequest budget per call, and finishes over several calls", async () => {
-        expect.assertions(3);
+    it("stays inside a Free-plan subrequest budget per call, finishes over several calls, and fingerprints once per pass", async () => {
+        expect.assertions(4);
 
         await seedSource("move-budget");
         await sql("move-budget", (storage) => {
@@ -256,10 +256,15 @@ describe("auth jurisdiction move in workerd", () => {
 
         let fetches = 0;
         let most = 0;
+        let fingerprintScans = 0;
         const move = moveFor("move-budget", (stub) => {
             return {
                 fetch: async (request) => {
+                    const body: { fingerprints?: boolean; op: string } = await request.clone().json();
+
                     fetches += 1;
+                    // A full scan of the source, or of the target's record of it.
+                    fingerprintScans += body.op === "fingerprints" || body.fingerprints === true ? 1 : 0;
 
                     return stub.fetch(request);
                 },
@@ -279,6 +284,9 @@ describe("auth jurisdiction move in workerd", () => {
 
         expect(first.done).toBe(false);
         expect(most).toBeLessThan(50);
+        // Only the call that reaches the end of every table checks fingerprints: the
+        // calls before it never rescan what was already copied.
+        expect(fingerprintScans).toBe(2);
         await expect(count("eu:move-budget", "bulk")).resolves.toBe(2500);
     });
 
