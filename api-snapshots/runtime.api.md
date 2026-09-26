@@ -2753,11 +2753,14 @@ interface AuthJurisdictionMove {
 
 ```ts
 interface AuthMoveTableReport {
+    conflicts: number;
     copied: number;
-    skipped: number;
+    deleted: number;
     sourceRows: number;
     table: string;
     targetRows: number;
+    unchanged: number;
+    updated: number;
 }
 ```
 

@@ -3,11 +3,14 @@ import { LunoraError } from "./errors";
 
 /** One table after a copy call, structurally mirroring `@lunora/auth`'s `AuthMoveTableReport`. */
 interface AuthMoveTableReport {
+    conflicts: number;
     copied: number;
-    skipped: number;
+    deleted: number;
     sourceRows: number;
     table: string;
     targetRows: number;
+    unchanged: number;
+    updated: number;
 }
 
 /**

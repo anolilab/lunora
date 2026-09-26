@@ -27,7 +27,7 @@ const failingShard: ShardNamespaceLike = {
 
 const ADMIN_TOKEN = "move-admin";
 
-const REPORT = { done: true, tables: [{ copied: 3, skipped: 0, sourceRows: 3, table: "user", targetRows: 3 }] };
+const REPORT = { done: true, tables: [{ conflicts: 0, copied: 3, deleted: 0, sourceRows: 3, table: "user", targetRows: 3, unchanged: 0, updated: 0 }] };
 
 const moveSpy = (): AuthJurisdictionMove => {
     return {

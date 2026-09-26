@@ -453,9 +453,19 @@ const ERROR_CATALOG: {
         readonly title: "Auth jurisdiction move not configured";
     };
     readonly AUTH_MOVE_TARGET_NOT_EMPTY: {
-        readonly hint: "The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.";
+        readonly hint: "The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.";
         readonly status: 409;
         readonly title: "Pinned auth object is not empty";
+    };
+    readonly AUTH_MOVE_CONFLICT: {
+        readonly hint: "A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.";
+        readonly status: 409;
+        readonly title: "Auth copy conflict";
+    };
+    readonly AUTH_MOVE_SOURCE_CHANGED: {
+        readonly hint: "The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.";
+        readonly status: 409;
+        readonly title: "Un-pinned auth object changed since the copy";
     };
     readonly AUTH_MOVE_INCOMPLETE: {
         readonly hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.";
@@ -463,7 +473,7 @@ const ERROR_CATALOG: {
         readonly title: "Auth copy not finished";
     };
     readonly AUTH_MOVE_FAILED: {
-        readonly internal: true;
+        readonly hint: "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.";
         readonly status: 500;
         readonly title: "Auth jurisdiction move failed";
     };

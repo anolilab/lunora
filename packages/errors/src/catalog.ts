@@ -390,9 +390,19 @@ export const ERROR_CATALOG = {
         title: "Auth jurisdiction move not configured",
     },
     AUTH_MOVE_TARGET_NOT_EMPTY: {
-        hint: "The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.",
+        hint: "The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.",
         status: 409,
         title: "Pinned auth object is not empty",
+    },
+    AUTH_MOVE_CONFLICT: {
+        hint: "A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.",
+        status: 409,
+        title: "Auth copy conflict",
+    },
+    AUTH_MOVE_SOURCE_CHANGED: {
+        hint: "The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.",
+        status: 409,
+        title: "Un-pinned auth object changed since the copy",
     },
     AUTH_MOVE_INCOMPLETE: {
         // eslint-disable-next-line no-secrets/no-secrets -- an admin op name, not a credential
@@ -401,8 +411,16 @@ export const ERROR_CATALOG = {
         title: "Auth copy not finished",
     },
 
-    /** A move request failed inside an auth object; the object logs the cause and the message is kept generic. */
-    AUTH_MOVE_FAILED: { internal: true, status: 500, title: "Auth jurisdiction move failed" },
+    /**
+     * A move step failed inside an auth object. Not `internal`: the message is built by
+     * the object from the step, the table and a SQLite error class, never row data, so
+     * the admin caller sees why; the object logs the full error.
+     */
+    AUTH_MOVE_FAILED: {
+        hint: "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.",
+        status: 500,
+        title: "Auth jurisdiction move failed",
+    },
 
     /**
      * Cron-job codes. The `*_NOT_STATIC` / `_INVALID` family are codegen

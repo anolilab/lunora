@@ -33,13 +33,14 @@ import { toErrorBody } from "@lunora/errors";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
-import { createAuthAuditReader, ensureAuthAuditTable } from "./audit";
+import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 import type { SqlExecutor } from "./sql-store";
@@ -163,8 +164,8 @@ class LunoraAuthDO {
 
     #schemaApplied = false;
 
-    /** Physical name of better-auth's `user` table, known once `#ensureReady` has run. */
-    #userTable = "user";
+    /** Physical table names that decide the jurisdiction copy's order, known once `#ensureReady` has run. */
+    #moveOrder: MoveOrder = { first: ["user"], last: [] };
 
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
@@ -198,7 +199,14 @@ class LunoraAuthDO {
         // on a missing table.
         const resolved = resolveAuthOptions(options);
 
-        this.#userTable = getAuthTablesWithResolvedIndexes(resolved).tables["user"]?.modelName ?? "user";
+        const { tables } = getAuthTablesWithResolvedIndexes(resolved);
+
+        // The copy into a pinned object goes `user`, `account`, `session` first, and the
+        // unbounded audit and rate-limit tables last.
+        this.#moveOrder = {
+            first: [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"],
+            last: [AUTH_AUDIT_TABLE, tables["rateLimit"]?.modelName ?? "rateLimit"],
+        };
 
         if (!this.#schemaApplied) {
             // better-auth's migrator is kysely-only and this storage is not a kysely
@@ -361,15 +369,28 @@ class LunoraAuthDO {
         try {
             const body: Record<string, unknown> = await request.json();
             const result = await handleMoveRequest(this.#storage, body, {
+                // The tables are gone: materialise them again on the next request rather
+                // than serve it from a schema this instance still believes is applied.
+                onPurge: () => {
+                    this.#schemaApplied = false;
+                    this.#auth = undefined;
+                },
+                order: () => this.#moveOrder,
                 prepare: () => {
                     this.#ensureReady();
                 },
-                userTable: () => this.#userTable,
+                userTable: () => this.#moveOrder.first[0] ?? "user",
             });
 
             return Response.json(result);
         } catch (error) {
-            const { body, redacted, status } = toErrorBody(error, { fallbackCode: "AUTH_MOVE_FAILED", redactedMessage: "auth move failed" });
+            // `data` is plain JSON the move built (counts, table names, a SQLite error class),
+            // so it passes through for the worker to hand the admin caller.
+            const { body, redacted, status } = toErrorBody(error, {
+                encodeData: (data) => data,
+                fallbackCode: "AUTH_MOVE_FAILED",
+                redactedMessage: "auth move failed",
+            });
 
             if (redacted) {
                 // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)

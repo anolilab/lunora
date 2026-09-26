@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 151 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 154 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -111,6 +111,18 @@ Build a SECOND, migration-only instance over the raw binding — `createAuth({ .
 
 To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.
 
+### `AUTH_MOVE_CONFLICT`
+
+`409` — Auth copy conflict
+
+A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.
+
+### `AUTH_MOVE_FAILED`
+
+`500` — Auth jurisdiction move failed
+
+The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.
+
 ### `AUTH_MOVE_INCOMPLETE`
 
 `409` — Auth copy not finished
@@ -123,11 +135,17 @@ Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, che
 
 The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`, and the auth object's `internalSecret` set.
 
+### `AUTH_MOVE_SOURCE_CHANGED`
+
+`409` — Un-pinned auth object changed since the copy
+
+The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.
+
 ### `AUTH_MOVE_TARGET_NOT_EMPTY`
 
 `409` — Pinned auth object is not empty
 
-The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.
+The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.
 
 ### `AUTH_NOT_CONFIGURED`
 
