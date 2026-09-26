@@ -134,6 +134,9 @@ class TestRpc < Minitest::Test
       assert_equal entry["code"], error.code
       assert_equal entry["message"], error.message
       assert_equal canonical(entry["dataWire"]), canonical(Lunora.encode_wire(error.data)) if entry.key?("dataWire")
+      # An envelope whose data the codec refuses is still the coded verdict,
+      # raised with the data dropped rather than as the codec's own error.
+      assert_nil error.data, entry["name"] if entry["dataDropped"]
     end
   end
 

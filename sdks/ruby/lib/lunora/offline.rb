@@ -34,6 +34,12 @@ module Lunora
   # protocol/fixtures/rpc.json's +responseError.with-data+).
   RATE_LIMIT_ERROR_CODES = %w[RATE_LIMITED TOO_MANY_REQUESTS].freeze
 
+  # A refused CREDENTIAL holds a replay rather than settling it. A write queued
+  # offline replays with whatever bearer the client held when it went offline,
+  # which has very often expired by reconnect; settling it destroyed the user's
+  # own durable write over a problem one token refresh fixes.
+  AUTH_REPLAY_ERROR_CODES = %w[UNAUTHORIZED TOKEN_EXPIRED UNAUTHENTICATED].freeze
+
   # The stamp of a record that carries no identity at all.
   #
   # Distinct from nil, which is a real value meaning "queued while signed out": a

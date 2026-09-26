@@ -55,7 +55,10 @@ JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
 tracked), and a consumer callback that raises is contained so the others still
 run. A poke applies to each shape whole or not at all — a row that does not
 decode leaves that shape's view and checkpoint untouched and reaches its error
-callback as `INVALID_FRAME`.
+callback as `WIRE_DECODE_FAILED`. A poke whose `baseCheckpoint` (or epoch) does
+not match where the view is — the server diffed past rows this client never
+applied — empties the view (its callback receives `[]`), skips the ops and sends
+a cold `shape_subscribe` so the server re-seeds it.
 
 `my_poster.call(url, headers, body)` returns `[status, body]`, `body` being the
 parsed JSON response — or the raw text when it is not JSON. A body that is not a
@@ -124,13 +127,17 @@ re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
 time remaining.
 
 A replay is classified the same way whether the write went out alone or in a
-batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR` and
-the rate-limit codes re-queue; every other code, a coded 5xx included, is
-terminal), a reply with no envelope as transport (re-queued). A 413 is
-`PAYLOAD_TOO_LARGE` whatever its body: a batch splits and retries, and a single
-write still refused settles rejected with that code. A write the server
-committed whose result does not decode settles `committed` with a
-`WIRE_DECODE_FAILED` error and no value, and is never replayed. Should anything
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`, held until a token refresh — re-queue; every other code, a
+coded 5xx included, is terminal), a reply with no envelope as transport
+(re-queued). An envelope whose `data` does not decode is still that coded error,
+raised with `data` nil. A 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch
+splits and retries, and a single write still refused settles rejected with that
+code. A write the server committed whose result this client cannot decode
+settles `committed` with a `Lunora::ResultDecodeError` (code
+`WIRE_DECODE_FAILED`) and no value, and is never replayed; a server that itself
+answers `WIRE_DECODE_FAILED` has refused the write, which settles rejected. Should anything
 unexpected raise out of a flush, every write it had drained but not yet settled
 is put back at the front of the queue before the exception propagates.
 

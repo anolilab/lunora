@@ -58,6 +58,39 @@ class TestFrameSafety < Minitest::Test
                   { "type" => "pokeEnd", "pokeId" => "p9" }])
 
     assert_equal canonical(shape["expectedRows"]), canonical(delivered.last)
+
+    # The server believes it delivered the refused rows, so its next diff is
+    # based past them: the view drops, tells the callback, and re-seeds cold.
+    sent = []
+    client.attach_socket(->(sent_frame) { sent << sent_frame })
+    fired = delivered.length
+    feed(client, shape["gapPokeSequence"])
+
+    assert_equal([canonical(shape["gapExpectedRows"])], delivered[fired..].map { |rows| canonical(rows) })
+    assert_equal([{ "type" => "shape_subscribe", "id" => "shape_1" }],
+                 sent.map { |sent_frame| sent_frame.slice("type", "id", "sinceCheckpoint", "sinceEpoch") })
+
+    cold = resend(client).find { |sent_frame| sent_frame["type"] == "shape_subscribe" }
+
+    refute cold.key?("sinceCheckpoint")
+    refute cold.key?("sinceEpoch")
+  end
+
+  # A poke based exactly where the view is applies normally: the gap check is
+  # not a re-seed on every based poke.
+  def test_a_contiguous_based_poke_applies
+    ConformanceManifest.covers("shape_poke_with_undecodable_row_is_refused_whole")
+    shape = shape_fixture
+    client = Lunora::Client.new("https://app.example")
+    sent = []
+    client.attach_socket(->(frame) { sent << frame })
+    delivered = []
+    client.subscribe_shape("roomMessages", { "room" => "general" }, ->(rows) { delivered << rows })
+    sent.clear
+    feed(client, shape["pokeSequence"] + shape["contiguousPokeSequence"])
+
+    assert_equal canonical(shape["contiguousExpectedRows"]), canonical(delivered.last)
+    assert_empty sent, "no re-seed"
   end
 
   # The refusal is per shape: another shape in the same poke still applies.
@@ -127,7 +160,7 @@ class TestFrameSafety < Minitest::Test
                   { "type" => "pokePart", "pokeId" => "r", "shapeId" => "shape_1", "rowsPatch" => [5] },
                   { "type" => "pokeEnd", "pokeId" => "r" }])
 
-    assert_equal [nil, nil, "INVALID_FRAME", "INVALID_FRAME"], errors
+    assert_equal [nil, nil, "WIRE_DECODE_FAILED", "WIRE_DECODE_FAILED"], errors
   end
 
   # A consumer callback that raises is the consumer's bug: it must neither stop

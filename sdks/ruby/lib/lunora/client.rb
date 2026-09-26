@@ -74,6 +74,12 @@ module Lunora
     end
   end
 
+  # The CLIENT failed to decode the result of a call the server answered with
+  # success, so the call committed. A distinct class, because the replay tells a
+  # committed write from a refusal by where the failure arose: a server may send
+  # the same public code WIRE_DECODE_FAILED in an envelope, and that is a refusal.
+  class ResultDecodeError < ApiError; end
+
   # A subscription-scoped error the server pushed.
   SubscriptionError = Struct.new(:code, :message)
 
@@ -165,7 +171,7 @@ module Lunora
     envelope = body.is_a?(Hash) ? body["error"] : nil
 
     if envelope.is_a?(Hash)
-      data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
+      data = decode_error_data(envelope["data"])
       # Classified by its CODE alone (+Client#transient?+), whatever the status:
       # a coded 5xx is the server's verdict, and the batch path already read it
       # as one. A status-derived flag made the same reply terminal for a write
@@ -190,13 +196,23 @@ module Lunora
   end
 
   # A successful call's result, decoded. One that does not decode raises
-  # ApiError WIRE_DECODE_FAILED rather than the codec's own error, so a caller
-  # can tell "committed, value unreadable" from a transport failure — which is
-  # what a queued write's replay turns on.
+  # ResultDecodeError (code WIRE_DECODE_FAILED) rather than the codec's own
+  # error, so a caller can tell "committed, value unreadable" from a transport
+  # failure — which is what a queued write's replay turns on.
   def decode_result(raw)
     decode_wire(raw)
   rescue WireFormatError => e
-    raise ApiError.new(WIRE_DECODE_FAILED, "result cannot be wire-decoded: #{e.message}")
+    raise ResultDecodeError.new(WIRE_DECODE_FAILED, "result cannot be wire-decoded: #{e.message}")
+  end
+
+  # An error envelope's +data+, decoded — or nil when the codec refuses it. The
+  # envelope is still the server's coded verdict; letting the codec error
+  # escape instead made it an uncoded failure the replay read as transport, and
+  # re-queued the write at the head of the queue forever.
+  def decode_error_data(raw)
+    raw.nil? ? nil : decode_wire(raw)
+  rescue WireFormatError
+    nil
   end
 
   # The CDC cursor a write committed at, echoed on a mutation's response.
@@ -709,7 +725,8 @@ module Lunora
         # the first key is the oldest buffer; one that old is no longer going to
         # see its +pokeEnd+.
         @pokes.shift while @pokes.size >= MAX_PENDING_POKES
-        @pokes[frame["pokeId"]] = { parts: {}, resets: [] }
+        @pokes[frame["pokeId"]] = { base: frame["baseCheckpoint"], bases: {}, epoch: frame["epoch"], parts: {},
+                                    resets: [] }
         kind
       when "pokePart" then buffer_poke_part(frame)
       when "pokeEnd" then apply_poke(frame, deferred)
@@ -828,6 +845,10 @@ module Lunora
         # refuses this shape's part whole rather than raising here.
         patch = [patch] unless patch.is_a?(Array)
         buffer[:parts][shape_id] = (buffer[:parts][shape_id] || []) + patch
+        # The checkpoint the server computed this diff against: the part's own,
+        # else the poke's.
+        base = frame["baseCheckpoint"].nil? ? buffer[:base] : frame["baseCheckpoint"]
+        buffer[:bases][shape_id] = base unless base.nil?
         # A shape gets at most one part per poke, but record the flag sticky
         # (never cleared) so a server that splits a seed across parts still
         # replaces the view rather than merging into it.
@@ -853,10 +874,12 @@ module Lunora
         begin
           decoded = decode_row_ops(operations)
         rescue WireFormatError => e
-          deliver_error({ "error" => { "code" => "INVALID_FRAME", "message" => e.message }, "id" => shape_id },
+          deliver_error({ "error" => { "code" => WIRE_DECODE_FAILED, "message" => e.message }, "id" => shape_id },
                         "error", deferred)
           next
         end
+
+        next if reseed_on_gap?(shape_id, shape, buffer, deferred)
 
         # A reset part carries the shape's COMPLETE membership, so it REPLACES
         # the view rather than patching it. Merging one keeps every row that left
@@ -877,6 +900,34 @@ module Lunora
       end
 
       "pokeEnd"
+    end
+
+    # Drop the view and re-subscribe it cold when this poke was computed against
+    # a position the view is not at; returns whether it did.
+    #
+    # An epoch mismatch means the changelog forked since the view last applied;
+    # a base mismatch means the diff starts from a checkpoint the view never
+    # reached (a refused or dropped poke). Splicing the ops onto the view anyway
+    # lost the refused rows for good. A reset part is exempt: it carries the
+    # complete membership and replaces the view on its own.
+    def reseed_on_gap?(shape_id, shape, buffer, deferred)
+      return false if buffer[:resets].include?(shape_id)
+
+      base = buffer[:bases][shape_id]
+      epoch_forked = !buffer[:epoch].nil? && !shape[:epoch].nil? && buffer[:epoch] != shape[:epoch]
+      base_diverged = !base.nil? && !shape[:checkpoint].nil? && shape[:checkpoint] != base
+      return false unless epoch_forked || base_diverged
+
+      shape[:rows].clear
+      shape[:order].clear
+      shape[:checkpoint] = nil
+      shape[:epoch] = nil
+      emit_shape_rows(shape, deferred)
+
+      sender = @send
+      frame = Lunora.build_shape_subscribe_frame(shape_id, shape[:name], shape[:args])
+      deferred << -> { sender.call(frame) } unless sender.nil?
+      true
     end
 
     # Queue +on_rows+ with the view's current contents.
@@ -1138,7 +1189,7 @@ module Lunora
           # The server committed it; only the result is unreadable, and a replay
           # can only return the same result. Settled committed, carrying the
           # error, rather than retried forever at the head of the queue.
-          if e.is_a?(ApiError) && e.code == WIRE_DECODE_FAILED
+          if e.is_a?(ResultDecodeError)
             settle_commit(queue, item, nil, Lunora.parse_commit_cursor(body), report, e)
             next
           end
@@ -1352,7 +1403,7 @@ module Lunora
       ApiError.new(
         envelope["code"].is_a?(String) ? envelope["code"] : "INTERNAL",
         envelope["message"].is_a?(String) ? envelope["message"] : fallback,
-        envelope["data"].nil? ? nil : Lunora.decode_wire(envelope["data"])
+        Lunora.decode_error_data(envelope["data"])
       )
     end
 
@@ -1379,7 +1430,7 @@ module Lunora
     def transient?(error)
       if error.is_a?(ApiError)
         return error.transient || TRANSIENT_ERROR_CODES.include?(error.code) ||
-               RATE_LIMIT_ERROR_CODES.include?(error.code)
+               RATE_LIMIT_ERROR_CODES.include?(error.code) || AUTH_REPLAY_ERROR_CODES.include?(error.code)
       end
 
       true
