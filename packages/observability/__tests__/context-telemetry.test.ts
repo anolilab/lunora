@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { MetricEvent } from "../../../shared/metric-event";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TracerDeps } from "../src/context-telemetry";
-import { createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
+import { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
 
 /**
  * Span redaction (finding b/b′ of plan 276): the span pipeline is the one
@@ -266,6 +267,79 @@ describe("createTracedFetch error-message redaction", () => {
 
         expect(recorded[0]?.error?.message).toBe("fetch failed for user 12345");
     });
+
+    it("drops the query string of every URL inside the thrown message", async () => {
+        expect.assertions(2);
+
+        // `sig` has no credential-looking name, so only URL redaction catches it.
+        const url = "https://api.example.com/v1/charge?sig=s1&api_key=k1";
+        const { fetch, recorded } = setupFetch(new TypeError(`fetch failed: ${url} (after retry)`));
+
+        await expect(fetch(url)).rejects.toThrow(TypeError);
+        // `standardRules` masks the domain as well; the path stays readable.
+        expect(recorded[0]?.error?.message).toBe("fetch failed: https://<DOMAIN>/v1/charge (after retry)");
+    });
+});
+
+describe("span attribute redaction", () => {
+    const ORDER_ID = "3f2a1c7e-9b1d-4c2a-8e2f-1a2b3c4d5e6f";
+
+    it("masks credential attributes on a ctx.trace span by default", async () => {
+        expect.assertions(1);
+
+        const { recorded, trace } = setup();
+
+        await trace(
+            "charge",
+            (_span, handle) => {
+                handle.setAttribute("stripeSecretKey", "sk_live_x");
+            },
+            { accessToken: "tok", id: 7, "order.id": ORDER_ID, plan: "pro", tokenCount: 42, url: "https://api.example.com/v1" },
+        );
+
+        // Only credentials are masked: ids and urls are what a trace is read by,
+        // and the request log's PII rules would erase them.
+        expect(recorded[0]!.attributes).toStrictEqual({
+            accessToken: "<REDACTED>",
+            id: 7,
+            "order.id": ORDER_ID,
+            plan: "pro",
+            stripeSecretKey: "<REDACTED>",
+            tokenCount: 42,
+            url: "https://api.example.com/v1",
+        });
+    });
+
+    it("keeps raw attributes when captureRaw is true", async () => {
+        expect.assertions(1);
+
+        const { recorded, trace } = setup({ captureRaw: true });
+
+        await trace("charge", () => undefined, { accessToken: "tok" });
+
+        expect(recorded[0]!.attributes).toStrictEqual({ accessToken: "tok" });
+    });
+
+    it("masks credential attributes a ctx.span wide event wrote onto the dispatch span", () => {
+        expect.assertions(1);
+
+        const collector = createSpanCollector({ spanId: "span000000000001", traceId: anchor.traceId });
+
+        collector.handle.setAttributes({ plan: "pro", refreshToken: "rt-1" });
+
+        const span = dispatchRootSpan({
+            anchor,
+            collected: collector.collected,
+            durationMs: 1,
+            failure: undefined,
+            functionPath: "messages:list",
+            shardKey: undefined,
+            startTs: 0,
+            userId: undefined,
+        });
+
+        expect(span.attributes).toStrictEqual({ plan: "pro", refreshToken: "<REDACTED>" });
+    });
 });
 
 describe("ctx.trace start-attribute bound", () => {
@@ -354,5 +428,74 @@ describe("createSpanCollector attribute bound", () => {
 
         expect(collected.attributes["status"]).toBe("settled");
         expect(collected.attributes["overflow"]).toBeUndefined();
+    });
+});
+
+describe("every telemetry sink drops URL query strings and masks credential attributes", () => {
+    // eslint-disable-next-line no-secrets/no-secrets -- a fabricated credential-bearing fixture, not a secret
+    const SIGNED = "https://api.example.test/cb?access_token=abc123&sig=deadbeef&X-Amz-Signature=cafe";
+    const LEAKS = /abc123|deadbeef|cafe/;
+
+    it("scrubs the URL in a ctx.trace span's error", async () => {
+        expect.assertions(2);
+
+        const { recorded, trace } = setup();
+
+        await expect(
+            trace("call", () => {
+                throw new Error(`upstream failed: ${SIGNED}`);
+            }),
+        ).rejects.toThrow("upstream failed");
+        expect(recorded[0]?.error?.message).not.toMatch(LEAKS);
+    });
+
+    it("scrubs the URL in a recorded exception and in the dispatch root span's error", () => {
+        expect.assertions(2);
+
+        const collector = createSpanCollector({ spanId: "span000000000001", traceId: anchor.traceId });
+
+        collector.handle.recordException(new Error(`upstream failed: ${SIGNED}`));
+
+        const root = dispatchRootSpan({
+            anchor,
+            durationMs: 1,
+            failure: { thrown: new Error(`upstream failed: ${SIGNED}`) },
+            functionPath: "messages:list",
+            shardKey: undefined,
+            startTs: 0,
+            userId: undefined,
+        });
+
+        expect(JSON.stringify(collector.collected.events)).not.toMatch(LEAKS);
+        expect(root.error?.message).not.toMatch(LEAKS);
+    });
+
+    it("masks credential attributes on span events and links", () => {
+        expect.assertions(2);
+
+        const collector = createSpanCollector({ spanId: "span000000000001", traceId: anchor.traceId });
+
+        collector.handle.addEvent("retry", { attempt: 2, authorization: "Bearer abc.def" });
+        collector.handle.addLink({ attributes: { apiKey: "k-1", kind: "follows" }, spanId: "span000000000002", traceId: anchor.traceId });
+
+        expect(collector.collected.events[0]?.attributes).toStrictEqual({ attempt: 2, authorization: "<REDACTED>" });
+        expect(collector.collected.links[0]?.attributes).toStrictEqual({ apiKey: "<REDACTED>", kind: "follows" });
+    });
+
+    it("masks credential attributes on a metric", () => {
+        expect.assertions(1);
+
+        const recorded: MetricEvent[] = [];
+        const metrics = createMetrics({
+            functionPath: "messages:send",
+            record: (event) => {
+                recorded.push(event);
+            },
+            shardKey: undefined,
+        });
+
+        metrics.count("notify.send", 1, { channel: "email", sessionId: "s-1" });
+
+        expect(recorded[0]?.attributes).toStrictEqual({ channel: "email", sessionId: "<REDACTED>" });
     });
 });

@@ -37,8 +37,9 @@
 
 import { fingerprintError } from "@lunora/fingerprint";
 import type { SqlExec } from "@lunora/shard-engine";
-import { redact, standardRules } from "@visulima/redact";
+import { createRedactor, standardRules } from "@visulima/redact";
 
+import { maskCredentials } from "../../../shared/credential-redaction";
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
@@ -230,31 +231,53 @@ interface ReadIssuesOptions {
 }
 
 /**
- * Redact the secrets / PII out of a value before it reaches the durable log or a
- * Logpush event, via `@visulima/redact`'s `standardRules`. Unlike a blunt
- * type-tag stamp this masks sensitive values by PATTERN (not just by key name)
- * while leaving benign values readable, so the studio's args/identity columns
- * stay useful. `null` / `undefined` pass through unchanged.
+ * `standardRules` without its exact `pass` key rule: that rule blanks whatever a
+ * `pass` key holds, so a transit or event `pass` object vanished from the log.
+ * `maskCredentials` already masks a scalar `pass` and walks a container one.
+ */
+const redactValue = createRedactor(standardRules, { exclude: ["pass"] });
+
+/**
+ * Mask credentials only, leaving PII alone: `maskCredentials` — credential key
+ * names, `name=value` pairs, auth schemes, JWTs, PEM keys, URL query / fragment
+ * / userinfo. For span, event, link and metric attributes: {@link redactArgs}'
+ * PII rules key on names like `id`, `url` and `date` and mask uuids, so they
+ * would erase the very `order.id` / `url` attributes a trace is read by, and
+ * `@visulima/redact`'s regexes cost ~20 µs per call on the Durable Object's only
+ * thread, where every span, event and metric pays it. `captureRaw` as in
+ * {@link redactArgs}.
+ */
+const redactSecrets = (value: unknown, captureRaw = false): unknown => {
+    if (captureRaw || value === null || value === undefined) {
+        return value;
+    }
+
+    return maskCredentials(value);
+};
+
+/**
+ * Redact the secrets / PII out of a value before it reaches the durable log, a
+ * Logpush event, a function-metrics row or a span's error message:
+ * `maskCredentials`, then `@visulima/redact`'s `standardRules`. `null` /
+ * `undefined` pass through unchanged.
  *
- * What `standardRules` actually catches differs by shape, verified against its
- * real behavior rather than assumed from its name: on a KEYED object (`args`,
- * `identity`) it also matches by key name, so `{ password: "hunter2" }` and
- * `{ token: "…" }` ARE masked regardless of the value's shape. On a PLAIN
- * STRING — which is what `errorMessage`/log `fields`-as-rendered-text are —
- * only pattern-shaped matches apply: emails, long digit runs / structured
- * numeric IDs (credit-card, phone, SSN, AWS-access-key-style), and an explicit
- * `Bearer <token>` / `token=…`-shaped substring. A free-text `password=hunter2`
- * or a bare provider API key embedded in prose (e.g. `sk-live-…`) is NOT
- * caught on a plain string — there is no key to match against, and neither is
- * a recognized value pattern. So this is a PII-pattern net for rendered text,
- * not a general secrets scrubber; a handler that echoes a raw credential into
- * an error message or a log string can still leak it through here. Works on a
- * plain string too (`redact` traverses whatever value it's handed), which is
- * how {@link appendRequestLogEntry} and {@link emitRequestLogEvent} reuse this
- * for `errorMessage` — a validation error echoes the offending value, a
- * constraint error quotes the conflicting row, so the error message is at
- * least as PII-dense as args and gets the same treatment (with the free-text
- * caveat above).
+ * On a KEYED object (`args`, `identity`), a key that names a credential
+ * (`accessToken`, `client_secret`, `X-Api-Key`, `sessionId`, `otp`, `pin`,
+ * `DATABASE_URL`) has its value masked, numbers included; a key that measures
+ * credentials (`maxTokens`, `tokenUsage`) keeps its numbers. See
+ * `shared/credential-redaction.ts` for how keys are judged.
+ *
+ * On a STRING (`errorMessage`, a URL, a log line), every URL loses its query,
+ * fragment and userinfo; `name=value`, `name: value` and `"name":"value"` pairs
+ * with a credential name are masked; `Basic …` is masked; and `standardRules`'
+ * value patterns (emails, long digit runs, `Bearer …`, JWTs) apply. Every string
+ * is truncated to 4 KiB in what is stored, and once 16 KiB of one value has been
+ * examined the remaining strings are replaced with a marker, so no arg can hold
+ * the Durable Object in regex work.
+ *
+ * Still NOT caught: a bare credential in prose with no name attached
+ * (`failed with sk_live_…`). This is a credential-and-PII net, not proof that no
+ * secret can reach the log.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
@@ -267,7 +290,7 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
         return value;
     }
 
-    return redact(value, standardRules);
+    return redactValue(maskCredentials(value));
 };
 
 /**
@@ -610,7 +633,9 @@ const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}
         fields: input.fields === undefined ? undefined : redactArgs(input.fields, captureRaw),
         function: input.functionPath,
         level: input.level,
-        message: input.message,
+        // The rendered message carries whatever the handler logged, and this line
+        // is what Workers Logs / Logpush keep — redacted like `fields`.
+        message: redactArgs(input.message, captureRaw) as string,
         shard: input.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
         spanId: input.spanId,
@@ -998,6 +1023,7 @@ export {
     readErrorIssues,
     readRequestLog,
     redactArgs,
+    redactSecrets,
     renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,

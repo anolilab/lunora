@@ -20,7 +20,7 @@ import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
 import { buildTraceparent, LUNORA_ATTR, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
 import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
-import { redactArgs } from "./request-log";
+import { redactArgs, redactSecrets } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -420,7 +420,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(attributes);
+            const normalized = redactSecrets(boundedAttributes(attributes), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -433,7 +433,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(link.attributes);
+            const normalized = redactSecrets(boundedAttributes(link.attributes), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -619,6 +619,12 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
                     assignBoundedAttributes(merged, normalized);
                     assignBoundedAttributes(merged, collected.attributes);
+
+                    // Credentials masked: `ctx.trace(name, fn, args)` and
+                    // `span.setAttributes(...)` take whatever the handler holds,
+                    // and a span is what ships to a third-party collector. PII
+                    // rules are deliberately not applied — see `redactSecrets`.
+                    const attributes = redactSecrets(merged, captureRaw) as LogFields;
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
                     const links = [...(resolved.links ?? []), ...collected.links];
@@ -632,7 +638,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // can't lose it.
                     try {
                         record({
-                            ...(Object.keys(merged).length === 0 ? {} : { attributes: merged }),
+                            ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
                             durationMs,
                             ...(collected.events.length === 0 ? {} : { events: collected.events }),
                             ...(error === undefined ? {} : { error }),
@@ -660,7 +666,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     if (hostSpan !== undefined) {
                         try {
                             applyHostSpanAttributes(hostSpan, {
-                                attributes: merged,
+                                attributes,
                                 durationMs,
                                 error,
                                 functionPath,
@@ -820,11 +826,9 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            // Redacted like every other span error: a `fetch` failure message
-            // routinely embeds the full request URL (query string included), and
-            // this is the span pipeline — the one sink with third-party fan-out.
-            // Shipping it raw here would leak exactly what `redactUrl` strips off
-            // `url.full` two lines below.
+            // A `fetch` failure message routinely embeds the full request URL,
+            // query string included; `redactArgs` drops every URL's query,
+            // fragment and userinfo, the same as `redactUrl` does for `url.full`.
             const rawMessage = error_ instanceof Error ? error_.message : String(error_);
 
             error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
@@ -882,7 +886,8 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
             return;
         }
 
-        const normalized = normalizeLogFields(attributes);
+        // Credentials masked like span attributes: metric attributes ship to the same collector.
+        const normalized = redactSecrets(normalizeLogFields(attributes)) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.
         try {
@@ -950,7 +955,9 @@ export const dispatchRootSpan = (input: {
     userId: string | undefined;
 }): SpanEvent => {
     const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
-    const attributes = collected?.attributes ?? {};
+    // Credentials masked, like `ctx.trace` attributes: `ctx.span` writes
+    // whatever the handler holds onto the span a collector receives.
+    const attributes = redactSecrets(collected?.attributes ?? {}, captureRaw) as LogFields;
 
     return {
         ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
