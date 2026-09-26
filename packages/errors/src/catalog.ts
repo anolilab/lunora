@@ -153,9 +153,10 @@ export const ERROR_CATALOG = {
     /** Build-time-only (codegen): `.jurisdiction()` would move voice sessions / DO-backed auth to new, empty objects without `{ pinAuthAndVoice: true }`. */
     JURISDICTION_MOVE: {
         hint: [
-            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones: existing users, sessions and transcripts stay in the unpinned objects.",
+            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones. For DO-backed auth that means every user, account and session stays in the unpinned object. Voice session objects store nothing: transcripts are agent-thread rows in the already-pinned shards, so only live sessions drop.",
             "",
-            'Move or discard that data first (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)), then acknowledge with `.jurisdiction("eu", { pinAuthAndVoice: true })`. For D1-mode auth the acknowledgement changes nothing.',
+            // eslint-disable-next-line no-secrets/no-secrets -- admin op names, not credentials
+            'Acknowledge with `.jurisdiction("eu", { pinAuthAndVoice: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.',
         ],
         status: 422,
         title: "Unacknowledged jurisdiction move",
@@ -381,6 +382,27 @@ export const ERROR_CATALOG = {
      * failed", so a future edit that inlines the driver error can't leak it.
      */
     AUTH_AUDIT_READ_FAILED: { internal: true, status: 500, title: "Auth audit read failed" },
+
+    /** Copying DO-backed auth into its jurisdiction-pinned object (`__lunora_admin__:copyAuthToJurisdiction` / `purgeUnpinnedAuth`). */
+    AUTH_MOVE_NOT_CONFIGURED: {
+        hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`, and the auth object's `internalSecret` set.",
+        status: 400,
+        title: "Auth jurisdiction move not configured",
+    },
+    AUTH_MOVE_TARGET_NOT_EMPTY: {
+        hint: "The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.",
+        status: 409,
+        title: "Pinned auth object is not empty",
+    },
+    AUTH_MOVE_INCOMPLETE: {
+        // eslint-disable-next-line no-secrets/no-secrets -- an admin op name, not a credential
+        hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.",
+        status: 409,
+        title: "Auth copy not finished",
+    },
+
+    /** A move request failed inside an auth object; the object logs the cause and the message is kept generic. */
+    AUTH_MOVE_FAILED: { internal: true, status: 500, title: "Auth jurisdiction move failed" },
 
     /**
      * Cron-job codes. The `*_NOT_STATIC` / `_INVALID` family are codegen

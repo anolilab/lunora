@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 148 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 151 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -110,6 +110,24 @@ better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `com
 Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.
 
 To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.
+
+### `AUTH_MOVE_INCOMPLETE`
+
+`409` — Auth copy not finished
+
+Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.
+
+### `AUTH_MOVE_NOT_CONFIGURED`
+
+`400` — Auth jurisdiction move not configured
+
+The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`, and the auth object's `internalSecret` set.
+
+### `AUTH_MOVE_TARGET_NOT_EMPTY`
+
+`409` — Pinned auth object is not empty
+
+The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.
 
 ### `AUTH_NOT_CONFIGURED`
 
@@ -397,9 +415,9 @@ This is reported per row rather than aborting the import: the remaining rows sti
 
 `422` — Unacknowledged jurisdiction move
 
-The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones: existing users, sessions and transcripts stay in the unpinned objects.
+The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones. For DO-backed auth that means every user, account and session stays in the unpinned object. Voice session objects store nothing: transcripts are agent-thread rows in the already-pinned shards, so only live sessions drop.
 
-Move or discard that data first (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)), then acknowledge with `.jurisdiction("eu", { pinAuthAndVoice: true })`. For D1-mode auth the acknowledgement changes nothing.
+Acknowledge with `.jurisdiction("eu", { pinAuthAndVoice: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.
 
 ### `KV_NOT_CONFIGURED`
 

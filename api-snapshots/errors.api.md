@@ -198,9 +198,9 @@ const ERROR_CATALOG: {
     };
     readonly JURISDICTION_MOVE: {
         readonly hint: readonly [
-            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones: existing users, sessions and transcripts stay in the unpinned objects.",
+            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones. For DO-backed auth that means every user, account and session stays in the unpinned object. Voice session objects store nothing: transcripts are agent-thread rows in the already-pinned shards, so only live sessions drop.",
             "",
-            "Move or discard that data first (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)), then acknowledge with `.jurisdiction(\"eu\", { pinAuthAndVoice: true })`. For D1-mode auth the acknowledgement changes nothing."
+            "Acknowledge with `.jurisdiction(\"eu\", { pinAuthAndVoice: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing."
         ];
         readonly status: 422;
         readonly title: "Unacknowledged jurisdiction move";
@@ -446,6 +446,26 @@ const ERROR_CATALOG: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "Auth audit read failed";
+    };
+    readonly AUTH_MOVE_NOT_CONFIGURED: {
+        readonly hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`, and the auth object's `internalSecret` set.";
+        readonly status: 400;
+        readonly title: "Auth jurisdiction move not configured";
+    };
+    readonly AUTH_MOVE_TARGET_NOT_EMPTY: {
+        readonly hint: "The pinned auth object already has users, so copying into it would merge two user bases. Pass `force: true` to copy anyway: rows whose id or unique key already exists in the pinned object are skipped and reported as skipped.";
+        readonly status: 409;
+        readonly title: "Pinned auth object is not empty";
+    };
+    readonly AUTH_MOVE_INCOMPLETE: {
+        readonly hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.";
+        readonly status: 409;
+        readonly title: "Auth copy not finished";
+    };
+    readonly AUTH_MOVE_FAILED: {
+        readonly internal: true;
+        readonly status: 500;
+        readonly title: "Auth jurisdiction move failed";
     };
     readonly CRON_EXPR_INVALID: {
         readonly status: 500;

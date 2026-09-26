@@ -11,9 +11,13 @@
  * @experimental
  */
 /* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
+import { LunoraError } from "@lunora/errors";
+
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
+import type { AuthJurisdictionMove } from "./jurisdiction-move";
+import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
 /* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
@@ -82,6 +86,13 @@ export interface DoAuthWiring {
     authHandler: (request: Request) => Promise<Response | undefined>;
 
     /**
+     * Copy the auth tables from the un-pinned object into the pinned one, and later
+     * purge the un-pinned copy. Present only when a `jurisdiction` is set. Backs the
+     * worker's `copyAuthToJurisdiction` and `purgeUnpinnedAuth` admin ops.
+     */
+    jurisdictionMove?: AuthJurisdictionMove;
+
+    /**
      * Resolves a request's identity by asking the object. `null` when anonymous,
      * unreachable, or ungated.
      *
@@ -107,6 +118,7 @@ export interface DoAuthWiring {
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
     const { internalSecret, jurisdiction, objectName = "auth" } = options;
+    const unpinned = options.namespace;
     let { namespace } = options;
 
     // The one throw here, and deliberately at construction: a residency pin that
@@ -158,7 +170,32 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         return response.ok ? response : undefined;
     };
 
+    // Only a pinned object has an un-pinned twin to copy from.
+    const pinned = namespace;
+    const jurisdictionMove =
+        unpinned && pinned && jurisdiction !== undefined
+            ? createAuthJurisdictionMove(async (side, body) => {
+                  if (!internalSecret) {
+                      throw new LunoraError(
+                          "AUTH_MOVE_NOT_CONFIGURED",
+                          "copying the auth object needs its internal secret; set the auth object's `internalSecret`",
+                      );
+                  }
+
+                  const from = side === "source" ? unpinned : pinned;
+
+                  return from.get(from.idFromName(objectName)).fetch(
+                      new Request(new URL(MOVE_PATH, "https://auth-do.invalid"), {
+                          body: JSON.stringify(body),
+                          headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: internalSecret },
+                          method: "POST",
+                      }),
+                  );
+              })
+            : undefined;
+
     return {
+        ...(jurisdictionMove === undefined ? {} : { jurisdictionMove }),
         auditReader: {
             read: async (readOptions) => {
                 // No request in scope here (the studio calls this out of band), so the
