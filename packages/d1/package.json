@@ -1,6 +1,6 @@
 {
     "name": "@lunora/d1",
-    "version": "1.0.0-alpha.142",
+    "version": "1.0.0-alpha.143",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
     "keywords": [
         "cloudflare",
@@ -66,16 +66,16 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.44",
-        "@lunora/platform": "1.0.0-alpha.40",
-        "@lunora/shard-engine": "1.0.0-alpha.91",
-        "@lunora/sql-store": "1.0.0-alpha.144",
+        "@lunora/platform": "1.0.0-alpha.41",
+        "@lunora/shard-engine": "1.0.0-alpha.92",
+        "@lunora/sql-store": "1.0.0-alpha.145",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.171",
+        "@lunora/do": "1.0.0-alpha.172",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
