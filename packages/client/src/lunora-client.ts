@@ -1656,9 +1656,11 @@ class LunoraClient {
         // this client asks who is signed in now. Browser only: a server-side
         // client has no cookie of its own and would leak its registration.
         if ("document" in globalThis) {
-            this.releaseSessionChangeListener = onSessionChanged(() => {
+            // Returns the probe, so a caller of the signal can wait until this
+            // client knows who is signed in (`@lunora/auth-ui` does).
+            this.releaseSessionChangeListener = onSessionChanged(async () => {
                 if (!this.closed && this.authToken === null) {
-                    this.getCurrentUser().catch(() => undefined);
+                    await this.getCurrentUser().catch(() => undefined);
                 }
             });
         }

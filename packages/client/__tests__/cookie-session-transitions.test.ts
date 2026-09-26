@@ -395,8 +395,8 @@ describe("cookie session: a session change made through the auth library", () =>
 
         // `authClient.signOut()` through `lunoraSessionSync`, or auth-ui's flow.
         server.state.user = null;
-        notifySessionChanged();
-        await settle();
+        // Settles once this client has re-resolved: no extra waiting needed.
+        await notifySessionChanged();
 
         expect(client.currentIdentity()).toBeNull();
         expect(identityChanges()).toBe(1);
@@ -421,7 +421,7 @@ describe("cookie session: a session change made through the auth library", () =>
             fetchImpl.mock.calls.filter((call) => (call[0] as string).includes("get-session")).length;
         const before = [probesOf(browser.server.fetchImpl), probesOf(server.server.fetchImpl)];
 
-        notifySessionChanged();
+        await notifySessionChanged();
         await settle();
 
         expect(probesOf(browser.server.fetchImpl)).toBe(before[0]);

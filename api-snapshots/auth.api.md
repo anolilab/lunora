@@ -1548,7 +1548,7 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `notifyLunoraSessionChange` (const)
 
 ```ts
-const notifyLunoraSessionChange: () => void;
+const notifyLunoraSessionChange: () => Promise<void>;
 ```
 
 ### `oauthDeviceAuthorizationClient` (const)

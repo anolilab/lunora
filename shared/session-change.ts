@@ -20,7 +20,10 @@
 
 const REGISTRY_KEY = Symbol.for("lunora:session-change-listeners");
 
-type Registry = Set<() => void>;
+/** A listener may return the work it started, so {@link notifySessionChanged} can wait for it. */
+type Listener = () => unknown;
+
+type Registry = Set<Listener>;
 
 const registry = (): Registry => {
     const holder = globalThis as unknown as Record<symbol, Registry | undefined>;
@@ -35,7 +38,7 @@ const registry = (): Registry => {
 };
 
 /** Register a listener for {@link notifySessionChanged}. Returns the unregister function. */
-const onSessionChanged = (listener: () => void): (() => void) => {
+const onSessionChanged = (listener: Listener): (() => void) => {
     const listeners = registry();
 
     listeners.add(listener);
@@ -45,15 +48,24 @@ const onSessionChanged = (listener: () => void): (() => void) => {
     };
 };
 
-/** Tell every registered listener the session may have changed. A throwing listener never stops the others. */
-const notifySessionChanged = (): void => {
+/**
+ * Tell every registered listener the session may have changed. Resolves once
+ * the work every listener returned has settled — for a `LunoraClient`, its
+ * re-resolve of who is signed in. Never rejects: a listener that throws or
+ * whose work fails never stops, or fails, the others.
+ */
+const notifySessionChanged = async (): Promise<void> => {
+    const pending: unknown[] = [];
+
     for (const listener of registry()) {
         try {
-            listener();
+            pending.push(listener());
         } catch {
             /* one listener's failure is not the others' concern */
         }
     }
+
+    await Promise.allSettled(pending);
 };
 
 export { notifySessionChanged, onSessionChanged };

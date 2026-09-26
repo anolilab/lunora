@@ -19,6 +19,18 @@ import type { ThemeTokens } from "./theme";
 import { resolveThemeVariables } from "./theme";
 import type { AnyAuthClient, AuthClient } from "./types";
 
+/**
+ * How long {@link AuthUIConfig.onSessionChange} waits for the Lunora clients to
+ * re-resolve the session before running anyway. One `/get-session` round trip
+ * is far under it; the cap exists for one that never answers.
+ */
+const SESSION_RESOLVE_WAIT_MS = 5000;
+
+const delay = async (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+
 /** better-auth's default mount path; matches `DEFAULT_AUTH_BASE_PATH` in the `@lunora/client` package. */
 const DEFAULT_BASE_PATH = "/api/auth";
 
@@ -163,9 +175,11 @@ interface AuthUIConfig {
 
     /**
      * Called after any successful auth mutation (sign-in/out, 2FA verify,
-     * account switch). Every `LunoraClient` in the page is already told first
-     * and re-resolves who is signed in, so no Lunora wiring is needed here —
-     * use it for your own session state (e.g. `authClient.getSession()`).
+     * account switch). Every `LunoraClient` in the page is told first and
+     * re-resolves who is signed in; this runs once they have (or after 5s if a
+     * probe never answers), so `client.currentIdentity()` read here is the new
+     * session's. No Lunora wiring is needed — use it for your own session
+     * state (e.g. `authClient.getSession()`).
      */
     onSessionChange?: () => void;
 
@@ -419,10 +433,22 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         onSessionChange: (): void => {
             // A cookie sign-in or sign-out is invisible to the Lunora client;
             // tell it, so it re-resolves the session instead of serving the
-            // previous user's rows. Before the app's own handler, so that
-            // handler sees a client that already knows.
-            notifyLunoraSessionChange();
-            config.onSessionChange?.();
+            // previous user's rows. The app's handler runs once every client
+            // has re-resolved, so it reads the new identity, not the old one.
+            // Capped: a probe that hangs must not hold the app's handler (often
+            // its own session refresh) back forever.
+            const resolved = notifyLunoraSessionChange();
+            const { onSessionChange } = config;
+
+            if (onSessionChange !== undefined) {
+                Promise.race([resolved, delay(SESSION_RESOLVE_WAIT_MS)])
+                    .then(() => {
+                        onSessionChange();
+
+                        return undefined;
+                    })
+                    .catch(() => undefined);
+            }
         },
         organization: {
             allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,

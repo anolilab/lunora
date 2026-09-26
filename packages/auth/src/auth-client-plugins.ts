@@ -155,10 +155,11 @@ interface LunoraSessionSyncPlugin {
  * {@link lunoraSessionSync} (installed by {@link createLunoraAuthClient}) and
  * `@lunora/auth-ui` call it for you; call it yourself after a session change
  * made any other way.
+ *
+ * Resolves once every client has re-resolved (or failed to), so code that
+ * reads `client.currentIdentity()` next can `await` it. Never rejects.
  */
-const notifyLunoraSessionChange = (): void => {
-    notifySessionChanged();
-};
+const notifyLunoraSessionChange = async (): Promise<void> => notifySessionChanged();
 
 /**
  * A better-auth client plugin that, after every successful auth request that
@@ -180,7 +181,8 @@ const lunoraSessionSync = (): LunoraSessionSyncPlugin => {
                 hooks: {
                     onSuccess: (context: { request: { method?: string } }): void => {
                         if ((context.request.method ?? "GET").toUpperCase() !== "GET") {
-                            notifySessionChanged();
+                            // Fire and forget: better-auth's own callers need not wait.
+                            notifySessionChanged().catch(() => undefined);
                         }
                     },
                 },
