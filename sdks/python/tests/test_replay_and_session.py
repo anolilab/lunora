@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import unittest
-from unittest import mock
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -439,7 +439,7 @@ class TestPortLocal(unittest.TestCase):
                 raise RuntimeError("unexpected")
             return real(value, *args)
 
-        with mock.patch("lunora.submit.decode_wire", side_effect=decode_then_fail), self.assertRaises(RuntimeError):
+        with unittest.mock.patch("lunora.submit.decode_wire", side_effect=decode_then_fail), self.assertRaises(RuntimeError):
             run.flush()
 
         self.assertEqual([e.mutation_id for e in run.settled], ["f1"])
