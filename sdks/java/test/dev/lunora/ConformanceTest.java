@@ -553,6 +553,32 @@ public final class ConformanceTest {
         check(
                 Key.jsonString("tab\there").equals("\"tab\\there\""),
                 "control characters are escaped");
+
+        // A lone surrogate is escaped lowercase, as JSON.stringify writes it; a well-formed pair
+        // stays raw. Left raw, the transport's UTF-8 encoder put a lone one on the wire as `?`.
+        check(
+                Key.jsonString("a\uD800b").equals("\"a\\ud800b\""),
+                "a lone high surrogate is escaped, got " + Key.jsonString("a\uD800b"));
+        check(
+                Key.jsonString("\uDC00\uD800").equals("\"\\udc00\\ud800\""),
+                "a reversed pair is two lone surrogates");
+        check(Key.jsonString("x\uD83D\uDE00").equals("\"x\uD83D\uDE00\""), "a pair stays raw");
+        check(
+                Key.jsonString("\uD83D").equals("\"\\ud83d\"")
+                        && Key.jsonString("\uDE00").equals("\"\\ude00\""),
+                "a surrogate at either end of the string is escaped");
+
+        byte[] wire =
+                Json.write(Client.buildRpcBody("m:f", Map.of("s", "a\uD800b"), null))
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        check(
+                new String(wire, java.nio.charset.StandardCharsets.UTF_8)
+                        .equals("{\"args\":{\"s\":\"a\\ud800b\"},\"functionPath\":\"m:f\"}"),
+                "the request body carries the escape, not a replacement character");
+        check(
+                !Key.stableWireKey(List.of("a\uD800b")).equals(Key.stableWireKey(List.of("a?b"))),
+                "a lone surrogate and a question mark key apart");
     }
 
     @SuppressWarnings("unchecked")
