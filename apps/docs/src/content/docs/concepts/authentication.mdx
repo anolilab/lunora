@@ -246,8 +246,12 @@ import { createAuthClient } from "better-auth/react";
 export const authClient = createAuthClient({ plugins: [lunoraSessionSync()] });
 ```
 
-A session changed any other way (another tab, a custom endpoint) reaches the
-client when its socket next reconnects. Call `notifyLunoraSessionChange()` from
+Every tab of the browser shares one cookie, so the report reaches the other
+tabs too: each re-checks the session, without reloading, and retires the
+previous user's rows the same way. A sign-out made through better-auth's own
+client in another tab is picked up even without the plugin. A session changed
+any other way (a custom endpoint) reaches the client when its socket next
+reconnects. Call `notifyLunoraSessionChange()` from
 `@lunora/auth/plugins/client` to report it sooner.
 
 `/get-session` answering `401` or with no user counts as signed out. Any other

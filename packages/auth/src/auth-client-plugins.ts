@@ -145,8 +145,9 @@ interface LunoraSessionSyncPlugin {
 }
 
 /**
- * Tell every `LunoraClient` in the page that the auth session may have changed,
- * so each asks `/get-session` who is signed in now.
+ * Tell every `LunoraClient` in the page, and in the browser's other tabs (they
+ * share the cookie), that the auth session may have changed, so each asks
+ * `/get-session` who is signed in now.
  *
  * Needed for a **cookie** session: a sign-in or sign-out sets or clears an
  * `HttpOnly` cookie in a request the Lunora client never sees, and nothing it
@@ -156,8 +157,9 @@ interface LunoraSessionSyncPlugin {
  * `@lunora/auth-ui` call it for you; call it yourself after a session change
  * made any other way.
  *
- * Resolves once every client has re-resolved (or failed to), so code that
- * reads `client.currentIdentity()` next can `await` it. Never rejects.
+ * Resolves once every client in this tab has re-resolved (or failed to), so
+ * code that reads `client.currentIdentity()` next can `await` it; the other
+ * tabs re-resolve on their own. Never rejects.
  */
 const notifyLunoraSessionChange = async (): Promise<void> => notifySessionChanged();
 
