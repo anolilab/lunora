@@ -9,10 +9,7 @@ import { RateLimiter } from "../src/index";
  * value. `getValue` (the sibling bench) only does the read; this bench
  * measures the read+write path that's actually on the hot path.
  *
- * - **token bucket, unsharded** — single bucket; cheapest mode.
- * - **token bucket, shards=8** — one bucket lookup chosen by a
- * deterministic hash of the key; the write still touches one shard.
- * Sharding is a read cost, not a write cost — the bench documents that.
+ * - **token bucket** — single bucket; cheapest mode.
  * - **fixed window** — different algorithm, same store IO shape.
  * - **sliding window** — algorithm with the most arithmetic.
  * - **deny-list hit** — short-circuits before the algorithm runs.
@@ -26,10 +23,6 @@ const tokenBucketConfig = {
     hits: { kind: "token bucket", period: PERIOD_MS, rate: RATE_PER_PERIOD },
 } satisfies RateLimitConfigMap<"hits">;
 
-const tokenBucketSharded = {
-    hits: { kind: "token bucket", period: PERIOD_MS, rate: RATE_PER_PERIOD, shards: 8 },
-} satisfies RateLimitConfigMap<"hits">;
-
 const fixedWindowConfig = {
     hits: { kind: "fixed window", period: PERIOD_MS, rate: RATE_PER_PERIOD },
 } satisfies RateLimitConfigMap<"hits">;
@@ -41,20 +34,14 @@ const slidingWindowConfig = {
 let clock = NOW;
 
 const tokenBucket = new RateLimiter({ config: tokenBucketConfig, now: () => clock });
-const tokenBucketSharded8 = new RateLimiter({ config: tokenBucketSharded, now: () => clock });
 const fixedWindow = new RateLimiter({ config: fixedWindowConfig, now: () => clock });
 const slidingWindow = new RateLimiter({ config: slidingWindowConfig, now: () => clock });
 const withDenyList = new RateLimiter({ config: tokenBucketConfig, denyList: ["banned-key"], now: () => clock });
 
 describe("RateLimiter.limit() — algorithm + store-write throughput", () => {
-    bench("token bucket, unsharded", async () => {
+    bench("token bucket", async () => {
         clock += 1;
         await tokenBucket.limit("hits", { key: "user-42" });
-    });
-
-    bench("token bucket, shards=8 (hashed shard select per call)", async () => {
-        clock += 1;
-        await tokenBucketSharded8.limit("hits", { key: "user-42" });
     });
 
     bench("fixed window", async () => {

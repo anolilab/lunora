@@ -12,8 +12,7 @@ interface RateLimiterOptions<Names extends string> {
 
     /**
      * Optional key normalizer applied to every incoming `args.key` (the
-     * deny-list check, the storage key, and downstream shard selection all see
-     * the normalized form). Use for case-folding, trimming, or canonicalizing
+     * deny-list check and the storage key both see the normalized form). Use for case-folding, trimming, or canonicalizing
      * IPs/emails so equivalent inputs share a single bucket. The deny-list
      * itself is consulted as-is; normalize the deny-list entries up front to
      * match.
@@ -26,29 +25,9 @@ interface RateLimiterOptions<Names extends string> {
 }
 
 // Both halves are percent-encoded so the separator stays unambiguous: a limit
-// named `a:b` (global) can't collide with limit `a` keyed by `b`. A sharded
-// limit appends `#<shard>`; `#` can't appear in either encoded half, so the
-// shard suffix is unambiguous too.
+// named `a:b` (global) can't collide with limit `a` keyed by `b`.
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
-
-/**
- * Deterministic shard selector. A FNV-1a-style rolling hash over the storage
- * key — same input always lands on the same shard so a single hot key can't
- * thrash across buckets the way `Math.random()` did. Per-key throughput is
- * therefore `rate/shards`; aggregate throughput across distinct keys spreads
- * uniformly. Use `shards: 1` (or unset) for a single bucket.
- */
-const hashToShard = (storageKey: string, shards: number): number => {
-    let hash = 0;
-
-    for (let index = 0; index < storageKey.length; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-math-trunc, no-bitwise, unicorn/prefer-code-point -- 32-bit integer wraparound (`| 0`) is the correct hashing primitive here; Math.trunc would not wrap, the bitwise op is intentional, and charCodeAt hashes per UTF-16 code unit by design (codePointAt would skip low surrogates).
-        hash = (hash * 31 + storageKey.charCodeAt(index)) | 0;
-    }
-
-    return Math.abs(hash) % shards;
-};
 
 // Fires once per `new RateLimiter(...)` call that receives no explicit
 // `store` — never per check/limit call, which would be noise on the hot
@@ -65,28 +44,6 @@ const NO_STORE_WARNING =
     "`.shardBy(...)` shards or `.global()` replicas, and it resets when the DO instance is evicted/restarted. For a limit that must hold " +
     "across any of those, pass a durable `store` (`createDbStore` or `createSqlStore`) instead. Pass `store: createMemoryStore()` " +
     "explicitly once you've confirmed the in-memory default is correct here, to silence this warning.";
-
-// A sharded config splits its rate and capacity evenly across N sub-buckets,
-// each enforced independently. `shards <= 1` (or unset) leaves the config as-is.
-const perShardConfig = (config: RateLimitConfig, shards: number): RateLimitConfig =>
-    shards > 1 ? { ...config, capacity: (config.capacity ?? config.rate) / shards, rate: config.rate / shards } : config;
-
-/** Every storage key a `(name, key)` pair occupies — one per shard, or just one when unsharded. */
-const shardKeysFor = (name: string, key: string | undefined, shards: number): string[] => {
-    const base = storageKeyFor(name, key);
-
-    return shards > 1 ? Array.from({ length: shards }, (_, shard) => `${base}#${String(shard)}`) : [base];
-};
-
-// The single storage key a `(name, key)` pair routes to: the sole bucket when
-// unsharded, or the one shard the deterministic hash selects. `getValue` and
-// `run` must route identically (otherwise a peek reads a different bucket than
-// the consume writes), so both go through here.
-const routeStorageKey = (name: string, key: string | undefined, shards: number): string => {
-    const base = storageKeyFor(name, key);
-
-    return shards > 1 ? `${base}#${String(hashToShard(base, shards))}` : base;
-};
 
 /**
  * Enforces named rate limits over a pluggable store. Construct one per app with
@@ -126,8 +83,14 @@ class RateLimiter<Names extends string = string> {
         this.store = options.store ?? createMemoryStore();
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
-            if (config.shards !== undefined && (!Number.isInteger(config.shards) || config.shards < 1)) {
-                throw new LunoraError("INTERNAL", `rate limit "${name}": shards must be a positive integer`);
+            // `shards` is gone. Ignoring a leftover one would silently enforce a
+            // different limit: an app that raised `rate` to offset the split
+            // would now admit `shards` times the traffic it meant to.
+            if (Object.hasOwn(config, "shards")) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `rate limit "${name}": \`shards\` is no longer supported — remove it; the limit now enforces its full \`rate\` (lower \`rate\` if you raised it to offset the split)`,
+                );
             }
 
             // A zero/negative/non-finite period divides by zero in the token
@@ -157,21 +120,13 @@ class RateLimiter<Names extends string = string> {
      * Read the current config and the units admittable right now for a
      * `(name, key)` pair. The value is projected forward to the current clock
      * (token-bucket refill, fixed-window rollover, sliding-window decay), not
-     * the last persisted figure. For a sharded limit it reads only the single
-     * shard `limit()`/`run()` would route this key to — the sibling shards are
-     * never touched by this key, so summing them would over-report.
+     * the last persisted figure.
      */
     public async getValue(name: Names, args: { key?: string } = {}): Promise<{ config: RateLimitConfig; ts: number; value: number }> {
         const config = this.resolve(name);
-        const shards = config.shards ?? 1;
         const now = this.now();
-        const normalizedKey = this.normalizeKey(args.key);
-
-        // Route to the exact bucket run() consumes from — for a sharded limit
-        // that is the single shard this key hashes to; summing siblings would
-        // over-report since this key never touches them.
-        const storageKey = routeStorageKey(name, normalizedKey, shards);
-        const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey), now);
+        const storageKey = storageKeyFor(name, this.normalizeKey(args.key));
+        const current = availableAt(config, await this.store.get(storageKey), now);
 
         return { config, ts: current.ts, value: current.value };
     }
@@ -183,10 +138,9 @@ class RateLimiter<Names extends string = string> {
 
     /** Clear accounting for a `(name, key)` pair (e.g. on successful login). */
     public async reset(name: Names, args: { key?: string } = {}): Promise<void> {
-        const shards = this.resolve(name).shards ?? 1;
-        const normalizedKey = this.normalizeKey(args.key);
+        this.resolve(name);
 
-        await Promise.all(shardKeysFor(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.delete(storageKey))));
+        await Promise.resolve(this.store.delete(storageKeyFor(name, this.normalizeKey(args.key))));
     }
 
     private normalizeKey(key: string | undefined): string | undefined {
@@ -234,15 +188,9 @@ class RateLimiter<Names extends string = string> {
             throw new LunoraError("INTERNAL", `rate limit "${name}": count must be a positive integer`);
         }
 
-        const shards = config.shards ?? 1;
-        // Deterministic hash routes a given (name, key) to a fixed shard. Per
-        // sibling shards are independent — per-key rate is `rate/shards`,
-        // aggregate across distinct keys spreads to ~`rate`. Random shard
-        // selection (the old behavior) allowed a single key to drain every
-        // shard before any of them rate-limited, which defeated the cap.
-        const storageKey = routeStorageKey(name, normalizedKey, shards);
+        const storageKey = storageKeyFor(name, normalizedKey);
         const prior = await this.store.get(storageKey);
-        const { status, value } = evaluate(perShardConfig(config, shards), prior, {
+        const { status, value } = evaluate(config, prior, {
             consume,
             count,
             now: this.now(),

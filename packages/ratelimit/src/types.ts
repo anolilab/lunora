@@ -20,19 +20,6 @@ export interface RateLimitConfig {
     rate: number;
 
     /**
-     * Split a hot limit across N independent sub-buckets to avoid a single
-     * contended key/Durable Object. Each shard enforces `rate / shards` (and
-     * `capacity / shards`); a request is routed to a shard via a deterministic
-     * hash of `(name, key)`, so the same key always lands on the same shard and
-     * a single key's effective throughput is exactly `rate / shards`. Aggregate
-     * throughput across many distinct keys approaches `rate` as keys spread
-     * uniformly across shards. Reserve it for high-volume limits where
-     * contention bites; leave unset (one bucket) otherwise. Must be a positive
-     * integer — `1` is equivalent to unset.
-     */
-    shards?: number;
-
-    /**
      * Phase offset in epoch milliseconds for windowed algorithms — windows
      * align to `start + n * period`. Ignored by token buckets. Defaults to `0`.
      */
