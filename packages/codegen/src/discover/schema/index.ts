@@ -1,12 +1,12 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { globalVectorIndexMessage } from "../../../../../shared/global-vector-index";
 import { diagnosticAt } from "../../diagnostics";
 import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
-import { chainedStringLiteralArgument } from "./internal/properties";
+import { chainedStringLiteralArgument, getBooleanProperty } from "./internal/properties";
 import { parseBaseTables } from "./internal/table-builder";
 
 /** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
@@ -20,6 +20,33 @@ const JURISDICTIONS = new Set<NonNullable<SchemaIR["jurisdiction"]>>(["eu", "fed
  */
 const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdiction"] =>
     chainedStringLiteralArgument(defineSchemaCall, "jurisdiction", "jurisdiction", JURISDICTIONS, '"eu", "us", or "fedramp"');
+
+/**
+ * Whether the chain's `.jurisdiction("…", { pinAuthAndVoice: true })` carries
+ * the acknowledgement that voice sessions and DO-backed auth move into the
+ * jurisdiction. Only a literal `true` counts: anything codegen cannot read is
+ * not an acknowledgement.
+ */
+const pinsAuthAndVoice = (defineSchemaCall: CallExpression): boolean => {
+    let current: TsNode = defineSchemaCall;
+
+    for (;;) {
+        const access = current.getParent();
+        const call = access?.getParent();
+
+        if (!access || !Node.isPropertyAccessExpression(access) || !call || !Node.isCallExpression(call)) {
+            return false;
+        }
+
+        if (access.getName() === "jurisdiction") {
+            const options = call.getArguments()[1];
+
+            return options !== undefined && Node.isObjectLiteralExpression(options) && getBooleanProperty(options, "pinAuthAndVoice") === true;
+        }
+
+        current = call;
+    }
+};
 
 /** Recognised `.rls(...)` mode literals — currently only `"required"`. */
 const RLS_MODES = new Set<NonNullable<SchemaIR["rlsMode"]>>(["required"]);
@@ -81,7 +108,13 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
         throw diagnosticAt(defineSchemaCall, globalVectorIndexMessage(globalVectorIndex.table, globalVectorIndex.name));
     }
 
-    return { jurisdiction: jurisdictionOf(defineSchemaCall), rlsMode: rlsModeOf(defineSchemaCall), tables, vectorIndexes };
+    return {
+        jurisdiction: jurisdictionOf(defineSchemaCall),
+        ...(pinsAuthAndVoice(defineSchemaCall) ? { jurisdictionPinsAuthAndVoice: true as const } : {}),
+        rlsMode: rlsModeOf(defineSchemaCall),
+        tables,
+        vectorIndexes,
+    };
 };
 
 export default discoverSchema;

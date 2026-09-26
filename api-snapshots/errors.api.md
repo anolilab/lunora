@@ -196,6 +196,15 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
     };
+    readonly JURISDICTION_MOVE: {
+        readonly hint: readonly [
+            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones: existing users, sessions and transcripts stay in the unpinned objects.",
+            "",
+            "Move or discard that data first (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)), then acknowledge with `.jurisdiction(\"eu\", { pinAuthAndVoice: true })`. For D1-mode auth the acknowledgement changes nothing."
+        ];
+        readonly status: 422;
+        readonly title: "Unacknowledged jurisdiction move";
+    };
     readonly SCHEMA_SNAPSHOT_PARSE: {
         readonly status: 500;
         readonly title: "Schema snapshot parse error";

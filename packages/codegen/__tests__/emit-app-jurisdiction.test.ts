@@ -64,4 +64,33 @@ describe("emitApp — schema jurisdiction", () => {
 
         expect(output).toContain("createScheduler({ namespace })");
     });
+
+    it("pins the DO-backed auth object once the move is acknowledged", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true, jurisdiction: "eu", jurisdictionPinsAuthAndVoice: true });
+        const wiring = /createDoAuthWiring\(\{[\s\S]*?\}\);/u.exec(output)?.[0] ?? "";
+
+        expect(wiring.match(/jurisdiction: "eu",/gu)).toHaveLength(1);
+    });
+
+    it("keeps the DO-backed auth object where its data is until the move is acknowledged", () => {
+        expect.assertions(1);
+
+        // Pinning would resolve every user to a NEW, EMPTY auth object.
+        const output = emitApp({ ...baseOptions, hasAuth: true, jurisdiction: "eu" });
+        const wiring = /createDoAuthWiring\(\{[\s\S]*?\}\);/u.exec(output)?.[0] ?? "";
+
+        expect(wiring).not.toContain("jurisdiction");
+    });
+
+    it("leaves the DO-backed auth object un-pinned when no jurisdiction is declared", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+        const wiring = /createDoAuthWiring\(\{[\s\S]*?\}\);/u.exec(output)?.[0] ?? "";
+
+        expect(wiring).toContain("namespace: authNamespace(env),");
+        expect(wiring).not.toContain("jurisdiction");
+    });
 });

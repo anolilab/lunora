@@ -243,6 +243,7 @@ interface EmitAppOptions {
     hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
+    jurisdictionPinsAuthAndVoice?: boolean;
     tableNames: ReadonlyArray<string>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
@@ -783,6 +784,7 @@ interface SchemaDriftDecision {
 ```ts
 interface SchemaIR {
     jurisdiction?: JurisdictionIR;
+    jurisdictionPinsAuthAndVoice?: true;
     rlsMode?: "required";
     tables: ReadonlyArray<TableIR>;
     vectorIndexes: ReadonlyArray<VectorIndexIR>;

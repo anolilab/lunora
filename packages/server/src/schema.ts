@@ -852,11 +852,18 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
      * into the new one.
      *
      * Note: this pins **DO-backed** state only. D1-backed state — `.global()`
-     * tables and `@lunora/auth` sessions alike — is governed by D1's own location
+     * tables and D1-mode `@lunora/auth` — is governed by D1's own location
      * settings, not this option.
+     *
+     * Voice sessions and DO-backed auth (`.auth({ namespace })`) are pinned only
+     * with `{ pinAuthAndVoice: true }`, and codegen refuses a project that has
+     * either without it. They were unpinned before, so pinning them resolves
+     * every user, session and transcript to a new, empty object: the option is
+     * the explicit "I have moved that data, or have none" acknowledgement. See
+     * the data-residency docs for what moves and how.
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
-    jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;
+    jurisdiction: (jurisdiction: DurableObjectJurisdiction, options?: { pinAuthAndVoice?: boolean }) => ExtendableSchema<T>;
 
     /**
      * Turn on secure-by-default RLS for the whole schema. Every table is then
@@ -876,7 +883,7 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
         ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
         },
-        jurisdiction(_jurisdiction: DurableObjectJurisdiction): ExtendableSchema<T> {
+        jurisdiction(_jurisdiction: DurableObjectJurisdiction, _options?: { pinAuthAndVoice?: boolean }): ExtendableSchema<T> {
             // Authoring-time, type-checked declaration only. The jurisdiction is
             // a worker-side residency concern: codegen reads the literal off the
             // schema AST and emits it into the generated `createWorker({ jurisdiction })`

@@ -2956,6 +2956,68 @@ describe("createWorker — voice-session upgrade", () => {
         // Anonymous upgrade: nothing server-minted is re-set, so NOTHING may survive.
         expect(seen[0]?.headers).toStrictEqual([]);
     });
+
+    it("routes the voice session through the jurisdiction-pinned namespace", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const pinnedTo: string[] = [];
+        const view = (label: string): ShardNamespaceLike => {
+            return {
+                get: () => {
+                    return {
+                        fetch: async () => {
+                            log.push(label);
+
+                            return new Response(null, { status: 200 });
+                        },
+                    };
+                },
+                idFromName: (name) => name,
+            };
+        };
+        const recording = (agent: string): ShardNamespaceLike => {
+            return {
+                ...view(`${agent}:UNPINNED`),
+                jurisdiction: (jurisdiction) => {
+                    pinnedTo.push(`${agent}:${jurisdiction}`);
+
+                    return view(`${agent}:PINNED`);
+                },
+            };
+        };
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            jurisdiction: "eu",
+            shardDO: recording("shard"),
+            voiceAgents: { sales: recording("sales"), support: recording("support") },
+        });
+
+        await worker.fetch(new Request("https://app.example/_lunora/voice/support?threadKey=t1", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+        await worker.fetch(new Request("https://app.example/_lunora/voice/sales?threadKey=t2", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(pinnedTo).toStrictEqual(["shard:eu", "sales:eu", "support:eu"]);
+        expect(log).toStrictEqual(["support:PINNED", "sales:PINNED"]);
+    });
+
+    it("fails closed when a voice namespace cannot express the jurisdiction", () => {
+        expect.assertions(1);
+
+        const pinnable: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response(null) };
+            },
+            idFromName: (name) => name,
+        };
+
+        expect(() =>
+            createWorker({
+                jurisdiction: "eu",
+                shardDO: { ...pinnable, jurisdiction: () => pinnable },
+                voiceAgents: { support: pinnable },
+            }),
+        ).toThrow('does not support jurisdiction("eu")');
+    });
 });
 
 describe("withFrameworkWorker — `scheduled` ownership", () => {

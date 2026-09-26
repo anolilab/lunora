@@ -525,7 +525,9 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
     extend: <X extends Record<string, TableDefinition>, Key extends string>(extension: SchemaExtension<X> & {
         readonly key: Key;
     }) => ExtendableSchema<PrefixedTables<X, Key> & T>;
-    jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;
+    jurisdiction: (jurisdiction: DurableObjectJurisdiction, options?: {
+        pinAuthAndVoice?: boolean;
+    }) => ExtendableSchema<T>;
     rls: (mode: "required") => ExtendableSchema<T>;
 } & Schema<T>;
 ```

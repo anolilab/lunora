@@ -141,6 +141,35 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("refuses to move voice sessions and DO-backed auth into a jurisdiction until acknowledged", () => {
+            expect.assertions(3);
+
+            const schemaSource = (chain: string): string =>
+                `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ notes: defineTable({ body: v.string() }) })${chain};\n\nexport default schema;\n`;
+
+            writeFileSync(join(workdir, "lunora", "schema.ts"), schemaSource(`.jurisdiction("eu")`));
+            writeFileSync(
+                join(workdir, "lunora", "agents.ts"),
+                `import { defineAgent } from "@lunora/agent";\nexport const support = defineAgent({ model: "m", voice: {} });\n`,
+            );
+
+            // An app that already declared `.jurisdiction()` upgrades with no schema
+            // change: this is the only thing that stops its transcripts starting empty.
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/voice sessions of agent\(s\) "support"/u);
+
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "index.ts"),
+                `import { app } from "./app";\nexport default app.auth({ namespace: (env) => env.AUTH, options: () => ({}) }).build();\n`,
+            );
+
+            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/DO-backed auth[\s\S]*src\/index\.ts:2/u);
+
+            writeFileSync(join(workdir, "lunora", "schema.ts"), schemaSource(`.jurisdiction("eu", { pinAuthAndVoice: true })`));
+
+            expect(runCodegen({ projectRoot: workdir }).generated.app).toContain('jurisdiction: "eu"');
+        });
+
         it("narrows ctx.db.asId to a real TableName", () => {
             expect.assertions(5);
 

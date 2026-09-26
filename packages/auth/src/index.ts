@@ -44,7 +44,7 @@ export {
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
 export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
-export type { AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
+export type { AuthJurisdiction, AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
 export { createDoAuthWiring } from "./do-wiring";
 export type { EmailGateHookConfig } from "./email-gate";
 export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";

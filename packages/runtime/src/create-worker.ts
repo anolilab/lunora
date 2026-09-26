@@ -1095,8 +1095,9 @@ interface WorkerOptions {
      * Restrict every Durable Object this worker reaches — shard DOs, the
      * scheduler DO, the fan-out coordinator, subscriptions — to a Cloudflare
      * data-residency jurisdiction (`"eu"`, `"us"`, `"fedramp"`). The runtime
-     * derives a jurisdiction-pinned subnamespace from {@link WorkerOptions.shardDO}
-     * and {@link WorkerOptions.schedulerDO} once, so all routing inherits it.
+     * derives a jurisdiction-pinned subnamespace from {@link WorkerOptions.shardDO},
+     * {@link WorkerOptions.schedulerDO}, and each {@link WorkerOptions.voiceAgents}
+     * namespace once, so all routing inherits it.
      *
      * Fail-closed: if the bound namespace does not expose `.jurisdiction()`
      * (an older `@cloudflare/workers-types`), the worker throws rather than
@@ -2715,6 +2716,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // When `options.jurisdiction` is unset these are the bindings unchanged.
     const shardDO = applyJurisdiction(options.shardDO, options.jurisdiction);
     const schedulerDO = options.schedulerDO === undefined ? undefined : applyJurisdiction(options.schedulerDO, options.jurisdiction);
+    // Each voice agent is its own `VoiceSessionDO` namespace, and its thread
+    // transcript lives in that object's storage — it needs the same pin.
+    const voiceAgents =
+        options.voiceAgents === undefined
+            ? undefined
+            : Object.fromEntries(Object.entries(options.voiceAgents).map(([name, namespace]) => [name, applyJurisdiction(namespace, options.jurisdiction)]));
 
     /**
      * Every worker→shard hop, with the app's placement policy applied in one
@@ -4182,8 +4189,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * a missing `threadKey`; never throws (a thrown upgrade handler 500s a socket).
      */
     const handleVoiceUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        const { voiceAgents } = options;
-
         if (voiceAgents === undefined) {
             return new Response("Not found", { status: 404 });
         }

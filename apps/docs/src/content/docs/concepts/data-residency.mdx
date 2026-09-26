@@ -37,14 +37,25 @@ reaches**:
 - **Fan-out**: cross-shard query coordination.
 - **`ctx.scheduler`**: the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
 - **`ctx.containers`**: container DOs and their lifecycle reporting.
+- **Voice agents**: each voice-enabled agent's `VoiceSessionDO`, which holds the
+  live session for `/_lunora/voice/<agent>`, once acknowledged (see
+  [Pinning auth and voice](#pinning-auth-and-voice)).
+- **DO-backed auth**: when `.auth()` is wired with a `namespace` (the auth tables
+  live in a Durable Object), that object is pinned too, so users, sessions, and
+  credentials stay in-region — again once acknowledged.
 
 It does **not** pin, by design:
 
 - **`.global()` tables**: these are D1-backed, not Durable Objects. D1 has its
   own [location settings](https://developers.cloudflare.com/d1/configuration/data-location/);
   the DO jurisdiction does not apply.
-- **Auth sessions**: `@lunora/auth` stores sessions in D1 (better-auth), so they
-  follow D1's residency, not this option.
+- **D1-backed auth**: when `.auth()` is wired with `d1`, better-auth stores users
+  and sessions in D1, so they follow D1's residency, not this option. DO-backed
+  auth is pinned, see above.
+- **Workflows and agent runs**: `defineWorkflow` and `defineAgent` runs are
+  Cloudflare Workflows, not Durable Objects, so the jurisdiction does not apply
+  to their step state. Their reads and writes go back through the worker and land
+  in the pinned shards.
 - **`@lunora/mail` inbound / capture shards**: mail is a scaffolded add-on, not
   codegen-wired, so its shard access is **not** auto-pinned. Both entry points
   take an optional `jurisdiction` (`createMailerFromEnv({ jurisdiction })` for the
@@ -57,12 +68,48 @@ It does **not** pin, by design:
     rather than silently routing to the un-pinned global namespace: a dropped residency constraint is never allowed to leak data out of region.
 </Callout>
 
+## Pinning auth and voice
+
+Voice sessions and DO-backed auth were not pinned by earlier releases, even with
+`.jurisdiction(...)` declared. Pinning them now moves them exactly the way a
+jurisdiction change moves everything else: each resolves to a **new, empty
+object**, and the old data stays in the un-pinned one. For DO-backed auth that
+means every user, account, session and credential; for voice, every stored
+transcript. Nothing about the upgrade changes your schema, so the drift gate
+below does not fire.
+
+So both are pinned only on an explicit acknowledgement:
+
+```ts
+export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndVoice: true });
+```
+
+Without it, codegen **refuses** a project that declares `.jurisdiction(...)`
+and has a voice-enabled agent or an `.auth({ namespace })` (DO-backed auth),
+pointing at the declaration. It also refuses when it cannot tell — an `.auth(…)`
+whose options it cannot read — because for D1-mode auth the acknowledgement
+changes nothing. Until you acknowledge, DO-backed auth stays on the un-pinned
+object, where its data is.
+
+Before acknowledging on an app with existing users or transcripts, decide what
+happens to that data. There is no built-in copy path:
+
+- **DO-backed auth**: `lunora export` does not read the auth object, so users
+  and sessions do not travel with the table rows. Either accept a fresh user
+  base (everyone signs up / signs in again), or move the rows yourself: the old
+  object is still reachable through the un-pinned namespace
+  (`env.AUTH.get(env.AUTH.idFromName("auth"))`) until you delete it, and its
+  tables are better-auth's own, so a one-off script can read them there and
+  write them through the pinned object.
+- **Voice**: transcripts in the un-pinned `VoiceSessionDO`s are left behind. Live
+  sessions end at the deploy; clients reconnect into the pinned objects.
+
 ## Set it once: changing it strands data
 
 A Durable Object name maps to a **different ID in each jurisdiction**. So
 toggling, changing, or removing `.jurisdiction(...)` on an app that has already
-deployed makes every shard, scheduler job, and container resolve to a **new,
-empty DO**. The previous data stays in the old region's DOs and is no longer
+deployed makes every shard, scheduler job, container, voice session, and
+DO-backed auth object resolve to a **new, empty DO**. The previous data stays in the old region's DOs and is no longer
 reachable through the worker. There is no in-place migration.
 
 Because this is the most destructive change a schema can express, the pre-deploy
@@ -185,5 +232,6 @@ Leave them to expire or delete them from the Cloudflare dashboard.
 <Callout type="warn">
     **Scheduled jobs and sessions don't ride along.** `lunora export` covers table rows, not `SchedulerDO` timer state. In-flight `runAfter` / `runAt` / cron
     jobs in the old region are lost; re-enqueue anything that must survive the move. D1-backed auth sessions are unaffected by the jurisdiction change and stay
-    put.
+    put. DO-backed auth is not: its users and sessions stay in the old region's auth object, and `lunora export` does not read them, so they do not move with
+    the table rows.
 </Callout>
