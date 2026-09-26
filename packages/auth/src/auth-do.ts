@@ -28,17 +28,20 @@
  * @experimental
  */
 import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+import { toErrorBody } from "@lunora/errors";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
-import { createAuthAuditReader, ensureAuthAuditTable } from "./audit";
+import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import type { MoveOrder } from "./jurisdiction-move";
+import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 import type { SqlExecutor } from "./sql-store";
 
@@ -149,7 +152,7 @@ class LunoraAuthDO {
      * is swallowed. The executor is a stateless pair of closures over `storage`,
      * so sharing it is free.
      */
-    readonly #auditExecutor: SqlExecutor;
+    #auditExecutor: SqlExecutor;
 
     readonly #options: AuthDoOptions;
 
@@ -160,6 +163,9 @@ class LunoraAuthDO {
     #auth: LunoraAuth | undefined;
 
     #schemaApplied = false;
+
+    /** Physical table names that decide the jurisdiction copy's order, known once `#ensureReady` has run. */
+    #moveOrder: MoveOrder = { first: ["user"], last: [] };
 
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
@@ -186,19 +192,26 @@ class LunoraAuthDO {
         }
 
         const options = this.#optionsFactory();
+        // Through `resolveAuthOptions`, for the same reason the D1 migration path
+        // does: `createAuth` defaults rate limiting to `storage: "database"`, and
+        // that table only appears in `getAuthTables` once the option is set. Deriving
+        // from the raw options would omit it and the limiter's first read would fail
+        // on a missing table.
+        const resolved = resolveAuthOptions(options);
+
+        const { tables } = getAuthTablesWithResolvedIndexes(resolved);
+
+        // The copy into a pinned object goes `user`, `account`, `session` first, and the
+        // unbounded audit and rate-limit tables last.
+        this.#moveOrder = {
+            first: [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"],
+            last: [AUTH_AUDIT_TABLE, tables["rateLimit"]?.modelName ?? "rateLimit"],
+        };
 
         if (!this.#schemaApplied) {
             // better-auth's migrator is kysely-only and this storage is not a kysely
             // dialect, so the schema is derived from better-auth's own resolved
             // tables instead. Every statement is IF NOT EXISTS.
-            //
-            // Through `resolveAuthOptions`, for the same reason the D1 migration path
-            // does: `createAuth` defaults rate limiting to `storage: "database"`, and
-            // that table only appears in `getAuthTables` once the option is set. Deriving
-            // from the raw options would omit it and the limiter's first read would fail
-            // on a missing table.
-            const resolved = resolveAuthOptions(options);
-
             for (const statement of authDoSchemaStatements(resolved)) {
                 // The cursor is lazy in workerd — iterating is what runs the statement.
                 [...this.#storage.sql.exec(statement)];
@@ -344,6 +357,54 @@ class LunoraAuthDO {
     }
 
     /**
+     * Serve one half of a jurisdiction move (see `jurisdiction-move.ts`): this object is
+     * either the un-pinned source or the pinned target. Same secret as the other
+     * internal routes — it reads and writes every auth table.
+     */
+    async #move(request: Request): Promise<Response> {
+        if (request.method !== "POST" || !this.#isTrustedCaller(request)) {
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        try {
+            const body: Record<string, unknown> = await request.json();
+            const result = await handleMoveRequest(this.#storage, body, {
+                // The tables are gone: materialise them again on the next request rather
+                // than serve it from a schema this instance still believes is applied.
+                onPurge: () => {
+                    this.#schemaApplied = false;
+                    this.#auth = undefined;
+                    // A fresh executor, so the audit table's single-flight "already created"
+                    // cache (keyed on the executor) does not outlive the table.
+                    this.#auditExecutor = doExecutor(this.#storage);
+                },
+                order: () => this.#moveOrder,
+                prepare: () => {
+                    this.#ensureReady();
+                },
+                userTable: () => this.#moveOrder.first[0] ?? "user",
+            });
+
+            return Response.json(result);
+        } catch (error) {
+            // `data` is plain JSON the move built (counts, table names, a SQLite error class),
+            // so it passes through for the worker to hand the admin caller.
+            const { body, redacted, status } = toErrorBody(error, {
+                encodeData: (data) => data,
+                fallbackCode: "AUTH_MOVE_FAILED",
+                redactedMessage: "auth move failed",
+            });
+
+            if (redacted) {
+                // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                console.error("@lunora/auth: auth move failed", error);
+            }
+
+            return Response.json({ error: body }, { status });
+        }
+    }
+
+    /**
      * Whether the caller presented the configured internal secret.
      */
     #isTrustedCaller(request: Request): boolean {
@@ -425,6 +486,10 @@ class LunoraAuthDO {
 
         if (url.pathname === READ_AUDIT_PATH) {
             return this.#readAudit(request);
+        }
+
+        if (url.pathname === MOVE_PATH) {
+            return this.#move(request);
         }
 
         const auth = this.#ensureReady();

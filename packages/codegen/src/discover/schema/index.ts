@@ -22,12 +22,11 @@ const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdictio
     chainedStringLiteralArgument(defineSchemaCall, "jurisdiction", "jurisdiction", JURISDICTIONS, '"eu", "us", or "fedramp"');
 
 /**
- * Whether the chain's `.jurisdiction("…", { pinAuthAndVoice: true })` carries
- * the acknowledgement that voice sessions and DO-backed auth move into the
- * jurisdiction. Only a literal `true` counts: anything codegen cannot read is
- * not an acknowledgement.
+ * Whether the chain's `.jurisdiction("…", { pinAuth: true })` carries the
+ * acknowledgement that DO-backed auth moves into the jurisdiction. Only a
+ * literal `true` counts: anything codegen cannot read is not an acknowledgement.
  */
-const pinsAuthAndVoice = (defineSchemaCall: CallExpression): boolean => {
+const pinsAuth = (defineSchemaCall: CallExpression): boolean => {
     let current: TsNode = defineSchemaCall;
 
     for (;;) {
@@ -41,7 +40,7 @@ const pinsAuthAndVoice = (defineSchemaCall: CallExpression): boolean => {
         if (access.getName() === "jurisdiction") {
             const options = call.getArguments()[1];
 
-            return options !== undefined && Node.isObjectLiteralExpression(options) && getBooleanProperty(options, "pinAuthAndVoice") === true;
+            return options !== undefined && Node.isObjectLiteralExpression(options) && getBooleanProperty(options, "pinAuth") === true;
         }
 
         current = call;
@@ -110,7 +109,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
 
     return {
         jurisdiction: jurisdictionOf(defineSchemaCall),
-        ...(pinsAuthAndVoice(defineSchemaCall) ? { jurisdictionPinsAuthAndVoice: true as const } : {}),
+        ...(pinsAuth(defineSchemaCall) ? { jurisdictionPinsAuth: true as const } : {}),
         rlsMode: rlsModeOf(defineSchemaCall),
         tables,
         vectorIndexes,

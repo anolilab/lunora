@@ -92,11 +92,11 @@ interface EmitAppOptions {
     jurisdiction?: JurisdictionIR;
 
     /**
-     * `.jurisdiction("…", { pinAuthAndVoice: true })`. DO-backed auth is pinned
-     * only then: unacknowledged, pinning would resolve every user to a new,
-     * empty auth object (codegen refuses a project it can see doing that).
+     * `.jurisdiction("…", { pinAuth: true })`. DO-backed auth is pinned only
+     * then: unacknowledged, pinning would resolve every user to a new, empty
+     * auth object (codegen refuses a project it can see doing that).
      */
-    jurisdictionPinsAuthAndVoice?: boolean;
+    jurisdictionPinsAuth?: boolean;
 
     /**
      * Every table the schema declares. Emitted as a literal `listSchemaTables`
@@ -749,10 +749,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 /**
  * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
  * users, sessions, and credentials, so it must live where every other DO does.
- * Only once the move is acknowledged — see {@link EmitAppOptions.jurisdictionPinsAuthAndVoice}.
+ * Only once the move is acknowledged — see {@link EmitAppOptions.jurisdictionPinsAuth}.
  */
 const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
-    options.jurisdiction && options.jurisdictionPinsAuthAndVoice === true
+    options.jurisdiction && options.jurisdictionPinsAuth === true
         ? `
                 // The schema's jurisdiction pins the auth object like every other DO.
                 jurisdiction: ${JSON.stringify(options.jurisdiction)},`
@@ -914,6 +914,9 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
             options.authAuditReader = authWiring.auditReader;
+            // Set only once auth is pinned to a jurisdiction: copies the users left in the
+            // un-pinned object across (\`__lunora_admin__:copyAuthToJurisdiction\`).
+            options.authJurisdictionMove = authWiring.jurisdictionMove;
             // \`authAdmin\` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently

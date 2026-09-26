@@ -207,9 +207,9 @@ const ERROR_CATALOG: {
     };
     readonly JURISDICTION_MOVE: {
         readonly hint: readonly [
-            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones: existing users, sessions and transcripts stay in the unpinned objects.",
+            "The schema declares `.jurisdiction(...)` and the project has DO-backed auth (`.auth({ namespace })`). Pinning the auth object to the jurisdiction resolves it to a new, empty one: every user, account and session stays in the unpinned object until copied across. Voice sessions are pinned without an acknowledgement: they store nothing, and their transcripts are rows in the already-pinned shards.",
             "",
-            "Move or discard that data first (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)), then acknowledge with `.jurisdiction(\"eu\", { pinAuthAndVoice: true })`. For D1-mode auth the acknowledgement changes nothing."
+            "Acknowledge with `.jurisdiction(\"eu\", { pinAuth: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing."
         ];
         readonly status: 422;
         readonly title: "Unacknowledged jurisdiction move";
@@ -455,6 +455,41 @@ const ERROR_CATALOG: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "Auth audit read failed";
+    };
+    readonly AUTH_MOVE_NOT_CONFIGURED: {
+        readonly hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuth: true })`, and the auth object's `internalSecret` set.";
+        readonly status: 400;
+        readonly title: "Auth jurisdiction move not configured";
+    };
+    readonly AUTH_MOVE_TARGET_NOT_EMPTY: {
+        readonly hint: "The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.";
+        readonly status: 409;
+        readonly title: "Pinned auth object is not empty";
+    };
+    readonly AUTH_MOVE_CONFLICT: {
+        readonly hint: "A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.";
+        readonly status: 409;
+        readonly title: "Auth copy conflict";
+    };
+    readonly AUTH_MOVE_SOURCE_CHANGED: {
+        readonly hint: "The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.";
+        readonly status: 409;
+        readonly title: "Un-pinned auth object changed since the copy";
+    };
+    readonly AUTH_MOVE_SOURCE_PURGED: {
+        readonly hint: "The un-pinned auth object was already purged. Its tables may exist again (a rollback served requests there), but they hold only rows written since, so the copy refuses rather than read them as deletions and remove the pinned object's users. Nothing is left to copy.";
+        readonly status: 409;
+        readonly title: "Un-pinned auth object already purged";
+    };
+    readonly AUTH_MOVE_INCOMPLETE: {
+        readonly hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.";
+        readonly status: 409;
+        readonly title: "Auth copy not finished";
+    };
+    readonly AUTH_MOVE_FAILED: {
+        readonly hint: "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.";
+        readonly status: 500;
+        readonly title: "Auth jurisdiction move failed";
     };
     readonly CRON_EXPR_INVALID: {
         readonly status: 500;

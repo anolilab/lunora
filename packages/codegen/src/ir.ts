@@ -288,12 +288,12 @@ export interface SchemaIR {
     jurisdiction?: JurisdictionIR;
 
     /**
-     * `.jurisdiction("…", { pinAuthAndVoice: true })` — the acknowledgement that
-     * voice sessions and DO-backed auth, unpinned before, move into the
-     * jurisdiction (and so to new, empty objects). Without it codegen refuses a
-     * project that has either, and does not pin DO-backed auth.
+     * `.jurisdiction("…", { pinAuth: true })` — the acknowledgement that
+     * DO-backed auth, unpinned before, moves into the jurisdiction (and so to a
+     * new, empty object until its rows are copied). Without it codegen refuses a
+     * project that has DO-backed auth, and does not pin it.
      */
-    jurisdictionPinsAuthAndVoice?: true;
+    jurisdictionPinsAuth?: true;
 
     /**
      * Set when `defineSchema(...).rls("required")` was chained onto the schema —
