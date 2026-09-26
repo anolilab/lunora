@@ -58,6 +58,12 @@ public final class ConformanceTest {
         resetPokeReplacesShapeMembership();
         pendingPokeBuffersAreBounded();
         concurrentSubscribeAndHandleFrame();
+        shapePokeWithUndecodableRowIsRefusedWhole();
+        malformedFramesAreIgnoredWithoutRaising();
+        rpcUnreadableSuccessBodyRaisesSdkError();
+        subscriptionStreamEndsOnClose();
+        identityChangeEvictsPreviousSession();
+        authTokenRedactedWhenPrinted();
 
         // The optimistic-layer and offline-queue cases, in their own file so this one
         // stays the wire-protocol suite it has always been.
@@ -1096,5 +1102,340 @@ public final class ConformanceTest {
         check(
                 resent.get() == threads * perThread,
                 "every concurrent subscribe survived with a distinct id");
+    }
+
+    /** The frame {@code resendSubscriptions} sent for {@code id}. */
+    private static Map<String, Object> resent(List<Map<String, Object>> sent, String id) {
+        for (Map<String, Object> frame : sent) {
+            if (id.equals(frame.get("id"))) {
+                return frame;
+            }
+        }
+
+        throw new AssertionError("nothing was resent for " + id);
+    }
+
+    /** Numeric equality across the parser's Double and a fixture's integral value. */
+    private static boolean sameNumber(Object left, Object right) {
+        return left instanceof Number a
+                && right instanceof Number b
+                && a.doubleValue() == b.doubleValue();
+    }
+
+    /**
+     * What the first shape's view holds right now, read through the real poke path: an empty poke
+     * fires {@code onRows} with the whole view.
+     */
+    private static List<Object> shapeView(Client client, List<List<Object>> delivered) {
+        int before = delivered.size();
+
+        client.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"view\"}");
+        client.handleFrame(
+                "{\"type\":\"pokePart\",\"pokeId\":\"view\",\"shapeId\":\"shape_1\","
+                        + "\"rowsPatch\":[]}");
+        client.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"view\"}");
+        check(delivered.size() == before + 1, "an empty poke reports the view");
+
+        return delivered.get(delivered.size() - 1);
+    }
+
+    /**
+     * A poke carrying a row that will not decode is refused WHOLE for that shape: nothing of it is
+     * applied (not even the reset's clear), the resume checkpoint stays where it was, no rows
+     * callback fires, and the shape's error callback gets {@code INVALID_FRAME}. Another shape in
+     * the same poke still applies.
+     */
+    @SuppressWarnings("unchecked")
+    private static void shapePokeWithUndecodableRowIsRefusedWhole() throws IOException {
+        covers("shape_poke_with_undecodable_row_is_refused_whole");
+
+        Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
+        Client client = new Client("https://app.example", null);
+        List<Map<String, Object>> sent = new ArrayList<>();
+
+        client.attachSocket(sent::add);
+
+        List<List<Object>> delivered = new ArrayList<>();
+        List<List<Object>> otherDelivered = new ArrayList<>();
+        List<Client.SubscriptionError> errors = new ArrayList<>();
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("room", "general");
+        client.subscribeShape("roomMessages", args, delivered::add, errors::add);
+        client.subscribeShape("roomMessages", args, otherDelivered::add, null);
+
+        for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+            client.handleFrame(Json.write(frame));
+        }
+
+        delivered.clear();
+
+        List<Object> sequence =
+                new ArrayList<>((List<Object>) shape.get("undecodableRowPokeSequence"));
+        // A second shape rides the same poke with a row that decodes: its part must still apply.
+        Map<String, Object> otherPart = new LinkedHashMap<>();
+        Map<String, Object> otherRow = new LinkedHashMap<>();
+
+        otherRow.put("op", "insert");
+        otherRow.put("key", "o1");
+        otherRow.put("value", Map.of("_id", "o1"));
+        otherPart.put("type", "pokePart");
+        otherPart.put("pokeId", ((Map<String, Object>) sequence.get(0)).get("pokeId"));
+        otherPart.put("shapeId", "shape_2");
+        otherPart.put("rowsPatch", List.of(otherRow));
+        sequence.add(sequence.size() - 1, otherPart);
+
+        for (Object frame : sequence) {
+            client.handleFrame(Json.write(frame));
+        }
+
+        check(delivered.isEmpty(), "no rows callback fires for the refused shape");
+        check(
+                errors.size() == 1
+                        && shape.get("undecodableRowErrorCode").equals(errors.get(0).code()),
+                "the shape's error callback gets INVALID_FRAME once, got " + errors);
+        check(
+                otherDelivered.size() == 1
+                        && canonical(otherDelivered.get(0))
+                                .equals(canonical(List.of(Map.of("_id", "o1")))),
+                "the other shape in the same poke still applies");
+
+        sent.clear();
+        client.resendSubscriptions();
+
+        Map<String, Object> resend = resent(sent, "shape_1");
+
+        check(
+                sameNumber(
+                        resend.get("sinceCheckpoint"), shape.get("undecodableRowResendCheckpoint")),
+                "the checkpoint is not advanced past a row the view never held, got "
+                        + resend.get("sinceCheckpoint"));
+        check("e1".equals(resend.get("sinceEpoch")), "nor is the epoch");
+        check(
+                canonical(shapeView(client, delivered))
+                        .equals(canonical(shape.get("expectedRows"))),
+                "the view is exactly what it was before the refused poke");
+    }
+
+    /**
+     * Frames shaped like no server frame are ignored: nothing raises out of the read loop's entry
+     * point, and the live subscription is untouched — including by a string where a cursor goes.
+     */
+    @SuppressWarnings("unchecked")
+    private static void malformedFramesAreIgnoredWithoutRaising() throws IOException {
+        covers("malformed_frames_are_ignored_without_raising");
+
+        Map<String, Object> testCase =
+                (Map<String, Object>) fixture("ws-frames.json").get("malformedFrames");
+        List<Object> frames = (List<Object>) testCase.get("frames");
+
+        check(frames.size() > 10, "malformedFrames must carry its frames");
+
+        for (Object frame : frames) {
+            String raw = Json.write(frame);
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<Object> seen = new ArrayList<>();
+            List<Client.SubscriptionError> errors = new ArrayList<>();
+
+            client.attachSocket(sent::add);
+            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, errors::add, null);
+            client.handleFrame(Json.write(testCase.get("setupFrame")));
+            seen.clear();
+
+            try {
+                client.handleFrame(raw);
+            } catch (RuntimeException error) {
+                check(false, "handleFrame(" + raw + ") threw " + error);
+            }
+
+            check(seen.isEmpty() && errors.isEmpty(), raw + " must not reach sub_1");
+
+            sent.clear();
+            client.resendSubscriptions();
+
+            Map<String, Object> query = (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+            check(
+                    sameNumber(query.get("sinceSeq"), testCase.get("resendSinceSeq"))
+                            && testCase.get("resendSinceEpoch").equals(query.get("sinceEpoch")),
+                    raw + " must leave the resume cursor alone, resent " + query);
+        }
+    }
+
+    /**
+     * A response the call can read neither a result nor an error envelope out of fails with the
+     * SDK's own error type, coded — never a parse, cast or null exception from the JDK.
+     */
+    @SuppressWarnings("unchecked")
+    private static void rpcUnreadableSuccessBodyRaisesSdkError() throws IOException {
+        covers("rpc_unreadable_success_body_raises_sdk_error");
+
+        List<Object> cases = (List<Object>) fixture("rpc.json").get("unreadableSuccessBody");
+
+        check(cases.size() >= 3, "unreadableSuccessBody must carry its cases");
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            int status = ((Number) testCase.get("status")).intValue();
+            String rawBody = (String) testCase.get("rawBody");
+            Client client =
+                    new Client(
+                            "https://app.example",
+                            (url, headers, body) -> new Client.Response(status, rawBody));
+
+            for (Client.Verb verb : Client.Verb.values()) {
+                try {
+                    client.call(verb, "messages:list", null, null);
+                    check(false, verb + " must fail for " + testCase.get("name"));
+                } catch (Client.ApiException error) {
+                    check(
+                            testCase.get("code").equals(error.code),
+                            verb + " code for " + testCase.get("name"));
+                } catch (RuntimeException error) {
+                    check(false, verb + " " + testCase.get("name") + " threw " + error);
+                }
+            }
+        }
+
+        Client empty =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> new Client.Response(200, "{}"));
+
+        check(empty.query("messages:list", null, null) == null, "{} is a void result");
+    }
+
+    /** Closing the client ends a pull stream after the value it already delivered. */
+    @SuppressWarnings("unchecked")
+    private static void subscriptionStreamEndsOnClose() throws IOException, InterruptedException {
+        covers("subscription_stream_ends_on_close");
+
+        Map<String, Object> testCase =
+                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        Client.Stream stream = client.stream("messages:list", Map.of("channel", "general"), null);
+        List<Object> seen = java.util.Collections.synchronizedList(new ArrayList<>());
+        Thread consumer =
+                new Thread(
+                        () -> {
+                            for (Client.StreamEvent event : stream) {
+                                seen.add(event.value());
+                            }
+                        });
+
+        consumer.setDaemon(true);
+        consumer.start();
+        client.handleFrame(Json.write(((List<Object>) testCase.get("frames")).get(0)));
+        client.close();
+        consumer.join(2_000);
+
+        check(!consumer.isAlive(), "the stream ends within 2 s of close()");
+        check(
+                canonical(Wire.encode(seen))
+                        .equals(
+                                canonical(
+                                        List.of(((List<Object>) testCase.get("yielded")).get(0)))),
+                "after yielding the value already delivered");
+    }
+
+    /**
+     * Changing identity from a set value evicts that identity's session: every resume cursor and
+     * epoch is dropped and every shape view emptied, with its callback told. A first set and a
+     * same-value set evict nothing.
+     */
+    @SuppressWarnings("unchecked")
+    private static void identityChangeEvictsPreviousSession() throws IOException {
+        covers("identity_change_evicts_previous_session");
+
+        Map<String, Object> document = fixture("ws-frames.json");
+        Map<String, Object> testCase = (Map<String, Object>) document.get("identityChange");
+        Map<String, Object> shape = (Map<String, Object>) document.get("shape");
+        Map<String, Object> retained = (Map<String, Object>) testCase.get("retained");
+        Map<String, Object> evicted = (Map<String, Object>) testCase.get("evicted");
+        List<Object> transitions = (List<Object>) testCase.get("transitions");
+
+        check(transitions.size() == 4, "identityChange must carry its transitions");
+
+        for (Object raw : transitions) {
+            Map<String, Object> transition = (Map<String, Object>) raw;
+            String label = transition.get("from") + " -> " + transition.get("to");
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<List<Object>> delivered = new ArrayList<>();
+
+            client.identity((String) transition.get("from"));
+            client.attachSocket(sent::add);
+            client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+            client.handleFrame(Json.write(testCase.get("queryFrame")));
+            client.subscribeShape("roomMessages", Map.of("room", "general"), delivered::add, null);
+
+            for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+                client.handleFrame(Json.write(frame));
+            }
+
+            delivered.clear();
+            client.identity((String) transition.get("to"));
+            check(
+                    java.util.Objects.equals(client.identity(), transition.get("to")),
+                    "the identity is set, " + label);
+
+            sent.clear();
+            client.resendSubscriptions();
+
+            Map<String, Object> query = (Map<String, Object>) resent(sent, "sub_1").get("query");
+            Map<String, Object> shapeFrame = resent(sent, "shape_1");
+
+            if (Boolean.TRUE.equals(transition.get("evicts"))) {
+                check(
+                        !query.containsKey("sinceSeq") && !query.containsKey("sinceEpoch"),
+                        "the query resumes cold, " + label + ": " + query);
+                check(
+                        !shapeFrame.containsKey("sinceCheckpoint")
+                                && !shapeFrame.containsKey("sinceEpoch"),
+                        "the shape resumes cold, " + label + ": " + shapeFrame);
+                check(
+                        canonical(delivered)
+                                .equals(canonical(List.of(evicted.get("shapeCallbackRows")))),
+                        "the shape callback is told its view is empty, " + label);
+                check(
+                        canonical(shapeView(client, delivered))
+                                .equals(canonical(evicted.get("shapeRows"))),
+                        "the shape view is emptied, " + label);
+            } else {
+                check(
+                        sameNumber(query.get("sinceSeq"), retained.get("sinceSeq"))
+                                && retained.get("sinceEpoch").equals(query.get("sinceEpoch")),
+                        "the query keeps its cursor, " + label + ": " + query);
+                check(
+                        sameNumber(
+                                        shapeFrame.get("sinceCheckpoint"),
+                                        retained.get("sinceCheckpoint"))
+                                && retained.get("sinceEpoch").equals(shapeFrame.get("sinceEpoch")),
+                        "the shape keeps its checkpoint, " + label + ": " + shapeFrame);
+                check(delivered.isEmpty(), "no shape callback fires, " + label);
+                check(
+                        shapeView(client, delivered).size()
+                                == ((Number) retained.get("shapeRowCount")).intValue(),
+                        "the shape keeps its rows, " + label);
+            }
+        }
+    }
+
+    /** The bearer token never reaches a printed client. */
+    private static void authTokenRedactedWhenPrinted() {
+        covers("auth_token_redacted_when_printed");
+
+        String token = "lunora-secret-7f3a9c";
+        Client client = new Client("https://app.example", null);
+
+        client.authToken = token;
+
+        for (String printed : List.of(client.toString(), String.valueOf(client))) {
+            check(!printed.contains(token), "the token leaked into " + printed);
+        }
     }
 }
