@@ -64,11 +64,11 @@ export interface PollingFallbackOptions {
     readonly intervalMs: number;
 
     /**
-     * A poll pass reached the origin after the fallback was armed (or after the
-     * origin was unreachable). The client flushes queued writes here: HTTP works,
-     * so they need not wait for a socket.
+     * A poll pass reached the origin. Fired on every such pass, not only the
+     * first: the client flushes queued writes here, and a write can be queued
+     * while polling is live (its request failed after the last poll).
      */
-    readonly onLive: () => void;
+    readonly onReachable: () => void;
 
     /** Re-read the state (i.e. recompute + emit the aggregate connection status). */
     readonly onStateChange: () => void;
@@ -99,7 +99,7 @@ export interface PollingFallback {
  * `false`, so the client behaves exactly as it did before this existed.
  */
 export const createPollingFallback = (options: PollingFallbackOptions): PollingFallback => {
-    const { afterFailedAttempts, intervalMs, onLive, onStateChange, poll } = options;
+    const { afterFailedAttempts, intervalMs, onReachable, onStateChange, poll } = options;
     const enabled = intervalMs > 0 && afterFailedAttempts > 0;
 
     let failures = 0;
@@ -141,8 +141,9 @@ export const createPollingFallback = (options: PollingFallbackOptions): PollingF
         if (!live) {
             live = true;
             onStateChange();
-            onLive();
         }
+
+        onReachable();
     };
 
     const tick = (): void => {

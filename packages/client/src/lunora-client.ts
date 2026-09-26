@@ -927,6 +927,51 @@ const encodeCallArgs = (payload: unknown, label: string): unknown => {
 };
 
 /**
+ * How long one polling-fallback request may take before it counts as unreachable.
+ * Without it a network that accepts the connection and never answers ("Wi-Fi
+ * without internet") holds the poll in flight forever, and the in-flight guard
+ * blocks every later tick, so the status stays `"polling"` and writes keep
+ * skipping the queue.
+ */
+const POLL_TIMEOUT_MS = 10_000;
+
+/**
+ * Run a poll request with {@link POLL_TIMEOUT_MS}. The timeout aborts it and
+ * rejects with a `TypeError`, the same error an unreachable origin gives, even
+ * when a `fetch` double ignores the signal.
+ */
+const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(new TypeError("LunoraClient: poll timed out"));
+        }, POLL_TIMEOUT_MS);
+    });
+
+    try {
+        return await Promise.race([run(controller.signal), timeout]);
+    } catch (error) {
+        // The aborted fetch's own `AbortError` is the timeout, not a response.
+        throw controller.signal.aborted ? new TypeError("LunoraClient: poll timed out") : error;
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/** Whether `payload` survives the wire codec; its failure is a `TypeError`, like a network failure. */
+const isEncodable = (payload: unknown): boolean => {
+    try {
+        encodeWire(payload);
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+/**
  * Undo the scheduler's `encodeWire(args)` on a record read back off the admin
  * routes, so `listScheduledJobs` / `listDeadJobs` / `subscribeScheduledJobs`
  * answer the same values `@lunora/scheduler`'s `createScheduler.list()` answers
@@ -2624,80 +2669,7 @@ class LunoraClient {
      * incompatible with DO hibernation).
      */
     public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
-        this.assertOpen();
-
-        if (!this.fetchImpl) {
-            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
-        }
-
-        if (calls.length === 0) {
-            return [];
-        }
-
-        const response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
-            body: JSON.stringify({
-                calls: calls.map((call, index) => {
-                    return {
-                        args: encodeCallArgs(call.args ?? {}, `args for batch call '${call.fn.__lunoraRef}'`),
-                        functionPath: call.fn.__lunoraRef,
-                        id: index,
-                        shardKey: call.shardKey,
-                    };
-                }),
-            }),
-            headers: this.rpcRequestHeaders({ attachBookmark: true }),
-            method: "POST",
-        });
-
-        const bookmark = response.headers.get("x-d1-bookmark");
-
-        if (bookmark) {
-            this.bookmark.set(bookmark);
-        }
-
-        let body: { error?: unknown; results?: { body?: unknown; id?: number }[] };
-
-        try {
-            body = await response.json();
-        } catch {
-            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
-        }
-
-        const envelope = errorEnvelopeOf(body);
-
-        // A whole-batch rejection (bad request, method, or a per-entry authorization
-        // denial that fails the batch closed BEFORE any dispatch) comes back as a
-        // non-2xx `{ error }` with no `results` — surface it like a single call
-        // rather than reporting every slot as an opaque "no result". An `error`
-        // slot with no envelope in it (a proxy's page) is classified by status
-        // instead, per §4.2.
-        if (!response.ok || (envelope !== undefined && !body.results)) {
-            if (envelope !== undefined) {
-                throw reconstructError(envelope);
-            }
-
-            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
-        }
-
-        // Each entry is dispatched as an independent single call server-side, so
-        // each carries its own commit cursor — recorded under its OWN shard, or a
-        // batched write would leave no read-your-writes requirement behind at
-        // all. Read off the raw envelopes because `demuxBatchResults` keeps only
-        // the result value.
-        //
-        // No outbound `x-lunora-min-seq` per entry: the batch route forwards
-        // straight to the owner shard and is never replica-served, so a
-        // per-entry freshness requirement would constrain nothing. What these
-        // cursors constrain is the SINGLE reads that follow.
-        for (const entry of body.results ?? []) {
-            const commitCursor = (entry.body as { commitCursor?: unknown } | undefined)?.commitCursor;
-
-            if (typeof entry.id === "number" && typeof commitCursor === "number") {
-                this.recordShardCursor(calls[entry.id]?.shardKey, commitCursor);
-            }
-        }
-
-        return demuxBatchResults(body.results ?? [], calls.length);
+        return this.sendBatch(calls);
     }
 
     /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional bullet list; the back-ticked `Promise<ReturnOf<F>>` type is prose, not a credential */
@@ -2734,128 +2706,22 @@ class LunoraClient {
         args: ArgsOf<F>,
         options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
-        this.assertOpen();
+        const { value } = await this.runMutation(function_, args, options);
 
-        const argsRecord = args as Record<string, unknown>;
+        return value;
+    }
 
-        // One stable idempotency key per logical mutation, shared by the direct
-        // send and any offline-queue replay of this write (the entry reuses it as
-        // its `id`). Lets the server dedup a replayed-but-already-committed write.
-        // A durable outbox replay passes the original key back via `mutationId` so
-        // its retry stays server-idempotent instead of minting a fresh key.
-        const mutationId = options.mutationId ?? nextId();
+    /**
+     * Whether a {@link mutation} on `shardKey` would be queued (offline queue or
+     * durable outbox) rather than fail when the network is down. `false` before
+     * the shard's first connect (unless `queueBeforeFirstConnect` is set) and on
+     * a client with no WebSocket. A caller that wants to hold a write until the
+     * network returns must do so itself when this is `false`.
+     */
+    public canQueueOffline(shardKey?: string): boolean {
+        const { wasEverConnected } = this.connectionGateState(shardKey);
 
-        // Read BEFORE the first `await` below, and reused by every path out of this
-        // call. `await replaying` can sit here for the length of a queue flush, and
-        // frames landing during it advance `serverCursor` — so a baseline sampled
-        // after the wait would claim the caller had seen changes that arrived after
-        // their write was composed. See `OutboxMutation.baselineSeq`.
-        const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
-
-        // Apply optimistic updates to any subscriber listening on this fn. Both
-        // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
-        // `optimistic` transform patches the matching (fn, args, shard)
-        // subscription, and the Convex-parity `optimisticUpdate` callback patches
-        // many queries at once via a localStore (each `setQuery` a constant layer).
-        // Their `confirm`/`rollback` closures collect into shared lists — all
-        // confirmed on success, all unwound (LIFO) on failure.
-        const { confirms: optimisticConfirms, rollbacks: optimisticRollbacks } = this.applyOptimisticUpdates(
-            function_.__lunoraRef,
-            argsRecord,
-            options.shardKey,
-            options.optimistic,
-        );
-
-        if (options.optimisticUpdate) {
-            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
-        }
-
-        // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
-        // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
-        // flush, so without this the gate below is already false and a brand-new
-        // write would race the replay of an older, queued write to the same
-        // document — last-writer-wins then silently resurrects the older value.
-        // Undefined (no replay running) is the overwhelmingly common case and
-        // costs nothing; the gate is re-read AFTER the wait so a socket that
-        // dropped again in the meantime queues this write instead of sending it.
-        const replaying = this.offlineFlushes.get(connectionKey(options.shardKey));
-
-        if (replaying !== undefined) {
-            await replaying;
-        }
-
-        // Queue while offline (only mutations — queries fail fast). We also
-        // queue when we're mid-reconnect (wsState === "connecting") provided
-        // we've been connected before — otherwise the mutation would race
-        // the resubscribe. State is scoped to the mutation's own shard so a
-        // dropped shard only queues writes destined for it. A follower tab
-        // has no `ShardConnection` of its own — `connectionGateState` derives
-        // the same triple from the mirrored leader status instead.
-        const { hasSocket, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
-        const { queueBeforeFirstConnect } = this.offlineQueue;
-        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
-        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
-        // While polling reaches the origin, a reconnect attempt is always armed
-        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
-        // the upgrade is refused. HTTP works, so neither may queue the write.
-        const midReconnect = wsState === "connecting" && connectedGate && !polling;
-        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !polling;
-
-        // Second half of the ordering barrier above, for the case the barrier
-        // cannot cover: a queued write can be HELD at flush time (its identity
-        // isn't re-confirmed yet — see `replayGateVerdict`), and a held queue
-        // publishes no `offlineFlushes` entry to wait on. This write would then
-        // go out live over the open socket and land BEFORE the older queued one;
-        // last-writer-wins silently resurrects the older value. So while the
-        // durable path still holds anything for this shard, go behind it.
-        //
-        // The durable path's OWN replay is the exception: it re-enters here
-        // carrying `replayBaseline` (every durable replay pins one), is already
-        // persisted, and re-queueing it would loop it back into the queue it is
-        // draining. A caller-supplied `mutationId` alone is not a replay:
-        // `importRows` and app code pass one for idempotency, and those writes
-        // must still go behind the queue.
-        const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
-
-        if (socketDown || midReconnect || queuedAhead) {
-            return this.enqueueOfflineMutation(
-                function_,
-                argsRecord,
-                options.shardKey,
-                composedBaselineSeq,
-                mutationId,
-                optimisticRollbacks,
-                optimisticConfirms,
-                options.precondition,
-            );
-        }
-
-        try {
-            let commitCursor: number | undefined;
-            const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
-                baselineSeq: composedBaselineSeq,
-                captureBookmark: true,
-                mutationId,
-                onCommitCursor: (cursor) => {
-                    commitCursor = cursor;
-                },
-            })) as ReturnOf<F>;
-
-            // Confirm each per-call optimistic layer against the write's committed
-            // CDC cursor: the layer drops gaplessly when (or once) a frame at that
-            // cursor lands — never on this RPC-resolve timing, which races the WS
-            // broadcast.
-            for (const confirm of optimisticConfirms) {
-                confirm(commitCursor);
-            }
-
-            return result;
-        } catch (error) {
-            // LIFO rollback: see the offline-queue reject path above.
-            rollbackOptimistic(optimisticRollbacks);
-
-            throw error;
-        }
+        return this.WebSocketImpl !== undefined && (wasEverConnected || this.offlineQueue.queueBeforeFirstConnect);
     }
 
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
@@ -2879,11 +2745,11 @@ class LunoraClient {
      * Bulk-import `rows` through a mutation that accepts a batch, chunked so a large
      * dataset lands in a bounded number of round-trips.
      *
-     * **Offline caveat:** each chunk is sent with {@link LunoraClient.mutation}, which
-     * resolves once the write is durably queued rather than once the server has applied
-     * it. So an import run while offline resolves `{ chunks, imported }` with nothing
-     * committed yet — the counts describe what was *handed over*, and the outbox
-     * replays them on reconnect. Don't report "migration complete" on this alone.
+     * **Queued chunks:** `imported` counts only rows the server committed. A chunk a
+     * durable outbox took instead (offline, or behind older queued writes) is counted
+     * in `queued`; the outbox replays it later under the same key. The built-in
+     * offline queue holds the call until each chunk commits, so its rows land in
+     * `imported`. Report "migration complete" only when `queued` is `0`.
      *
      * This is the one-shot migration / seed path: "I have 20k rows client-side and a
      * server mutation that inserts many at once". Doing it by hand goes wrong in two
@@ -2938,12 +2804,8 @@ class LunoraClient {
             importId?: string;
 
             /**
-             * Called after each chunk is accepted — for a progress bar.
-             *
-             * "Accepted" is not always "committed": while offline (or mid-reconnect) a
-             * `mutation` resolves as soon as the write is durably **queued**, so a fully
-             * offline import reports completion with nothing yet applied server-side.
-             * Gate a migration's "done" state on connectivity, not just on this.
+             * Called after each chunk is accepted — for a progress bar. `done` counts
+             * committed and queued rows alike; the result separates them.
              */
             onProgress?: (progress: { done: number; total: number }) => void;
             /** Routes every chunk to one shard's DO. */
@@ -2951,7 +2813,7 @@ class LunoraClient {
             /** Build the mutation args for one chunk. Defaults to `{ rows: chunk }`. */
             toArgs?: (chunk: ReadonlyArray<unknown>) => Record<string, unknown>;
         } = {},
-    ): Promise<{ chunks: number; imported: number }> {
+    ): Promise<{ chunks: number; imported: number; queued: number }> {
         this.assertOpen();
 
         const chunkSize = Math.max(1, Math.trunc(options.chunkSize ?? 500));
@@ -2962,6 +2824,7 @@ class LunoraClient {
             });
         const total = rows.length;
         let done = 0;
+        let imported = 0;
         let chunks = 0;
 
         for (let offset = 0; offset < total; offset += chunkSize) {
@@ -2971,17 +2834,22 @@ class LunoraClient {
             // Sequential on purpose: concurrent chunks would race the shard's write
             // path and give up the deterministic resume point the idempotency key buys.
             // eslint-disable-next-line no-await-in-loop -- chunked import is sequential by design (see comment)
-            await this.mutation(function_, toArgs(chunk), {
+            const { committed } = await this.runMutation(function_, toArgs(chunk), {
                 ...(options.importId === undefined ? {} : { mutationId: `${options.importId}:${String(chunkIndex)}` }),
                 shardKey: options.shardKey,
             });
 
             chunks += 1;
             done += chunk.length;
+
+            if (committed) {
+                imported += chunk.length;
+            }
+
             options.onProgress?.({ done, total });
         }
 
-        return { chunks, imported: done };
+        return { chunks, imported, queued: done - imported };
     }
 
     // --- Advisor admin ------------------------------------------------------
@@ -4899,6 +4767,239 @@ class LunoraClient {
 
     // --- Internals ----------------------------------------------------------
 
+    /** The body of {@link batch}, optionally abortable (the polling fallback's timeout). */
+    private async sendBatch(
+        calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>,
+        signal?: AbortSignal,
+    ): Promise<BatchSlot[]> {
+        this.assertOpen();
+
+        if (!this.fetchImpl) {
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+        }
+
+        if (calls.length === 0) {
+            return [];
+        }
+
+        const response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+            body: JSON.stringify({
+                calls: calls.map((call, index) => {
+                    return {
+                        args: encodeCallArgs(call.args ?? {}, `args for batch call '${call.fn.__lunoraRef}'`),
+                        functionPath: call.fn.__lunoraRef,
+                        id: index,
+                        shardKey: call.shardKey,
+                    };
+                }),
+            }),
+            headers: this.rpcRequestHeaders({ attachBookmark: true }),
+            method: "POST",
+            signal,
+        });
+
+        const bookmark = response.headers.get("x-d1-bookmark");
+
+        if (bookmark) {
+            this.bookmark.set(bookmark);
+        }
+
+        let body: { error?: unknown; results?: { body?: unknown; id?: number }[] };
+
+        try {
+            body = await response.json();
+        } catch {
+            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+        }
+
+        const envelope = errorEnvelopeOf(body);
+
+        // A whole-batch rejection (bad request, method, or a per-entry authorization
+        // denial that fails the batch closed BEFORE any dispatch) comes back as a
+        // non-2xx `{ error }` with no `results` — surface it like a single call
+        // rather than reporting every slot as an opaque "no result". An `error`
+        // slot with no envelope in it (a proxy's page) is classified by status
+        // instead, per §4.2.
+        if (!response.ok || (envelope !== undefined && !body.results)) {
+            if (envelope !== undefined) {
+                throw reconstructError(envelope);
+            }
+
+            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
+        }
+
+        // Each entry is dispatched as an independent single call server-side, so
+        // each carries its own commit cursor — recorded under its OWN shard, or a
+        // batched write would leave no read-your-writes requirement behind at
+        // all. Read off the raw envelopes because `demuxBatchResults` keeps only
+        // the result value.
+        //
+        // No outbound `x-lunora-min-seq` per entry: the batch route forwards
+        // straight to the owner shard and is never replica-served, so a
+        // per-entry freshness requirement would constrain nothing. What these
+        // cursors constrain is the SINGLE reads that follow.
+        for (const entry of body.results ?? []) {
+            const commitCursor = (entry.body as { commitCursor?: unknown } | undefined)?.commitCursor;
+
+            if (typeof entry.id === "number" && typeof commitCursor === "number") {
+                this.recordShardCursor(calls[entry.id]?.shardKey, commitCursor);
+            }
+        }
+
+        return demuxBatchResults(body.results ?? [], calls.length);
+    }
+
+    /**
+     * The body of {@link mutation}, also saying whether the write committed. `committed` is
+     * `false` only when a durable outbox took the write, which resolves at once
+     * with no server result.
+     */
+    private async runMutation<F extends FunctionReference>(
+        function_: F,
+        args: ArgsOf<F>,
+        options: MutationCallOptions<unknown, unknown, ArgsOf<F>>,
+    ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
+        this.assertOpen();
+
+        const argsRecord = args as Record<string, unknown>;
+
+        // One stable idempotency key per logical mutation, shared by the direct
+        // send and any offline-queue replay of this write (the entry reuses it as
+        // its `id`). Lets the server dedup a replayed-but-already-committed write.
+        // A durable outbox replay passes the original key back via `mutationId` so
+        // its retry stays server-idempotent instead of minting a fresh key.
+        const mutationId = options.mutationId ?? nextId();
+
+        // Read BEFORE the first `await` below, and reused by every path out of this
+        // call. `await replaying` can sit here for the length of a queue flush, and
+        // frames landing during it advance `serverCursor` — so a baseline sampled
+        // after the wait would claim the caller had seen changes that arrived after
+        // their write was composed. See `OutboxMutation.baselineSeq`.
+        const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
+
+        // Apply optimistic updates to any subscriber listening on this fn. Both
+        // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
+        // `optimistic` transform patches the matching (fn, args, shard)
+        // subscription, and the Convex-parity `optimisticUpdate` callback patches
+        // many queries at once via a localStore (each `setQuery` a constant layer).
+        // Their `confirm`/`rollback` closures collect into shared lists — all
+        // confirmed on success, all unwound (LIFO) on failure.
+        const { confirms: optimisticConfirms, rollbacks: optimisticRollbacks } = this.applyOptimisticUpdates(
+            function_.__lunoraRef,
+            argsRecord,
+            options.shardKey,
+            options.optimistic,
+        );
+
+        if (options.optimisticUpdate) {
+            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
+        }
+
+        // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
+        // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
+        // flush, so without this the gate below is already false and a brand-new
+        // write would race the replay of an older, queued write to the same
+        // document — last-writer-wins then silently resurrects the older value.
+        // Undefined (no replay running) is the overwhelmingly common case and
+        // costs nothing; the gate is re-read AFTER the wait so a socket that
+        // dropped again in the meantime queues this write instead of sending it.
+        const replaying = this.offlineFlushes.get(connectionKey(options.shardKey));
+
+        if (replaying !== undefined) {
+            await replaying;
+        }
+
+        // Queue while offline (only mutations — queries fail fast). We also
+        // queue when we're mid-reconnect (wsState === "connecting") provided
+        // we've been connected before — otherwise the mutation would race
+        // the resubscribe. State is scoped to the mutation's own shard so a
+        // dropped shard only queues writes destined for it. A follower tab
+        // has no `ShardConnection` of its own — `connectionGateState` derives
+        // the same triple from the mirrored leader status instead.
+        const { hasSocket, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
+        const { queueBeforeFirstConnect } = this.offlineQueue;
+        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
+        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
+        // While polling reaches the origin, a reconnect attempt is always armed
+        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
+        // the upgrade is refused. HTTP works, so neither may queue the write.
+        const midReconnect = wsState === "connecting" && connectedGate && !polling;
+        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !polling;
+
+        // Second half of the ordering barrier above, for the case the barrier
+        // cannot cover: a queued write can be HELD at flush time (its identity
+        // isn't re-confirmed yet — see `replayGateVerdict`), and a held queue
+        // publishes no `offlineFlushes` entry to wait on. This write would then
+        // go out live over the open socket and land BEFORE the older queued one;
+        // last-writer-wins silently resurrects the older value. So while the
+        // durable path still holds anything for this shard, go behind it.
+        //
+        // The durable path's OWN replay is the exception: it re-enters here
+        // carrying `replayBaseline` (every durable replay pins one), is already
+        // persisted, and re-queueing it would loop it back into the queue it is
+        // draining. A caller-supplied `mutationId` alone is not a replay:
+        // `importRows` and app code pass one for idempotency, and those writes
+        // must still go behind the queue.
+        //
+        // With a durable outbox this is process-wide, not per shard: the sink
+        // reports only its total depth. Over-inclusion costs a write a trip
+        // through the outbox, under its own `mutationId`, which is safe.
+        const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
+
+        const enqueue = async (): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
+            this.enqueueOfflineMutation(
+                function_,
+                argsRecord,
+                options.shardKey,
+                composedBaselineSeq,
+                mutationId,
+                optimisticRollbacks,
+                optimisticConfirms,
+                options.precondition,
+                options.mutationId,
+            );
+
+        if (socketDown || midReconnect || queuedAhead) {
+            return enqueue();
+        }
+
+        try {
+            let commitCursor: number | undefined;
+            const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
+                baselineSeq: composedBaselineSeq,
+                captureBookmark: true,
+                mutationId,
+                onCommitCursor: (cursor) => {
+                    commitCursor = cursor;
+                },
+            })) as ReturnOf<F>;
+
+            // Confirm each per-call optimistic layer against the write's committed
+            // CDC cursor: the layer drops gaplessly when (or once) a frame at that
+            // cursor lands — never on this RPC-resolve timing, which races the WS
+            // broadcast.
+            for (const confirm of optimisticConfirms) {
+                confirm(commitCursor);
+            }
+
+            return { committed: true, value: result };
+        } catch (error) {
+            // Polling sent this write over HTTP instead of queueing it, and the
+            // request never reached the origin: the network dropped after the last
+            // poll. Queue it under the same key, as it would have been had the
+            // drop been noticed first. A `TypeError` from an arg the codec cannot
+            // encode is not a network failure, hence the re-check.
+            if (polling && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
+                return enqueue();
+            }
+
+            // LIFO rollback: see the offline-queue reject path above.
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw error;
+        }
+    }
+
     /**
      * Persist a mutation that can't go out on the wire right now (offline, or
      * mid-reconnect after a prior connect). The optimistic update has already
@@ -4918,8 +5019,9 @@ class LunoraClient {
         mutationId: string,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
-        precondition?: () => boolean,
-    ): Promise<ReturnOf<F>> {
+        precondition: (() => boolean) | undefined,
+        callerMutationId: string | undefined,
+    ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue).
         const issuingIdentity = this.identityFingerprint();
@@ -4936,7 +5038,10 @@ class LunoraClient {
                     baselineSeq,
                     clientId: this.clientId,
                     functionPath: function_.__lunoraRef,
-                    idempotencyKey: `${this.clientId}:${String(outboxMutationId)}`,
+                    // The caller's own `mutationId` when it passed one (an
+                    // `importRows` chunk): its replay must dedup against the key a
+                    // resumed run sends again, not a per-session counter.
+                    idempotencyKey: callerMutationId ?? `${this.clientId}:${String(outboxMutationId)}`,
                     identity: issuingIdentity,
                     mutationId: outboxMutationId,
                     // The only signal that can take this write's predicted value
@@ -4966,10 +5071,10 @@ class LunoraClient {
                 confirm(undefined);
             }
 
-            return undefined as ReturnOf<F>;
+            return { committed: false, value: undefined as ReturnOf<F> };
         }
 
-        return new Promise<ReturnOf<F>>((resolve, reject) => {
+        const value = await new Promise<ReturnOf<F>>((resolve, reject) => {
             const entry: QueuedMutation<ReturnOf<F>> = {
                 args: argsRecord,
                 functionPath: function_.__lunoraRef,
@@ -5027,6 +5132,8 @@ class LunoraClient {
                 this.queuedIdentities.set(entry.id, issuingIdentity);
             }
         });
+
+        return { committed: true, value };
     }
 
     /**
@@ -5550,7 +5657,22 @@ class LunoraClient {
      */
     private async pollSubscriptions(shardKey: string | undefined): Promise<boolean> {
         const key = connectionKey(shardKey);
-        const states = this.subscriptions.all().filter((state) => connectionKey(state.shardKey) === key);
+        const states: SubscriptionState[] = [];
+
+        for (const state of this.subscriptions.all()) {
+            if (connectionKey(state.shardKey) !== key) {
+                continue;
+            }
+
+            // An arg the codec cannot encode fails the whole batch with a
+            // `TypeError`, which reads exactly like "the network is down". Keep
+            // it out of the batch and tell only that subscription.
+            if (isEncodable(state.args)) {
+                states.push(state);
+            } else {
+                fanSubscriptionError(state.errorCallbacks, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+            }
+        }
 
         if (states.length === 0) {
             // Nothing to refresh, but the answer still gates `mutation()`: a live
@@ -5567,15 +5689,19 @@ class LunoraClient {
         let slots: BatchSlot[];
 
         try {
-            slots = await this.batch(
-                states.map((state) => {
-                    return { args: state.args, fn: state.fn, shardKey: state.shardKey };
-                }),
+            slots = await withinPollTimeout(async (signal) =>
+                this.sendBatch(
+                    states.map((state) => {
+                        return { args: state.args, fn: state.fn, shardKey: state.shardKey };
+                    }),
+                    signal,
+                ),
             );
         } catch (error) {
             // `fetch` rejects with a `TypeError` when the request never reaches the
-            // origin (browsers, undici, React Native alike). Everything `batch`
-            // throws after a response arrived is a coded `Error` instead.
+            // origin (browsers, undici, React Native alike), and so does the
+            // timeout. Everything `sendBatch` throws after a response arrived is a
+            // coded `Error` instead.
             return !(error instanceof TypeError);
         }
 
@@ -5612,16 +5738,21 @@ class LunoraClient {
      * (even a refusal) is the proof. `false` only when `fetch` itself rejects.
      */
     private async probeOrigin(): Promise<boolean> {
-        if (!this.fetchImpl) {
+        const { fetchImpl } = this;
+
+        if (!fetchImpl) {
             return false;
         }
 
         try {
-            await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
-                body: JSON.stringify({ calls: [] }),
-                headers: this.rpcRequestHeaders({}),
-                method: "POST",
-            });
+            await withinPollTimeout(async (signal) =>
+                fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                    body: JSON.stringify({ calls: [] }),
+                    headers: this.rpcRequestHeaders({}),
+                    method: "POST",
+                    signal,
+                }),
+            );
 
             return true;
         } catch {
@@ -5817,11 +5948,12 @@ class LunoraClient {
                 polling: createPollingFallback({
                     afterFailedAttempts: this.pollingFallbackAfterFailedAttempts,
                     intervalMs: this.pollingFallbackIntervalMs,
-                    // HTTP reaches the origin again, so writes queued while it
-                    // could not need not wait for a socket that may never open.
-                    // The flush applies the same identity gate and FIFO order a
-                    // reconnect flush does.
-                    onLive: () => {
+                    // HTTP reaches the origin, so queued writes need not wait for a
+                    // socket that may never open: the ones queued before polling
+                    // went live, and any a dropped request queued since. The flush
+                    // applies the same identity gate and FIFO order a reconnect
+                    // flush does, and costs nothing when the queue is empty.
+                    onReachable: () => {
                         this.flushOfflineQueue(shardKey).catch(() => undefined);
                     },
                     onStateChange: () => {

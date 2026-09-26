@@ -236,7 +236,12 @@ export interface OutboxMutation {
     /** Stable per-client id; pairs with {@link OutboxMutation.mutationId} as `idempotencyKey`. */
     clientId: string;
     functionPath: string;
-    /** `${clientId}:${mutationId}` — sent as `x-lunora-mutation-id` so a replay is server-idempotent. */
+
+    /**
+     * `${clientId}:${mutationId}`, or the caller's own `mutationId` when it passed
+     * one (an `importRows` chunk) — sent as `x-lunora-mutation-id` so a replay is
+     * server-idempotent.
+     */
     idempotencyKey: string;
     /** Issuing identity fingerprint (`null` = signed out); drives the sink's identity guard. */
     identity: string | null;

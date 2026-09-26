@@ -4793,7 +4793,7 @@ describe("lunoraClient", () => {
         const runImport = async (
             rows: ReadonlyArray<unknown>,
             options: { chunkSize: number; importId: string },
-        ): Promise<{ keyToRows: Map<string, string>; result: { chunks: number; imported: number } }> => {
+        ): Promise<{ keyToRows: Map<string, string>; result: { chunks: number; imported: number; queued: number } }> => {
             const keyToRows = new Map<string, string>();
 
             const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
@@ -4837,7 +4837,7 @@ describe("lunoraClient", () => {
                 onProgress: (p) => progress.push(p),
             });
 
-            expect(result).toEqual({ chunks: 3, imported: 5 });
+            expect(result).toEqual({ chunks: 3, imported: 5, queued: 0 });
             // 5 rows / chunkSize 2 → 3 POSTs (2 + 2 + 1).
             expect(fetchMock).toHaveBeenCalledTimes(3);
             expect(progress).toEqual([

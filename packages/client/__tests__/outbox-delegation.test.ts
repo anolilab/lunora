@@ -253,4 +253,33 @@ describe("lunoraClient outbox delegation", () => {
 
         expect(received).toEqual([1, 2, 1]);
     });
+
+    it("keeps an importRows chunk's own key in the outbox, and reports it queued rather than imported", async () => {
+        expect.assertions(3);
+
+        const { enqueued, sink } = recordingSink();
+        let fetches = 0;
+        const client = new LunoraClient({
+            fetch: async () => {
+                fetches += 1;
+
+                return Response.json({ result: null });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            // Something unrelated is still waiting in the outbox, so every new
+            // write goes behind it even though the socket is open.
+            outbox: { ...sink, pending: () => true },
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+
+        client.subscribe(fnRef("nodes:list"), {}, () => {});
+        (sockets.at(-1) as SeedableSocket).open();
+
+        const result = await client.importRows(fnRef("nodes:import"), [1, 2, 3], { chunkSize: 1, importId: "imp" });
+
+        expect(enqueued.map((mutation) => mutation.idempotencyKey)).toStrictEqual(["imp:0", "imp:1", "imp:2"]);
+        expect(result).toStrictEqual({ chunks: 3, imported: 0, queued: 3 });
+        expect(fetches).toBe(0);
+    });
 });

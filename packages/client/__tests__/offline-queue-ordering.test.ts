@@ -286,7 +286,7 @@ describe("offline queue ordering vs a live mutation", () => {
         client.setAuthToken("jwt-2", "user-1");
         await settle();
 
-        await expect(imported).resolves.toStrictEqual({ chunks: 1, imported: 1 });
+        await expect(imported).resolves.toStrictEqual({ chunks: 1, imported: 1, queued: 0 });
         expect(server.observed).toStrictEqual(["OLDER", "NEWER"]);
     });
 });

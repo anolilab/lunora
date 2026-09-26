@@ -24,7 +24,7 @@ describe("createPollingFallback", () => {
         vi.useFakeTimers();
 
         const poll = vi.fn<() => Promise<boolean>>(async () => true);
-        const fallback = createPollingFallback({ afterFailedAttempts: 3, intervalMs: 1000, onLive: () => {}, onStateChange: () => {}, poll });
+        const fallback = createPollingFallback({ afterFailedAttempts: 3, intervalMs: 1000, onReachable: () => {}, onStateChange: () => {}, poll });
 
         fallback.noteFailedOpen();
         fallback.noteFailedOpen();
@@ -40,7 +40,7 @@ describe("createPollingFallback", () => {
         vi.useFakeTimers();
 
         const poll = vi.fn<() => Promise<boolean>>(async () => true);
-        const fallback = createPollingFallback({ afterFailedAttempts: 2, intervalMs: 1000, onLive: () => {}, onStateChange: () => {}, poll });
+        const fallback = createPollingFallback({ afterFailedAttempts: 2, intervalMs: 1000, onReachable: () => {}, onStateChange: () => {}, poll });
 
         fallback.noteFailedOpen();
         fallback.noteFailedOpen();
@@ -65,7 +65,7 @@ describe("createPollingFallback", () => {
         vi.useFakeTimers();
 
         const poll = vi.fn<() => Promise<boolean>>(async () => true);
-        const fallback = createPollingFallback({ afterFailedAttempts: 2, intervalMs: 1000, onLive: () => {}, onStateChange: () => {}, poll });
+        const fallback = createPollingFallback({ afterFailedAttempts: 2, intervalMs: 1000, onReachable: () => {}, onStateChange: () => {}, poll });
 
         fallback.noteFailedOpen();
         fallback.noteFailedOpen();
@@ -97,7 +97,7 @@ describe("createPollingFallback", () => {
                     };
                 }),
         );
-        const fallback = createPollingFallback({ afterFailedAttempts: 1, intervalMs: 100, onLive: () => {}, onStateChange: () => {}, poll });
+        const fallback = createPollingFallback({ afterFailedAttempts: 1, intervalMs: 100, onReachable: () => {}, onStateChange: () => {}, poll });
 
         fallback.noteFailedOpen();
         vi.advanceTimersByTime(1000);
@@ -119,7 +119,7 @@ describe("createPollingFallback", () => {
         vi.useFakeTimers();
 
         const poll = vi.fn<() => Promise<boolean>>(async () => true);
-        const fallback = createPollingFallback({ afterFailedAttempts: 1, intervalMs: 0, onLive: () => {}, onStateChange: () => {}, poll });
+        const fallback = createPollingFallback({ afterFailedAttempts: 1, intervalMs: 0, onReachable: () => {}, onStateChange: () => {}, poll });
 
         fallback.noteFailedOpen();
         fallback.noteFailedOpen();
@@ -620,6 +620,148 @@ describe("lunoraClient polling fallback", () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(seen).not.toContainEqual(["A-secret"]);
+
+        client.close();
+    });
+
+    it("queues a write whose request fails after the network drops mid-polling, and sends it once polls answer again", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        let online = true;
+        const writes: string[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!online) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            const { args } = JSON.parse(init?.body as string) as { args: { text: string } };
+
+            writes.push(args.text);
+
+            return jsonResponse({ result: args.text });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+
+        // The network drops between two polls: the fallback still reads live.
+        online = false;
+
+        let outcome = "pending";
+
+        client
+            .mutation(fnRef("todos:add"), { text: "DROPPED" })
+            .then(
+                (value) => {
+                    outcome = `resolved:${String(value)}`;
+
+                    return undefined;
+                },
+                () => {
+                    outcome = "rejected";
+                },
+            )
+            .catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(client.pendingCount()).toBe(1);
+
+        // Back online; the next poll that answers flushes the queue.
+        online = true;
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(writes).toStrictEqual(["DROPPED"]);
+        expect(outcome).toBe("resolved:DROPPED");
+
+        client.close();
+    });
+
+    it("stops reporting polling when a poll hangs instead of failing", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        let hang = false;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            if (hang) {
+                return new Promise<Response>(() => {});
+            }
+
+            return jsonResponse({ results: [{ body: { result: 1 }, id: 0, status: 200 }] });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: { initialDelayMs: 60_000, jitter: false, maxDelayMs: 60_000 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("messages:list"), {}, () => {});
+
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(60_000);
+        sockets.at(-1)?.triggerClose();
+
+        // "Wi-Fi without internet": the connection is accepted, nothing answers.
+        hang = true;
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(client.connectionStatus()).not.toBe("polling");
+
+        client.close();
+    });
+
+    it("keeps polling the other queries when one has args the codec cannot encode", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ results: [{ body: { result: ["ok"] }, id: 0, status: 200 }] }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+        const good: unknown[] = [];
+        const errors: unknown[] = [];
+
+        client.subscribe(fnRef("messages:list"), {}, (value) => good.push(value));
+        const args: Record<string, unknown> = { filter: {} };
+
+        client.subscribe(fnRef("messages:search"), args, () => {}, {
+            onError: (error) => errors.push(error.code),
+        });
+        // The caller mutates its args object after subscribing, to a value the
+        // codec refuses. The registry holds the same reference.
+        (args.filter as Record<string, unknown>).pattern = /x/u;
+
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+        expect(good).toStrictEqual([["ok"]]);
+        expect(errors).toStrictEqual(["WIRE_ENCODE_FAILED"]);
 
         client.close();
     });
