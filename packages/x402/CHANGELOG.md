@@ -1,3 +1,10 @@
+## @lunora/x402 [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.76...@lunora/x402@1.0.0-alpha.77) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+
 ## @lunora/x402 [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/x402@1.0.0-alpha.75...@lunora/x402@1.0.0-alpha.76) (2026-09-26)
 
 
