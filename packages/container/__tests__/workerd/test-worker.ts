@@ -13,8 +13,10 @@ import type { Container } from "@cloudflare/containers";
 import { defineContainer } from "../../src/define-container";
 import { LunoraContainer } from "../../src/do";
 import type { ContainerDefinition } from "../../src/types";
+import type ExecProbe from "./exec-probe";
 
 interface Env {
+    CONTAINER_EXEC_PROBE: DurableObjectNamespace<ExecProbe>;
     CONTAINER_SMOKE: DurableObjectNamespace<SmokeContainer>;
 }
 
@@ -61,3 +63,5 @@ const testWorker = {
 export default testWorker;
 export { SmokeContainer, smokeContainer };
 export type { Env };
+
+export { default as ExecProbe } from "./exec-probe";

@@ -523,7 +523,7 @@ const handleLabel = (spec: ContainerBindingSpec): string => `ctx.containers.${sp
  * routing composes with the retry uniformly.
  */
 const coldStartRetryingHandle = (
-    send: (request: Request) => Promise<Response>,
+    send: (request: Request, signal: AbortSignal | null | undefined) => Promise<Response>,
     label: string,
     options: InstanceRetryOptions = {},
     port?: number,
@@ -549,7 +549,7 @@ const coldStartRetryingHandle = (
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                const response = await send(toRequest(input, init, port, trace));
+                const response = await send(toRequest(input, init, port, trace), init?.signal);
 
                 // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
                 if (isLastAttempt || !(await isColdStartTransient(response))) {
@@ -587,6 +587,35 @@ const coldStartRetryingHandle = (
     };
 };
 
+/** `pending`, or a rejection with `signal`'s reason as soon as it aborts. */
+const raceAbort = async <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
+    if (signal.aborted) {
+        // The call is already in flight; keep its eventual rejection from going unhandled.
+        pending.catch(() => undefined);
+
+        throw signal.reason;
+    }
+
+    // Aborted in `finally` to detach the listener once the race is settled.
+    const detach = new AbortController();
+    const aborted = new Promise<never>((_resolve, reject) => {
+        signal.addEventListener(
+            "abort",
+            () => {
+                reject(signal.reason as Error);
+            },
+            { once: true, signal: detach.signal },
+        );
+    });
+
+    try {
+        return await Promise.race([pending, aborted]);
+    } finally {
+        detach.abort();
+        pending.catch(() => undefined);
+    }
+};
+
 /**
  * Deliver one request to a container DO stub. An `exec` request (carrying the
  * in-worker {@link CONTAINER_EXEC_HEADER} mark, which every caller `fetch` has
@@ -596,7 +625,7 @@ const coldStartRetryingHandle = (
  * header, path, or an inbound request forwarded as-is — can reach the exec
  * route through `fetch`.
  */
-const sendToStub = async (stub: ContainerStubLike, request: Request): Promise<Response> => {
+const sendToStub = async (stub: ContainerStubLike, request: Request, signal: AbortSignal | null | undefined): Promise<Response> => {
     if (!request.headers.has(CONTAINER_EXEC_HEADER)) {
         return stub.fetch(request);
     }
@@ -605,13 +634,24 @@ const sendToStub = async (stub: ContainerStubLike, request: Request): Promise<Re
         throw new TypeError("ctx.containers: this container DO does not expose lunoraExec() — is @lunora/container/do up to date?");
     }
 
-    // Mutated in place rather than cloned: every attempt builds its request
-    // afresh (`toRequest`), and a clone's signal only follows the original's
-    // through a weak reference, which is not something an exec deadline
-    // should depend on.
     request.headers.delete(CONTAINER_EXEC_HEADER);
 
-    return stub.lunoraExec(request);
+    // An RPC argument cannot carry an AbortSignal — workerd rejects the call
+    // with "AbortSignal serialization is not enabled" — so the request crosses
+    // without one and the deadline is enforced here, by racing the call.
+    // ponytail: a timed-out RPC is abandoned, not cancelled — the DO keeps
+    // proxying until the container answers. The runner is told `timeoutMs` in
+    // the body and is expected to stop the command itself.
+    //
+    // `signal` is the caller's own, passed alongside: a Request built from
+    // `init.signal` only FOLLOWS it (through a weak reference in undici), so
+    // `request.signal` is not a deadline anything should depend on.
+    //
+    // Rebuilt from its parts, not `new Request(request)`, which would inherit
+    // the signal. The exec body is a small JSON document, so buffering it is fine.
+    const call = stub.lunoraExec(new Request(request.url, { body: await request.text(), headers: request.headers, method: request.method }));
+
+    return signal ? raceAbort(call, signal) : call;
 };
 
 const handleFor = (
@@ -621,7 +661,13 @@ const handleFor = (
     options?: InstanceRetryOptions,
     trace?: OutboundTraceContext,
 ): ContainerHandle =>
-    coldStartRetryingHandle(async (request) => sendToStub(namespace.get(namespace.idFromName(instanceName)), request), label, options, undefined, trace);
+    coldStartRetryingHandle(
+        async (request, signal) => sendToStub(namespace.get(namespace.idFromName(instanceName)), request, signal),
+        label,
+        options,
+        undefined,
+        trace,
+    );
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch" | "lunoraExec">;
@@ -664,7 +710,7 @@ const instanceHandleFor = (
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...coldStartRetryingHandle(async (request) => sendToStub(stub(), request), handleLabel(spec), options, undefined, trace),
+        ...coldStartRetryingHandle(async (request, signal) => sendToStub(stub(), request, signal), handleLabel(spec), options, undefined, trace),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
@@ -745,7 +791,7 @@ const poolHandleFor = (
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                    const response = await sendToStub(namespace.get(namespace.idFromName(randomPoolName(size))), request);
+                    const response = await sendToStub(namespace.get(namespace.idFromName(randomPoolName(size))), request, init?.signal);
 
                     // eslint-disable-next-line no-await-in-loop -- the cold-start predicate peeks the body
                     if (attempt === totalAttempts - 1 || !(await shouldRetry(response))) {

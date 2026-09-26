@@ -222,9 +222,10 @@ detail: `fetch` resolves on headers, so a runner that answers `200` when the
 command _starts_ and then stalls would otherwise sit past the deadline.
 
 <Callout type="warn">
-    Abort propagation to a container is best-effort. The request travels through a Durable Object stub, and Cloudflare does not guarantee that cancelling the
-    outer call cancels the inner one — the deadline reliably frees _your_ handler, but the command may keep running inside the container. Send `timeoutMs` (the
-    client always does) and have the runner enforce it too.
+    An exec is not cancelled when its deadline fires. `exec` reaches the container Durable Object over an RPC, and an RPC argument cannot carry an
+    `AbortSignal`, so the deadline is enforced in your worker: it frees _your_ handler on time, while the call it abandons keeps running and the command keeps
+    going inside the container. The client always sends `timeoutMs` in the request body — have the runner enforce it, since the runner is the only place that
+    can stop the command.
 </Callout>
 
 <Callout type="warn">
