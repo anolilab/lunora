@@ -39,8 +39,10 @@ interface FromEnvOptions {
 
     /**
      * Pin the captured-mail inbox shard to a Cloudflare data-residency
-     * jurisdiction. Pass the same value as the worker's `jurisdiction` so the
-     * dev inbox co-resides with app data. Omit for the un-pinned global namespace.
+     * jurisdiction. Defaults to the jurisdiction the schema declares
+     * (`.jurisdiction("eu")`), so a generated app needs nothing here; set it only
+     * for a hand-written worker, to the same value as its `jurisdiction`. A value
+     * that contradicts the schema's throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */

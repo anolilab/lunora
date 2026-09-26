@@ -335,9 +335,11 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     functionPath: string;
 
     /**
-     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Pass the
-     * same value as the worker's `jurisdiction` so inbound mail routes to the
-     * jurisdiction-pinned shard. Omit for the un-pinned global namespace.
+     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Defaults
+     * to the jurisdiction the schema declares (`.jurisdiction("eu")`), so a
+     * generated app needs nothing here; set it only for a hand-written worker, to
+     * the same value as its `jurisdiction`. A value that contradicts the schema's
+     * throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
 

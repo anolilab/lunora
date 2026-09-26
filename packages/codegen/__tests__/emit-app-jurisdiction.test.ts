@@ -93,4 +93,15 @@ describe("emitApp — schema jurisdiction", () => {
         expect(wiring).toContain("namespace: authNamespace(env),");
         expect(wiring).not.toContain("jurisdiction");
     });
+
+    it("declares the jurisdiction at module scope so @lunora/mail pins its shard RPC", () => {
+        expect.assertions(3);
+
+        const output = emitApp({ ...baseOptions, jurisdiction: "eu" });
+
+        expect(output.match(/^declareAppJurisdiction\("eu"\);$/gmu)).toHaveLength(1);
+        expect(output).toMatch(/^import \{[^}]*\bdeclareAppJurisdiction\b[^}]*\} from "@lunora\/runtime";$/mu);
+        // No schema jurisdiction: nothing declared, output unchanged.
+        expect(emitApp({ ...baseOptions })).not.toContain("declareAppJurisdiction");
+    });
 });

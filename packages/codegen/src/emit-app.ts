@@ -88,7 +88,7 @@ interface EmitAppOptions {
     hasX402: boolean;
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
     identity?: IdentityIR;
-    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth) to the Cloudflare data-residency jurisdiction. */
+    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth, `@lunora/mail` shard RPC) to the Cloudflare data-residency jurisdiction. */
     jurisdiction?: JurisdictionIR;
 
     /**
@@ -249,6 +249,7 @@ const buildRuntimeImports = (options: EmitAppOptions): string[] => {
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
         "createWorker",
+        ...(options.jurisdiction ? ["declareAppJurisdiction"] : []),
         "resolveLogArchiveFromEnv",
         ...(hasFramework ? ["withFrameworkWorker"] : []),
     ].join(", ");
@@ -1607,7 +1608,16 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
-
+${
+    options.jurisdiction
+        ? `
+// Module scope, so every isolate loading this script (the worker and each Durable
+// Object class it exports) knows the schema's jurisdiction before a request runs.
+// \`@lunora/mail\` reads it to pin its shard RPC like every other DO path.
+declareAppJurisdiction(${JSON.stringify(options.jurisdiction)});
+`
+        : ""
+}
 ${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
 interface ComposedApp extends LunoraWorker {
     /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */
