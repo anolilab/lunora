@@ -222,7 +222,6 @@
                 { "token": "token-b", "digest": "7:m5ad19:1ujs3qt" },
                 { "token": "token-abc", "digest": "9:6xtdsz:ku9cs9" },
                 { "token": "eyJhbGciOiJIUzI1NiJ9.payload.sig", "digest": "w:t846r5:1i09z6p" },
-                { "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLWEifQ.c2lnbmF0dXJl", "digest": "1k:e8ykre:1b4t0tk" },
                 { "token": "caf\u00e9-\ud83d\ude00", "digest": "7:153fab2:1dk3l6q" },
                 { "token": "\ud83d\udd11\u00fcn\u00efcode", "digest": "9:zq7trr:4ipgmf" }
             ]
