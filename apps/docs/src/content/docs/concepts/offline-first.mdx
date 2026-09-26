@@ -294,7 +294,10 @@ you writing sync glue:
    rolls the layer back.
 4. **Identity is the trust boundary.** A token change between sessions drops both
    the cached reads and the queued writes rather than replaying them under the
-   new identity.
+   new identity. A replay is sent with the token its identity check judged, never
+   one swapped in afterwards, and a replay refused for an expired token stays
+   queued: `onTokenExpired` fires once, and the write goes out again after
+   `setAuthToken` hands the client a fresh token.
 
 ## Write ordering
 

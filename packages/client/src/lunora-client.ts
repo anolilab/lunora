@@ -14,7 +14,7 @@ import { ClientQueryStore } from "./client-query-store";
 import { TabCoordinator } from "./cross-tab";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { LunoraErrorCode } from "./errors";
-import { TransportError } from "./errors";
+import { isAuthReplayFailure, TransportError } from "./errors";
 import { httpStream } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
@@ -41,7 +41,6 @@ import type { RpcEnvelopeBody } from "./replay";
 import {
     defaultReplayRetryDelayMs,
     errorEnvelopeOf,
-    isAuthReplayFailure,
     isTransientReplayFailure,
     isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
@@ -531,17 +530,41 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     replayBaseline?: null | number;
 
     /**
-     * The identity stamp a durable write was queued under
-     * ({@link import("./types").OutboxMutation.identity}), handed back by the
-     * sink's replay. Under a cookie session the request then names that user,
-     * and the worker refuses it with `IDENTITY_MISMATCH` when the cookie now
-     * belongs to someone else — the check {@link LunoraClient.replayIdentityVerdict}
-     * cannot make, because the client cannot see the cookie. Omit for normal
-     * calls.
+     * The credential a durable replay was judged under — the one
+     * {@link LunoraClient.replayIdentityVerdict} returns with a `"match"`. The
+     * request is sent with exactly the bearer that verdict was judged against,
+     * never the live one: a `setAuthToken` landing between the verdict and the
+     * send would otherwise put a write judged as one user's on the next user's
+     * bearer, and a bearer request carries no subject for the worker to refuse it
+     * on. Under a cookie session the request also names the user the write was
+     * queued by, and the worker refuses it with `IDENTITY_MISMATCH` when the
+     * cookie now belongs to someone else — the check the client cannot make,
+     * because it cannot see the cookie.
+     *
+     * Single use, and only valid on the client that issued it. A replay refused
+     * for its credential (`UNAUTHENTICATED` / `TOKEN_EXPIRED` / `UNAUTHORIZED`)
+     * fires {@link LunoraClient.onTokenExpired} once per credential, and only
+     * while that credential is still the current one. Omit for normal calls,
+     * which always send the live token.
      */
-    replayIdentity?: null | string;
+    replayCredential?: ReplayCredential;
     shardKey?: string;
 }
+
+declare const replayCredentialBrand: unique symbol;
+
+/**
+ * Opaque proof that a durable write was judged replayable, bound to the
+ * credential it was judged under. Issued only by
+ * {@link LunoraClient.replayIdentityVerdict}; pass it to
+ * {@link MutationCallOptions.replayCredential}.
+ */
+interface ReplayCredential {
+    readonly [replayCredentialBrand]: true;
+}
+
+/** {@link LunoraClient.replayIdentityVerdict}'s answer: a `"match"` carries the credential the replay must be sent with. */
+type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } | { verdict: "mismatch" } | { verdict: "unknown" };
 
 /**
  * One WebSocket per shard key. Subscriptions and the writes they observe must
@@ -1484,8 +1507,11 @@ class LunoraClient {
     /** Subscribers notified when the previous identity's session is retired (see `onIdentityChange`). */
     private readonly identityChangeListeners = new Listeners();
 
-    /** Token hash the last durable-replay auth refusal fired `onTokenExpired` for — see `shouldRequeueReplayFailure`. */
+    /** Token hash the last durable-replay auth refusal fired `onTokenExpired` for — see `noteReplayAuthRefusal`. */
     private authRefusalNotifiedFor: string | undefined;
+
+    /** What each outstanding {@link ReplayCredential} was judged against — see `replayIdentityVerdict`. */
+    private readonly replayCredentials = new WeakMap<ReplayCredential, { authToken: string | null; stamp: null | string | undefined }>();
 
     /** Subscribers to offline-queued mutation verdicts (see `onMutationSettled`). */
     private readonly mutationSettledListeners = new Listeners<MutationSettledEvent>();
@@ -1975,35 +2001,25 @@ class LunoraClient {
      * `"mismatch"` is a different identity signed in, and is the one that must be
      * terminal: replaying would attribute one user's write to another and pass
      * THEIR row-level security.
+     *
+     * A `"match"` carries the {@link ReplayCredential} the replay must be sent
+     * with ({@link MutationCallOptions.replayCredential}): the bearer held right
+     * now, which is the one this verdict judged. The replay goes out with it even
+     * if the token changes before the send, and the outbox's next attempt judges
+     * again against whatever is current then.
      */
-    public replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown" {
-        if (this.subjectAwaitingReconfirm()) {
-            return "unknown";
+    public replayIdentityVerdict(stamped: null | string | undefined): ReplayIdentityVerdict {
+        const verdict = this.identityVerdict(stamped);
+
+        if (verdict !== "match") {
+            return { verdict };
         }
 
-        const current = this.identityFingerprint();
+        const credential = Object.freeze({}) as ReplayCredential;
 
-        // A `null` fingerprint that is about to become `subj:<id>` is not an
-        // identity yet, so nothing may be matched against it — least of all
-        // another `null`. This is the window the leak lived in: the socket's
-        // `open` flush races `/get-session`, and `null === null` sent the
-        // PREVIOUS browser user's queued write out on the CURRENT one's cookie,
-        // with no `authorization` header for the server to disagree with.
-        // Held, not dropped: the probe settles within the round trip and
-        // re-flushes, and the verdict is then honest either way.
-        if (current === null && this.identityUnresolved()) {
-            return "unknown";
-        }
+        this.replayCredentials.set(credential, { authToken: this.authToken, stamp: stamped });
 
-        if (stamped === current) {
-            return "match";
-        }
-
-        if (stamped !== undefined && this.isSameCredentialUnderTokenHash(stamped)) {
-            return "match";
-        }
-
-        return current === null ? "unknown" : "mismatch";
+        return { credential, verdict };
     }
 
     /** This client's stable identifier — the watermark key the server's custom-mutator protocol advances per `clientSeq`. */
@@ -5048,6 +5064,10 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
+        // A durable replay's credential, redeemed before any await: the request
+        // below is sent with the bearer its verdict judged, not the live one.
+        const replay = this.takeReplayCredential(options.replayCredential);
+
         // Read BEFORE the first `await` below, and reused by every path out of this
         // call. `await replaying` can sit here for the length of a queue flush, and
         // frames landing during it advance `serverCursor` — so a baseline sampled
@@ -5147,7 +5167,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
-                ...replayExpectation(options.replayIdentity, this.authToken),
+                ...replay,
                 mutationId,
                 onCommitCursor: (cursor) => {
                     commitCursor = cursor;
@@ -5173,7 +5193,7 @@ class LunoraClient {
                 return enqueue();
             }
 
-            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks);
+            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.authToken);
 
             throw error;
         }
@@ -5190,10 +5210,16 @@ class LunoraClient {
         commitCursor: number | undefined,
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
         optimisticRollbacks: (() => void)[],
+        replayAuthToken?: null | string,
     ): void {
         // A durable replay the worker refused for another user's cookie:
         // learn who that is, so the sink's next attempt is gated on it.
         this.noteIdentityMismatch(error);
+
+        // A durable replay refused for the credential it was judged under.
+        if (replayAuthToken !== undefined) {
+            this.noteReplayAuthRefusal(error, replayAuthToken);
+        }
 
         if (isUndecodableResult(error)) {
             for (const confirm of optimisticConfirms) {
@@ -8519,7 +8545,7 @@ class LunoraClient {
         const held: QueuedMutation[] = [];
 
         for (const item of drained) {
-            if (this.replayIdentityVerdict(this.stampOf(item)) !== "mismatch") {
+            if (this.identityVerdict(this.stampOf(item)) !== "mismatch") {
                 held.push(item);
 
                 continue;
@@ -9077,6 +9103,40 @@ class LunoraClient {
     }
 
     /**
+     * The three-way comparison behind {@link replayIdentityVerdict} (documented
+     * there), without a credential: the built-in queue sends with its own pinned token.
+     */
+    private identityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown" {
+        if (this.subjectAwaitingReconfirm()) {
+            return "unknown";
+        }
+
+        const current = this.identityFingerprint();
+
+        // A `null` fingerprint that is about to become `subj:<id>` is not an
+        // identity yet, so nothing may be matched against it — least of all
+        // another `null`. This is the window the leak lived in: the socket's
+        // `open` flush races `/get-session`, and `null === null` sent the
+        // PREVIOUS browser user's queued write out on the CURRENT one's cookie,
+        // with no `authorization` header for the server to disagree with.
+        // Held, not dropped: the probe settles within the round trip and
+        // re-flushes, and the verdict is then honest either way.
+        if (current === null && this.identityUnresolved()) {
+            return "unknown";
+        }
+
+        if (stamped === current) {
+            return "match";
+        }
+
+        if (stamped !== undefined && this.isSameCredentialUnderTokenHash(stamped)) {
+            return "match";
+        }
+
+        return current === null ? "unknown" : "mismatch";
+    }
+
+    /**
      * Identity gate for one queued write about to replay: a write stamped under
      * one identity must never replay under another, and must never be DESTROYED
      * because the identity isn't known yet.
@@ -9106,7 +9166,7 @@ class LunoraClient {
             return "send";
         }
 
-        const verdict = this.replayIdentityVerdict(stamped);
+        const verdict = this.identityVerdict(stamped);
 
         if (verdict === "unknown") {
             return "hold";
@@ -9232,21 +9292,51 @@ class LunoraClient {
             return true;
         }
 
-        if (isAuthReplayFailure(error)) {
-            const refusedCredential = this.hashToken(authToken ?? "");
+        return this.noteReplayAuthRefusal(error, authToken) || isTransientReplayFailure(error);
+    }
 
-            // A refusal of a token the app has already replaced says nothing
-            // about the current one: the pass that follows the swap re-sends
-            // under it, so asking for another refresh would be spurious.
-            if (authToken === this.authToken && this.authRefusalNotifiedFor !== refusedCredential) {
-                this.authRefusalNotifiedFor = refusedCredential;
-                this.notifyTokenExpired();
-            }
-
-            return true;
+    /**
+     * Whether `error` refused a replay's CREDENTIAL (`authToken`, the bearer it
+     * was sent with), and if so tell {@link onTokenExpired} — once per
+     * credential, and only while it is still the current one. A refusal of a
+     * token the app has already replaced says nothing about the current one:
+     * the next pass re-sends under it, so asking for another refresh would be
+     * spurious.
+     */
+    private noteReplayAuthRefusal(error: unknown, authToken: null | string): boolean {
+        if (!isAuthReplayFailure(error)) {
+            return false;
         }
 
-        return isTransientReplayFailure(error);
+        const refusedCredential = this.hashToken(authToken ?? "");
+
+        if (authToken === this.authToken && this.authRefusalNotifiedFor !== refusedCredential) {
+            this.authRefusalNotifiedFor = refusedCredential;
+            this.notifyTokenExpired();
+        }
+
+        return true;
+    }
+
+    /**
+     * Redeem a {@link ReplayCredential} (single use) into the request flags it
+     * pins: the judged bearer, and the subject a cookie replay names. Throws for a
+     * credential this client did not issue or already redeemed.
+     */
+    private takeReplayCredential(credential: ReplayCredential | undefined): { authToken: string | null; expectSubject?: null | string } | undefined {
+        if (credential === undefined) {
+            return undefined;
+        }
+
+        const judged = this.replayCredentials.get(credential);
+
+        if (judged === undefined) {
+            throw new TypeError("LunoraClient: `replayCredential` must come from this client's `replayIdentityVerdict`, and is single use");
+        }
+
+        this.replayCredentials.delete(credential);
+
+        return { authToken: judged.authToken, ...replayExpectation(judged.stamp, judged.authToken) };
     }
 
     /**
@@ -9644,6 +9734,8 @@ export type {
     LunoraClientError,
     MutationCallOptions,
     MutationSettledEvent,
+    ReplayCredential,
+    ReplayIdentityVerdict,
 };
 
 export { type SyncWatermark } from "./subscription";

@@ -259,3 +259,44 @@ describe("offline flush pins the bearer it gated on", () => {
         client.close();
     });
 });
+
+/**
+ * The same guarantee across the public API: a durable outbox outside the
+ * built-in queue judges a write with `replayIdentityVerdict` and sends it with a
+ * separate `mutation` call, so the credential the verdict judged has to ride
+ * into that call rather than be re-read there.
+ */
+describe("replayIdentityVerdict's credential", () => {
+    it("sends with the judged token after a swap, is single use, and is refused by another client", async () => {
+        expect.assertions(5);
+
+        const bearers: (string | undefined)[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            bearers.push((init?.headers as Record<string, string>).authorization);
+
+            return json({ result: { ok: true } });
+        });
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+        const other = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        client.setAuthToken("token-a", "user-a");
+
+        const judged = client.replayIdentityVerdict("subj:user-a");
+
+        expect(judged.verdict).toBe("match");
+
+        const credential = judged.verdict === "match" ? judged.credential : undefined;
+
+        client.setAuthToken("token-b", "user-b");
+
+        await client.mutation(fnRef("messages:send"), {}, { replayBaseline: null, replayCredential: credential });
+
+        expect(bearers).toStrictEqual(["Bearer token-a"]);
+        await expect(client.mutation(fnRef("messages:send"), {}, { replayBaseline: null, replayCredential: credential })).rejects.toThrow(TypeError);
+        await expect(other.mutation(fnRef("messages:send"), {}, { replayBaseline: null, replayCredential: credential })).rejects.toThrow(TypeError);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        client.close();
+        other.close();
+    });
+});

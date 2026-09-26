@@ -1,5 +1,6 @@
 /* eslint-disable import/exports-last -- a helpers module: public constants/types are declared next to the code they support */
 import type { OutboxMutation, OutboxSink } from "@lunora/client";
+import { isAuthReplayFailure } from "@lunora/client";
 import type { Collection } from "@tanstack/db";
 import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OnlineDetector } from "@tanstack/offline-transactions";
@@ -397,7 +398,9 @@ export const makeDiffEmit =
  * code is transient — a `fetch` network failure (`TypeError`) or an HTTP/infra
  * blip the rpc surfaces as a code-less `Error` (a 5xx gateway page, a non-JSON
  * body) — so it's rethrown as-is and the durable outbox replays it. Keying on
- * `error instanceof TypeError` alone would wrongly drop the latter.
+ * `error instanceof TypeError` alone would wrongly drop the latter. Two coded
+ * failures are not verdicts on the write and are rethrown as-is too: the worker's
+ * `IDENTITY_MISMATCH`, and a refused credential ({@link isAuthReplayFailure}).
  */
 export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
     try {
@@ -408,6 +411,14 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
         // attempt's identity guard settles it against that answer — dropped for
         // another user, held for nobody, sent for the same one.
         if ((error as { code?: unknown }).code === "IDENTITY_MISMATCH") {
+            throw error;
+        }
+
+        // The worker refused the replay's CREDENTIAL, not the write: a durable
+        // write routinely outlives its token. The client has told the app to
+        // refresh (`onTokenExpired`), and the next attempt is judged and sent
+        // under whatever token is current then.
+        if (isAuthReplayFailure(error)) {
             throw error;
         }
 

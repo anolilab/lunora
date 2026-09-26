@@ -408,7 +408,7 @@ class LunoraClient {
     currentIdentity(): string | null;
     expectIdentityResolution(): void;
     currentBaseline(shardKey?: string): number | undefined;
-    replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
+    replayIdentityVerdict(stamped: null | string | undefined): ReplayIdentityVerdict;
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
     callMutator(functionPath: string, args: Record<string, unknown>, options?: {
@@ -849,7 +849,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
-    replayIdentity?: null | string;
+    replayCredential?: ReplayCredential;
     shardKey?: string;
 }
 ```
@@ -1113,6 +1113,27 @@ interface ReconnectOptions {
     jitter?: boolean;
     maxDelayMs?: number;
 }
+```
+
+### `ReplayCredential` (interface)
+
+```ts
+interface ReplayCredential {
+    readonly [replayCredentialBrand]: true;
+}
+```
+
+### `ReplayIdentityVerdict` (type)
+
+```ts
+type ReplayIdentityVerdict = {
+    credential: ReplayCredential;
+    verdict: "match";
+} | {
+    verdict: "mismatch";
+} | {
+    verdict: "unknown";
+};
 ```
 
 ### `ReturnOf` (type)
@@ -1663,6 +1684,12 @@ const getRetryAfterMs: (error: unknown) => number | undefined;
 ### `httpStream` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `isAuthReplayFailure` (const)
+
+```ts
+const isAuthReplayFailure: (error: unknown) => boolean;
+```
 
 ### `isConflictError` (const)
 

@@ -1,5 +1,5 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
-import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
+import type { FunctionReference, LunoraClient, ReplayCredential, SubscriptionError } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnostic } from "@tanstack/offline-transactions";
@@ -169,21 +169,27 @@ const reportWriteRejected = (options: DefineCollectionsOptions, event: WriteReje
  *
  * An unstamped write — queued by an older build — has no provenance, so it is
  * held rather than dropped for the same reason.
+ *
+ * A pass returns the credential the verdict was judged under, and the replay is
+ * sent with exactly that ({@link ReplayCredential}): the send is a separate call,
+ * and a `setAuthToken` between the two must not put a write judged as one user's
+ * on another user's bearer. The next attempt judges again against whatever
+ * token is current then.
  */
-type AssertIssuingIdentity = (client: LunoraClient, meta: undefined | WriteProvenance) => asserts meta is WriteProvenance;
+const replayCredentialFor = (client: LunoraClient, meta: undefined | WriteProvenance): ReplayCredential => {
+    const judged = client.replayIdentityVerdict(meta?.identity);
 
-const assertIssuingIdentity: AssertIssuingIdentity = (client, meta) => {
-    const verdict = client.replayIdentityVerdict(meta?.identity);
-
-    if (verdict === "mismatch") {
+    if (judged.verdict === "mismatch") {
         throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
     }
 
-    if (verdict === "unknown") {
+    if (judged.verdict === "unknown") {
         // Deliberately NOT a NonRetriableError: the executor's retry policy holds
         // the write and replays it once an identity is established.
         throw new Error("outbox write deferred: no identity established yet");
     }
+
+    return judged.credential;
 };
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
@@ -340,7 +346,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                         // transaction awaits between its writes, which is exactly where a
                         // `setAuthToken` can slip in. Inside the try so the drop reaches
                         // `onWriteRejected` instead of rolling the row back in silence.
-                        assertIssuingIdentity(client, meta);
+                        const replayCredential = replayCredentialFor(client, meta);
 
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
                         await runOutboxMutation(() =>
@@ -354,11 +360,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                                 // `null` pins "composed with no baseline"; omitting the
                                 // option entirely would sample the current cursor instead.
                                 // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: meta.baselineSeq ?? null,
-                                // Under a cookie session the worker refuses the write
-                                // if the cookie now belongs to someone else.
-                                replayIdentity: meta.identity,
-                                shardKey: meta.shardKey,
+                                replayBaseline: meta?.baselineSeq ?? null,
+                                // Sent with the bearer the verdict above judged; under a
+                                // cookie session the worker also refuses the write if the
+                                // cookie now belongs to someone else.
+                                replayCredential,
+                                shardKey: meta?.shardKey,
                             }),
                         );
                     } catch (error) {
@@ -393,7 +400,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         }
 
         try {
-            assertIssuingIdentity(client, meta);
+            const replayCredential = replayCredentialFor(client, meta);
 
             // Replay under the *original* idempotency key (not a fresh one), so a
             // committed-but-unacked write that the executor retries is deduped by the
@@ -404,9 +411,10 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                     // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
                     // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                     replayBaseline: meta.baselineSeq ?? null,
-                    // Under a cookie session the worker refuses the write if the
-                    // cookie now belongs to someone else.
-                    replayIdentity: meta.identity,
+                    // Sent with the bearer the verdict above judged; under a cookie
+                    // session the worker also refuses the write if the cookie now
+                    // belongs to someone else.
+                    replayCredential,
                     shardKey: meta.shardKey,
                 }),
             );
