@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { StorageUploadIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, propertyKeyName } from "./ast";
 
 /**
  * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the
@@ -57,7 +57,7 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
         }
 
         if (Node.isPropertyAssignment(property)) {
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             presentKeys.push(name);
 
@@ -70,7 +70,7 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
 
         // A shorthand (`{ contentType }`) or method (`contentType() {}`) still declares the key.
         if (Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property)) {
-            presentKeys.push(property.getName());
+            presentKeys.push(propertyKeyName(property));
         }
     }
 

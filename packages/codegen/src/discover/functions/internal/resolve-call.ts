@@ -1,6 +1,8 @@
 import type { CallExpression, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { bindingKeyName } from "../../ast";
+
 /**
  * Depth bound for {@link resolveExpressionToCall} so an aliased/cyclic reference
  * (`export const a = b; export const b = a`) can't loop forever.
@@ -82,7 +84,7 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
     if (Node.isBindingElement(declaration)) {
         // `const { check } = component.functions` — the value comes from the
         // right-hand side's `check` property, not from the binding element.
-        const propertyName = declaration.getPropertyNameNode()?.getText() ?? declaration.getName();
+        const propertyName = bindingKeyName(declaration);
         const variableDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
         const rightHandSide = variableDeclaration?.getInitializer();
         const propertyDeclaration = rightHandSide?.getType().getProperty(propertyName)?.getValueDeclaration();

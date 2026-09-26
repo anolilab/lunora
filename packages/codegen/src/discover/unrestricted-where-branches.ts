@@ -2,7 +2,7 @@ import type { ArrowFunction, FunctionExpression, IfStatement, Node as TsNode, Pr
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { UnrestrictedWhereBranchIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * Config keys whose value is a row predicate returning a `WhereInput`: a
@@ -399,7 +399,7 @@ const branchesInCall = (call: TsNode, owner: string, relativePath: string): Unre
     const found: UnrestrictedWhereBranchIR[] = [];
 
     for (const property of config.getProperties()) {
-        if (!Node.isPropertyAssignment(property) || !PREDICATE_KEYS.has(property.getName())) {
+        if (!Node.isPropertyAssignment(property) || !PREDICATE_KEYS.has(propertyKeyName(property))) {
             continue;
         }
 
@@ -421,7 +421,7 @@ const branchesInCall = (call: TsNode, owner: string, relativePath: string): Unre
                     exportName: enclosingExport(call),
                     file: relativePath,
                     form,
-                    key: property.getName(),
+                    key: propertyKeyName(property),
                     line: candidate.getStartLineNumber(),
                     owner,
                 });

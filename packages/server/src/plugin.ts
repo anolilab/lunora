@@ -62,7 +62,7 @@ import { LunoraError } from "@lunora/errors";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
-import { validateGlobalVectors, validateIndexFields } from "./schema";
+import { validateGlobalVectors, validateIndexFields, validateTableModes } from "./schema";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -444,6 +444,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     }
 
     validateIndexFields(merged);
+    validateTableModes(merged);
     validateGlobalVectors(merged, mergedVectorIndexes);
 
     return {

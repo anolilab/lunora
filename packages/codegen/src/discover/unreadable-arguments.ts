@@ -3,7 +3,7 @@ import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDecla
 import { Node } from "ts-morph";
 
 import { procedureArgumentObjects } from "../procedure-argument-objects";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -54,7 +54,7 @@ const declaresUnreadableArguments = (call: CallExpression, receiver: TsNode | un
     if (receiver === undefined) {
         const first = call.getArguments()[0];
 
-        if (first === undefined || !Node.isObjectLiteralExpression(first) || first.getProperty("args") === undefined) {
+        if (first === undefined || !Node.isObjectLiteralExpression(first) || findObjectProperty(first, "args") === undefined) {
             return false;
         }
     }

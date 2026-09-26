@@ -8,6 +8,7 @@ import { diagnosticAt } from "../diagnostics";
 import type { MutatorIR, ValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
+import { findObjectProperty } from "./ast";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
@@ -112,7 +113,7 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
  * parameterless mutator) or isn't an inline object literal.
  */
 const argsFromMutator = (literal: ObjectLiteralExpression | undefined): Record<string, ValidatorIR> => {
-    const argsProperty = literal?.getProperty("args");
+    const argsProperty = findObjectProperty(literal, "args");
 
     if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
         return {};
@@ -130,7 +131,7 @@ const argsFromMutator = (literal: ObjectLiteralExpression | undefined): Record<s
  * `unknown`. `"unknown"` when `server` isn't an inline function.
  */
 const returnTypeFromMutator = (literal: ObjectLiteralExpression | undefined): string => {
-    const serverProperty = literal?.getProperty("server");
+    const serverProperty = findObjectProperty(literal, "server");
 
     if (!serverProperty || !Node.isPropertyAssignment(serverProperty)) {
         return "unknown";
@@ -152,7 +153,7 @@ const returnTypeFromMutator = (literal: ObjectLiteralExpression | undefined): st
  * real `owner_field_from_args_not_auth` finding and fake a clean owner scope).
  */
 const ownerFromMutator = (literal: ObjectLiteralExpression | undefined): string | undefined => {
-    const property = literal?.getProperty("owner");
+    const property = findObjectProperty(literal, "owner");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return undefined;

@@ -8,7 +8,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { WorkflowIR, WorkflowStepIR } from "../ir";
-import { stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
@@ -79,7 +79,7 @@ const isStepCall = (call: CallExpression): boolean => {
  * `[]`. Order follows source order so the lint's "first wins" is deterministic.
  */
 const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] => {
-    const handlerProperty = argument.getProperty("handler");
+    const handlerProperty = findObjectProperty(argument, "handler");
 
     if (!handlerProperty) {
         return [];
@@ -187,7 +187,7 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
         steps: stepsFromHandler(argument),
     };
 
-    const nameProperty = argument.getProperty("name");
+    const nameProperty = findObjectProperty(argument, "name");
 
     if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");

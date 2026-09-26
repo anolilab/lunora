@@ -3,6 +3,7 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, S
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { propertyKeyName } from "./discover/ast";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
 /**
@@ -60,8 +61,10 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
             break;
         }
         case "$type": {
-            // Type-only override: the generated code can't import the caller's
-            // override type, so it stays a no-op and we emit the base kind.
+            // Type-only override, deliberately a no-op here: the runtime parser is
+            // unchanged, so the base kind is what a stored value is guaranteed to
+            // be, and emitting the caller's `T` would mean rendering an arbitrary
+            // (possibly module-local) user type into `_generated/`.
             break;
         }
         case "nullable": {
@@ -416,7 +419,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
             continue;
         }
 
-        const fieldName = property.getName();
+        const fieldName = propertyKeyName(property);
 
         if (!FIELD_NAME_RE.test(fieldName)) {
             throw new LunoraError("INTERNAL", `@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);

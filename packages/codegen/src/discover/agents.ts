@@ -10,7 +10,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { AgentIR } from "../ir";
-import { stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
@@ -77,7 +77,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
         name: agentDefaultName(exportName),
     };
 
-    const nameProperty = argument.getProperty("name");
+    const nameProperty = findObjectProperty(argument, "name");
 
     if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
@@ -86,7 +86,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // Opt-in to public run-starts (`agents:agentRun`). Only a `true` literal is
     // carried onto IR — `false`/absent stays undefined so the emitted spec (and
     // agent-free output) is byte-identical.
-    const publicRunProperty = argument.getProperty("publicRun");
+    const publicRunProperty = findObjectProperty(argument, "publicRun");
 
     if (
         publicRunProperty &&
@@ -100,7 +100,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // literal) turns on the hibernatable-WebSocket DO; the block's fields are
     // runtime config the DO reads, so codegen keys only on presence, not contents.
     // Only carried onto IR when present, so voice-free agents stay byte-identical.
-    const voiceProperty = argument.getProperty("voice");
+    const voiceProperty = findObjectProperty(argument, "voice");
 
     if (voiceProperty && Node.isPropertyAssignment(voiceProperty)) {
         const voiceInitializer = voiceProperty.getInitializerOrThrow();
@@ -122,7 +122,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // form: assignment, shorthand, or method) tells codegen to wire this agent
     // onto the worker's `email()` handler. Carried onto IR only when present, so
     // email-free agents stay byte-identical.
-    if (argument.getProperty("onEmail")) {
+    if (findObjectProperty(argument, "onEmail")) {
         ir.onEmail = true;
     }
 

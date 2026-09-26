@@ -3,7 +3,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -227,10 +227,10 @@ const identityWritesInObjectLiteral = (
         let value: TsNode | undefined;
 
         if (Node.isPropertyAssignment(property)) {
-            name = property.getName();
+            name = propertyKeyName(property);
             value = property.getInitializer();
         } else if (Node.isShorthandPropertyAssignment(property)) {
-            name = property.getName();
+            name = propertyKeyName(property);
             value = property.getNameNode();
         }
 

@@ -5,7 +5,7 @@ import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
 import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { defaultExportExpression, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
@@ -206,8 +206,8 @@ const discoverNotifyConfig = (project: Project, lunoraDirectory: string): Adviso
         const argument = exported.getArguments()[0];
 
         if (argument && Node.isObjectLiteralExpression(argument)) {
-            hasWebPush = argument.getProperty("webPush") !== undefined;
-            hasFcm = argument.getProperty("fcm") !== undefined;
+            hasWebPush = findObjectProperty(argument, "webPush") !== undefined;
+            hasFcm = findObjectProperty(argument, "fcm") !== undefined;
         }
     }
 

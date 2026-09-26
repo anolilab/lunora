@@ -127,6 +127,19 @@ describe("markdownChunker", () => {
         expect(second).not.toContain("Deep");
     });
 
+    it("keeps a real ancestor path when the document skips heading levels", () => {
+        expect.assertions(3);
+
+        const chunk = markdownChunker({ overlap: 0, size: 200 });
+        const chunks = chunk(["# Top", "", "### A", "", "a body", "", "### B", "", "b body", "", "## Mid", "", "mid body"].join("\n"));
+
+        // `### A` is a sibling of `### B`, not its parent.
+        expect(chunks.find((piece) => piece.includes("b body"))).toBe("# Top > ### B\n\nb body");
+        expect(chunks.find((piece) => piece.includes("a body"))).toBe("# Top > ### A\n\na body");
+        // A shallower `##` closes both `###` siblings.
+        expect(chunks.find((piece) => piece.includes("mid body"))).toBe("# Top > ## Mid\n\nmid body");
+    });
+
     it("does not treat a `#` comment inside a code fence as a heading", () => {
         expect.hasAssertions();
 

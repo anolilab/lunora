@@ -8,7 +8,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR } from "../ir";
-import { stringPropertyFor } from "./ast";
+import { findObjectProperty, stringPropertyFor } from "./ast";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
 const QUEUES_FILENAME = "queues.ts";
@@ -63,7 +63,7 @@ const numberProperty = (expression: Expression, exportName: string, property: st
  * with a located diagnostic rather than failing downstream validation.
  */
 const queueNameOverride = (argument: ObjectLiteralExpression, exportName: string): string | undefined => {
-    const nameProperty = argument.getProperty("name");
+    const nameProperty = findObjectProperty(argument, "name");
 
     if (!nameProperty || !Node.isPropertyAssignment(nameProperty)) {
         return undefined;
@@ -94,7 +94,7 @@ const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
         tuning: {},
     };
 
-    const modeProperty = argument.getProperty("mode");
+    const modeProperty = findObjectProperty(argument, "mode");
 
     if (modeProperty && Node.isPropertyAssignment(modeProperty)) {
         const mode = stringProperty(modeProperty.getInitializerOrThrow(), exportName, "mode");
@@ -106,14 +106,14 @@ const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
         ir.mode = mode;
     }
 
-    const dlqProperty = argument.getProperty("deadLetterQueue");
+    const dlqProperty = findObjectProperty(argument, "deadLetterQueue");
 
     if (dlqProperty && Node.isPropertyAssignment(dlqProperty)) {
         ir.tuning.deadLetterQueue = stringProperty(dlqProperty.getInitializerOrThrow(), exportName, "deadLetterQueue");
     }
 
     for (const property of ["maxBatchSize", "maxBatchTimeout", "maxRetries", "retryDelay"] as const) {
-        const node = argument.getProperty(property);
+        const node = findObjectProperty(argument, property);
 
         if (node && Node.isPropertyAssignment(node)) {
             ir.tuning[property] = numberProperty(node.getInitializerOrThrow(), exportName, property);
