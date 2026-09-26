@@ -200,4 +200,80 @@ describe("pitrPanel", () => {
 
         expect(screen.getByTestId("pitr-error").textContent).toContain("PITR_UNAVAILABLE");
     });
+
+    it("disables preview and restore when the host keeps no bookmarks", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (): unknown => {
+                throw Object.assign(new Error("point-in-time recovery is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("pitr-error");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-typed" } });
+
+        expect(screen.getByTestId("pitr-preview").hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pitr-error").textContent).toContain("not available");
+    });
+
+    it("disables restore once a restore answers that the host cannot arm one", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            mutation: (): unknown => {
+                throw Object.assign(new Error("restore is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+            query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult,
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("pitr-current");
+
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-target" } });
+        fireEvent.click(screen.getByTestId("pitr-restore"));
+        fireEvent.click(screen.getByTestId("pitr-restore-confirm"));
+
+        await screen.findByTestId("pitr-error");
+
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("ignores a bookmark answer from the previous client after a client swap", async () => {
+        expect.assertions(2);
+
+        let answerOld: ((value: PitrBookmarkResult) => void) | undefined;
+        const old = createMockClient({
+            query: (): unknown =>
+                new Promise<PitrBookmarkResult>((resolve) => {
+                    answerOld = resolve;
+                }),
+        });
+        const next = createMockClient({
+            query: (): unknown => {
+                throw Object.assign(new Error("point-in-time recovery is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+        });
+
+        const { rerender } = render(renderPanel(old));
+
+        rerender(renderPanel(next));
+        await screen.findByTestId("pitr-error");
+
+        answerOld?.({ current: "bm-from-old-host" });
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-target" } });
+
+        expect(screen.getByTestId("pitr-current").textContent).not.toContain("bm-from-old-host");
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+    });
 });

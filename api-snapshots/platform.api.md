@@ -295,6 +295,7 @@ interface PlatformCapabilities {
         objectStorageBackups?: Capability;
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
+        pointInTimeRecovery?: Capability;
         queues?: Capability;
         relationGraph?: Capability;
         scheduler?: Capability;

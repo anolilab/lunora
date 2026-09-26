@@ -630,11 +630,31 @@ export interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+    /** The worker's deploy target and its capability levels; absent from a worker that predates it or has no matrix. */
+    platform?: StudioPlatform;
     queues: boolean;
     scheduler: boolean;
     storage: boolean;
     vectors: boolean;
     workflows: boolean;
+}
+
+/**
+ * The studio's view of {@link StudioFeaturesResult}: the payload, plus whether
+ * the fetch has settled yet. Client-side state, not part of the wire contract.
+ */
+export type StudioFeatures = StudioFeaturesResult & { readonly settled: boolean };
+
+/**
+ * The deploy target a worker was generated for, hand-mirroring the `platform`
+ * field of `@lunora/do`'s `StudioFeaturesResult`. `unsupported` lists the
+ * `@lunora/platform` capability keys (`vectorStore`, `pointInTimeRecovery`, …)
+ * the target's matrix rates `unsupported`.
+ */
+export interface StudioPlatform {
+    id: string;
+    name: string;
+    unsupported: string[];
 }
 
 /**

@@ -311,3 +311,23 @@ only ever hidden once the worker positively reports its feature as unused, so th
 worst case is an extra empty page, never a missing working one. No configuration
 is required; re-run codegen (`lunora dev` does this on save) after adding or
 removing a package and the nav updates itself.
+
+## Host capability gating
+
+A second gate sits beside the usage flags: whether the worker's _host_ can serve
+a page at all. Codegen knows the deploy target (`target` in `lunora.config.*`)
+and adds it to the same `studioFeatures` payload, together with the
+`@lunora/platform` capabilities that target's matrix rates `unsupported`. So a
+studio hosted apart from the worker still learns which host it is talking to.
+On a Node worker, for example, Time Travel (point-in-time recovery), Agents,
+Vectors, Containers, Analytics and Mail are backed by capabilities that host
+does not have.
+
+Such a page stays in the nav, dimmed, with a one-line reason as its tooltip
+("Point-in-time recovery is not supported on Node."). It is left out of the ⌘K
+palette, and its URL renders that reason instead of the panel, so none of the
+panel's admin calls are made. Unlike the usage gate, this one **fails closed**
+while the payload is in flight: a capability-gated page shows a loading skeleton
+until the worker answers, rather than mounting a panel that calls an op the host
+cannot answer. A worker that reports no target (an unregistered one, or one
+built before the field existed) gets no capability gating at all.

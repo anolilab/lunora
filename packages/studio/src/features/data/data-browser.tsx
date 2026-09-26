@@ -45,6 +45,13 @@ const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
 
 interface DataBrowserProps {
     /**
+     * Offer "Generate rows" alongside the edit controls. It needs the dev host's
+     * seed endpoint, which a deployed studio does not have, so it is its own
+     * switch rather than part of `editable`. Off by default.
+     */
+    readonly canGenerateRows?: boolean;
+
+    /**
      * Allow editing: surfaces insert/edit/delete actions that issue
      * `__lunora_admin__:writeRow` ops through the schema-aware writer. Off by
      * default — the browser is read-only unless the host opts in.
@@ -174,6 +181,7 @@ const DataBrowserSidebarHeader = ({
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
 export const DataBrowser = ({
+    canGenerateRows = false,
     editable = false,
     globalTableNames,
     initialFilters,
@@ -523,7 +531,7 @@ export const DataBrowser = ({
                         onAskAiFilter={askAiFilter}
                         onInspect={inspection.onInspect}
                         onOpenBulkPatch={onOpenBulkPatch}
-                        onOpenGenerateRows={onOpenGenerateRows}
+                        onOpenGenerateRows={canGenerateRows ? onOpenGenerateRows : undefined}
                         onRowDelete={openCascadePreview}
                         onSaveQuery={saveCurrentQuery}
                         page={page}
