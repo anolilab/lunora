@@ -389,6 +389,9 @@ private fun rpcResponses() {
         } catch (error: ApiException) {
             check(error.code == testCase["code"], "code for ${testCase["name"]}")
             check(error.message == testCase["message"], "message for ${testCase["name"]}")
+
+            // Undecodable `data` is dropped, never the codec's exception.
+            if (testCase["dataDropped"] == true) check(error.data == null, "data dropped for ${testCase["name"]}")
         }
     }
 }
@@ -861,18 +864,71 @@ private fun shapePokeWithUndecodableRowIsRefusedWhole() {
     deliver(
         client,
         listOf(
-            mapOf("type" to "pokeStart", "pokeId" to "p4"),
+            mapOf("type" to "pokeStart", "pokeId" to "p-empty"),
             mapOf(
                 "type" to "pokePart",
-                "pokeId" to "p4",
+                "pokeId" to "p-empty",
                 "shapeId" to "shape_1",
                 "rowsPatch" to emptyList<Any?>(),
             ),
-            mapOf("type" to "pokeEnd", "pokeId" to "p4"),
+            mapOf("type" to "pokeEnd", "pokeId" to "p-empty"),
         ),
     )
 
     check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["expectedRows"]), "the view is exactly the seed: ${delivered.last()}")
+
+    // The server believes the refused poke landed, so the NEXT one is based on a
+    // checkpoint this view never reached. It must re-seed, not splice.
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+
+    val before = delivered.size
+
+    deliver(client, shape["gapPokeSequence"])
+
+    check(delivered.size == before + 1, "the gap tells the rows callback once")
+    check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["gapExpectedRows"]), "that the view is empty: ${delivered.last()}")
+
+    val cold = sent.filter { it["type"] == "shape_subscribe" && it["id"] == "shape_1" }
+
+    check(cold.size == 1, "a shape_subscribe for shape_1 goes out right away: $sent")
+    check(!cold[0].containsKey("sinceCheckpoint") && !cold[0].containsKey("sinceEpoch"), "and it is cold: ${cold[0]}")
+
+    val later = resent(client).first { it["id"] == "shape_1" }
+
+    check(!later.containsKey("sinceCheckpoint") && !later.containsKey("sinceEpoch"), "a later resend is cold too: $later")
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    val contiguous = Client("https://app.example")
+    val applied = mutableListOf<List<WireValue>>()
+    val contiguousSent = mutableListOf<Map<String, Any?>>()
+
+    contiguous.attachSocket { contiguousSent.add(it) }
+    contiguous.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { applied.add(it) })
+    deliver(contiguous, shape["pokeSequence"])
+    contiguousSent.clear()
+    deliver(contiguous, shape["contiguousPokeSequence"])
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(applied.last()))) == canonical(shape["contiguousExpectedRows"]),
+        "a contiguous poke applies: ${applied.last()}",
+    )
+    check(contiguousSent.isEmpty(), "without a re-seed: $contiguousSent")
+
+    // A based poke on a view that has NO checkpoint yet is not a gap.
+    val fresh = Client("https://app.example")
+    val seeded = mutableListOf<List<WireValue>>()
+
+    fresh.attachSocket { }
+    fresh.subscribeShape("roomMessages", null, { seeded.add(it) })
+    fresh.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"b0\",\"baseCheckpoint\":0}")
+    fresh.handleFrame(
+        "{\"type\":\"pokePart\",\"pokeId\":\"b0\",\"shapeId\":\"shape_1\",\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"a\",\"value\":1}]}",
+    )
+    fresh.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"b0\",\"checkpoint\":1}")
+
+    check(seeded == listOf(listOf(WireValue.Num(1.0))), "a base on an unchecked view applies: $seeded")
 }
 
 /**

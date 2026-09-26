@@ -49,8 +49,13 @@ queries and shapes alike — carrying each one's resume cursor or checkpoint.
 object, or carries a mistyped `id`/`pokeId`/`cursor` is ignored (a cursor that is
 not an integer never replaces the tracked one). A poke is applied whole or not at
 all per shape: if any row fails to decode, that shape's view, checkpoint and
-epoch are left exactly as they were and its `onError` receives `INVALID_FRAME`,
-while other shapes in the same poke still apply.
+epoch are left exactly as they were and its `onError` receives
+`WIRE_DECODE_FAILED`, while other shapes in the same poke still apply. A later
+poke whose `baseCheckpoint` (the part's, else its `pokeStart`'s) is not the
+checkpoint the view is at — or whose epoch differs from the view's — and that is
+not a `reset` re-seeds the shape instead of splicing onto it: the view is emptied,
+its checkpoint and epoch cleared, `onRows` told `[]`, the ops skipped, and a cold
+`shape_subscribe` sent at once through the attached socket.
 
 A reply the RPC cannot read — a body that is not a JSON object, whatever its
 status — throws `ApiException` (`INTERNAL`), never a parser or cast exception. A
@@ -110,8 +115,11 @@ passed.
 
 A lone write and a batched one are classified by ONE rule: a coded error envelope
 by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`,
-`RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue; every other code, a coded 5xx
-included, is terminal), and a reply with no envelope by its status (re-queued). A
+`RATE_LIMITED`, `TOO_MANY_REQUESTS` and the refused-credential codes
+`UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` re-queue; every other code,
+a coded 5xx and a server-sent `WIRE_DECODE_FAILED` included, is terminal), and a
+reply with no envelope by its status (re-queued). An envelope whose `data` does
+not decode is still that coded error, with its `data` dropped. A
 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch splits and retries, and a
 lone write still refused settles terminally with that code. A write the server
 committed whose result does not decode settles `COMMITTED` with a

@@ -514,7 +514,7 @@ private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation
     // and transient.
     val envelope = body?.get("error") as? Map<*, *>
     val error = when {
-        envelope != null -> batchSlotError(envelope, "batch rejected")
+        envelope != null -> Client.envelopeError(envelope, "batch rejected")
         status == 413 -> Client.envelopeless(status)
         else -> return items to true
     }
@@ -596,7 +596,7 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
         val envelope = slot["error"] as? Map<*, *>
 
         if (envelope != null) {
-            val error = batchSlotError(envelope, "request failed")
+            val error = Client.envelopeError(envelope, "request failed")
 
             // Classified by the SAME predicate as a whole batch and a single call,
             // never a second code set beside it: a slot's body is exactly a §4.2
@@ -639,22 +639,6 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
 
     return requeue
 }
-
-/**
- * Rebuilds an [ApiException] from a slot's or a batch's error envelope,
- * defaulting the way `parseRpcResponse` does.
- */
-private fun batchSlotError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
-    envelope["code"] as? String ?: "INTERNAL",
-    envelope["message"] as? String ?: fallback,
-    // Undecodable `data` is dropped rather than thrown: one bad slot must not
-    // abort the demux of every slot after it. The code is the verdict.
-    try {
-        envelope["data"]?.let { Wire.decode(it) }
-    } catch (error: WireFormatException) {
-        null
-    },
-)
 
 /**
  * Every live subscription as a snapshot slot, read under the monitor.

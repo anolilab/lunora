@@ -186,8 +186,14 @@ class Client(
      * The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
      * while delivering an ordinary diff to another on the same socket.
      */
-    private class PokeBuffer {
+    private class PokeBuffer(val epoch: Any?, val baseCheckpoint: Any?) {
         val parts = LinkedHashMap<String, MutableList<Map<String, Any?>>>()
+
+        /**
+         * Per shape, the checkpoint the server computed this diff against: the
+         * part's own `baseCheckpoint`, else the `pokeStart`'s.
+         */
+        val bases = mutableMapOf<String, Any>()
 
         /**
          * Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
@@ -263,14 +269,29 @@ class Client(
         internal fun checkRpcResponse(body: Map<*, *>, status: Int) {
             val envelope = body["error"]
 
-            if (envelope is Map<*, *>) {
-                val data = envelope["data"]?.let { Wire.decode(it) }
-
-                throw ApiException(envelope["code"] as? String ?: "INTERNAL", envelope["message"] as? String ?: "request failed", data)
-            }
+            if (envelope is Map<*, *>) throw envelopeError(envelope, "request failed")
 
             if (status !in 200..299) throw envelopeless(status)
         }
+
+        /**
+         * The coded error an envelope carries — a single call's, a batch slot's or a
+         * whole batch's — defaulting a missing code to `INTERNAL`.
+         *
+         * `data` the codec refuses is DROPPED, not thrown: the envelope is still the
+         * server's verdict and its code still classifies it. Throwing the codec's
+         * exception made it look like a transport failure on the single-call path
+         * (re-queued at the head of the queue forever) and aborted a batch's demux.
+         */
+        internal fun envelopeError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
+            envelope["code"] as? String ?: "INTERNAL",
+            envelope["message"] as? String ?: fallback,
+            try {
+                envelope["data"]?.let { Wire.decode(it) }
+            } catch (error: WireFormatException) {
+                null
+            },
+        )
 
         /**
          * A non-2xx reply with no envelope: nothing a Lunora function returned.
@@ -385,7 +406,11 @@ class Client(
          * this arm is what keeps one surfacing from anywhere else terminal too.
          */
         fun isTransient(error: Exception): Boolean = when (error) {
-            is ApiException -> error.transient || error.code in TRANSIENT_ERROR_CODES || error.code in RATE_LIMIT_ERROR_CODES
+            is ApiException ->
+                error.transient ||
+                    error.code in TRANSIENT_ERROR_CODES ||
+                    error.code in RATE_LIMIT_ERROR_CODES ||
+                    error.code in AUTH_REPLAY_ERROR_CODES
             is OfflineException -> false
             is WireFormatException -> false
             else -> true
@@ -901,7 +926,7 @@ class Client(
                     oldest.remove()
                 }
 
-                pokes[pokeId] = PokeBuffer()
+                pokes[pokeId] = PokeBuffer(frame["epoch"], frame["baseCheckpoint"])
             }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
@@ -981,6 +1006,8 @@ class Client(
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
             // retention re-seed arrives with the epoch unchanged.
             if (frame["reset"] == true) buffer.resets.add(shapeId)
+
+            (frame["baseCheckpoint"] ?: buffer.baseCheckpoint)?.let { buffer.bases[shapeId] = it }
         }
     }
 
@@ -991,6 +1018,7 @@ class Client(
         val deliveries = synchronized(lock) {
             val buffer = pokes.remove(frame["pokeId"] as? String ?: return) ?: return
             val pending = mutableListOf<() -> Unit>()
+            val sender = send
 
             for ((shapeId, operations) in buffer.parts) {
                 val shape = shapes[shapeId] ?: continue
@@ -1008,8 +1036,29 @@ class Client(
                     }
                 } catch (error: WireFormatException) {
                     shape.onError?.let { onError ->
-                        pending.add { onError(SubscriptionError("INVALID_FRAME", error.message ?: "shape rows could not be decoded")) }
+                        pending.add { onError(SubscriptionError(WIRE_DECODE_FAILED, error.message ?: "shape rows could not be decoded")) }
                     }
+
+                    continue
+                }
+
+                // The server computed this diff against `base`. If the view is not at
+                // that checkpoint — a poke was refused or dropped — or the changelog
+                // epoch forked, splicing the ops on corrupts the view for good (the
+                // missed rows never come again). Drop it, skip the ops, tell the
+                // callback `[]` and re-subscribe COLD so the server re-seeds it. A
+                // reset part is the full membership and settles either case itself.
+                val base = buffer.bases[shapeId]
+                val epochForked = buffer.epoch != null && shape.epoch != null && buffer.epoch != shape.epoch
+                val baseDiverged = base != null && shape.checkpoint != null && shape.checkpoint != base
+
+                if (shapeId !in buffer.resets && (epochForked || baseDiverged)) {
+                    shape.rows.clear()
+                    shape.order.clear()
+                    shape.checkpoint = null
+                    shape.epoch = null
+                    shape.onRows?.let { onRows -> pending.add { onRows(emptyList()) } }
+                    sender?.let { pending.add { it(buildShapeSubscribeFrame(shapeId, shape.name, shape.args)) } }
 
                     continue
                 }

@@ -57,6 +57,15 @@ val TRANSIENT_ERROR_CODES: Set<String> = setOf("SHARD_ERROR", "SHARD_UNAVAILABLE
 val RATE_LIMIT_ERROR_CODES: Set<String> = setOf("RATE_LIMITED", "TOO_MANY_REQUESTS")
 
 /**
+ * The codes that refused the CREDENTIAL, not the write, so a replay HOLDS the write.
+ *
+ * A write queued offline replays with whatever bearer the client held when it went
+ * offline, which has very often expired by the time the socket is back; settling it
+ * would destroy the user's own durable write over a problem one token refresh fixes.
+ */
+val AUTH_REPLAY_ERROR_CODES: Set<String> = setOf("TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED")
+
+/**
  * Hard cap on entries in one batch, matching the server's own
  * (`shared/batch-wire.ts`). A Durable Object is single-threaded and replays a
  * batch's entries sequentially, so an unbounded one could pin a shard for tens of
