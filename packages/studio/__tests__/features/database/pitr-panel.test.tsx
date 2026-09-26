@@ -217,8 +217,8 @@ describe("pitrPanel", () => {
         fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
         fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-typed" } });
 
-        expect((screen.getByTestId("pitr-preview")).disabled).toBe(true);
-        expect((screen.getByTestId("pitr-restore")).disabled).toBe(true);
+        expect(screen.getByTestId("pitr-preview").hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
         expect(screen.getByTestId("pitr-error").textContent).toContain("not available");
     });
 });
