@@ -395,7 +395,15 @@ Four rules a conforming client MUST follow, because each one is a durable write:
 - A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
   or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
   entry — it could not reach the shard, or a limiter refused to look — so it is
-  retried rather than reported failed. Every other coded error is a verdict, and
+  retried rather than reported failed. So is a refused CREDENTIAL —
+  `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
+  rather than settles: a write queued offline replays with the bearer it held
+  when it went offline, often expired by reconnect, and a token refresh is what
+  lets it through. An envelope whose `data` does not decode is still that coded
+  error: the `data` is dropped and the code classifies it. And a server that
+  answers `WIRE_DECODE_FAILED` refused the write — only a result the CLIENT could
+  not decode marks one committed, so a client tells the two apart by where the
+  failure arose, never by the code string. Every other coded error is a verdict, and
   terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
   `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
   as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
@@ -635,10 +643,14 @@ mid-poke discards the buffer and re-seeds on reconnect (no torn view). A shape
 whose parts carry a row `decodeWire` refuses is refused WHOLE for that poke:
 every row is decoded before the view is touched, and on a failure the view, its
 checkpoint and its epoch stay as they were and the shape's error listeners are
-told — applying the decodable rest would advance the resume position past a row
-the view never held. Other shapes in the poke still apply
-(`undecodableRowPokeSequence` in `fixtures/ws-frames.json`). An
-`epoch` mismatch or a `baseCheckpoint` gap forces a full re-seed.
+told (`WIRE_DECODE_FAILED`) — applying the decodable rest would advance the
+resume position past a row the view never held. Other shapes in the poke still
+apply. The refused rows come back through the NEXT poke: the server stamps its
+`baseCheckpoint` with the checkpoint it believes it delivered, which no longer
+matches the view's, so the base check below re-seeds the shape
+(`undecodableRowPokeSequence` then `gapPokeSequence` in
+`fixtures/ws-frames.json`). An `epoch` mismatch or a `baseCheckpoint` gap forces
+a full re-seed.
 
 A buffer is released at `pokeEnd`, and a poke abandoned mid-flight never sends
 one — so a client MUST bound its pending buffers and evict oldest-first, rather
@@ -674,13 +686,15 @@ the part to splice on cleanly, and takes precedence over `pokeStart.baseCheckpoi
 own delivered-through cursor. Absent means the sender cannot name a base and the
 gap check is disarmed for that part.
 
-> **Outstanding in the non-JS ports.** Only `@lunora/client` acts on this field:
-> on a mismatch it drops the shape's view, clears its cursor, skips the ops and
-> re-subscribes. None of the eight SDKs implements the comparison — one stores
-> the value and never reads it, the rest only mention it in a comment about
-> `reset`. A poke can genuinely be dropped on the cross-DO owner→relay POST, so
-> until a port adds the check its shape views can diverge where the JS client
-> recovers. A port adding it needs no wire change; the field is already sent.
+On a mismatch with the view's checkpoint — or an `epoch` that differs from the
+view's — a part that is not a `reset` makes the client drop the shape's view,
+clear its checkpoint and epoch, tell its listeners `[]`, skip the ops and send a
+COLD `shape_subscribe` (no `sinceCheckpoint`/`sinceEpoch`) so the server re-seeds
+it. A view with no checkpoint yet has nothing to diverge from. The reference and
+all eight `sdks/*` ports implement it; before they did, a poke dropped on the
+cross-DO owner→relay POST — or refused for an undecodable row — was spliced over
+by the next one, losing its rows for good. `gapPokeSequence` and its
+counterweight `contiguousPokeSequence` pin both directions.
 
 ### 5.4 Delta runs and the resume cursor
 
