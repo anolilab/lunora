@@ -645,9 +645,12 @@ def _utf16_sort_key(value: str) -> tuple:
     yet 0x1F600 as a code point, so it sorts before U+FFFD in JavaScript and
     after it here. A key set mixing the two would produce a different dedup key
     than the reference client for identical arguments.
+
+    ``surrogatepass``: a key holding a LONE surrogate is a legal JS string and
+    sorts as its own code unit there; the strict codec raised on it instead.
     """
 
-    return tuple(value.encode("utf-16-be"))
+    return tuple(value.encode("utf-16-be", "surrogatepass"))
 
 
 def _json_string(text: str) -> str:

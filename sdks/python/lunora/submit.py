@@ -69,6 +69,12 @@ TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
 #: ``protocol/fixtures/rpc.json``'s ``responseError.with-data``).
 RATE_LIMIT_ERROR_CODES = frozenset({"RATE_LIMITED", "TOO_MANY_REQUESTS"})
 
+#: A refused CREDENTIAL, not a refused write, so the write is HELD. A write
+#: queued offline replays with the bearer the client held when it went offline,
+#: which has very often expired by reconnect; settling it destroyed the user's
+#: own durable write over a problem one token refresh fixes.
+AUTH_HOLD_ERROR_CODES = frozenset({"TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"})
+
 #: Hard cap on entries in one batch, matching the server's own
 #: (``shared/batch-wire.ts``). A Durable Object is single-threaded and replays a
 #: batch's entries sequentially, so an unbounded one could pin a shard for tens
@@ -220,7 +226,7 @@ def is_transient(error: BaseException) -> bool:
     """
 
     if isinstance(error, LunoraError):
-        return error.transient or error.code in TRANSIENT_ERROR_CODES or error.code in RATE_LIMIT_ERROR_CODES
+        return error.transient or error.code in TRANSIENT_ERROR_CODES or error.code in RATE_LIMIT_ERROR_CODES or error.code in AUTH_HOLD_ERROR_CODES
 
     return True
 

@@ -148,8 +148,11 @@ How a replayed write settles, on the single-call and the batch path alike:
 
 - A **coded** error envelope is the server's verdict and is classified by its
   code alone, whatever the HTTP status: `SHARD_UNAVAILABLE`, `SHARD_ERROR`,
-  `RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue; every other code — a coded
-  500 included — settles `rejected`.
+  `RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue, and so do the refused
+  credentials `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` (the write
+  is held for a fresh token, not destroyed); every other code — a coded 500 and
+  a server-sent `WIRE_DECODE_FAILED` included — settles `rejected`. An envelope
+  whose `data` does not decode keeps its code, with `data` dropped.
 - A reply with **no envelope** (an edge page, a proxy, a body that is not a JSON
   object) re-queues, except a **413**, which is `PAYLOAD_TOO_LARGE` whatever its
   body: a batch is halved and retried, and a lone write still refused settles
@@ -165,7 +168,10 @@ How a replayed write settles, on the single-call and the batch path alike:
 return. A subscription or shape callback that raises is isolated: the others
 queued for the same frame still run. A poke is applied per shape whole or not at
 all — a row that does not decode leaves that shape's view and checkpoint as they
-were and reports `INVALID_FRAME` to its error callbacks. `connect_and_run`
+were and reports `WIRE_DECODE_FAILED` to its error callbacks. A later poke whose
+`baseCheckpoint` is not the view's checkpoint (or whose epoch forked), unless it
+is a reset, empties the view, tells its callbacks `[]`, skips its rows and sends
+a cold `shape_subscribe` so the server re-seeds it. `connect_and_run`
 accepts inbound messages up to 32 MiB (`MAX_WS_FRAME_BYTES`, the Workers
 per-message WebSocket limit) instead of `websockets`' 1 MiB default.
 

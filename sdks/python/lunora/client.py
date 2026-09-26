@@ -30,7 +30,7 @@ from collections.abc import AsyncIterator, Awaitable
 from functools import partial
 from typing import Any, Callable, Optional, Union
 
-from .errors import LunoraError, SubscriptionError, decode_failed, reply_error
+from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_failed, reply_error
 from .offline import OfflineQueue, random_id
 from .optimistic import drop_confirmed_layers, fold_optimistic
 from .submit import (
@@ -686,11 +686,18 @@ class LunoraClient:
             with contextlib.suppress(RuntimeError):  # the loop is already closed
                 loop.call_soon_threadsafe(values.put_nowait, _CLOSED)
 
-        with self._lock:
-            self._close_hooks.append(end)
         unsubscribe = self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key)
 
         async def iterate() -> AsyncIterator:
+            # Registered on the first `__anext__`, not at call time: a generator
+            # that is never iterated never runs its `finally`, so a hook added up
+            # front stayed in `_close_hooks` for the life of the client. A close
+            # that already happened ends the loop after what was delivered.
+            with self._lock:
+                self._close_hooks.append(end)
+                closed = self._closed
+            if closed:
+                end()
             try:
                 while True:
                     value = await values.get()
@@ -829,6 +836,7 @@ class LunoraClient:
                 self._poke_buffers.pop(next(iter(self._poke_buffers)))
             self._poke_buffers[poke_id] = {
                 "baseCheckpoint": frame.get("baseCheckpoint"),
+                "bases": {},
                 "epoch": frame.get("epoch"),
                 "parts": {},
                 "resets": set(),
@@ -847,6 +855,12 @@ class LunoraClient:
                 # parts still replaces the view rather than merging into it.
                 if frame.get("reset") is True:
                     buf["resets"].add(shape_id)
+                # The checkpoint the server believes this view is at: the part's
+                # own, else its pokeStart's. Compared at pokeEnd.
+                base = frame.get("baseCheckpoint")
+                base = buf["baseCheckpoint"] if base is None else base
+                if base is not None:
+                    buf["bases"][shape_id] = base
             return {"kind": "pokePart", "pokeId": poke_id, "shapeId": shape_id}
 
         if kind == "pokeEnd":
@@ -960,16 +974,36 @@ class LunoraClient:
                 shape = self._shapes.get(shape_id)
                 if shape is None:
                     continue
+                reset = shape_id in buf["resets"]
+                # A diff computed against a checkpoint this view is not at (a
+                # refused or dropped poke), or on a forked epoch, cannot be
+                # spliced on: drop the view, tell its callbacks, SKIP the ops and
+                # re-subscribe cold so the server re-seeds it. A reset is
+                # authoritative on its own. Mirrors the reference's
+                # `applyPokePart`; without it the poke after a refused one
+                # spliced its rows onto the stale view for good.
+                base = buf["bases"].get(shape_id)
+                epoch_forked = buf["epoch"] is not None and shape.server_epoch is not None and buf["epoch"] != shape.server_epoch
+                base_diverged = base is not None and shape.server_cursor is not None and base != shape.server_cursor
+                if not reset and (epoch_forked or base_diverged):
+                    shape.rows.clear()
+                    shape.server_cursor = None
+                    shape.server_epoch = None
+                    deferred.extend(partial(cb, []) for cb in shape.callbacks)
+                    if self._send is not None:
+                        deferred.append(partial(self._send, build_shape_subscribe_frame(shape.id, shape.name, shape.args)))
+                    touched.append(shape_id)
+                    continue
                 # Decoded WHOLE before the view is touched: a poke applies per
                 # shape entirely or not at all. Clearing for a reset and then
                 # raising on a bad row left the view torn — or empty — with
                 # nothing reported, and the read loop's backstop swallowed it.
-                # Refused, the view, checkpoint and epoch stay where they were,
-                # so the next resume asks for this diff again.
+                # Refused, the view, checkpoint and epoch stay where they were;
+                # the server's next based poke then diverges and re-seeds it.
                 try:
                     decoded = [_decode_row_op(op) for op in ops]
                 except WireFormatError as error:
-                    reported = SubscriptionError(str(error), "INVALID_FRAME")
+                    reported = SubscriptionError(str(error), WIRE_DECODE_FAILED)
                     deferred.extend(partial(cb, reported) for cb in shape.error_callbacks)
                     continue
                 # A reset part carries the shape's COMPLETE membership, so it
@@ -980,7 +1014,7 @@ class LunoraClient:
                 # client. Not inferable from anything else on the wire — a
                 # retention re-seed keeps the epoch, and most live pokes carry no
                 # baseCheckpoint either.
-                if shape_id in buf["resets"]:
+                if reset:
                     shape.rows.clear()
                 for key, value in decoded:
                     if value is _DELETE:

@@ -310,6 +310,39 @@ class TestFrameManifestCases(unittest.TestCase):
         self.assertEqual(resend["sinceCheckpoint"], shape["undecodableRowResendCheckpoint"])
         self.assertEqual(resend["sinceEpoch"], "e1")
 
+        # The server's next poke is based on the checkpoint it believes it
+        # delivered: the view is not there, so it re-seeds cold instead of splicing.
+        sent.clear()
+        for frame in shape["gapPokeSequence"]:
+            client.handle_frame(frame)
+
+        self.assertEqual(list(client._shapes["shape_1"].rows.values()), shape["gapExpectedRows"])
+        self.assertEqual(rows, [[]])
+        cold = [frame for frame in sent if frame.get("type") == "shape_subscribe" and frame.get("id") == "shape_1"]
+        self.assertEqual(len(cold), 1)
+        self.assertNotIn("sinceCheckpoint", cold[0])
+        self.assertNotIn("sinceEpoch", cold[0])
+        sent.clear()
+        client.resend_subscriptions()
+        resend = next(frame for frame in sent if frame.get("id") == "shape_1")
+        self.assertNotIn("sinceCheckpoint", resend)
+        self.assertNotIn("sinceEpoch", resend)
+
+    def test_contiguous_based_poke_applies(self):
+        covers("shape_poke_with_undecodable_row_is_refused_whole")
+        shape = FRAMES["shape"]
+        client = LunoraClient("https://app.example")
+        sent = []
+        client.attach_socket(sent.append)
+        rows = []
+        client.subscribe_shape("roomMessages", {"room": "general"}, rows.append)
+
+        for frame in [*shape["pokeSequence"], *shape["contiguousPokeSequence"]]:
+            client.handle_frame(frame)
+
+        self.assertEqual(rows[-1], shape["contiguousExpectedRows"])
+        self.assertEqual([frame["type"] for frame in sent], ["shape_subscribe"], "no re-seed")
+
     def test_identity_change_evicts_previous_session(self):
         covers("identity_change_evicts_previous_session")
         case = FRAMES["identityChange"]
@@ -372,6 +405,20 @@ class TestFrameManifestCases(unittest.TestCase):
 
 
 class TestPortLocal(unittest.TestCase):
+    def test_a_stream_never_iterated_leaves_no_close_hook(self):
+        async def run():
+            client = LunoraClient("https://app.example")
+            client.attach_socket(lambda _frame: None)
+            client.stream("messages:list", {})
+            return client._close_hooks
+
+        self.assertEqual(asyncio.run(run()), [])
+
+    def test_a_lone_surrogate_object_key_sorts_by_code_unit(self):
+        from lunora.wire import stable_stringify
+
+        self.assertEqual(stable_stringify({"\ud800": 1, "a": 2}), '{"a":2,"\\ud800":1}')
+
     def test_an_unexpected_failure_mid_flush_requeues_the_unsettled_writes(self):
         """A flush must never lose drained writes to an exception it did not expect."""
 
