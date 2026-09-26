@@ -436,9 +436,11 @@ public final class LunoraClient {
         }
 
         let body = try LunoraClient.buildRPCBody(functionPath: functionPath, args: args, shardKey: shardKey)
-        let payload = try JSONSerialization.data(withJSONObject: body)
-        let (status, raw) = try post(join(lunoraRPCPath), headers, payload)
-        let parsed = try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:]
+        // The body is written by ``Wire/stableStringify(_:)`` — the same writer the
+        // key uses — which cannot fail and spells every number and string the way
+        // `JSON.stringify` does, a lone surrogate included.
+        let (status, raw) = try post(join(lunoraRPCPath), headers, Data(Wire.stableStringify(body).utf8))
+        let parsed = try LunoraJSON.parse(raw) as? [String: Any] ?? [:]
 
         return (try LunoraClient.parseRPCResponse(parsed, status: status), LunoraClient.parseCommitCursor(parsed))
     }
@@ -455,13 +457,13 @@ public final class LunoraClient {
         var headers = ["content-type": "application/json"]
         if let authToken { headers["authorization"] = "Bearer \(authToken)" }
 
-        let payload = try JSONSerialization.data(withJSONObject: ["calls": calls])
+        let payload = Data(Wire.stableStringify(["calls": calls]).utf8)
         // The status is returned, not discarded: a whole-batch envelope is only
         // a verdict on its entries when the shard answered, and that is what the
         // status says.
         let (status, raw) = try post(join(lunoraRPCBatchPath), headers, payload)
 
-        return (status, try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:])
+        return (status, try LunoraJSON.parse(raw) as? [String: Any] ?? [:])
     }
 
     /// Projects a generated model into the dictionary tree ``Wire/encode(_:depth:)``
@@ -490,7 +492,7 @@ public final class LunoraClient {
     /// value the caller passed.
     public static func wireValue<T: Encodable>(_ value: T, nullablePaths: [[String]] = []) throws -> Any {
         let data = try JSONEncoder().encode(value)
-        let tree = try JSONSerialization.jsonObject(with: data)
+        let tree = try LunoraJSON.parse(data)
 
         return nullablePaths.isEmpty ? tree : restoreNulls(tree, nullablePaths, [])
     }
@@ -759,9 +761,7 @@ public final class LunoraClient {
     @discardableResult
     public func handleFrame(_ raw: String) throws -> String? {
         if raw == "lunora-ping" || raw == "lunora-pong" { return nil }
-        guard let data = raw.data(using: .utf8),
-            let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
+        guard let frame = try? LunoraJSON.parse(raw) as? [String: Any] else {
             // Non-JSON frames are ignored by the client parser, not fatal.
             return nil
         }

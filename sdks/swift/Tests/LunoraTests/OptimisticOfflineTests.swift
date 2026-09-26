@@ -8,7 +8,7 @@ import XCTest
 /// A file-scope function rather than a method: it is called from inside a poster
 /// closure, where reaching for `self` would capture the test case.
 func batchCalls(_ body: Data) -> [[String: Any]] {
-    guard let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+    guard let parsed = try? LunoraJSON.parse(body) as? [String: Any],
         let calls = parsed["calls"] as? [[String: Any]]
     else { return [] }
 

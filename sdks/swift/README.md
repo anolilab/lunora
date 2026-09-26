@@ -138,6 +138,15 @@ so mark those explicitly; plain values map to JSON directly:
 
 `decodeWire` returns these same wrappers so values round-trip exactly.
 
+The transport reads JSON with its own reader, `LunoraJSON.parse`, not
+`JSONSerialization`, which on Darwin is not correctly rounded (about one double in
+eleven came back one ulp off). It writes RPC bodies with `Wire.stableStringify`,
+which spells every number and string as `JSON.stringify` does — including a lone
+UTF-16 surrogate, written `\udXXX`, which a bridged `NSString` (a truncated emoji)
+can carry and `JSONSerialization` refused. An integer literal off the wire past
+±(2^53−1) decodes to the double `JSON.parse` reads; a native `Int` that large is
+still refused on encode.
+
 ### One thing to know about generated models
 
 `JSONEncoder` omits a `nil` struct property, which is right for an unset
