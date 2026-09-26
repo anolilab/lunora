@@ -68,4 +68,53 @@ describe("data browser — manual shard switch", () => {
         expect(screen.queryByTestId("db-staged")).toBeNull();
         expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toHaveLength(0);
     });
+
+    it("drops an edit staged on the old shard's rows inside the shard-input debounce window", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                const rows = ROWS[(options as { shardKey?: string } | undefined)?.shardKey ?? ""] ?? [];
+
+                return { columns: ["__id__", "text"], rows, total: rows.length };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Host />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await waitFor(() => {
+            expect(screen.getByTestId("db-cell-cfg-text").textContent).toBe("root-value");
+        });
+
+        // Retype the shard box FIRST: the grid still shows the root shard's rows
+        // until the input settles (~400ms), and the operator edits one of them.
+        fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "tenant-b" } });
+        fireEvent.doubleClick(screen.getByTestId("db-cell-cfg-text"));
+
+        const input = await screen.findByTestId<HTMLInputElement>("db-cell-input-cfg-text");
+
+        fireEvent.change(input, { target: { value: "EDIT-MEANT-FOR-ROOT" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByTestId("db-staged");
+
+        // Once the writes' target shard settles on tenant-b, that root edit must be gone.
+        await waitFor(
+            () => {
+                expect(screen.getByTestId("db-cell-cfg-text").textContent).toBe("tenant-b-value");
+            },
+            { timeout: 3000 },
+        );
+
+        expect(screen.queryByTestId("db-staged")).toBeNull();
+        expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toHaveLength(0);
+    });
 });

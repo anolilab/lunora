@@ -1211,6 +1211,13 @@ const filterBindValue = (clause: FilterClause, kind: string | undefined): unknow
         return serializeSqlValue(BigInt(text));
     }
 
+    // Any other value on a bigint column (a boolean, array, object) would bind as
+    // INTEGER or JSON text against the TEXT sort key, where `gt`/`ne`/`lt` match
+    // every row — and this clause also selects the rows a bulk delete removes.
+    if (kind === "bigint" && typeof value !== "bigint") {
+        throw new LunoraError("BAD_REQUEST", `bigint column ${clause.column} can only be filtered by an integer, got ${JSON.stringify(value)}`);
+    }
+
     return serializeSqlValue(value);
 };
 

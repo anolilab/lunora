@@ -353,6 +353,41 @@ describe("d1 introspect", () => {
             expect(clicked.rows.map((row) => row["_id"])).toStrictEqual(["l1"]);
         });
 
+        it("a facet value on an untyped (union/any) column filters back to its row", async () => {
+            expect.assertions(2);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    mixed: {
+                        indexes: [],
+                        shape: { loose: col("any"), u: col("union") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "mixed" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "u" TEXT, "loose" TEXT)`);
+            await harness.exec.run(`INSERT INTO "mixed" VALUES ('m1', 1, ?, ?), ('m2', 2, ?, ?)`, [
+                sqliteEncode(42, "union"),
+                sqliteEncode(true, "any"),
+                sqliteEncode("x", "union"),
+                sqliteEncode(false, "any"),
+            ]);
+
+            // The facet hands back each value in its STORED (marked) form; clicking
+            // it must match that row, not be marked a second time and match nothing.
+            const clickedRows = async (column: string, predicate: (value: unknown) => boolean): Promise<unknown[]> => {
+                const facet = overJson(await facetGlobalColumn(harness.exec, wireSchema, { column, table: "mixed" })) as { values: { value: unknown }[] };
+                const value = facet.values.find((entry) => predicate(entry.value))?.value;
+                const page = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column, value }], table: "mixed" });
+
+                return page.rows.map((row) => row["_id"]);
+            };
+
+            await expect(clickedRows("u", (value) => value !== sqliteEncode("x", "union"))).resolves.toStrictEqual(["m1"]);
+            await expect(clickedRows("loose", (value) => value === sqliteEncode(true, "any"))).resolves.toStrictEqual(["m1"]);
+        });
+
         it("reflects the active view (eq filters)", async () => {
             expect.assertions(1);
 

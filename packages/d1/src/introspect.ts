@@ -214,9 +214,17 @@ const INTEGER_TEXT = /^-?\d+$/u;
  * parsed to a `bigint` first so it encodes to the key the row was written with.
  */
 const bindGlobalFilterValue = (value: unknown, kind: string | undefined): unknown => {
+    if (kind !== "bigint") {
+        // Only bigint needs its kind here. An untyped column (`union`/`any`/
+        // `from`) stores its scalars in the marked form, and the facet hands that
+        // stored text straight back as the clicked value: encoding it again with
+        // the kind would mark it a second time and it would never match.
+        return sqliteEncode(value);
+    }
+
     const text = typeof value === "number" || typeof value === "string" ? String(value).trim() : undefined;
 
-    return sqliteEncode(kind === "bigint" && text !== undefined && INTEGER_TEXT.test(text) ? BigInt(text) : value, kind);
+    return sqliteEncode(text !== undefined && INTEGER_TEXT.test(text) ? BigInt(text) : value, kind);
 };
 
 /**

@@ -654,6 +654,20 @@ const useDataBrowser = ({
     const search = useDebounced(filterInput.trim(), 300, debounceResetKey);
     const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
 
+    // `changeShard` clears the staged buffer when the input changes, but writes
+    // target `debouncedShard`, which settles up to 400ms later. An edit staged
+    // inside that window was made against the old shard's rows; clear again when
+    // the shard the writes actually go to changes. Adjusted during render (the
+    // same idiom as the re-seed check above), not in an effect.
+    const [stagedForShard, setStagedForShard] = useState<string>(debouncedShard);
+
+    if (stagedForShard !== debouncedShard) {
+        setStagedForShard(debouncedShard);
+        stagedEdits.clear();
+        setEditingCell(null);
+        setEditing(null);
+    }
+
     // Mirror the emitted view — the exact payload the mirror effect far below
     // sends to the host — into `emittedViewKey`, so the render-time re-seed
     // check above can compare against it next render. This is the same

@@ -1003,4 +1003,16 @@ describe("admin filters over a v.bigint() / v.bytes() field", () => {
             selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "gt", value: 1.5 }], table: "payments" }),
         ).toThrow(/integer/u);
     });
+
+    it("refuses a boolean, array or object on a bigint instead of matching every row", () => {
+        expect.assertions(3);
+
+        // Bound raw, each of these compares against the TEXT sort key so that
+        // gt/lt/ne select the whole table — the set a bulk delete removes.
+        for (const value of [true, ["1"], {}]) {
+            expect(() =>
+                selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "gt", value }], table: "payments" }),
+            ).toThrow(/integer/u);
+        }
+    });
 });
