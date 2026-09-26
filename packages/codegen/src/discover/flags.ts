@@ -5,7 +5,7 @@ import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpressio
 import { Node } from "ts-morph";
 
 import type { FlagsIR } from "../ir";
-import { defaultExportExpression, propertyInitializer } from "./ast";
+import { defaultExportExpression, findObjectProperty, propertyInitializer } from "./ast";
 
 /** The only file a feature-flag provider may be declared in — mirrors `lunora/queues.ts`. */
 const FLAGS_FILENAME = "flags.ts";
@@ -53,7 +53,7 @@ const isFlagshipProvider = (identifier: Identifier): boolean => {
 
 /** Read a static string-literal property off an object literal, or `undefined` when absent / non-literal. */
 const stringPropertyOrUndefined = (argument: ObjectLiteralExpression, property: string): string | undefined => {
-    const node = argument.getProperty(property);
+    const node = findObjectProperty(argument, property);
 
     if (!node || !Node.isPropertyAssignment(node)) {
         return undefined;

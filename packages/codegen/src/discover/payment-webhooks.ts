@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { PaymentWebhookIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, findObjectProperty } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -21,7 +21,7 @@ const numericLiteralValue = (node: TsNode | undefined): number | undefined => (n
 
 /** The statically-known `webhookToleranceSeconds` numeric literal from an adapter's options object literal, or `undefined` when absent / not a literal. */
 const toleranceFromOptions = (objectLiteral: ObjectLiteralExpression): number | undefined => {
-    const property = objectLiteral.getProperty("webhookToleranceSeconds");
+    const property = findObjectProperty(objectLiteral, "webhookToleranceSeconds");
 
     return property && Node.isPropertyAssignment(property) ? numericLiteralValue(property.getInitializer()) : undefined;
 };

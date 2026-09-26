@@ -163,11 +163,13 @@ describe("discoverSchema", () => {
         expect(posts?.softDelete).toStrictEqual({ field: "deletedAt" });
         expect(logs?.softDelete).toStrictEqual({ field: "removedAt" });
 
-        // The injected column flows into the emitted Doc as an optional number.
+        // The injected column flows into the emitted Doc as an optional, nullable
+        // number — the runtime injects `v.optional(v.number().nullable())`, and
+        // `restore()` clears the marker with `null`.
         const dataModel = emitDataModel(schema);
 
-        expect(dataModel).toContain("deletedAt?: number;");
-        expect(dataModel).toContain("removedAt?: number;");
+        expect(dataModel).toContain("deletedAt?: number | null;");
+        expect(dataModel).toContain("removedAt?: number | null;");
     });
 
     it("captures searchIndex name + field + filterFields", () => {

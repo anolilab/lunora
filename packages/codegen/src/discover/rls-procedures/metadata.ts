@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsMetadataIR, RlsPolicyIR, RlsRoleIR } from "../../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "../ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "../ast";
 import exportedProcedureChains from "../functions/exported-procedure-chains";
 import { rlsCallsInChain } from "./internal/chain";
 
@@ -52,7 +52,7 @@ const extractRolePermissions = (roleObject: TsNode): string[] => {
         return [];
     }
 
-    const property = roleObject.getProperty("permissions");
+    const property = findObjectProperty(roleObject, "permissions");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return [];
@@ -135,7 +135,7 @@ const extractRoles = (rlsCall: CallExpression): RlsRoleIR[] => {
         return [];
     }
 
-    const rolesProperty = optionsArgument.getProperty("roles");
+    const rolesProperty = findObjectProperty(optionsArgument, "roles");
 
     if (!rolesProperty || !Node.isPropertyAssignment(rolesProperty)) {
         return [];

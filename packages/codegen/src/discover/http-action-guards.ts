@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { HttpActionGuardIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { bindingKeyName, collectCallRows } from "./ast";
 import type { InspectableHandler } from "./functions/handler";
 import { inlineHandler } from "./functions/handler";
 
@@ -33,7 +33,7 @@ const destructuredBinding = (nameNode: TsNode | undefined, property: string): st
     }
 
     for (const element of nameNode.getElements()) {
-        const key = element.getPropertyNameNode()?.getText() ?? element.getNameNode().getText();
+        const key = bindingKeyName(element);
 
         if (key === property) {
             const local = element.getNameNode();
@@ -154,7 +154,7 @@ const readsContextAuth = (handler: InspectableHandler, contextName: string): boo
         }
 
         for (const element of nameNode.getElements()) {
-            const property = element.getPropertyNameNode()?.getText() ?? element.getNameNode().getText();
+            const property = bindingKeyName(element);
 
             if (property === "auth") {
                 return true;

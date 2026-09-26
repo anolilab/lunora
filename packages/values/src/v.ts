@@ -179,7 +179,15 @@ interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Va
     $defaultFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Recompute the field on every patch/replace when not explicitly provided. */
     $onUpdateFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert>;
-    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type<Id<"users">>()`). */
+
+    /**
+     * Override the type `Infer<>` gives this validator without changing runtime
+     * parsing (e.g. `v.string().$type<Brand>()`). An unchecked assertion: the
+     * parser still accepts any value of the base kind, so codegen's `Doc_*` /
+     * `Insert_*` / procedure-arg types keep the base type (`string`) — the one
+     * the stored value is actually guaranteed to have. For a document id use
+     * `v.id("users")`, which is checked.
+     */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
     check: (predicate: (value: TSelect) => boolean, options?: CheckOptions | string) => ColumnValidator<TSelect, TInsert>;

@@ -3,22 +3,13 @@ import { Node } from "ts-morph";
 
 import { diagnosticAt } from "../../../diagnostics";
 import type { VectorIndexIR } from "../../../ir";
+import { findObjectProperty } from "../../ast";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
 
-/**
- * `property.getName()` returns the string-literal's text WITH its surrounding
- * quotes for a quoted key (e.g. `"delete"` yields `'"delete"'`, not `delete`),
- * verified empirically against ts-morph — so both the reserved-name and
- * identifier checks below must strip them first, or a quoted `"delete"` key
- * would slip past `RESERVED_TABLE_NAMES.has` and a quoted `"user-profiles"`
- * key would slip past the identifier test.
- */
-const stripQuotes = (name: string): string => name.replaceAll(/^["']|["']$/gu, "");
-
 /** Read the named property's initializer off an object literal, or `undefined` when absent / not a plain property assignment. */
 const objectPropertyInitializer = (objectLiteral: ObjectLiteralExpression, name: string): Expression | undefined => {
-    const property = objectLiteral.getProperty(name);
+    const property = findObjectProperty(objectLiteral, name);
 
     if (property && Node.isPropertyAssignment(property)) {
         return property.getInitializer();
@@ -151,5 +142,4 @@ export {
     indexNameOf,
     objectPropertyInitializer,
     stringArrayPropertyOf,
-    stripQuotes,
 };

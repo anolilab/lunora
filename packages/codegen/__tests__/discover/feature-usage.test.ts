@@ -247,6 +247,20 @@ describe("discover/feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
     });
 
+    it("reads a quoted destructuring key as its runtime property", () => {
+        expect.assertions(2);
+
+        // `{ "storage": bucket }` and `{ "ctx": c }` destructure `storage` / `ctx`
+        // exactly as the bare spellings do; the key used to be read with its quotes.
+        writeSource("upload.ts", `export const put = async (ctx) => {\n  const { "storage": bucket } = ctx;\n  return bucket.put("k", new Blob());\n};`);
+        writeSource("bill.ts", `export const charge = async ({ "ctx": c }) => c.payments.checkout();`);
+
+        const usage = discoverFeatureUsage(newProject(), workdir);
+
+        expect(usage.storage).toBe(true);
+        expect(usage.payments).toBe(true);
+    });
+
     it("detects containers via either the `@lunora/container` import or a `ctx.containers` read", () => {
         expect.assertions(2);
 

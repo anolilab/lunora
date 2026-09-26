@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName, referencesArgs } from "../argument-taint";
 import type { AiToolSideEffectIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { bindingKeyName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { calleeName } from "./callee";
 
 /** The AI SDK text-generation entrypoints that accept a `tools` map — the injection sink surface. Matched by callee name, `import`-agnostic like the other feeders. */
@@ -82,7 +82,7 @@ const destructuredArgumentNames = (node: TsNode): Set<string> => {
     }
 
     for (const element of pattern.getElements()) {
-        const propertyName = element.getPropertyNameNode()?.getText() ?? element.getName();
+        const propertyName = bindingKeyName(element);
         const valueNode = element.getNameNode();
 
         if (propertyName === "args" && Node.isObjectBindingPattern(valueNode)) {
@@ -113,7 +113,7 @@ const isUserInputDerived = (inputNode: TsNode): boolean => {
 /** True when any of the generation call's model-input options (`prompt` / `messages` / `system`) is derived from user input. */
 const hasUserDerivedInput = (optionsObject: ObjectLiteralExpression): boolean => {
     for (const property of optionsObject.getProperties()) {
-        if (!Node.isPropertyAssignment(property) || !MODEL_INPUT_KEYS.has(property.getName())) {
+        if (!Node.isPropertyAssignment(property) || !MODEL_INPUT_KEYS.has(propertyKeyName(property))) {
             continue;
         }
 

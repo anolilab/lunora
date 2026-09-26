@@ -48,6 +48,8 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
+import { propertyKeyName } from "./discover/ast";
+
 /**
  * The config filenames probed at the project root, in order. TypeScript first
  * because that is what the templates ship and what the type-only `satisfies`
@@ -214,25 +216,13 @@ const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | 
     return expression !== undefined && TsNode.isObjectLiteralExpression(expression) ? expression : undefined;
 };
 
-/**
- * One property's key, with a string-literal key's quotes removed.
- *
- * `getName()` keeps them, so `{ "target": … }` — perfectly valid TypeScript —
- * read as the name `"target"` and was silently ignored.
- */
-const propertyKey = (property: PropertyAssignment | ShorthandPropertyAssignment): string => {
-    const nameNode = property.getNameNode();
-
-    return TsNode.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
-};
-
 /** The literal a property is assigned, following a shorthand to its `const` in the same file. */
 const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile) => {
     if (TsNode.isPropertyAssignment(property)) {
         return property.getInitializer();
     }
 
-    return sourceFile.getVariableDeclaration(property.getName())?.getInitializer();
+    return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
 };
 
 /**
@@ -264,7 +254,7 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         return { advisor: { unreadable: true } };
     }
 
-    const property = plain.find((candidate) => propertyKey(candidate) === "minSeverity");
+    const property = plain.find((candidate) => propertyKeyName(candidate) === "minSeverity");
 
     if (property === undefined) {
         return { advisor: {} };
@@ -295,14 +285,14 @@ const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map(
 const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A getter or method declares a value this reader cannot see.
     if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
-        return UNREADABLE_ACCESSOR.get(property.getName()) ?? {};
+        return UNREADABLE_ACCESSOR.get(propertyKeyName(property)) ?? {};
     }
 
     if (!TsNode.isPropertyAssignment(property) && !TsNode.isShorthandPropertyAssignment(property)) {
         return {};
     }
 
-    const key = propertyKey(property);
+    const key = propertyKeyName(property);
 
     if (key === "advisor") {
         return readAdvisor(propertyLiteral(property, sourceFile), sourceFile);
@@ -371,13 +361,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     // declared `advisor`, whose own warning is what tells the user the floor
     // was not applied: dropping it here left that warning silent.
     if (object.getProperties().some((property) => TsNode.isSpreadAssignment(property))) {
-        const declaresAdvisor = object.getProperties().some((property) => {
-            if (TsNode.isPropertyAssignment(property) || TsNode.isShorthandPropertyAssignment(property)) {
-                return propertyKey(property) === "advisor";
-            }
-
-            return (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) && property.getName() === "advisor";
-        });
+        const declaresAdvisor = object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === "advisor");
 
         return declaresAdvisor ? { advisor: { unreadable: true }, unreadable: true } : { unreadable: true };
     }

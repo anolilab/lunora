@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName, isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
 import type { HttpHeaderWriteIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { calleeName } from "./callee";
 import type { InspectableHandler } from "./functions/handler";
 import { inlineHandler } from "./functions/handler";
@@ -125,7 +125,7 @@ const collectFromHeadersObject = (headersObject: ObjectLiteralExpression, via: H
                 context.rows.push({
                     exportName: context.exportName,
                     file: context.relativePath,
-                    headerName: property.getName(),
+                    headerName: propertyKeyName(property),
                     line: valueNode.getStartLineNumber(),
                     via,
                 });
@@ -148,7 +148,7 @@ const collectFromResponseInit = (init: TsNode | undefined, context: CollectConte
         return;
     }
 
-    const headersProperty = initObject.getProperty("headers");
+    const headersProperty = findObjectProperty(initObject, "headers");
 
     if (headersProperty === undefined || !Node.isPropertyAssignment(headersProperty)) {
         return;

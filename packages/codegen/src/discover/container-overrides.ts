@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { ContainerOverrideIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, findObjectProperty } from "./ast";
 
 /** Runtime egress-firewall mutators on a `<handle>.egress` control surface — the `egress_relaxation` sink set. */
 const EGRESS_MUTATING_METHODS = new Set(["allow", "deny", "setAllowed"]);
@@ -16,7 +16,7 @@ const hasEnableInternetTrue = (call: CallExpression): boolean => {
         return false;
     }
 
-    const property = argument.getProperty("enableInternet");
+    const property = findObjectProperty(argument, "enableInternet");
 
     return property !== undefined && Node.isPropertyAssignment(property) && Node.isTrueLiteral(property.getInitializerOrThrow());
 };

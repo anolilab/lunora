@@ -62,3 +62,21 @@ describe("discoverSchema — .global() + vector index", () => {
         expect(schema.vectorIndexes.map((index) => index.name)).toStrictEqual(["profiles_bio"]);
     });
 });
+
+describe("discoverSchema — .global() + .ttl()", () => {
+    it.each([
+        ["global() first", `defineTable({ expiresAt: v.number() }).global().ttl("expiresAt")`],
+        ["ttl() first", `defineTable({ expiresAt: v.number() }).ttl("expiresAt").global({ backend: "hyperdrive" })`],
+    ])("rejects the pair (%s) instead of emitting no sweep", (_label, table) => {
+        expect.assertions(1);
+
+        // `buildTtlSweeps` never swept a global table, so the policy was a no-op.
+        expect(() =>
+            discover(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({ sessions: ${table} });
+            `),
+        ).toThrow(/table "sessions" is both \.global\(\) and \.ttl\(\)/u);
+    });
+});

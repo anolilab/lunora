@@ -2,7 +2,7 @@ import type { AdvisorExportSink } from "@lunora/advisor";
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listSecurityScanFiles } from "./ast";
+import { listSecurityScanFiles, propertyKeyName } from "./ast";
 
 /** The three CDC export-sink factories the runtime ships (plan 170). */
 const SINK_FACTORIES = new Set<AdvisorExportSink["factory"]>(["defineExportSink", "r2Sink", "webhookExportSink"]);
@@ -43,7 +43,7 @@ const analyzeConfig = (literal: ObjectLiteralExpression): ConfigFacts => {
         }
 
         if (Node.isPropertyAssignment(property)) {
-            const key = property.getName();
+            const key = propertyKeyName(property);
 
             presentKeys.push(key);
 
@@ -57,7 +57,7 @@ const analyzeConfig = (literal: ObjectLiteralExpression): ConfigFacts => {
         }
 
         if (Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property) || Node.isGetAccessorDeclaration(property)) {
-            presentKeys.push(property.getName());
+            presentKeys.push(propertyKeyName(property));
         }
     }
 

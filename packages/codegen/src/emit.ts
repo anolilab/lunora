@@ -182,8 +182,20 @@ const literalToType = (value: string | undefined): string => {
     return value;
 };
 
-/** Map a {@link ValidatorIR} kind to its TS type. */
-const validatorToType = (validator: ValidatorIR): string => {
+/**
+ * Map a {@link ValidatorIR} to its TS type.
+ *
+ * `.nullable()` is recorded on the column meta rather than as a kind, and it
+ * admits `null` at runtime (a nullable column reads back as SQL NULL). So every
+ * type rendered from the IR — `Doc_*`, `Insert_*`, procedure args, drizzle
+ * `$type<…>` — widens here, or `doc.note.length` typechecks against a `null`.
+ */
+const validatorToType = (validator: ValidatorIR): string =>
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: kindToType re-enters validatorToType for nested validators
+    validator.column?.notNull === false ? `${kindToType(validator)} | null` : kindToType(validator);
+
+/** The TS type of a {@link ValidatorIR}'s kind, before {@link validatorToType}'s `.nullable()` widening. */
+const kindToType = (validator: ValidatorIR): string => {
     const scalar = SCALAR_TYPE_BY_KIND[validator.kind];
 
     if (scalar !== undefined) {
@@ -6587,7 +6599,9 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
         expression += `.references((): AnySQLiteColumn => ${fkTable}._id)`;
     }
 
-    if (column.notNull) {
+    // `.nullable()` is recorded on the column meta rather than as its own kind,
+    // so the kind-based mapping above cannot see it.
+    if (column.notNull && validator.column?.notNull !== false) {
         expression += ".notNull()";
     }
 
