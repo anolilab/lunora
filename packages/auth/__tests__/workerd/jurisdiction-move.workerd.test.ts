@@ -254,6 +254,29 @@ describe("auth jurisdiction move in workerd", () => {
         await expect(count("eu:move-purge", "user")).resolves.toBe(USERS);
     });
 
+    it("refuses to purge a row written to the un-pinned object after the copy finished", async () => {
+        expect.assertions(4);
+
+        await seedSource("move-late-write");
+
+        const move = moveFor("move-late-write");
+
+        await move.copy();
+        await sql("move-late-write", (storage) =>
+            storage.sql.exec(
+                `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('late', 'Late', 'late@example.test', 1, 0, 0)`,
+            ),
+        );
+
+        await expect(move.purge()).rejects.toMatchObject({ code: "AUTH_MOVE_INCOMPLETE" });
+        await expect(count("move-late-write", "user")).resolves.toBe(USERS + 1);
+
+        const again = await move.copy();
+
+        expect(reportFor(again, "user")).toMatchObject({ copied: 1, targetRows: USERS + 1 });
+        await expect(move.purge()).resolves.toMatchObject({ dropped: expect.arrayContaining(["user"]) });
+    });
+
     it("refuses a move request without the internal secret", async () => {
         expect.assertions(1);
 

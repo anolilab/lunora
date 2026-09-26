@@ -190,7 +190,8 @@ LUNORA_ADMIN_TOKEN=… lunora run __lunora_admin__:purgeUnpinnedAuth \
 pinned to keep in the jurisdiction are still stored outside it. The copy never
 deletes them on its own: a copy you have not verified is not a reason to lose the
 only other one. The purge refuses (`AUTH_MOVE_INCOMPLETE`) until a copy has
-finished for every table the un-pinned object holds.
+finished for every table the un-pinned object holds, and again if any of them
+gained a row after that copy; run the copy again, then purge.
 
 </Step>
 

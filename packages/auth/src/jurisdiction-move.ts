@@ -255,13 +255,13 @@ const beginMove = (
 };
 
 /** Target: write one page and advance the table's cursor, atomically. */
-const writePage = async (storage: DoStorageLike, table: string, rows: Row[], last: number): Promise<{ inserted: number; targetRows: number }> => {
+const writePage = async (storage: DoStorageLike, table: string, rows: Row[], last: number): Promise<{ inserted: number }> => {
     if (!markerRows(storage).some((marker) => marker.table === table)) {
         throw new TypeError(`table ${JSON.stringify(table)} was not part of this move`);
     }
 
     return inTransaction(storage, () => {
-        const before = countRows(storage, table);
+        let inserted = 0;
 
         for (const row of rows) {
             const columns = Object.keys(row);
@@ -272,13 +272,14 @@ const writePage = async (storage: DoStorageLike, table: string, rows: Row[], las
                     ...columns.map((column) => row[column]),
                 ),
             ];
+            // `changes()` rather than counting the table around the page: a count is a
+            // full scan, and one per page makes a large copy quadratic.
+            inserted += Number([...storage.sql.exec(`SELECT changes() AS n`)][0]?.["n"] ?? 0);
         }
 
         [...storage.sql.exec(`UPDATE ${quoteIdentifier(MARKER_TABLE)} SET after = ? WHERE tbl = ?`, last, table)];
 
-        const targetRows = countRows(storage, table);
-
-        return { inserted: targetRows - before, targetRows };
+        return { inserted };
     });
 };
 
@@ -313,9 +314,27 @@ const handleMoveRequest = async (storage: DoStorageLike, body: Row, context: { p
             return { last: page.last, rows: encodeWire(page.rows) };
         }
         case "purge": {
+            const copiedTo = body["copiedTo"] as Record<string, number>;
             const dropped = tableNames(storage);
 
             await inTransaction(storage, () => {
+                // Checked inside the transaction that drops, so no row can land between
+                // the check and the drop. A row past the copied cursor (or a table the
+                // copy never saw) would be lost: refuse, and let the copy pick it up.
+                const uncopied = dropped.filter((table) => {
+                    const after = copiedTo[table];
+
+                    return after === undefined || [...storage.sql.exec(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE rowid > ? LIMIT 1`, after)].length > 0;
+                });
+
+                if (uncopied.length > 0) {
+                    throw new LunoraError(
+                        "AUTH_MOVE_INCOMPLETE",
+                        `refusing to purge the un-pinned auth object: ${uncopied.join(", ")} gained rows the copy has not written — run the copy again first`,
+                        { data: { unfinished: uncopied } },
+                    );
+                }
+
                 for (const table of dropped) {
                     [...storage.sql.exec(`DROP TABLE ${quoteIdentifier(table)}`)];
                 }
@@ -406,7 +425,7 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
                     }
 
                     // eslint-disable-next-line no-await-in-loop -- the write advances the cursor the next read starts from
-                    const written = await call<{ inserted: number; targetRows: number }>("target", {
+                    const written = await call<{ inserted: number }>("target", {
                         last: page.last,
                         op: "write",
                         rows: page.rows,
@@ -415,7 +434,7 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
 
                     report.copied += written.inserted;
                     report.skipped += rows.length - written.inserted;
-                    report.targetRows = written.targetRows;
+                    report.targetRows += written.inserted;
                     after = page.last;
 
                     if (rows.length < PAGE_ROWS) {
@@ -430,7 +449,7 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
         },
         purge: async () => {
             const { tables } = await call<{ tables: MovableTable[] }>("source", { op: "manifest" });
-            const { markers } = await call<{ markers: { done: boolean; table: string }[] }>("target", { op: "status" });
+            const { markers } = await call<{ markers: { after: number; done: boolean; table: string }[] }>("target", { op: "status" });
             const finished = new Set(markers.filter(({ done }) => done).map(({ table }) => table));
             const unfinished = tables.map(({ name }) => name).filter((name) => !finished.has(name));
 
@@ -442,7 +461,9 @@ const createAuthJurisdictionMove = (post: (side: MoveSide, body: Row) => Promise
                 );
             }
 
-            return call<{ dropped: string[] }>("source", { op: "purge" });
+            const copiedTo = Object.fromEntries(markers.filter(({ done }) => done).map(({ after, table }) => [table, after]));
+
+            return call<{ dropped: string[] }>("source", { copiedTo, op: "purge" });
         },
     };
 };
