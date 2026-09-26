@@ -862,6 +862,7 @@ const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
 ```ts
 interface FacetColumnOptions {
     column: string;
+    columnKinds?: ColumnKinds;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -1964,6 +1965,7 @@ type ReadHook = (table: string, idOrScan?: string) => void;
 
 ```ts
 interface ReadTablePageOptions {
+    columnKinds?: ColumnKinds;
     filters?: FilterClause[];
     limit?: number;
     offset?: number;
@@ -2607,6 +2609,7 @@ interface SearchScoredDocument {
 ```ts
 interface SelectMatchingIdsOptions {
     after?: string;
+    columnKinds?: ColumnKinds;
     filters?: FilterClause[];
     limit?: number;
     search?: string;
@@ -5311,6 +5314,12 @@ interface BackfillState {
     done: boolean;
     profile: string | undefined;
 }
+```
+
+### `ColumnKinds` (type)
+
+```ts
+type ColumnKinds = Readonly<Record<string, string>>;
 ```
 
 ### `DataMigrationContext` (interface)

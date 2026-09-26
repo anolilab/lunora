@@ -1,4 +1,5 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { sqliteEncode } from "@lunora/sql-store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { decodeWire } from "../../../shared/wire-codec";
@@ -321,6 +322,35 @@ describe("d1 introspect", () => {
 
             expect(page.total).toBe(1);
             expect(page.rows[0]?.["_id"]).toBe("l1");
+        });
+
+        it("decodes a bigint facet and matches a typed number against the stored key", async () => {
+            expect.assertions(4);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "ledger" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "blob" BLOB, "cents" TEXT)`);
+            await harness.exec.run(`INSERT INTO "ledger" VALUES ('l1', 1, X'01', ?), ('l2', 2, X'02', ?)`, [sqliteEncode(10n), sqliteEncode(200n)]);
+
+            const facet = overJson(await facetGlobalColumn(harness.exec, wireSchema, { column: "cents", table: "ledger" })) as { values: { value: unknown }[] };
+
+            expect(facet.values.map((entry) => entry.value).toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([10n, 200n]);
+
+            // The operator's typed `200` arrives as a number; the facet click as a bigint.
+            const typed = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column: "cents", value: 200 }], table: "ledger" });
+            const clicked = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column: "cents", value: 10n }], table: "ledger" });
+
+            expect(typed.total).toBe(1);
+            expect(typed.rows[0]?.["_id"]).toBe("l2");
+            expect(clicked.rows.map((row) => row["_id"])).toStrictEqual(["l1"]);
         });
 
         it("reflects the active view (eq filters)", async () => {

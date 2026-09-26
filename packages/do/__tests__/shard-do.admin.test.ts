@@ -38,6 +38,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import { drainBulkOp } from "../../../shared/bulk-drain";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,
@@ -3065,6 +3066,134 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
         } finally {
             target.close();
         }
+    });
+});
+
+/**
+ * {@link MoneyApplyShard} with the two other seams the codegen subclass fills: the
+ * schema's column kinds (`tableColumns`) and a real per-row writer for the bulk
+ * ops (`runShardWrite`).
+ */
+class MoneyBulkShard extends MoneyApplyShard {
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override tableColumns(table: string): { name: string; optional: boolean; type: string }[] {
+        return table === "sessions"
+            ? [
+                  { name: "_id", optional: false, type: "id" },
+                  { name: "amountMinor", optional: false, type: "bigint" },
+                  { name: "receipt", optional: false, type: "bytes" },
+              ]
+            : [];
+    }
+
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.id ?? "", args.table, { hard: true });
+
+        return { id: args.id ?? null, op: args.op };
+    }
+}
+
+describe("shardDO admin filters over a bigint column", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: MoneyBulkShard;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, moneySchema);
+
+        const writer = createShardContextDatabase({ schema: moneySchema, sql: database.sql });
+
+        for (const [id, amount] of [
+            ["s9", 9n],
+            ["s10", 10n],
+            ["s200", 200n],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert(
+                "sessions",
+                { _id: id, amountMinor: amount, receipt: new Uint8Array([amount === 9n ? 9 : 1]).buffer },
+                { allowExplicitId: true },
+            );
+        }
+
+        shard = new MoneyBulkShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const remainingIds = (): string[] => database.raw(`SELECT "id" FROM "sessions" ORDER BY "id"`).map((row) => String(row["id"]));
+
+    it("deletes exactly the one row a `> 100` filter matches, not the whole table", async () => {
+        expect.assertions(3);
+
+        // The browser sends the typed `100` as a number. Bound raw against the
+        // stored TEXT sort key, `>` held for every row and this deleted all three.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "gt", value: 100 }], table: "sessions" }),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ result: { count: 1, hasMore: false } });
+        expect(remainingIds()).toStrictEqual(["s10", "s9"]);
+    });
+
+    it("previews the same rows the delete removes", async () => {
+        expect.assertions(3);
+
+        const page = async (operator: string, value: unknown): Promise<{ ids: unknown[]; total: unknown }> => {
+            const response = await shard.fetch(
+                adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters: [{ column: "amountMinor", operator, value }], table: "sessions" }),
+            );
+            const { result } = await response.json<{ result: { rows: Record<string, unknown>[]; total: number } }>();
+
+            return { ids: result.rows.map((row) => row["_id"]), total: result.total };
+        };
+
+        await expect(page("eq", 10)).resolves.toStrictEqual({ ids: ["s10"], total: 1 });
+        await expect(page("gt", 100)).resolves.toStrictEqual({ ids: ["s200"], total: 1 });
+        // Past 2^53 the browser sends the exact digits as a string.
+        await expect(page("lte", "9")).resolves.toStrictEqual({ ids: ["s9"], total: 1 });
+    });
+
+    it("facets the decoded values, and a facet value filters back to its rows", async () => {
+        expect.assertions(3);
+
+        const facet = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.facetColumn, { column: "amountMinor", table: "sessions" }));
+        const { result } = decodeWire(await facet.json()) as { result: { values: { count: number; value: unknown }[] } };
+
+        expect(result.values.map((entry) => entry.value).toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([9n, 10n, 200n]);
+
+        // The studio sends a clicked bigint back as its decimal text (a query key
+        // cannot hold a `bigint`); a wire-encoded literal must match as well.
+        const filterBy = async (value: unknown): Promise<unknown> => {
+            const response = await shard.fetch(
+                adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters: encodeWire([{ column: "amountMinor", operator: "eq", value }]), table: "sessions" }),
+            );
+
+            const body = await response.json<{ result: { total: number } }>();
+
+            return body.result.total;
+        };
+
+        await expect(filterBy("200")).resolves.toBe(1);
+        await expect(filterBy(200n)).resolves.toBe(1);
+    });
+
+    it("refuses a filter that cannot compare against a bigint honestly", async () => {
+        expect.assertions(3);
+
+        const contains = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "contains", value: "100" }], table: "sessions" }),
+        );
+        const fractional = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "gt", value: 10.5 }], table: "sessions" }),
+        );
+
+        expect(contains.status).toBe(400);
+        expect(fractional.status).toBe(400);
+        expect(remainingIds()).toHaveLength(3);
     });
 });
 
