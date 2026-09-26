@@ -150,8 +150,15 @@ const VALUE_WORDS = new Set([
 const COUNT_LAST_WORDS = new Set(["count", "counts", "length", "limit", "limits", "size", "tokens", "total", "usage"]);
 const COUNT_FIRST_WORDS = new Set(["max", "min", "num", "total"]);
 
-/** Longest single string examined; the rest is cut before any pattern runs. */
+/** Longest single string kept; the rest is cut. */
 const MAX_REDACTED_STRING_LENGTH = 4096;
+
+/**
+ * Characters examined past {@link MAX_REDACTED_STRING_LENGTH} before the cut, so
+ * a token that starts before the cap is whole when the patterns see it. More than
+ * any secret shape's minimum length.
+ */
+const CAP_OVERSCAN = 128;
 
 /**
  * Characters examined per redacted VALUE (an args object, a log field bag), not
@@ -273,8 +280,83 @@ const URL_IN_TEXT = /\b[a-z][\d+.a-z-]{1,15}:\/\/[^\s"'<>()[\]{}]+/gi;
 /** A PEM private key, header through footer (or to the end of the text when the footer was cut off). */
 const PEM_PRIVATE_KEY = /-----BEGIN ([A-Z ]{0,32}PRIVATE KEY)-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g;
 
-/** Tokens recognisable by shape alone: an auth scheme and its credential, a JWT, an AWS access-key id. */
-const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}|\beyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*|\bAKIA[\dA-Z]{16}\b/g;
+/** An auth scheme and its credential. */
+const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}/g;
+
+/**
+ * What may sit right before a vendor token when that token is glued to other
+ * text: a percent-encoded byte (`key%3Dsk_live_…`, `msg%20ghp_…`) or a
+ * JSON/JS escape (`"retry\nghp_…"`). The character before such a token is a
+ * letter or digit, so a plain "not after a letter or digit" guard would miss it.
+ */
+const ENCODED_SEPARATOR = String.raw`%[\dA-Fa-f]{2}|\\(?:[bfnrt]|u[\dA-Fa-f]{4})`;
+
+/**
+ * One secret format recognisable by its value alone. `prefix` is the regex
+ * source of its literal vendor prefix; the pre-check {@link MAY_HOLD_SECRET_VALUE}
+ * is built from these, so a rule can never be added without the gate admitting
+ * it. `body` follows the prefix.
+ */
+interface SecretValueRule {
+    body: string;
+    name: string;
+    prefix: string;
+}
+
+/**
+ * Formats with a vendor prefix that ordinary text, ids and hashes never start
+ * with. No rule matches on length or alphabet alone: those turned trace ids,
+ * uuids and git shas into placeholders.
+ */
+const SECRET_VALUE_RULES: ReadonlyArray<SecretValueRule> = [
+    { body: String.raw`[\dA-Za-z]{10,}`, name: "Stripe secret or restricted key", prefix: String.raw`[rs]k_(?:live|test)_` },
+    { body: String.raw`[\d+/=A-Za-z]{20,}`, name: "Stripe webhook secret", prefix: "whsec_" },
+    { body: String.raw`[\dA-Za-z]{30,}`, name: "GitHub classic token (personal, OAuth, user/server-to-server, refresh)", prefix: "gh[oprsu]_" },
+    { body: String.raw`\w{20,}`, name: "GitHub fine-grained token", prefix: "github_pat_" },
+    { body: String.raw`[\w-]{20,}`, name: "GitLab personal, pipeline-trigger and deploy tokens", prefix: "gl(?:pat|ptt|dt)-" },
+    // Bot (b), user (p), workspace (a), refresh (r), legacy service (s), config (e), client (c) and cookie (d) tokens.
+    { body: String.raw`[\dA-Za-z-]{10,}`, name: "Slack token", prefix: "xox[a-eprs]-" },
+    { body: String.raw`\d-[\dA-Za-z-]{10,}`, name: "Slack app-level token", prefix: "xapp-" },
+    { body: String.raw`[\dA-Z]{16}\b`, name: "AWS access-key id, long-lived and temporary", prefix: "(?:AKIA|ASIA)" },
+    { body: String.raw`[\w-]{35}(?![\w-])`, name: "Google API key", prefix: "AIza" },
+    { body: String.raw`[\w-]{24,}`, name: "Google OAuth client secret", prefix: "GOCSPX-" },
+    { body: String.raw`[\w-]{20,}`, name: "Google OAuth access token", prefix: String.raw`ya29\.` },
+    { body: String.raw`[\dA-Za-z]{36}\b`, name: "npm token", prefix: "npm_" },
+    { body: String.raw`[\dA-Za-z]{30,}`, name: "Hugging Face token", prefix: "hf_" },
+    { body: String.raw`[\dA-Fa-f]{32}\b`, name: "Shopify token", prefix: "shp(?:at|ca|pa|ss)_" },
+    { body: String.raw`[\da-f]{64}\b`, name: "DigitalOcean token", prefix: "do[opr]_v1_" },
+    { body: String.raw`[\w-]{20,}`, name: "OpenAI project/service/admin key, Anthropic key", prefix: "sk-(?:admin|ant|proj|svcacct)-" },
+    { body: String.raw`[\dA-Za-z]{20}T3BlbkFJ[\dA-Za-z]{20}\b`, name: "OpenAI legacy key", prefix: "sk-" },
+    { body: String.raw`[\w-]{22}\.[\w-]{43}(?![\w-])`, name: "SendGrid key", prefix: String.raw`SG\.` },
+];
+
+/**
+ * A JWT: three base64url segments, the header starting `eyJ`. It is the one
+ * shape with an unbounded run followed by something required (`.`), so it may
+ * only start where a `[\w-]` run starts: inside `eyJ-eyJ-eyJ-…` every `eyJ`
+ * would otherwise rescan the rest of the run and fail, which is quadratic.
+ */
+const JWT_SHAPE = String.raw`(?<=^|[^\w-]|${ENCODED_SEPARATOR})eyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*`;
+
+/**
+ * Every secret value shape. A vendor token may follow anything but a letter or
+ * digit (`STRIPE_sk_live_…` is caught, `task_live_status` is not), or an encoded
+ * separator. Every body is either fixed-length or an unbounded run that succeeds
+ * as soon as it reaches its minimum, and the JWT may start only at the start of a
+ * run, so a scan is linear in the input.
+ */
+const SECRET_VALUE_SHAPES = new RegExp(
+    [...SECRET_VALUE_RULES.map(({ body, prefix }) => String.raw`(?<=^|[^\dA-Za-z]|${ENCODED_SEPARATOR})${prefix}${body}`), JWT_SHAPE].join("|"),
+    "g",
+);
+
+/**
+ * Cheap pre-check for {@link SECRET_VALUE_SHAPES}: one of its literal prefixes,
+ * built from the same rules. Kept apart from {@link MAY_HOLD_CREDENTIAL}, so a
+ * string that is only there for a `:` (a route, a URL, a timestamp) does not also
+ * pay for the vendor patterns.
+ */
+const MAY_HOLD_SECRET_VALUE = new RegExp([...SECRET_VALUE_RULES.map(({ prefix }) => prefix), "eyJ"].join("|"));
 
 /** CLI credential flags: curl's `-u <user>:<password>`, `--password <value>`. */
 const CLI_CREDENTIAL = /(\s|^)(-u|--user|--password|--pass|--token|--api-key)(\s+|=)[^\s"']+/g; // secret-scanner:allow -- the pattern that masks CLI credentials, not a secret
@@ -340,32 +422,43 @@ const maskAssignments = (text: string): string => {
 };
 
 /** Cheap pre-check: a string with none of these cannot hold anything the patterns mask. */
-const MAY_HOLD_CREDENTIAL = /[:=@]|basic|bearer|digest|eyJ|AKIA|-u\b|--/i;
+const MAY_HOLD_CREDENTIAL = /[:=@]|basic|bearer|digest|-u\b|--/i;
 
 interface Budget {
     remaining: number;
 }
+
+/** Mask every credential form in `text`. Callers bound `text`: every pattern is linear, the key/value ones are not all. */
+const maskText = (text: string): string => {
+    const mayHoldSecretValue = MAY_HOLD_SECRET_VALUE.test(text);
+
+    if (!mayHoldSecretValue && !MAY_HOLD_CREDENTIAL.test(text)) {
+        return text;
+    }
+
+    const masked = text
+        .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
+        .replaceAll(URL_IN_TEXT, stripUrl)
+        .replaceAll(TOKEN_SHAPES, `$1 ${REDACTED}`);
+
+    return maskAssignments((mayHoldSecretValue ? masked.replaceAll(SECRET_VALUE_SHAPES, REDACTED) : masked).replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`));
+};
 
 const maskString = (value: string, budget: Budget): string => {
     if (budget.remaining <= 0) {
         return BUDGET_MARKER;
     }
 
-    const capped = value.length > MAX_REDACTED_STRING_LENGTH ? `${value.slice(0, MAX_REDACTED_STRING_LENGTH)}…[truncated]` : value;
+    // Mask a little past the cap, then cut: cutting first would leave a token that
+    // straddles the cap shorter than its own minimum length, so no rule would
+    // recognise the part that is kept.
+    const scanned = value.slice(0, MAX_REDACTED_STRING_LENGTH + CAP_OVERSCAN);
 
-    budget.remaining -= capped.length;
+    budget.remaining -= scanned.length;
 
-    if (!MAY_HOLD_CREDENTIAL.test(capped)) {
-        return capped;
-    }
+    const masked = maskText(scanned);
 
-    return maskAssignments(
-        capped
-            .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
-            .replaceAll(URL_IN_TEXT, stripUrl)
-            .replaceAll(TOKEN_SHAPES, (_match, scheme: string | undefined) => (scheme === undefined ? REDACTED : `${scheme} ${REDACTED}`))
-            .replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`),
-    );
+    return masked.length > MAX_REDACTED_STRING_LENGTH || value.length > scanned.length ? `${masked.slice(0, MAX_REDACTED_STRING_LENGTH)}…[truncated]` : masked;
 };
 
 /** Built-ins whose own enumerable properties are not what they carry, and which have no `toJSON` to say what they do. */
@@ -462,9 +555,11 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
 
 /**
  * Mask credentials in `value` — by key name on objects and class instances (any
- * depth), and in strings by `name=value` / `name: value`, auth-scheme, JWT, PEM,
+ * depth), and in strings by `name=value` / `name: value`, auth-scheme, vendor
+ * token prefix ({@link SECRET_VALUE_RULES}: Stripe, GitHub, Slack, AWS, JWT, …), PEM,
  * CLI-flag and URL shape (query, fragment and userinfo dropped). Every string is
- * capped at {@link MAX_REDACTED_STRING_LENGTH}, and once
+ * masked over its first {@link MAX_REDACTED_STRING_LENGTH} + {@link CAP_OVERSCAN} characters and then
+ * cut to {@link MAX_REDACTED_STRING_LENGTH}, and once
  * {@link MAX_REDACTED_TOTAL_LENGTH} characters of one value have been examined,
  * later strings become a marker. Returns a copy; the input is never mutated.
  * A value with a `toJSON` is replaced by its masked `toJSON()` result, which is
@@ -472,4 +567,5 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
  */
 const maskCredentials = (value: unknown): unknown => walk(value, new WeakSet(), 0, false, { remaining: MAX_REDACTED_TOTAL_LENGTH });
 
-export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH, MAX_REDACTED_TOTAL_LENGTH };
+export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH, MAX_REDACTED_TOTAL_LENGTH, MAY_HOLD_SECRET_VALUE, SECRET_VALUE_RULES };
+export type { SecretValueRule };
