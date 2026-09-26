@@ -20,7 +20,7 @@ import { createCaptureTransport } from "./capture-transport";
 import type { CloudflareSend } from "./cloudflare-transport";
 import createMailer from "./create-mailer";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./inbound/shard";
-import { DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
+import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
 import type { Mailer, SendPayload } from "./types";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
@@ -39,8 +39,10 @@ interface FromEnvOptions {
 
     /**
      * Pin the captured-mail inbox shard to a Cloudflare data-residency
-     * jurisdiction. Pass the same value as the worker's `jurisdiction` so the
-     * dev inbox co-resides with app data. Omit for the un-pinned global namespace.
+     * jurisdiction. Defaults to the jurisdiction the schema declares
+     * (`.jurisdiction("eu")`), so a generated app needs nothing here; set it only
+     * for a hand-written worker, to the same value as its `jurisdiction`. A value
+     * that contradicts the schema's throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */
@@ -134,15 +136,20 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
                 return { id: "uncaptured" };
             }
 
+            // Outside the best-effort catch: a jurisdiction that contradicts the
+            // app's, or a binding that cannot be pinned, is a residency
+            // misconfiguration, and the send must fail rather than report a
+            // success-shaped id for mail that was never recorded.
+            const shard = applyJurisdiction(binding, jurisdiction);
+
             // Best-effort: a send must never fail for lack of somewhere to record.
             // `postShardRpc` throws on a non-2xx / error envelope (wrong admin
             // token, missing route, shard error) — catch it and surface a loud
             // diagnostic instead of returning a bogus success id for lost mail.
             try {
-                const body = (await postShardRpc(binding, {
+                const body = (await postShardRpc(shard, {
                     adminToken,
                     envelope: { args: mail, functionPath: RECORD_MAIL_OP },
-                    jurisdiction,
                     label: "@lunora/mail: recording captured mail",
                     shardKey: rootShard,
                 })) as { result?: { id?: string } };

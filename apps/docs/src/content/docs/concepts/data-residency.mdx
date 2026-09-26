@@ -43,6 +43,10 @@ reaches**:
 - **DO-backed auth**: when `.auth()` is wired with a `namespace` (the auth tables
   live in a Durable Object), that object is pinned too, so users, sessions, and
   credentials stay in-region — once acknowledged.
+- **`@lunora/mail`**: inbound dispatch (`dispatchToLunoraFunction`) and the dev
+  capture inbox (`createMailerFromEnv`) reach the app's shards, and follow the
+  schema's jurisdiction with no option passed (see
+  [Pinning mail](#pinning-mail)).
 
 It does **not** pin, by design:
 
@@ -56,12 +60,8 @@ It does **not** pin, by design:
   Cloudflare Workflows, not Durable Objects, so the jurisdiction does not apply
   to their step state. Their reads and writes go back through the worker and land
   in the pinned shards.
-- **`@lunora/mail` inbound / capture shards**: mail is a scaffolded add-on, not
-  codegen-wired, so its shard access is **not** auto-pinned. Both entry points
-  take an optional `jurisdiction` (`createMailerFromEnv({ jurisdiction })` for the
-  dev capture inbox, `dispatchToLunoraFunction({ jurisdiction })` for inbound
-  routing). Pass the **same value** you declared on the schema so the mail shard
-  co-resides with app data. Omit it and mail uses the un-pinned global namespace.
+- **Outbound mail delivery**: a send goes to Cloudflare Email or Resend, and
+  `mailer.queue()` to a Cloudflare Queue. Neither is a Durable Object.
 
 <Callout type="info">
     **Fail-closed.** If the bound DO namespace can't honour the jurisdiction (an older `@cloudflare/workers-types` without `.jurisdiction()`), the worker throws
@@ -230,6 +230,36 @@ tables as deletions and remove users from the pinned object.
 </Step>
 
 </Steps>
+
+## Pinning mail
+
+`@lunora/mail` has no Durable Object of its own. Its two shard paths call the
+app's `__root__` shard:
+
+- `dispatchToLunoraFunction` runs your inbound function there (for example
+  `inbound:onEmail`), and that function writes to your own tables.
+- In development, `createMailerFromEnv` records each captured message in the
+  studio's Mail inbox, a table in the same shard.
+
+The generated worker records the schema's jurisdiction when it loads, in the
+worker and in every Durable Object class it exports. Both paths read it and pin
+the `SHARD` namespace, so you do not pass anything. The `jurisdiction` option on
+each is only for a hand-written worker that does not use the generated
+`defineApp`. A value that contradicts the schema's throws.
+
+**Nothing to acknowledge.** Before this, an app that declared a jurisdiction but
+did not pass it to mail sent mail's writes to the **un-pinned** `__root__`. The
+rest of the app reads the pinned one. So those rows were already out of the app's
+view, and pinning mail hides nothing the app could see. After the deploy, inbound
+functions write where your queries read, and captured dev mail shows in the
+studio inbox.
+
+**What stays behind.** Rows written through the un-pinned path before the deploy
+stay in the un-pinned `__root__`: the rows your inbound function wrote there, and
+captured dev mail. `lunora export` reads the pinned shards only, so it does not
+include them. The mail that produced them has already been delivered or bounced.
+Mail has no outbox, retry state or suppression list in a Durable Object, and
+`mailer.queue()` uses a Cloudflare Queue.
 
 ## Set it once: changing it strands data
 
