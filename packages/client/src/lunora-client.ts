@@ -1484,6 +1484,9 @@ class LunoraClient {
     /** Subscribers notified when the previous identity's session is retired (see `onIdentityChange`). */
     private readonly identityChangeListeners = new Listeners();
 
+    /** How many identities this client has retired (see `identityEpoch`). */
+    private retiredIdentities = 0;
+
     /** Token hash the last durable-replay auth refusal fired `onTokenExpired` for — see `shouldRequeueReplayFailure`. */
     private authRefusalNotifiedFor: string | undefined;
 
@@ -2155,6 +2158,20 @@ class LunoraClient {
      */
     public onIdentityChange(listener: () => void): Unsubscribe {
         return this.identityChangeListeners.add(listener);
+    }
+
+    /**
+     * How many identities this client has retired since it was constructed —
+     * the number of times {@link onIdentityChange} has fired. Already moved when
+     * those listeners run.
+     *
+     * A value rendered on the server (a `Preloaded` token) was read for whoever
+     * was signed in when the page loaded, so it is only safe to show while this
+     * is `0`: once a sign-out or user switch has retired that identity, a
+     * component mounting later must not seed the previous user's rows.
+     */
+    public identityEpoch(): number {
+        return this.retiredIdentities;
     }
 
     /**
@@ -8701,6 +8718,7 @@ class LunoraClient {
         this.bounceShardSockets();
 
         // Last: a listener reads the retired state (every value blanked).
+        this.retiredIdentities += 1;
         this.identityChangeListeners.emit();
     }
 
