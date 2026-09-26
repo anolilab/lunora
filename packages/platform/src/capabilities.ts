@@ -32,7 +32,7 @@
  * `pipelines`, `queues`, `relationGraph`, `scheduler`, `secrets`,
  * `vectorStore`, `workflows`.
  *
- * Every other key here — `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectStorageBackups`, `objectStorageCdcArchive`, `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
@@ -41,6 +41,10 @@
  * still records parity honestly, which is its job; it is not a gate.
  *
  * # Advisory is not one thing — there are two reasons, and only one is final
+ *
+ * `authJurisdictionMove` is advisory by nature too: an app never declares it.
+ * Codegen wires the admin ops whenever DO-backed auth is pinned to a
+ * jurisdiction, so the thing a host would have to refuse is the jurisdiction.
  *
  * Most advisory keys are advisory *by nature*: the feature is engine-internal
  * (`shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
@@ -122,10 +126,21 @@ export interface PlatformCapabilities {
          * rate `workflows` honestly and still not run an agent.
          */
         agents?: Capability;
+
         /** AI inference (Workers AI / Bedrock / OpenAI). */
         ai?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
+
+        /**
+         * Copying DO-backed auth from its un-pinned object into the
+         * jurisdiction-pinned one, and purging the un-pinned copy afterwards
+         * (the worker's `copyAuthToJurisdiction` / `purgeUnpinnedAuth` admin
+         * ops). Advisory by nature: it exists only once a schema pins auth with
+         * `.jurisdiction(…)`, which is itself the thing a host without
+         * jurisdictions cannot run.
+         */
+        authJurisdictionMove?: Capability;
         /** Browser rendering / headless browser. */
         browser?: Capability;
 
@@ -470,6 +485,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
         },
+        authJurisdictionMove: {
+            level: "native",
+            note: "Durable Object jurisdictions. The un-pinned and the pinned auth object are two objects on one namespace (namespace.jurisdiction()), and the __lunora_admin__:copyAuthToJurisdiction / purgeUnpinnedAuth admin ops copy between them over the objects' secret-gated internal route, driven from the worker. Present only for DO-backed auth pinned with .jurisdiction(…, { pinAuthAndVoice: true })",
+        },
         agents: {
             level: "emulated",
             note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow under an AGENT_* binding (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
@@ -631,6 +650,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         cronTriggers: {
             level: "unsupported",
             note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+        },
+        authJurisdictionMove: {
+            level: "unsupported",
+            note: "Not applicable rather than missing: this host has no jurisdictions. A single process cannot restrict where state lives, so the shard registry offers no jurisdiction() and a worker built for a schema that declares one fails closed at construction. There is never a pinned auth object to copy into, so the admin ops are never wired",
         },
         agents: {
             level: "unsupported",

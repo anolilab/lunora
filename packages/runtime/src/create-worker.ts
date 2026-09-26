@@ -28,6 +28,8 @@ import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { AuthAuditReader } from "./auth-audit-rpc";
 import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
+import type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
+import { buildAuthJurisdictionMoveRpc, COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
@@ -880,6 +882,16 @@ interface WorkerOptions {
      * signal is then absent but auth behaves identically.
      */
     authHandler?: (request: Request) => Promise<Response | undefined>;
+
+    /**
+     * Copies DO-backed auth from its un-pinned object into the jurisdiction-pinned
+     * one, and later purges the un-pinned copy. Serves the admin-gated
+     * `copyAuthToJurisdiction` and `purgeUnpinnedAuth` admin RPCs at the worker (the
+     * auth objects are not shards). Codegen wires `@lunora/auth`'s
+     * `createDoAuthWiring(...).jurisdictionMove`, which exists only once the app pins
+     * auth to a jurisdiction. Omit it and both RPCs respond `AUTH_MOVE_NOT_CONFIGURED`.
+     */
+    authJurisdictionMove?: AuthJurisdictionMove;
 
     /**
      * Optional table-level authorization callback for fan-out RPC envelopes.
@@ -3498,6 +3510,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         getReader: () => options.authAuditReader,
     });
 
+    // The auth jurisdiction-move ops (copy, purge): worker-served for the same reason —
+    // the auth objects are reached through the injected move, not a shard.
+    const authJurisdictionMove = buildAuthJurisdictionMoveRpc({
+        assertAdmin: assertAdminAuthorized,
+        getMove: () => options.authJurisdictionMove,
+    });
+
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
      * Studio Notifications page's read of registered `@lunora/notify` devices.
@@ -3577,7 +3596,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return undefined;
         }
 
-        if (envelope.functionPath !== GET_AUTH_AUDIT_LOG_OP && envelope.functionPath !== LIST_PUSH_SUBSCRIPTIONS_OP) {
+        if (
+            envelope.functionPath !== GET_AUTH_AUDIT_LOG_OP &&
+            envelope.functionPath !== LIST_PUSH_SUBSCRIPTIONS_OP &&
+            envelope.functionPath !== COPY_AUTH_TO_JURISDICTION_OP &&
+            envelope.functionPath !== PURGE_UNPINNED_AUTH_OP
+        ) {
             return undefined;
         }
 
@@ -3593,7 +3617,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // so ordinary RPC traffic still never pays for it.
         await recordAdminGrant(request);
 
-        return envelope.functionPath === GET_AUTH_AUDIT_LOG_OP ? getAuthAuditLog(request, envelope.args ?? {}) : listPushSubscriptions(request, envelope.args);
+        if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
+            return getAuthAuditLog(request, envelope.args ?? {});
+        }
+
+        if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
+            return listPushSubscriptions(request, envelope.args);
+        }
+
+        return authJurisdictionMove(request, envelope.functionPath, envelope.args ?? {});
     };
 
     // The data-movement admin routes (export / sync / connector-sync / apply /
@@ -5944,6 +5976,8 @@ export type {
 } from "./auth-admin-routes";
 export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
+export type { AuthJurisdictionMove, AuthMoveTableReport } from "./auth-jurisdiction-move-rpc";
+export { COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
 // Identity-resolver layer lives in its own module; re-export the public names
 // here so `@lunora/runtime`'s import surface is unchanged.
 export type {

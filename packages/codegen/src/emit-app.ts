@@ -914,6 +914,9 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
             options.authAuditReader = authWiring.auditReader;
+            // Set only once auth is pinned to a jurisdiction: copies the users left in the
+            // un-pinned object across (\`__lunora_admin__:copyAuthToJurisdiction\`).
+            options.authJurisdictionMove = authWiring.jurisdictionMove;
             // \`authAdmin\` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently

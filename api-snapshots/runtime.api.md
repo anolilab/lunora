@@ -2238,6 +2238,7 @@ interface WorkerOptions {
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
     authHandler?: (request: Request) => Promise<Response | undefined>;
+    authJurisdictionMove?: AuthJurisdictionMove;
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
     authorizeShard?: (caller: ShardCaller) => boolean | Promise<boolean>;
     backupCron?: string;
@@ -2729,6 +2730,34 @@ type AuthAuditOutcome = "failure" | "success";
 ```ts
 interface AuthAuditReader {
     read: (options: ReadAuthAuditQuery) => Promise<AuthAuditEntry[]>;
+}
+```
+
+### `AuthJurisdictionMove` (interface)
+
+```ts
+interface AuthJurisdictionMove {
+    copy: (options?: {
+        force?: boolean;
+    }) => Promise<{
+        done: boolean;
+        tables: AuthMoveTableReport[];
+    }>;
+    purge: () => Promise<{
+        dropped: string[];
+    }>;
+}
+```
+
+### `AuthMoveTableReport` (interface)
+
+```ts
+interface AuthMoveTableReport {
+    copied: number;
+    skipped: number;
+    sourceRows: number;
+    table: string;
+    targetRows: number;
 }
 ```
 

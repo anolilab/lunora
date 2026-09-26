@@ -2151,7 +2151,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits the Durable-Object-backed auth branch alongside the D1 one", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2175,6 +2175,8 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // secret, because DO storage is unreachable from the worker.
             expect(app).toContain("const authWiring = createDoAuthWiring({");
             expect(app).toContain("options.authAuditReader = authWiring.auditReader;");
+            // The copy/purge admin ops for a jurisdiction move; `undefined` until pinned.
+            expect(app).toContain("options.authJurisdictionMove = authWiring.jurisdictionMove;");
 
             // Both modes must be rejected together — silently doing nothing is worse.
             expect(app).toContain("pass either `d1` or `namespace`, not both");
