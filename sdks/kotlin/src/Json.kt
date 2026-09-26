@@ -356,13 +356,32 @@ object Key {
 
     private fun trimTrailingZeros(text: String): String = if (!text.contains('.')) text else text.trimEnd('0').trimEnd('.')
 
-    /** Quotes a string the way `JSON.stringify` does: `<`, `>`, `&`, U+2028/9 stay raw. */
+    /**
+     * Quotes a string the way `JSON.stringify` does: `<`, `>`, `&`, U+2028/9 stay raw.
+     *
+     * A LONE surrogate is escaped as `\udXXX`, lowercase, exactly as ECMAScript's
+     * well-formed `JSON.stringify` writes it. Left raw it reaches the UTF-8
+     * encoder, which has no encoding for it and substitutes `?` — so the write
+     * went to the server with a different string than the caller made, and the
+     * stable key collided with the one for a literal `?`. A well-formed pair is
+     * written as-is.
+     */
     fun jsonString(value: String): String {
         val out = StringBuilder(value.length + 2)
 
         out.append('"')
 
-        for (character in value) {
+        for ((index, character) in value.withIndex()) {
+            val lone =
+                (character.isHighSurrogate() && !(index + 1 < value.length && value[index + 1].isLowSurrogate())) ||
+                    (character.isLowSurrogate() && !(index > 0 && value[index - 1].isHighSurrogate()))
+
+            if (lone) {
+                out.append(String.format(Locale.ROOT, "\\u%04x", character.code))
+
+                continue
+            }
+
             when (character) {
                 '"' -> out.append("\\\"")
                 '\\' -> out.append("\\\\")
