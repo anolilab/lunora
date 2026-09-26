@@ -103,6 +103,17 @@ public final class Offline {
             Set.of("RATE_LIMITED", "TOO_MANY_REQUESTS");
 
     /**
+     * Codes that refuse the CREDENTIAL, not the write, so a replay answered with one is held
+     * (re-queued) rather than settled.
+     *
+     * <p>A write queued offline replays with whatever bearer the client held when it went offline,
+     * which has very often expired by reconnect; settling it would destroy the user's own durable
+     * write over a problem one token refresh fixes.
+     */
+    public static final Set<String> AUTH_REPLAY_ERROR_CODES =
+            Set.of("UNAUTHORIZED", "TOKEN_EXPIRED", "UNAUTHENTICATED");
+
+    /**
      * The longest delay a rate-limit hint is honoured for, matching the reference client's own
      * clamp. A server (or a proxy inventing one) that names an hour would otherwise park a durable
      * queue for an hour with nothing able to shorten it — the caller can always flush again sooner

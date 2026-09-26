@@ -3,7 +3,9 @@ package lunora
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -60,13 +62,21 @@ type APIError struct {
 	Code    string
 	Message string
 	Data    any
-	// Transient says the call never reached a verdict — a 5xx, or a non-2xx
-	// carrying no envelope at all (an edge error page, a WAF block, a proxy). It
-	// is set where the HTTP STATUS is still in scope, because nothing downstream
-	// can recover it: Code alone cannot tell a BAD_REQUEST a function returned
-	// from the INTERNAL this client synthesises for a body that never came from
-	// one. See isTransient.
+	// Transient says the call never reached a verdict: a reply with no readable
+	// error envelope (an edge error page, a WAF block, a proxy, a body that is
+	// not a JSON object) — except a 413, which is PAYLOAD_TOO_LARGE, a verdict on
+	// the request's size. It is set where the HTTP STATUS is still in scope,
+	// because nothing downstream can recover it: Code alone cannot tell an
+	// INTERNAL a function returned from the INTERNAL this client synthesises for
+	// a body that never came from one. A CODED envelope never sets it — the code
+	// is the verdict whatever the status, so a coded 5xx is terminal on the
+	// single-call and batch replay paths alike. See isTransient.
 	Transient bool
+	// resultUndecodable marks the error this client raises when a SUCCESSFUL
+	// reply's result will not decode — the write committed. It is where the
+	// failure arose, not the code: a server may answer WIRE_DECODE_FAILED
+	// itself, and that is a refusal.
+	resultUndecodable bool
 }
 
 func (e APIError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
@@ -136,6 +146,9 @@ type Client struct {
 	pokeOrder   []string
 	nextID      int
 	nextShapeID int
+	// streams holds each open Stream's teardown, so Close can end them.
+	streams      map[int]func()
+	nextStreamID int
 
 	// offline holds the writes made while send was nil. Guarded by mu, which is
 	// why OfflineQueue carries no lock of its own.
@@ -176,6 +189,12 @@ type pokeBuffer struct {
 	// because the flag is per part, and sticky (never cleared) so a server that
 	// splits a seed across several parts still replaces rather than merges.
 	resets map[string]bool
+	// bases holds, per shape, the checkpoint the server computed its diff
+	// against: the part's baseCheckpoint, else the pokeStart's. epoch is the
+	// pokeStart's. Both are compared with the view's own at pokeEnd.
+	bases          map[string]any
+	baseCheckpoint any
+	epoch          any
 }
 
 // MaxPendingPokes bounds the un-applied poke buffers a client retains. A buffer
@@ -218,6 +237,22 @@ func NewClient(baseURL string, post HTTPPoster) *Client {
 	}
 }
 
+// String renders the client for %v, %+v, %s and %q WITHOUT its AuthToken. The
+// default struct formatting prints every field, so a client that reached a log
+// line or an error message leaked the bearer token with it.
+func (c *Client) String() string {
+	token := "unset"
+	if c.AuthToken != "" {
+		token = "[redacted]"
+	}
+
+	return fmt.Sprintf("lunora.Client{BaseURL: %q, AuthToken: %s}", c.BaseURL, token)
+}
+
+// GoString is String for %#v, which bypasses String and would otherwise dump
+// the token verbatim.
+func (c *Client) GoString() string { return c.String() }
+
 // ClientID returns the id this client namespaces anonymous idempotency under.
 func (c *Client) ClientID() string {
 	c.mu.Lock()
@@ -248,11 +283,47 @@ func (c *Client) Identity() *string {
 // a consumer setting it from a sign-in handler while the socket goroutine is
 // mid-flush is the ordinary case, and an unsynchronised field there is a data
 // race the consumer's own `go test -race` would report against this package.
+//
+// A change FROM a set identity to a different one (a sign-out, or another user
+// signing in) evicts the previous session: every subscription's resume cursor
+// and epoch were that identity's position in the changelog, and every shape
+// view held the rows THAT identity could see. Resuming from them under the new
+// identity would splice a diff onto someone else's rows, so each query drops
+// its cursor, epoch and server value, each shape view is emptied and its
+// callback told so with an empty row set, and the next resubscribe is cold. A
+// first sign-in (from nil) and a re-assertion of the same identity evict
+// nothing.
 func (c *Client) SetIdentity(identity *string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	var deferred []func()
 
+	c.mu.Lock()
+	previous := c.identity
 	c.identity = identity
+
+	if previous != nil && (identity == nil || *identity != *previous) {
+		for _, entry := range c.subscriptions {
+			entry.cursor = nil
+			entry.epoch = nil
+			entry.state.ServerBase = nil
+			entry.state.ServerCursor = nil
+			NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), &deferred)
+		}
+
+		for _, shape := range c.shapes {
+			shape.rows = map[string]any{}
+			shape.order = nil
+			shape.checkpoint = nil
+			shape.epoch = nil
+
+			if onRows := shape.onRows; onRows != nil {
+				deferred = append(deferred, func() { onRows([]any{}) })
+			}
+		}
+	}
+
+	c.mu.Unlock()
+
+	runDeferred(deferred)
 }
 
 // AttachSocket registers the sender used for subscription frames. Call it once
@@ -287,18 +358,28 @@ func (c *Client) Online() bool {
 	return c.send != nil
 }
 
-// Close rejects every queued write so no caller waits on a dead client. Durable
-// storage is untouched: the next session restores those writes.
+// Close rejects every queued write so no caller waits on a dead client, and ends
+// every open [Client.Stream]. Durable storage is untouched: the next session
+// restores those writes.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.send = nil
 	discarded := c.offline.Clear()
+
+	streams := make([]func(), 0, len(c.streams))
+	for _, end := range c.streams {
+		streams = append(streams, end)
+	}
 	c.mu.Unlock()
 
-	// Settled outside the lock: a rejection rolls optimistic layers back, which
-	// re-acquires it.
+	// Settled outside the lock: a rejection rolls optimistic layers back, and a
+	// stream's teardown unsubscribes — both re-acquire it.
 	c.reportDiscarded(discarded)
+
+	for _, end := range streams {
+		end()
+	}
 }
 
 // argsOrEmpty normalises a nil argument record to the empty object the wire
@@ -352,14 +433,19 @@ func ParseRPCResponse(status int, raw []byte) (any, error) {
 // a read, and for a write against a shard with CDC off — the degraded case the
 // optimistic engine falls back to one-shot behaviour for.
 func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
-	var body map[string]any
+	// Parsed into `any`, not a map: `null`, `[]`, `"ok"` and `7` are JSON no
+	// map holds, and each must surface as this package's APIError rather than a
+	// raw encoding/json error — or, for `null`, a nil result that reads as
+	// success.
+	var parsed any
 
-	if err := json.Unmarshal(raw, &body); err != nil {
-		if status < 200 || status > 299 {
-			return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status), Transient: true}
-		}
+	// A syntax error leaves parsed nil (encoding/json validates before it
+	// assigns), which the assertion below reads as "no object".
+	_ = json.Unmarshal(raw, &parsed)
 
-		return nil, nil, fmt.Errorf("lunora: malformed RPC response: %w", err)
+	body, isObject := parsed.(map[string]any)
+	if !isObject {
+		return nil, nil, envelopelessError(status, "an unreadable body")
 	}
 
 	if envelope, ok := body["error"].(map[string]any); ok {
@@ -376,33 +462,56 @@ func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 
 		var data any
 
+		// A `data` the codec refuses is dropped, not raised: the envelope is still
+		// the server's coded verdict, and escaping as a bare codec error made a
+		// replay classify it as a transport failure and re-send it forever.
 		if payload, present := envelope["data"]; present && payload != nil {
-			decoded, err := DecodeWire(payload)
-			if err != nil {
-				return nil, nil, err
+			if decoded, err := DecodeWire(payload); err == nil {
+				data = decoded
 			}
-
-			data = decoded
 		}
 
-		// A 5xx is the shard or the edge failing under the call, not a verdict on
-		// it, so a queued write replayed under the same idempotency key is still
-		// good.
-		return nil, nil, APIError{Code: code, Data: data, Message: message, Transient: status >= 500}
+		// Classified by its code alone, whatever the status: a coded 5xx is the
+		// server's verdict, on this path and the batch path alike. Only the codes
+		// isTransient names re-queue a replay.
+		return nil, nil, APIError{Code: code, Data: data, Message: message}
 	}
 
 	if status < 200 || status > 299 {
-		// No envelope at all, so this body never came from a Lunora function: an
-		// edge error page, a WAF block, a proxy. Nothing reached the shard, which
-		// makes it transport rather than a verdict — the batch path already
-		// classified the identical response that way, and a lone queued write must
-		// not be dropped for being alone.
-		return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status), Transient: true}
+		return nil, nil, envelopelessError(status, "no error envelope")
 	}
 
-	result, err := DecodeWire(body["result"])
+	commitCursor := asCursor(body["commitCursor"])
 
-	return result, asCursor(body["commitCursor"]), err
+	result, err := DecodeWire(body["result"])
+	if err != nil {
+		// The call succeeded — a write COMMITTED — and only its result is
+		// unreadable. Coded so a replay can tell it from a transport failure and
+		// settle the write rather than re-send it forever; the cursor rides along
+		// so its overlay still confirms.
+		return nil, commitCursor, APIError{Code: CodeWireDecodeFailed, Message: "result could not be decoded: " + err.Error(), resultUndecodable: true}
+	}
+
+	return result, commitCursor, nil
+}
+
+// CodeWireDecodeFailed marks a successful reply whose `result` does not decode.
+// A write carrying it has committed: a replay settles it committed, with this
+// error on its settled event, and never re-sends it.
+const CodeWireDecodeFailed = "WIRE_DECODE_FAILED"
+
+// envelopelessError classifies a reply carrying no readable error envelope by
+// its HTTP status (protocol/README.md §4.2/§4.3). Nothing in it came from a
+// Lunora function — an edge error page, a WAF block, a proxy — so it is
+// transport, and transient, with one exception: a 413 refused the request body
+// for its size, which re-sending it unchanged can never fix. That is
+// PAYLOAD_TOO_LARGE, the verdict the worker's own coded 413 carries.
+func envelopelessError(status int, what string) APIError {
+	if status == 413 {
+		return APIError{Code: CodePayloadTooLarge, Message: "HTTP 413 with " + what}
+	}
+
+	return APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with %s", status, what), Transient: true}
 }
 
 // asCursor narrows a JSON number to the int64 cursors are compared as.
@@ -508,20 +617,21 @@ func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutatio
 	return ParseRPCEnvelope(status, raw)
 }
 
-// rpcBatch posts one /_lunora/rpc-batch chunk and returns the parsed body.
+// rpcBatch posts one /_lunora/rpc-batch chunk and returns the HTTP status with
+// the body, which is nil when it is not a JSON object.
 //
 // No x-lunora-mutation-id on the request: a batch is ONE transport hop carrying
 // independent calls, so each entry carries its own idempotency key and client id
 // in the body. A single outer header would name one write and de-duplicate the
 // whole chunk against it.
-func (c *Client) rpcBatch(calls []map[string]any) (map[string]any, error) {
+func (c *Client) rpcBatch(calls []map[string]any) (int, map[string]any, error) {
 	if c.Post == nil {
-		return nil, fmt.Errorf("lunora: no HTTPPoster configured")
+		return 0, nil, fmt.Errorf("lunora: no HTTPPoster configured")
 	}
 
 	payload, err := json.Marshal(map[string]any{"calls": calls})
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	headers := map[string]string{"content-type": "application/json"}
@@ -529,19 +639,19 @@ func (c *Client) rpcBatch(calls []map[string]any) (map[string]any, error) {
 		headers["authorization"] = "Bearer " + c.AuthToken
 	}
 
-	_, raw, err := c.Post(joinURL(c.BaseURL, RPCBatchPath), headers, payload)
+	status, raw, err := c.Post(joinURL(c.BaseURL, RPCBatchPath), headers, payload)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	var body map[string]any
+	var parsed any
 
-	if err := json.Unmarshal(raw, &body); err != nil {
-		// A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
-		return nil, err
-	}
+	// A body that is not a JSON object (an edge's HTML page, say) is left to
+	// the caller to classify by status, exactly as ParseRPCEnvelope does.
+	_ = json.Unmarshal(raw, &parsed)
+	body, _ := parsed.(map[string]any)
 
-	return body, nil
+	return status, body, nil
 }
 
 // Call invokes functionPath and decodes the result into T.
@@ -754,14 +864,33 @@ type StreamEvent struct {
 // sender is the frame dispatcher, so a consumer that stops reading slows frame
 // handling rather than losing data. A consumer that cannot keep up should read
 // on its own goroutine.
+//
+// [Client.Close] ends every open stream too: the channel closes, so a `range`
+// over it returns rather than waiting on a client that will never send again.
 func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
 	events := make(chan StreamEvent, streamBufferSize)
 	done := make(chan struct{})
 
-	// Guarded by `done` rather than sent to blindly: an unsubscribe closes the
-	// channel, and a frame still in flight would otherwise send on a closed
-	// channel and panic in the caller's socket loop.
+	// sending is held (shared) for the whole of every send and taken exclusively
+	// to close `events`, so the close can never land while a frame is mid-send.
+	// `done` alone is not enough: select picks at random among ready cases, and
+	// once both channels are closed the send case is ready too — a send on a
+	// closed channel, panicking in the caller's socket loop (and a data race
+	// under -race). `done` is still what unblocks a sender stuck on a full
+	// buffer, which is why it closes BEFORE the exclusive lock is taken.
+	var (
+		sending sync.RWMutex
+		closed  bool
+	)
+
 	emit := func(event StreamEvent) {
+		sending.RLock()
+		defer sending.RUnlock()
+
+		if closed {
+			return
+		}
+
 		select {
 		case <-done:
 		case events <- event:
@@ -775,15 +904,45 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
 		shardKey,
 	)
-	var once sync.Once
 
-	return events, func() {
+	var (
+		once     sync.Once
+		streamID int
+	)
+
+	end := func() {
 		once.Do(func() {
+			c.mu.Lock()
+			delete(c.streams, streamID)
+			c.mu.Unlock()
+
 			unsubscribe()
 			close(done)
+
+			sending.Lock()
+			closed = true
 			close(events)
+			sending.Unlock()
 		})
 	}
+
+	c.mu.Lock()
+	if c.streams == nil {
+		c.streams = map[int]func(){}
+	}
+
+	c.nextStreamID++
+	streamID = c.nextStreamID
+	c.streams[streamID] = end
+	closedClient := c.closed
+	c.mu.Unlock()
+
+	// A stream opened on a closed client ends at once rather than never.
+	if closedClient {
+		end()
+	}
+
+	return events, end
 }
 
 // streamBufferSize is how many values [Client.Stream] holds before its sends
@@ -1063,7 +1222,13 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			c.pokeOrder = append(c.pokeOrder, pokeID)
 		}
 
-		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}, resets: map[string]bool{}}
+		c.pokes[pokeID] = &pokeBuffer{
+			bases:          map[string]any{},
+			baseCheckpoint: frame["baseCheckpoint"],
+			epoch:          frame["epoch"],
+			parts:          map[string][]map[string]any{},
+			resets:         map[string]bool{},
+		}
 
 		// Evict oldest-first at the cap; a poke that old is no longer going to
 		// see its pokeEnd.
@@ -1080,7 +1245,9 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 		return kind, nil
 	case "pokeEnd":
-		return kind, c.applyPoke(frame)
+		c.applyPoke(frame)
+
+		return kind, nil
 	default:
 		return kind, nil
 	}
@@ -1108,6 +1275,19 @@ func (c *Client) bufferPokePart(frame map[string]any) {
 	if buffer := c.pokes[pokeID]; buffer != nil {
 		buffer.parts[shapeID] = append(buffer.parts[shapeID], operations...)
 
+		base := frame["baseCheckpoint"]
+		if base == nil {
+			base = buffer.baseCheckpoint
+		}
+
+		if base != nil {
+			if buffer.bases == nil {
+				buffer.bases = map[string]any{}
+			}
+
+			buffer.bases[shapeID] = base
+		}
+
 		if reset, _ := frame["reset"].(bool); reset {
 			if buffer.resets == nil {
 				buffer.resets = map[string]bool{}
@@ -1133,7 +1313,7 @@ func (c *Client) forgetPokeOrder(pokeID string) {
 
 // applyPoke applies a whole poke in one step and fires each touched shape's
 // callback with the resulting view.
-func (c *Client) applyPoke(frame map[string]any) error {
+func (c *Client) applyPoke(frame map[string]any) {
 	pokeID, _ := frame["pokeId"].(string)
 
 	c.mu.Lock()
@@ -1144,19 +1324,62 @@ func (c *Client) applyPoke(frame map[string]any) error {
 	if buffer == nil {
 		c.mu.Unlock()
 
-		return nil
+		return
 	}
 
 	type delivery struct {
 		handler RowsHandler
 		rows    []any
+		onError ErrorHandler
+		err     SubscriptionError
 	}
 
 	deliveries := make([]delivery, 0, len(buffer.parts))
 
+	var reseeds []*shapeSubscription
+
 	for shapeID, operations := range buffer.parts {
 		shape := c.shapes[shapeID]
 		if shape == nil {
+			continue
+		}
+
+		// Every row is decoded BEFORE the view is touched: a poke applies whole
+		// or not at all. Clearing for a reset and then failing on a row left the
+		// view half-applied (or empty), and skipping the row while advancing the
+		// checkpoint past it meant no resume would ever send it again. A refused
+		// poke leaves the view, checkpoint and epoch as they were and reports on
+		// the shape's error callback; other shapes in the same poke still apply.
+		decoded, err := decodePokeRows(operations)
+		if err != nil {
+			if shape.onError != nil {
+				deliveries = append(deliveries, delivery{onError: shape.onError, err: SubscriptionError{Code: CodeWireDecodeFailed, Message: err.Error()}})
+			}
+
+			continue
+		}
+
+		// A forked epoch (the changelog timeline was reset) or a base that is not
+		// the checkpoint this view is at (a poke went missing — or was refused
+		// above) means the ops are a diff against a view we do not hold. Splicing
+		// them on would corrupt it, so drop the view, clear its resume point, tell
+		// its callback, skip the ops and re-subscribe cold so the server re-seeds.
+		// A reset part is exempt: it carries the whole membership anyway.
+		base, based := buffer.bases[shapeID]
+		epochForked := buffer.epoch != nil && shape.epoch != nil && !reflect.DeepEqual(buffer.epoch, shape.epoch)
+		baseDiverged := based && shape.checkpoint != nil && !reflect.DeepEqual(base, shape.checkpoint)
+
+		if !buffer.resets[shapeID] && (epochForked || baseDiverged) {
+			shape.rows = map[string]any{}
+			shape.order = nil
+			shape.checkpoint = nil
+			shape.epoch = nil
+			reseeds = append(reseeds, shape)
+
+			if shape.onRows != nil {
+				deliveries = append(deliveries, delivery{handler: shape.onRows, rows: []any{}})
+			}
+
 			continue
 		}
 
@@ -1172,7 +1395,7 @@ func (c *Client) applyPoke(frame map[string]any) error {
 			shape.order = nil
 		}
 
-		for _, operation := range operations {
+		for index, operation := range operations {
 			key, _ := operation["key"].(string)
 			op, _ := operation["op"].(string)
 
@@ -1185,25 +1408,18 @@ func (c *Client) applyPoke(frame map[string]any) error {
 				continue
 			}
 
-			value, present := operation["value"]
-			if !present || value == nil {
+			value, present := decoded[index]
+			if !present {
 				// A value-less upsert is membership-only; it must not blank an
 				// existing row.
 				continue
-			}
-
-			decoded, err := DecodeWire(value)
-			if err != nil {
-				c.mu.Unlock()
-
-				return err
 			}
 
 			if _, existing := shape.rows[key]; !existing {
 				shape.order = append(shape.order, key)
 			}
 
-			shape.rows[key] = decoded
+			shape.rows[key] = value
 		}
 
 		if checkpoint, ok := frame["checkpoint"]; ok {
@@ -1224,15 +1440,57 @@ func (c *Client) applyPoke(frame map[string]any) error {
 		}
 	}
 
+	send := c.send
 	c.mu.Unlock()
 
 	// Callbacks run outside the lock: a handler that subscribes or unsubscribes
 	// would otherwise deadlock on the mutex it is already inside.
 	for _, item := range deliveries {
+		if item.onError != nil {
+			item.onError(item.err)
+
+			continue
+		}
+
 		item.handler(item.rows)
 	}
 
-	return nil
+	// The cold re-subscribe for every view dropped above (id, name and args
+	// never change after SubscribeShape, so reading them unlocked is safe).
+	if send != nil {
+		for _, shape := range reseeds {
+			if frame, err := BuildShapeSubscribeFrame(shape.id, shape.name, shape.args, nil, nil); err == nil {
+				_ = send(frame)
+			}
+		}
+	}
+}
+
+// decodePokeRows decodes the value of every upsert in one shape's buffered
+// operations, keyed by operation index. A value-less (or null) upsert has no
+// entry: it is membership-only.
+func decodePokeRows(operations []map[string]any) (map[int]any, error) {
+	decoded := make(map[int]any, len(operations))
+
+	for index, operation := range operations {
+		if op, _ := operation["op"].(string); op == "delete" {
+			continue
+		}
+
+		value, present := operation["value"]
+		if !present || value == nil {
+			continue
+		}
+
+		row, err := DecodeWire(value)
+		if err != nil {
+			return nil, err
+		}
+
+		decoded[index] = row
+	}
+
+	return decoded, nil
 }
 
 func removeKey(keys []string, key string) []string {
@@ -1249,7 +1507,9 @@ func removeKey(keys []string, key string) []string {
 // path has to update the resume point and the optimistic state in one critical
 // section so a concurrent frame cannot interleave between them.
 func (c *Client) advanceLocked(entry *subscription, frame map[string]any) {
-	if cursor, ok := frame["cursor"]; ok {
+	// Only an integer is a cursor. A string or fractional one is kept off the
+	// resume point: resending it verbatim asks the server to resume from "9".
+	if cursor, ok := frame["cursor"].(float64); ok && cursor == math.Trunc(cursor) {
 		entry.cursor = cursor
 	}
 

@@ -45,6 +45,26 @@ val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect —
 queries and shapes alike — carrying each one's resume cursor or checkpoint.
+`handleFrame` never throws for a frame's shape: one that is not JSON, not an
+object, or carries a mistyped `id`/`pokeId`/`cursor` is ignored (a cursor that is
+not an integer never replaces the tracked one). A poke is applied whole or not at
+all per shape: if any row fails to decode, that shape's view, checkpoint and
+epoch are left exactly as they were and its `onError` receives
+`WIRE_DECODE_FAILED`, while other shapes in the same poke still apply. A later
+poke whose `baseCheckpoint` (the part's, else its `pokeStart`'s) is not the
+checkpoint the view is at — or whose epoch differs from the view's — and that is
+not a `reset` re-seeds the shape instead of splicing onto it: the view is emptied,
+its checkpoint and epoch cleared, `onRows` told `[]`, the ops skipped, and a cold
+`shape_subscribe` sent at once through the attached socket.
+
+A reply the RPC cannot read — a body that is not a JSON object, whatever its
+status — throws `ApiException` (`INTERNAL`), never a parser or cast exception. A
+success whose `result` does not decode throws `ApiException`
+(`WIRE_DECODE_FAILED`): the call did reach the server, and a mutation behind it
+committed.
+
+`client.close()` also ends every open `stream`: a loop over one yields what was
+already delivered and then returns.
 
 ## Optimistic updates and offline writes
 
@@ -93,9 +113,27 @@ A replay the server rate-limits is re-queued, not dropped: `FlushReport.retryAft
 carries the delay the envelope named, and the next flush is a no-op until it has
 passed.
 
+A lone write and a batched one are classified by ONE rule: a coded error envelope
+by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`,
+`RATE_LIMITED`, `TOO_MANY_REQUESTS` and the refused-credential codes
+`UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` re-queue; every other code,
+a coded 5xx and a server-sent `WIRE_DECODE_FAILED` included, is terminal), and a
+reply with no envelope by its status (re-queued). An envelope whose `data` does
+not decode is still that coded error, with its `data` dropped. A
+413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch splits and retries, and a
+lone write still refused settles terminally with that code. A write the server
+committed whose result does not decode settles `COMMITTED` with a
+`WIRE_DECODE_FAILED` error and no value, and is never replayed. A flush that is
+left by an unexpected exception puts every write it drained but had not yet
+settled back at the front of the queue before the exception propagates.
+
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Changing
+it from one set value to a different one (including `null`) evicts the previous
+session: every query and shape subscription drops its resume cursor and epoch, so
+the next resubscribe is cold, and every shape view is emptied and its callback
+told `[]`. A first sign-in and re-setting the same value evict nothing.
 
 `synchronized` is reentrant, so a consumer callback invoked under the client's
 monitor would not deadlock — it would instead run inside the critical section

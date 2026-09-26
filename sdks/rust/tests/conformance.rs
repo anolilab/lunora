@@ -23,12 +23,13 @@ use serde_json::{json, Value};
 mod offline_cases;
 
 use offline_cases::{
-    batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_payload_too_large, offline_flush_batches_multiple_writes,
-    offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal, offline_queue_drains_only_the_named_shard,
-    offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes,
-    offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write,
-    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
-    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
+    offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
+    offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
+    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
+    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
+    offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -140,6 +141,16 @@ fn conformance_manifest_is_covered() {
             "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
             "offline_flush_unencodable_write_settles_terminal" => offline_flush_unencodable_write_settles_terminal(),
             "batch_entry_cap_matches_protocol" => batch_entry_cap_matches_protocol(),
+            "offline_flush_empty_shard_key_routes_to_default" => offline_flush_empty_shard_key_routes_to_default(),
+            "offline_flush_undecodable_result_settles_committed" => offline_flush_undecodable_result_settles_committed(),
+            "offline_flush_classifies_single_and_batch_alike" => offline_flush_classifies_single_and_batch_alike(),
+            "offline_flush_batch_splits_on_envelopeless_413" => offline_flush_batch_splits_on_envelopeless_413(),
+            "shape_poke_with_undecodable_row_is_refused_whole" => shape_poke_with_undecodable_row_is_refused_whole(),
+            "malformed_frames_are_ignored_without_raising" => malformed_frames_are_ignored_without_raising(),
+            "rpc_unreadable_success_body_raises_sdk_error" => rpc_unreadable_success_body_raises_sdk_error(),
+            "subscription_stream_ends_on_close" => subscription_stream_ends_on_close(),
+            "identity_change_evicts_previous_session" => identity_change_evicts_previous_session(),
+            "auth_token_redacted_when_printed" => auth_token_redacted_when_printed(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -427,6 +438,10 @@ fn rpc_responses() {
             Err(ClientError::Api(error)) => {
                 assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
                 assert_eq!(error.message, case["message"].as_str().unwrap(), "{name}");
+
+                if case["dataDropped"] == json!(true) {
+                    assert_eq!(error.data, None, "{name}: undecodable data is dropped");
+                }
             }
             other => panic!("expected an ApiError for {name}, got {other:?}"),
         }
@@ -458,14 +473,15 @@ fn non_2xx_without_error_envelope_fails() {
         assert!(is_transient(&ClientError::Api(error)));
     }
 
-    // A coded 5xx is likewise the shard failing UNDER the call, while the same
-    // envelope at 4xx is the function's own answer and terminal.
+    // A CODED envelope is a verdict whatever its status: the code alone decides
+    // a replay, so a coded 5xx is exactly as terminal as a coded 4xx
+    // (`offline_flush_classifies_single_and_batch_alike`).
     let coded = |status| match parse_rpc_response(&json!({ "error": { "code": "BAD_REQUEST", "message": "no" } }), status) {
-        Err(ClientError::Api(error)) => error.transient,
+        Err(ClientError::Api(error)) => is_transient(&ClientError::Api(error)),
         other => panic!("expected an ApiError, got {other:?}"),
     };
 
-    assert!(coded(503));
+    assert!(!coded(503));
     assert!(!coded(400));
 }
 
@@ -892,6 +908,329 @@ fn pending_poke_buffers_are_bounded() {
 
     assert_eq!(delivered.len(), 1, "the newest buffer must survive and apply");
     assert_eq!(delivered[0], vec![WireValue::String("kept".into())]);
+}
+
+/// Records every `on_rows` delivery and every `on_error` code of one shape.
+type ShapeRecorders = (Arc<Mutex<Vec<Vec<WireValue>>>>, Arc<Mutex<Vec<Option<String>>>>);
+
+/// A client subscribed to `roomMessages` (the fixtures' `shape_1`), with the
+/// frames it sends and the shape's callbacks recorded.
+fn shape_client() -> (Client, Arc<Mutex<Vec<Value>>>, ShapeRecorders) {
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
+    let rows: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let (rows_handle, errors_handle) = (Arc::clone(&rows), Arc::clone(&errors));
+
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |delivered| rows_handle.lock().expect("rows").push(delivered.to_vec()))),
+        Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.code.clone()))),
+    );
+
+    (client, sent, (rows, errors))
+}
+
+fn deliver(client: &mut Client, frames: &Value) {
+    for frame in frames.as_array().expect("frames") {
+        client.handle_frame(&frame.to_string()).expect("a frame must never fail handle_frame");
+    }
+}
+
+/// The frames `resend_subscriptions` sends now, keyed by type.
+fn resent(client: &Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
+    sent.lock().expect("sent").clear();
+    client.resend_subscriptions().expect("resend");
+
+    let frames = sent.lock().expect("sent");
+
+    frames.iter().find(|frame| frame["type"] == json!(kind)).cloned().expect("a resent frame")
+}
+
+/// What the shape view holds, observed the only way a consumer can: an empty
+/// follow-up poke re-delivers the whole view.
+fn shape_view(client: &mut Client, rows: &Arc<Mutex<Vec<Vec<WireValue>>>>) -> Value {
+    deliver(
+        client,
+        &json!([
+            { "type": "pokeStart", "pokeId": "probe" },
+            { "type": "pokePart", "pokeId": "probe", "shapeId": "shape_1", "rowsPatch": [] },
+            { "type": "pokeEnd", "pokeId": "probe" },
+        ]),
+    );
+
+    let delivered = rows.lock().expect("rows").last().cloned().expect("the probe delivers the view");
+
+    encode_wire(&WireValue::Array(delivered)).expect("encode")
+}
+
+/// A poke is applied WHOLE or not at all, per shape: a row the codec refuses
+/// leaves the view, its checkpoint and its epoch untouched and reaches the
+/// shape's error callback — never `handle_frame`'s caller, whose read loop it
+/// would end.
+fn shape_poke_with_undecodable_row_is_refused_whole() {
+    let document = fixture("ws-frames.json");
+    let shape = &document["shape"];
+    let (mut client, sent, (rows, errors)) = shape_client();
+
+    deliver(&mut client, &shape["pokeSequence"]);
+    rows.lock().expect("rows").clear();
+    deliver(&mut client, &shape["undecodableRowPokeSequence"]);
+
+    assert!(rows.lock().expect("rows").is_empty(), "no rows callback fires for the refused poke");
+    assert_eq!(
+        *errors.lock().expect("errors"),
+        vec![shape["undecodableRowErrorCode"].as_str().map(str::to_string)],
+        "the shape's error callback hears it once"
+    );
+
+    let frame = resent(&client, &sent, "shape_subscribe");
+
+    assert_eq!(
+        frame["sinceCheckpoint"], shape["undecodableRowResendCheckpoint"],
+        "the checkpoint did not advance"
+    );
+    assert_eq!(frame["sinceEpoch"], json!("e1"));
+    assert_eq!(
+        canonical(&shape_view(&mut client, &rows)),
+        canonical(&shape["expectedRows"]),
+        "the view is untouched"
+    );
+
+    // The server believes it delivered the refused rows, so the next poke is
+    // based on checkpoint 12 while the view is at 5: a gap. The view is dropped,
+    // its callbacks told `[]`, the ops skipped, and a COLD re-subscribe sent.
+    rows.lock().expect("rows").clear();
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["gapPokeSequence"]);
+
+    let told: Vec<Value> = rows
+        .lock()
+        .expect("rows")
+        .iter()
+        .map(|delivered| encode_wire(&WireValue::Array(delivered.clone())).expect("encode"))
+        .collect();
+
+    assert_eq!(told, vec![shape["gapExpectedRows"].clone()], "the callbacks are told the view emptied");
+
+    let resubscribes: Vec<Value> = sent
+        .lock()
+        .expect("sent")
+        .iter()
+        .filter(|frame| frame["type"] == json!("shape_subscribe"))
+        .cloned()
+        .collect();
+
+    assert_eq!(resubscribes.len(), 1, "a re-seed is requested at once");
+    assert_eq!(resubscribes[0]["id"], json!("shape_1"));
+    assert!(
+        resubscribes[0].get("sinceCheckpoint").is_none() && resubscribes[0].get("sinceEpoch").is_none(),
+        "cold"
+    );
+
+    let frame = resent(&client, &sent, "shape_subscribe");
+
+    assert!(
+        frame.get("sinceCheckpoint").is_none() && frame.get("sinceEpoch").is_none(),
+        "a later resume is cold too"
+    );
+    assert_eq!(shape_view(&mut client, &rows), shape["gapExpectedRows"], "the gap's ops were skipped");
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    let (mut client, sent, (rows, _errors)) = shape_client();
+
+    deliver(&mut client, &shape["pokeSequence"]);
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["contiguousPokeSequence"]);
+
+    let delivered = rows.lock().expect("rows").last().cloned().expect("delivered");
+
+    assert_eq!(
+        canonical(&encode_wire(&WireValue::Array(delivered)).expect("encode")),
+        canonical(&shape["contiguousExpectedRows"]),
+        "a contiguous poke applies"
+    );
+    assert!(sent.lock().expect("sent").is_empty(), "and re-seeds nothing");
+}
+
+/// Frames shaped like no server frame are ignored: none may fail
+/// `handle_frame` or panic, and none may touch the live subscription.
+fn malformed_frames_are_ignored_without_raising() {
+    let document = fixture("ws-frames.json");
+    let case = &document["malformedFrames"];
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
+    let touched = Arc::new(Mutex::new(0_usize));
+    let (on_data, on_error) = (Arc::clone(&touched), Arc::clone(&touched));
+
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(Vec::new()),
+        Some(Box::new(move |_value| *on_data.lock().expect("touched") += 1)),
+        Some(Box::new(move |_error| *on_error.lock().expect("touched") += 1)),
+    );
+    client.handle_frame(&case["setupFrame"].to_string()).expect("setup frame");
+    *touched.lock().expect("touched") = 0;
+
+    for frame in case["frames"].as_array().expect("frames") {
+        if let Err(error) = client.handle_frame(&frame.to_string()) {
+            panic!("{frame} must be ignored, not fail handle_frame: {error}");
+        }
+    }
+
+    assert_eq!(*touched.lock().expect("touched"), 0, "no malformed frame reaches sub_1's callbacks");
+
+    let frame = resent(&client, &sent, "subscribe");
+
+    assert_eq!(
+        frame["query"]["sinceSeq"], case["resendSinceSeq"],
+        "a non-integer cursor never replaces the tracked one"
+    );
+    assert_eq!(frame["query"]["sinceEpoch"], case["resendSinceEpoch"]);
+}
+
+/// A response the call cannot read a result or an error envelope out of fails
+/// with this SDK's own coded error, never a bare transport string or a silent
+/// null result.
+fn rpc_unreadable_success_body_raises_sdk_error() {
+    let document = fixture("rpc.json");
+    let answering = |status: u16, body: &str| {
+        let body = body.as_bytes().to_vec();
+
+        Client::new("https://app.example", Some(Box::new(move |_url, _headers, _body| Ok((status, body.clone())))))
+    };
+
+    for case in document["unreadableSuccessBody"].as_array().expect("unreadableSuccessBody") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let client = answering(case["status"].as_u64().expect("status") as u16, case["rawBody"].as_str().expect("rawBody"));
+        let args = WireValue::Object(Vec::new());
+
+        for (verb, outcome) in [
+            ("query", client.query("messages:list", &args, None)),
+            ("mutation", client.mutation("messages:send", &args, None, None)),
+            ("action", client.action("messages:notify", &args, None)),
+        ] {
+            match outcome {
+                Err(ClientError::Api(error)) => assert_eq!(error.code, case["code"].as_str().expect("code"), "{name} ({verb})"),
+                other => panic!("{name} ({verb}): expected the SDK's coded error, got {other:?}"),
+            }
+        }
+    }
+
+    // `{}` is how a function returning nothing is answered.
+    assert_eq!(
+        answering(200, "{}").query("messages:list", &WireValue::Object(Vec::new()), None).expect("void"),
+        WireValue::Null
+    );
+}
+
+/// `close()` ends every stream: the consumer iterating one drains what was
+/// delivered and then sees the channel close, rather than blocking forever.
+fn subscription_stream_ends_on_close() {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+
+    client
+        .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())
+        .expect("data frame");
+    client.close();
+
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)).expect("the delivered value"),
+        StreamEvent::Value(WireValue::Number(1.0))
+    );
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)),
+        Err(RecvTimeoutError::Disconnected),
+        "the stream ENDS on close instead of hanging"
+    );
+}
+
+/// A change FROM a set identity evicts that identity's session: resume cursors
+/// and epochs dropped, shape views emptied and told so. A first sign-in and a
+/// re-assertion of the same identity evict nothing.
+fn identity_change_evicts_previous_session() {
+    let document = fixture("ws-frames.json");
+    let case = &document["identityChange"];
+    let identity = |value: &Value| value.as_str().map(str::to_string);
+
+    for transition in case["transitions"].as_array().expect("transitions") {
+        let label = format!("{} -> {}", transition["from"], transition["to"]);
+        let (mut client, sent, (rows, _errors)) = shape_client();
+
+        client.set_identity(identity(&transition["from"]));
+        client.subscribe("messages:list", WireValue::Object(Vec::new()), None, None);
+        client.handle_frame(&case["queryFrame"].to_string()).expect("query frame");
+        deliver(&mut client, &document["shape"]["pokeSequence"]);
+        rows.lock().expect("rows").clear();
+
+        client.set_identity(identity(&transition["to"]));
+
+        let query = resent(&client, &sent, "subscribe");
+        let shape = resent(&client, &sent, "shape_subscribe");
+
+        if transition["evicts"] == json!(true) {
+            let evicted = &case["evicted"];
+
+            assert!(query["query"].get("sinceSeq").is_none(), "{label}: the query resubscribes cold");
+            assert!(query["query"].get("sinceEpoch").is_none(), "{label}");
+            assert!(shape.get("sinceCheckpoint").is_none(), "{label}: the shape resubscribes cold");
+            assert!(shape.get("sinceEpoch").is_none(), "{label}");
+
+            let told: Vec<Value> = rows
+                .lock()
+                .expect("rows")
+                .iter()
+                .map(|delivered| encode_wire(&WireValue::Array(delivered.clone())).expect("encode"))
+                .collect();
+
+            assert_eq!(
+                told,
+                vec![evicted["shapeCallbackRows"].clone()],
+                "{label}: the callbacks are told the view emptied"
+            );
+            assert_eq!(shape_view(&mut client, &rows), evicted["shapeRows"], "{label}: the view is empty");
+        } else {
+            let retained = &case["retained"];
+
+            assert_eq!(query["query"]["sinceSeq"], retained["sinceSeq"], "{label}");
+            assert_eq!(query["query"]["sinceEpoch"], retained["sinceEpoch"], "{label}");
+            assert_eq!(shape["sinceCheckpoint"], retained["sinceCheckpoint"], "{label}");
+            assert!(rows.lock().expect("rows").is_empty(), "{label}: nothing was evicted, so nobody is told");
+            assert_eq!(
+                shape_view(&mut client, &rows).as_array().expect("rows").len() as u64,
+                retained["shapeRowCount"].as_u64().expect("count"),
+                "{label}"
+            );
+        }
+    }
+}
+
+/// The bearer token never reaches a printed value. `Debug` is Rust's one
+/// standard "print this value" facility (`Client` has no `Display`), in both
+/// its compact and its pretty form.
+fn auth_token_redacted_when_printed() {
+    const TOKEN: &str = "lunora-secret-7f3a9c";
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.auth_token = Some(TOKEN.to_string());
+
+    for printed in [format!("{client:?}"), format!("{client:#?}")] {
+        assert!(!printed.contains(TOKEN), "the token leaked: {printed}");
+        assert!(printed.contains("https://app.example"), "and the rest still prints: {printed}");
+    }
 }
 
 /// The topology every real consumer has: a socket read loop on one thread and

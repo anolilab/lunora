@@ -135,6 +135,8 @@ class TestRpcFixtures(unittest.TestCase):
                 self.assertEqual(ctx.exception.message, case["message"])
                 if "dataWire" in case:
                     self.assertEqual(encode_wire(ctx.exception.data), case["dataWire"])
+                if case.get("dataDropped"):
+                    self.assertIsNone(ctx.exception.data)
 
 
 class TestWsFrameBuilders(unittest.TestCase):

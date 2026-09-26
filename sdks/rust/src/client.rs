@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
-use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler};
+use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
 use crate::submit::{args_key, matches};
@@ -43,13 +43,15 @@ pub struct ApiError {
     pub code: String,
     pub message: String,
     pub data: Option<WireValue>,
-    /// Whether the call reached no verdict — a 5xx, or a non-2xx carrying no
-    /// envelope at all (an edge error page, a WAF block, a proxy).
+    /// Whether the call reached no verdict — a reply carrying no error envelope
+    /// at all (an edge error page, a WAF block, a proxy, an unreadable body),
+    /// other than a 413.
     ///
-    /// It is set where the HTTP STATUS is still in scope, because nothing
-    /// downstream can recover it: `code` alone cannot tell a `BAD_REQUEST` a
-    /// function returned from the `INTERNAL` this client synthesises for a body
-    /// that never came from one. [`crate::submit::is_transient`] reads it.
+    /// It is set where the reply is still in scope, because nothing downstream
+    /// can recover it: `code` alone cannot tell an `INTERNAL` a function returned
+    /// from the `INTERNAL` this client synthesises for a body that never came
+    /// from one. A coded envelope never sets it, whatever its HTTP status: its
+    /// code is the verdict. [`crate::submit::is_transient`] reads it.
     pub transient: bool,
 }
 
@@ -158,38 +160,65 @@ pub fn build_rpc_body(function_path: &str, args: &WireValue, shard_key: Option<&
 /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
 /// yields a null result and no error — the caller believes its write committed.
 pub fn parse_rpc_response(body: &Value, status: u16) -> Result<WireValue, ClientError> {
+    Ok(decode_wire(rpc_result(body, status)?)?)
+}
+
+/// The raw `result` of a reply, or the error it carries — everything
+/// [`parse_rpc_response`] does short of decoding, so the offline replay can tell a
+/// committed-but-undecodable result from a failed call.
+pub(crate) fn rpc_result(body: &Value, status: u16) -> Result<&Value, ClientError> {
     if let Some(envelope) = body.get("error").and_then(Value::as_object) {
-        let data = match envelope.get("data") {
-            Some(Value::Null) | None => None,
-            Some(inner) => Some(decode_wire(inner)?),
-        };
+        // Data the codec refuses is DROPPED, never allowed to turn the envelope
+        // into a codec error: the envelope is still the server's coded verdict,
+        // and a codec error would neither carry its code nor classify by it.
+        let data = envelope.get("data").filter(|inner| !inner.is_null()).and_then(|inner| decode_wire(inner).ok());
 
         return Err(ClientError::Api(Box::new(ApiError {
             code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
             data,
             message: envelope.get("message").and_then(Value::as_str).unwrap_or("request failed").to_string(),
-            // A 5xx is the shard or the edge failing under the call, not a
-            // verdict on it, so a queued write replayed under the same
-            // idempotency key is still good.
-            transient: status >= 500,
+            // A coded envelope is the server's verdict whatever the status
+            // carrying it: its CODE alone says whether a replay is worth it
+            // (`crate::submit::is_transient`), on the single-call path and the
+            // batch path alike.
+            transient: false,
         })));
     }
 
-    if !(200..=299).contains(&status) {
-        return Err(ClientError::Api(Box::new(ApiError {
-            code: "INTERNAL".to_string(),
+    // A 2xx whose body is not an object — `null`, `[]`, a bare string, or no
+    // JSON at all (read as `null`) — holds neither a result nor an envelope, so
+    // it fails like any other envelope-less reply rather than succeeding with a
+    // null result the function never returned. `{}` is an object: the void result.
+    if !(200..=299).contains(&status) || !body.is_object() {
+        return Err(ClientError::Api(Box::new(envelopeless_error(status))));
+    }
+
+    Ok(body.get("result").unwrap_or(&Value::Null))
+}
+
+/// The error a reply carrying no error envelope stands for, decided by its status.
+///
+/// A 413 is a verdict on the REQUEST whatever its body: an edge or proxy refuses
+/// an oversized body with its own page long before the worker could write its
+/// coded `PAYLOAD_TOO_LARGE`, and re-sending the same bytes can only meet the
+/// same refusal. Anything else never came from a Lunora function, so nothing
+/// reached the shard: transport, and `transient`.
+pub(crate) fn envelopeless_error(status: u16) -> ApiError {
+    if status == 413 {
+        return ApiError {
+            code: CODE_PAYLOAD_TOO_LARGE.to_string(),
             data: None,
-            message: format!("HTTP {status} without an error envelope"),
-            // No envelope at all, so this body never came from a Lunora
-            // function. Nothing reached the shard, which makes it transport
-            // rather than a verdict — the batch path already classified the
-            // identical response that way, and a lone queued write must not be
-            // dropped for being alone.
-            transient: true,
-        })));
+            message: "HTTP 413 without an error envelope".to_string(),
+            transient: false,
+        };
     }
 
-    Ok(decode_wire(body.get("result").unwrap_or(&Value::Null))?)
+    ApiError {
+        code: "INTERNAL".to_string(),
+        data: None,
+        message: format!("HTTP {status} without a readable Lunora response"),
+        transient: true,
+    }
 }
 
 pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> Value {
@@ -320,7 +349,7 @@ struct ShapeSubscription {
 }
 
 /// A row op decoded during `apply_poke`'s decode phase, ready to commit against
-/// a `ShapeSubscription` once the whole poke has decoded successfully.
+/// a `ShapeSubscription` once every row of that shape's part has decoded.
 enum PokeOp {
     Delete(String),
     Upsert(String, WireValue),
@@ -336,6 +365,22 @@ enum PokeOp {
 struct ShapePart {
     operations: Vec<Value>,
     reset: bool,
+    /// The checkpoint the server computed this part's diff against: the part's
+    /// own `baseCheckpoint`, else its `pokeStart`'s.
+    base: Option<Value>,
+}
+
+/// One buffered poke: its parts per shape, plus what its `pokeStart` said.
+#[derive(Default)]
+struct PokeBuffer {
+    base: Option<Value>,
+    epoch: Option<Value>,
+    parts: HashMap<String, ShapePart>,
+}
+
+/// A field that is present and not `null`.
+fn present(frame: &Value, field: &str) -> Option<Value> {
+    frame.get(field).filter(|value| !value.is_null()).cloned()
 }
 
 /// A Lunora deployment client.
@@ -365,7 +410,8 @@ struct ShapePart {
 /// How many un-applied poke buffers the client retains before evicting the
 /// oldest. Concurrent in-flight pokes number in the low single digits, so this
 /// is far above any legitimate working set; it exists purely to bound the
-/// buffers a failed decode intentionally leaves behind.
+/// buffers of pokes whose `pokeEnd` never arrives — a socket that dropped
+/// mid-poke, or a peer opening pokes it never closes.
 pub const MAX_PENDING_POKES: usize = 64;
 
 pub struct Client {
@@ -391,14 +437,15 @@ pub struct Client {
     /// not a bearer token. It is persisted alongside every queued write and
     /// re-checked before that write replays, so a restart cannot push one user's
     /// queued writes as another. `None` means signed out, which is itself an
-    /// identity a write can be stamped with.
-    pub identity: Option<String>,
+    /// identity a write can be stamped with. Set through
+    /// [`Client::set_identity`], which evicts the previous session on a change.
+    identity: Option<String>,
     /// The durable write queue backing [`Client::submit`].
     pub offline_queue: OfflineQueue,
     pub(crate) send: Option<FrameSender>,
     pub(crate) subscriptions: HashMap<String, Subscription>,
     shapes: HashMap<String, ShapeSubscription>,
-    pokes: HashMap<String, HashMap<String, ShapePart>>,
+    pokes: HashMap<String, PokeBuffer>,
     poke_order: VecDeque<String>,
     next_id: usize,
     next_shape_id: usize,
@@ -409,6 +456,20 @@ pub struct Client {
     pub(crate) flush_not_before: Option<Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
+}
+
+/// By hand rather than derived: a derived `Debug` would print `auth_token`, a
+/// bearer credential, into every log line or panic message a client reaches.
+impl fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("base_url", &self.base_url)
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field("client_id", &self.client_id)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Client {
@@ -461,8 +522,14 @@ impl Client {
         self.offline_queue.size()
     }
 
-    /// Rejects every queued write so no caller waits on a dead client. Durable
-    /// storage is untouched: the next session restores those writes.
+    /// Rejects every queued write so no caller waits on a dead client, and drops
+    /// every subscription. Durable storage is untouched: the next session
+    /// restores those writes.
+    ///
+    /// Dropping the registries is what ENDS every [`Client::stream`]: its
+    /// `Sender` lives on the subscription, so a consumer iterating the receiver
+    /// of a closed client otherwise blocked forever on a stream nothing would
+    /// ever feed or close.
     pub fn close(&mut self) {
         self.closed = true;
         self.send = None;
@@ -470,6 +537,55 @@ impl Client {
         let discarded = self.offline_queue.clear();
 
         self.report_discarded(discarded);
+        self.subscriptions.clear();
+        self.shapes.clear();
+        self.pokes.clear();
+        self.poke_order.clear();
+    }
+
+    /// Who is signed in, as last set by [`Client::set_identity`].
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
+    }
+
+    /// Sets the opaque, NON-SECRET stamp for whoever is signed in — a user id,
+    /// not a bearer token; `None` is signed out.
+    ///
+    /// A change FROM a set identity to a different one (another user, or signed
+    /// out) evicts the previous session: the resume cursors and epochs of every
+    /// query and shape subscription were that identity's position in the
+    /// changelog, and the shape rows were the rows THAT identity could see, so
+    /// resuming from them under the new one splices a diff onto someone else's
+    /// view. Every subscription resubscribes cold, and every shape view is
+    /// emptied and its `on_rows` told so (`[]`). A first sign-in and a
+    /// re-assertion of the same identity evict nothing.
+    pub fn set_identity(&mut self, identity: Option<String>) {
+        let previous = std::mem::replace(&mut self.identity, identity);
+
+        if previous.is_none() || previous == self.identity {
+            return;
+        }
+
+        for entry in self.subscriptions.values_mut() {
+            entry.cursor = None;
+            entry.epoch = None;
+        }
+
+        // A poke half-received under the previous session must not land on the
+        // emptied views.
+        self.pokes.clear();
+        self.poke_order.clear();
+
+        for shape in self.shapes.values_mut() {
+            shape.rows.clear();
+            shape.order.clear();
+            shape.checkpoint = None;
+            shape.epoch = None;
+
+            if let Some(handler) = &shape.on_rows {
+                handler(&[]);
+            }
+        }
     }
 
     /// The current displayed value for a subscribed query, or `None` when nothing
@@ -529,23 +645,27 @@ impl Client {
     }
 
     fn rpc(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>, mutation_id: Option<&str>) -> Result<WireValue, ClientError> {
-        Ok(self.rpc_full(function_path, args, shard_key, mutation_id, None)?.0)
+        let (result, _commit_cursor) = self.rpc_raw(function_path, args, shard_key, mutation_id, None)?;
+
+        Ok(decode_wire(&result)?)
     }
 
-    /// One round-trip, returning `(result, commit_cursor)`.
+    /// One round-trip, returning `(raw result, commit_cursor)`, UNDECODED.
     ///
     /// The cursor is what gates an optimistic overlay's removal, so it has to
-    /// survive the call rather than be discarded by [`parse_rpc_response`].
-    /// `client_id` overrides this session's, so a replayed write namespaces
-    /// server-side under the id that ISSUED it.
-    pub(crate) fn rpc_full(
+    /// survive the call rather than be discarded by [`parse_rpc_response`]. The
+    /// result is left for the caller to decode because a write whose result does
+    /// not decode still COMMITTED: the write paths confirm it before they report
+    /// the decode error. `client_id` overrides this session's, so a replayed
+    /// write namespaces server-side under the id that ISSUED it.
+    pub(crate) fn rpc_raw(
         &self,
         function_path: &str,
         args: &WireValue,
         shard_key: Option<&str>,
         mutation_id: Option<&str>,
         client_id: Option<&str>,
-    ) -> Result<(WireValue, Option<i64>), ClientError> {
+    ) -> Result<(Value, Option<i64>), ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
         let mut headers = HashMap::new();
@@ -569,19 +689,22 @@ impl Client {
         let body = build_rpc_body(function_path, args, shard_key)?;
         let payload = serde_json::to_vec(&body).map_err(|error| ClientError::Transport(error.to_string()))?;
         let (status, raw) = post(&self.join(RPC_PATH), &headers, &payload).map_err(ClientError::Transport)?;
-        let parsed: Value = serde_json::from_slice(&raw).map_err(|error| ClientError::Transport(error.to_string()))?;
-        let result = parse_rpc_response(&parsed, status)?;
+        // A body that is not JSON (a proxy's HTML page) reads as `null`, which
+        // `rpc_result` fails as the envelope-less reply it is.
+        let parsed: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+        let result = rpc_result(&parsed, status)?.clone();
 
         Ok((result, parsed.get("commitCursor").and_then(Value::as_i64)))
     }
 
-    /// POST one `/_lunora/rpc-batch` chunk, returning the parsed body.
+    /// POST one `/_lunora/rpc-batch` chunk, returning the status and the parsed
+    /// body — `null` when the body is not JSON. `Err` only when no reply arrived.
     ///
     /// No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
     /// carrying independent calls, so each entry carries its own idempotency key
     /// and client id in the body. A single outer header would name one write and
     /// de-duplicate the whole chunk against it.
-    pub(crate) fn rpc_batch(&self, calls: Vec<Value>) -> Result<Value, ClientError> {
+    pub(crate) fn rpc_batch(&self, calls: Vec<Value>) -> Result<(u16, Value), ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
         let mut headers = HashMap::new();
@@ -593,11 +716,11 @@ impl Client {
         }
 
         let payload = serde_json::to_vec(&json!({ "calls": calls })).map_err(|error| ClientError::Transport(error.to_string()))?;
-        let (_status, raw) = post(&self.join(RPC_BATCH_PATH), &headers, &payload).map_err(ClientError::Transport)?;
+        let (status, raw) = post(&self.join(RPC_BATCH_PATH), &headers, &payload).map_err(ClientError::Transport)?;
 
-        // A non-JSON body, an edge 5xx say. Transient: the caller does not lose
-        // the writes.
-        serde_json::from_slice(&raw).map_err(|error| ClientError::Transport(error.to_string()))
+        // The STATUS is part of the answer: an envelope-less reply is classified
+        // by it, exactly as on the single-call path.
+        Ok((status, serde_json::from_slice(&raw).unwrap_or(Value::Null)))
     }
 
     pub fn subscribe(&mut self, function_path: &str, args: WireValue, on_data: DataHandler, on_error: ErrorHandler) -> String {
@@ -897,15 +1020,20 @@ impl Client {
             }
             "pokeStart" => {
                 if let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) {
-                    if self.pokes.insert(poke_id.to_string(), HashMap::new()).is_none() {
+                    let buffer = PokeBuffer {
+                        base: present(&frame, "baseCheckpoint"),
+                        epoch: present(&frame, "epoch"),
+                        parts: HashMap::new(),
+                    };
+
+                    if self.pokes.insert(poke_id.to_string(), buffer).is_none() {
                         self.poke_order.push_back(poke_id.to_string());
                     }
 
-                    // A poke whose decode failed is deliberately left buffered
-                    // (see `apply_poke`), and nothing ever retries it — so a
-                    // peer streaming malformed pokes, each with a fresh id,
-                    // would grow this map without bound. Evict oldest-first at
-                    // the cap; a poke that old is no longer going to complete.
+                    // A poke whose `pokeEnd` never arrives is never released —
+                    // so a peer opening pokes it never closes, each with a fresh
+                    // id, would grow this map without bound. Evict oldest-first
+                    // at the cap; a poke that old is no longer going to complete.
                     while self.poke_order.len() > MAX_PENDING_POKES {
                         if let Some(oldest) = self.poke_order.pop_front() {
                             self.pokes.remove(&oldest);
@@ -914,7 +1042,7 @@ impl Client {
                 }
             }
             "pokePart" => self.buffer_poke_part(&frame),
-            "pokeEnd" => self.apply_poke(&frame)?,
+            "pokeEnd" => self.apply_poke(&frame),
             _ => {}
         }
 
@@ -934,80 +1062,87 @@ impl Client {
         // A part for an unknown poke is dropped: without its pokeStart there is
         // no batch to join, and guessing would apply a fragment of one.
         if let Some(buffer) = self.pokes.get_mut(poke_id) {
-            let part = buffer.entry(shape_id.to_string()).or_default();
+            let part = buffer.parts.entry(shape_id.to_string()).or_default();
 
             part.operations.extend(operations);
             part.reset |= frame.get("reset").and_then(Value::as_bool).unwrap_or(false);
+
+            if let Some(base) = present(frame, "baseCheckpoint").or_else(|| buffer.base.clone()) {
+                part.base = Some(base);
+            }
         }
     }
 
-    /// Applies a fully-buffered poke, in two phases so the batch really is
-    /// atomic rather than merely buffered:
+    /// Applies a fully-buffered poke, WHOLE or not at all per shape: every row a
+    /// shape's part carries is decoded before that shape's view is touched.
     ///
-    /// 1. **Decode** every row value across every shape in the poke, without
-    ///    touching any shape's state. `self.pokes` still owns the buffer at
-    ///    this point.
-    /// 2. **Commit** — only once every value decoded successfully — mutating
-    ///    `rows`/`order`/`checkpoint`/`epoch` per shape and firing `on_rows`,
-    ///    then removing the buffer from `self.pokes`.
-    ///
-    /// If any row anywhere in the batch fails to decode, phase 2 never runs:
-    /// no shape's state changes, `on_rows` does not fire, and the error
-    /// propagates to the caller of `handle_frame`. The buffer is deliberately
-    /// left in `self.pokes` rather than dropped — the failure is surfaced as an
-    /// error and the batch is not retried automatically, but a subsequent
-    /// `pokeStart` for the same id (or a fresh one) still has somewhere to land
-    /// rather than the state being permanently frozen.
-    fn apply_poke(&mut self, frame: &Value) -> Result<(), ClientError> {
+    /// A shape whose part holds a row the codec refuses keeps its view, its
+    /// checkpoint and its epoch exactly as they were — no reset clear, no ops,
+    /// no `on_rows` — and its `on_error` hears `WIRE_DECODE_FAILED`. Clearing the view
+    /// for a reset and then failing on the row left it half-applied or empty;
+    /// skipping the row and applying the rest advanced the checkpoint past a row
+    /// the view never held, so no resume would send it again. Every other shape
+    /// in the poke applies as usual, and nothing reaches `handle_frame`'s caller,
+    /// whose read loop — and every other subscription with it — an error would
+    /// end.
+    fn apply_poke(&mut self, frame: &Value) {
         let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) else {
-            return Ok(());
+            return;
         };
 
-        let Some(buffer) = self.pokes.get(poke_id) else {
-            return Ok(());
+        // The poke is over either way: a refused shape resyncs from its
+        // unchanged checkpoint on the next resume, not from this buffer.
+        let Some(buffer) = self.pokes.remove(poke_id) else {
+            return;
         };
 
-        let mut decoded: Vec<(String, bool, Vec<PokeOp>)> = Vec::with_capacity(buffer.len());
-
-        for (shape_id, part) in buffer {
-            if !self.shapes.contains_key(shape_id) {
-                continue;
-            }
-
-            let mut ops = Vec::with_capacity(part.operations.len());
-
-            for operation in &part.operations {
-                let Some(key) = operation.get("key").and_then(Value::as_str) else {
-                    continue;
-                };
-
-                if operation.get("op").and_then(Value::as_str) == Some("delete") {
-                    ops.push(PokeOp::Delete(key.to_string()));
-                    continue;
-                }
-
-                // A value-less upsert is membership-only; it must not blank an
-                // existing row.
-                let value = match operation.get("value") {
-                    Some(Value::Null) | None => continue,
-                    Some(inner) => inner,
-                };
-
-                ops.push(PokeOp::Upsert(key.to_string(), decode_wire(value)?));
-            }
-
-            decoded.push((shape_id.clone(), part.reset, ops));
-        }
-
-        // Every row in the batch decoded successfully — commit. Only now is the
-        // buffer removed.
-        self.pokes.remove(poke_id);
         self.poke_order.retain(|candidate| candidate != poke_id);
 
-        for (shape_id, reset, ops) in decoded {
+        for (shape_id, part) in buffer.parts {
             let Some(shape) = self.shapes.get_mut(&shape_id) else {
                 continue;
             };
+
+            let ops = match decode_poke_ops(&part.operations) {
+                Ok(ops) => ops,
+                Err(error) => {
+                    if let Some(handler) = &shape.on_error {
+                        handler(&SubscriptionError {
+                            code: Some(CODE_WIRE_DECODE_FAILED.to_string()),
+                            message: error.to_string(),
+                        });
+                    }
+
+                    continue;
+                }
+            };
+
+            // An epoch mismatch means the changelog forked since we last applied;
+            // a base mismatch means this diff was computed against a checkpoint
+            // the view is not at — a dropped or refused poke the server believes
+            // it delivered. Splicing the ops on would corrupt the view for good,
+            // so (unless the part is a reset, which settles either in one step)
+            // drop the view, clear the checkpoint and epoch, tell the callbacks,
+            // SKIP the ops, and re-subscribe COLD so the server re-seeds it.
+            let epoch_forked = buffer.epoch.is_some() && shape.epoch.is_some() && buffer.epoch != shape.epoch;
+            let base_diverged = part.base.is_some() && shape.checkpoint.is_some() && part.base != shape.checkpoint;
+
+            if !part.reset && (epoch_forked || base_diverged) {
+                shape.rows.clear();
+                shape.order.clear();
+                shape.checkpoint = None;
+                shape.epoch = None;
+
+                if let Some(handler) = &shape.on_rows {
+                    handler(&[]);
+                }
+
+                if let (Some(send), Ok(cold)) = (&self.send, build_shape_subscribe_frame(&shape_id, &shape.name, shape.args.as_ref(), None, None)) {
+                    send(&cold);
+                }
+
+                continue;
+            }
 
             // A `reset` part carries the shape's COMPLETE membership, so it is
             // authoritative on its own: drop whatever we hold, then apply it.
@@ -1017,7 +1152,7 @@ impl Client {
             // client. The flag is the only signal: `baseCheckpoint` is absent on
             // most live poke paths, and a retention re-seed arrives with the
             // epoch unchanged.
-            if reset {
+            if part.reset {
                 shape.rows.clear();
                 shape.order.clear();
             }
@@ -1053,8 +1188,6 @@ impl Client {
                 handler(&rows);
             }
         }
-
-        Ok(())
     }
 
     /// The socket URL: the origin with its scheme swapped, plus the shard and
@@ -1094,8 +1227,40 @@ impl Client {
     }
 }
 
+/// Decodes one shape's buffered row ops, failing on the first row the codec
+/// refuses so the caller can leave the view untouched.
+fn decode_poke_ops(operations: &[Value]) -> Result<Vec<PokeOp>, WireError> {
+    let mut ops = Vec::with_capacity(operations.len());
+
+    for operation in operations {
+        let Some(key) = operation.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+
+        if operation.get("op").and_then(Value::as_str) == Some("delete") {
+            ops.push(PokeOp::Delete(key.to_string()));
+            continue;
+        }
+
+        // A value-less upsert is membership-only; it must not blank an existing
+        // row.
+        let value = match operation.get("value") {
+            Some(Value::Null) | None => continue,
+            Some(inner) => inner,
+        };
+
+        ops.push(PokeOp::Upsert(key.to_string(), decode_wire(value)?));
+    }
+
+    Ok(ops)
+}
+
 fn advance(entry: &mut Subscription, frame: &Value) {
-    if let Some(cursor) = frame.get("cursor") {
+    // A cursor is an integer. Anything else is not a cursor, and tracking it
+    // resent it verbatim: a `"9"` asked the server to resume from a string. A
+    // `null` is kept, and resent as the reference resends it — the server takes
+    // it as a cold subscribe.
+    if let Some(cursor) = frame.get("cursor").filter(|cursor| cursor.is_null() || cursor.is_i64() || cursor.is_u64()) {
         entry.cursor = Some(cursor.clone());
     }
 
@@ -1142,18 +1307,28 @@ mod tests {
         json!(["$lunora.wire$", "bigint", "not-a-number"])
     }
 
+    /// Records a shape's `on_error` codes.
+    fn error_recorder() -> (Arc<Mutex<Vec<Option<String>>>>, ErrorHandler) {
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let handle = Arc::clone(&errors);
+
+        (
+            errors,
+            Some(Box::new(move |error: &SubscriptionError| handle.lock().unwrap().push(error.code.clone()))),
+        )
+    }
+
     /// A poke batch where the SECOND row in a single shape fails to decode: the
-    /// first row must not have been committed either. This is the case that
-    /// reproduces the pre-fix defect — see the executor's report for what was
-    /// observed running this test against the code before the decode/commit
-    /// split.
+    /// first row must not have been committed either, and the failure reaches
+    /// the shape's `on_error` rather than `handle_frame`'s caller.
     #[test]
-    fn decode_failure_leaves_shape_unchanged_and_buffer_retryable() {
+    fn decode_failure_leaves_shape_unchanged_and_reports_it() {
         let mut client = Client::new("https://app.example", None);
 
         let fired = Arc::new(Mutex::new(0usize));
         let handle = Arc::clone(&fired);
-        let shape_id = client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.lock().unwrap() += 1)), None);
+        let (errors, on_error) = error_recorder();
+        let shape_id = client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.lock().unwrap() += 1)), on_error);
 
         // Baseline: one row committed successfully.
         client.handle_frame(&poke_start("poke1").to_string()).expect("pokeStart");
@@ -1181,9 +1356,15 @@ mod tests {
             )
             .expect("pokePart");
 
-        let result = client.handle_frame(&poke_end("poke2", "cp2", "epoch2").to_string());
+        client
+            .handle_frame(&poke_end("poke2", "cp2", "epoch2").to_string())
+            .expect("a bad row must not fail handle_frame");
 
-        assert!(result.is_err(), "a bad row must surface as an error");
+        assert_eq!(
+            *errors.lock().unwrap(),
+            vec![Some(CODE_WIRE_DECODE_FAILED.to_string())],
+            "reported on the shape"
+        );
         assert_eq!(*fired.lock().unwrap(), 1, "on_rows must not fire for the failed batch");
 
         let shape = client.shapes.get(&shape_id).expect("shape");
@@ -1198,31 +1379,28 @@ mod tests {
         assert_eq!(shape.checkpoint, Some(json!("cp1")), "checkpoint must not advance on a failed poke");
         assert_eq!(shape.epoch, Some(json!("epoch1")), "epoch must not advance on a failed poke");
 
-        assert!(
-            client.pokes.contains_key("poke2"),
-            "the buffer must survive the failure so a corrected retry has data to apply"
-        );
+        assert!(!client.pokes.contains_key("poke2"), "the poke is over: its buffer is released");
     }
 
-    /// A multi-shape poke where the failure is in the second shape: the first
-    /// shape must also be left unchanged. `self.pokes` is a `HashMap`, whose
-    /// iteration order is not fixed, so the scenario is run many times with a
-    /// fresh client each time — whichever shape a given run happens to decode
-    /// first, the invariant must still hold. A fix that only decodes-then-commits
-    /// within one shape (rather than across the whole poke before committing
-    /// anything) corrupts whichever shape it reaches before the failing one.
+    /// A multi-shape poke where one shape's part fails to decode: THAT shape is
+    /// left unchanged and told, while the other shape applies. `self.pokes` is a
+    /// `HashMap`, whose iteration order is not fixed, so the scenario is run many
+    /// times with a fresh client each time — whichever shape a given run reaches
+    /// first, the outcome must be the same.
     #[test]
-    fn cross_shape_failure_leaves_every_shape_unchanged() {
+    fn cross_shape_failure_refuses_only_the_failing_shape() {
         for attempt in 0..20 {
             let mut client = Client::new("https://app.example", None);
 
             let fired_a = Arc::new(Mutex::new(0usize));
             let handle_a = Arc::clone(&fired_a);
-            let shape_a = client.subscribe_shape("roomA", None, Some(Box::new(move |_rows| *handle_a.lock().unwrap() += 1)), None);
+            let (errors_a, on_error_a) = error_recorder();
+            let shape_a = client.subscribe_shape("roomA", None, Some(Box::new(move |_rows| *handle_a.lock().unwrap() += 1)), on_error_a);
 
             let fired_b = Arc::new(Mutex::new(0usize));
             let handle_b = Arc::clone(&fired_b);
-            let shape_b = client.subscribe_shape("roomB", None, Some(Box::new(move |_rows| *handle_b.lock().unwrap() += 1)), None);
+            let (errors_b, on_error_b) = error_recorder();
+            let shape_b = client.subscribe_shape("roomB", None, Some(Box::new(move |_rows| *handle_b.lock().unwrap() += 1)), on_error_b);
 
             // Baseline: both shapes get one committed row.
             client.handle_frame(&poke_start("base").to_string()).expect("pokeStart");
@@ -1248,24 +1426,27 @@ mod tests {
                 .handle_frame(&poke_part(&poke_id, &shape_b, json!([{ "op": "insert", "key": "b2", "value": bad_bigint() }])).to_string())
                 .expect("pokePart b");
 
-            let result = client.handle_frame(&poke_end(&poke_id, "cp1", "epoch1").to_string());
+            client
+                .handle_frame(&poke_end(&poke_id, "cp1", "epoch1").to_string())
+                .expect("a bad row must not fail handle_frame");
 
-            assert!(result.is_err(), "attempt {attempt}: a bad row anywhere in the poke must surface as an error");
-            assert_eq!(
-                *fired_a.lock().unwrap(),
-                1,
-                "attempt {attempt}: shape_a's on_rows must not fire when shape_b fails to decode"
-            );
+            assert_eq!(*fired_a.lock().unwrap(), 2, "attempt {attempt}: shape_a applies its own, valid part");
+            assert!(errors_a.lock().unwrap().is_empty(), "attempt {attempt}: shape_a hears no error");
             assert_eq!(
                 *fired_b.lock().unwrap(),
                 1,
                 "attempt {attempt}: shape_b's on_rows must not fire on its own failure"
             );
+            assert_eq!(
+                *errors_b.lock().unwrap(),
+                vec![Some(CODE_WIRE_DECODE_FAILED.to_string())],
+                "attempt {attempt}: shape_b is told"
+            );
 
             let a = client.shapes.get(&shape_a).expect("shape_a");
 
-            assert_eq!(a.order, vec!["a1".to_string()], "attempt {attempt}: shape_a must not have committed a2");
-            assert_eq!(a.checkpoint, Some(json!("cp0")), "attempt {attempt}: shape_a's checkpoint must not advance");
+            assert_eq!(a.order, vec!["a1".to_string(), "a2".to_string()], "attempt {attempt}: shape_a committed a2");
+            assert_eq!(a.checkpoint, Some(json!("cp1")), "attempt {attempt}: shape_a's checkpoint advances");
 
             let b = client.shapes.get(&shape_b).expect("shape_b");
 

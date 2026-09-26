@@ -351,6 +351,10 @@ func TestRPCResponses(t *testing.T) {
 				t.Errorf("message = %q, want %q", apiError.Message, want)
 			}
 
+			if testCase["dataDropped"] == true && apiError.Data != nil {
+				t.Errorf("data = %#v, want it dropped", apiError.Data)
+			}
+
 			if wire, present := testCase["dataWire"]; present {
 				reEncoded, err := EncodeWire(apiError.Data)
 				if err != nil {

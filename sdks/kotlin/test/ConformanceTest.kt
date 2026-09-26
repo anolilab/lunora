@@ -389,6 +389,9 @@ private fun rpcResponses() {
         } catch (error: ApiException) {
             check(error.code == testCase["code"], "code for ${testCase["name"]}")
             check(error.message == testCase["message"], "message for ${testCase["name"]}")
+
+            // Undecodable `data` is dropped, never the codec's exception.
+            if (testCase["dataDropped"] == true) check(error.data == null, "data dropped for ${testCase["name"]}")
         }
     }
 }
@@ -793,6 +796,292 @@ private fun concurrentSubscribeAndHandleFrame() {
     check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id")
 }
 
+/** A frame fixture delivered as the raw text a socket read loop hands [Client.handleFrame]. */
+private fun deliver(client: Client, frames: Any?) {
+    for (frame in frames as List<*>) client.handleFrame(Json.write(frame))
+}
+
+/** The frames [Client.resendSubscriptions] sends, captured through a fresh socket. */
+private fun resent(client: Client): List<Map<String, Any?>> {
+    val frames = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { frames.add(it) }
+    client.resendSubscriptions()
+
+    return frames
+}
+
+private fun number(value: Any?): Double? = (value as? Number)?.toDouble()
+
+/**
+ * A poke is applied whole or not at all, per shape: a row the codec refuses leaves
+ * the view, its checkpoint and its epoch exactly as they were and reaches the
+ * shape's error callback — while another shape in the same poke still applies.
+ */
+private fun shapePokeWithUndecodableRowIsRefusedWhole() {
+    covers("shape_poke_with_undecodable_row_is_refused_whole")
+
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val client = Client("https://app.example")
+    val delivered = mutableListOf<List<WireValue>>()
+    val errors = mutableListOf<SubscriptionError>()
+    val other = mutableListOf<List<WireValue>>()
+
+    client.attachSocket { }
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { delivered.add(it) }, { errors.add(it) })
+    client.subscribeShape("other", null, { other.add(it) })
+    deliver(client, shape["pokeSequence"])
+
+    check(delivered.size == 1, "the seed applies")
+
+    // The fixture's sequence, plus a good part for a SECOND shape in the same poke.
+    val sequence = (shape["undecodableRowPokeSequence"] as List<*>).toMutableList()
+    val good = mapOf(
+        "type" to "pokePart",
+        "pokeId" to "p3",
+        "shapeId" to "shape_2",
+        "rowsPatch" to listOf(mapOf("op" to "insert", "key" to "k", "value" to "kept")),
+    )
+
+    sequence.add(sequence.size - 1, good)
+
+    try {
+        deliver(client, sequence)
+    } catch (error: RuntimeException) {
+        check(false, "a refused poke must not throw out of handleFrame: $error")
+    }
+
+    check(delivered.size == 1, "no rows callback fires for the refused shape")
+    check(errors.map { it.code } == listOf(shape["undecodableRowErrorCode"]), "its error callback hears ${shape["undecodableRowErrorCode"]} once: $errors")
+    check(other == listOf(listOf(WireValue.Text("kept"))), "the other shape in the same poke still applies")
+
+    val frame = resent(client).first { it["id"] == "shape_1" }
+
+    check(number(frame["sinceCheckpoint"]) == number(shape["undecodableRowResendCheckpoint"]), "the checkpoint does not advance: ${frame["sinceCheckpoint"]}")
+    check(frame["sinceEpoch"] == "e1", "nor the epoch")
+
+    // The view itself is untouched: an empty poke re-delivers it unchanged.
+    deliver(
+        client,
+        listOf(
+            mapOf("type" to "pokeStart", "pokeId" to "p-empty"),
+            mapOf(
+                "type" to "pokePart",
+                "pokeId" to "p-empty",
+                "shapeId" to "shape_1",
+                "rowsPatch" to emptyList<Any?>(),
+            ),
+            mapOf("type" to "pokeEnd", "pokeId" to "p-empty"),
+        ),
+    )
+
+    check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["expectedRows"]), "the view is exactly the seed: ${delivered.last()}")
+
+    // The server believes the refused poke landed, so the NEXT one is based on a
+    // checkpoint this view never reached. It must re-seed, not splice.
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+
+    val before = delivered.size
+
+    deliver(client, shape["gapPokeSequence"])
+
+    check(delivered.size == before + 1, "the gap tells the rows callback once")
+    check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["gapExpectedRows"]), "that the view is empty: ${delivered.last()}")
+
+    val cold = sent.filter { it["type"] == "shape_subscribe" && it["id"] == "shape_1" }
+
+    check(cold.size == 1, "a shape_subscribe for shape_1 goes out right away: $sent")
+    check(!cold[0].containsKey("sinceCheckpoint") && !cold[0].containsKey("sinceEpoch"), "and it is cold: ${cold[0]}")
+
+    val later = resent(client).first { it["id"] == "shape_1" }
+
+    check(!later.containsKey("sinceCheckpoint") && !later.containsKey("sinceEpoch"), "a later resend is cold too: $later")
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    val contiguous = Client("https://app.example")
+    val applied = mutableListOf<List<WireValue>>()
+    val contiguousSent = mutableListOf<Map<String, Any?>>()
+
+    contiguous.attachSocket { contiguousSent.add(it) }
+    contiguous.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { applied.add(it) })
+    deliver(contiguous, shape["pokeSequence"])
+    contiguousSent.clear()
+    deliver(contiguous, shape["contiguousPokeSequence"])
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(applied.last()))) == canonical(shape["contiguousExpectedRows"]),
+        "a contiguous poke applies: ${applied.last()}",
+    )
+    check(contiguousSent.isEmpty(), "without a re-seed: $contiguousSent")
+
+    // A based poke on a view that has NO checkpoint yet is not a gap.
+    val fresh = Client("https://app.example")
+    val seeded = mutableListOf<List<WireValue>>()
+
+    fresh.attachSocket { }
+    fresh.subscribeShape("roomMessages", null, { seeded.add(it) })
+    fresh.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"b0\",\"baseCheckpoint\":0}")
+    fresh.handleFrame(
+        "{\"type\":\"pokePart\",\"pokeId\":\"b0\",\"shapeId\":\"shape_1\",\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"a\",\"value\":1}]}",
+    )
+    fresh.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"b0\",\"checkpoint\":1}")
+
+    check(seeded == listOf(listOf(WireValue.Num(1.0))), "a base on an unchecked view applies: $seeded")
+}
+
+/**
+ * Frames shaped like nothing the server sends are ignored: none raises out of the
+ * handler the read loop calls, and none touches a live subscription.
+ */
+private fun malformedFramesAreIgnoredWithoutRaising() {
+    covers("malformed_frames_are_ignored_without_raising")
+
+    val case = fixture("ws-frames.json")["malformedFrames"] as Map<*, *>
+    val client = Client("https://app.example")
+    val seen = mutableListOf<WireValue>()
+    val errors = mutableListOf<SubscriptionError>()
+
+    client.attachSocket { }
+    client.subscribe("messages:list", WireValue.Obj(emptyList()), { seen.add(it) }, { errors.add(it) })
+    client.handleFrame(Json.write(case["setupFrame"]))
+    seen.clear()
+
+    for (frame in case["frames"] as List<*>) {
+        try {
+            client.handleFrame(Json.write(frame))
+        } catch (error: Throwable) {
+            check(false, "handleFrame(${Json.write(frame)}) raised $error")
+        }
+    }
+
+    check(seen.isEmpty() && errors.isEmpty(), "no frame reached sub_1: $seen $errors")
+
+    val query = resent(client).first { it["id"] == "sub_1" }["query"] as Map<*, *>
+
+    check(number(query["sinceSeq"]) == number(case["resendSinceSeq"]), "the resend still carries sinceSeq ${case["resendSinceSeq"]}: ${query["sinceSeq"]}")
+    check(query["sinceEpoch"] == case["resendSinceEpoch"], "and sinceEpoch ${case["resendSinceEpoch"]}")
+}
+
+/**
+ * A reply the call can read neither a result nor an envelope out of fails with the
+ * SDK's own error, never the JSON parser's or a cast's.
+ */
+private fun rpcUnreadableSuccessBodyRaisesSdkError() {
+    covers("rpc_unreadable_success_body_raises_sdk_error")
+
+    for (entry in fixture("rpc.json")["unreadableSuccessBody"] as List<*>) {
+        val case = entry as Map<*, *>
+        val response = HttpResponse(count(case["status"]), case["rawBody"] as String)
+        val client = Client("https://app.example", { _, _, _ -> response })
+
+        for (verb in Verb.values()) {
+            val raised = try {
+                client.call(verb, "messages:list")
+                null
+            } catch (error: Throwable) {
+                error
+            }
+
+            check(raised is ApiException && raised.code == case["code"], "${case["name"]} ($verb) raises ApiException ${case["code"]}, got $raised")
+        }
+
+        // On the offline replay the same reply is transport-shaped: re-queued.
+        client.offlineQueue.enqueue(QueuedMutation("w-${case["name"]}", "messages:send", WireValue.Obj(emptyList())))
+
+        check(client.flushOfflineQueue().requeued == listOf("w-${case["name"]}"), "${case["name"]}: a queued write is re-queued")
+    }
+
+    // `{}` stays the void result.
+    check(Client("https://app.example", { _, _, _ -> HttpResponse(200, "{}") }).query("x:y") == WireValue.Null, "{} is a void result")
+}
+
+private fun count(value: Any?): Int = (value as Number).toInt()
+
+/** `close()` ends an open pull stream: the loop yields what was delivered, then returns. */
+private fun subscriptionStreamEndsOnClose() {
+    covers("subscription_stream_ends_on_close")
+
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val stream = client.stream("messages:list")
+    val yielded = java.util.Collections.synchronizedList(mutableListOf<WireValue?>())
+    val consumer = Thread { for (event in stream) yielded.add(event.value) }
+
+    consumer.isDaemon = true
+    consumer.start()
+    client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1}")
+    client.close()
+    consumer.join(2000)
+
+    check(!consumer.isAlive, "the stream ends within 2 s of close() instead of blocking forever")
+    check(yielded == listOf(WireValue.Num(1.0)), "after yielding the delivered value: $yielded")
+}
+
+/**
+ * A change FROM a set identity evicts the previous session's resume cursors and
+ * shape views; a first set and a same-value set evict nothing.
+ */
+private fun identityChangeEvictsPreviousSession() {
+    covers("identity_change_evicts_previous_session")
+
+    val case = fixture("ws-frames.json")["identityChange"] as Map<*, *>
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val retained = case["retained"] as Map<*, *>
+    val evicted = case["evicted"] as Map<*, *>
+
+    for (raw in case["transitions"] as List<*>) {
+        val transition = raw as Map<*, *>
+        val label = "${transition["from"]} -> ${transition["to"]}"
+        val client = Client("https://app.example", identity = transition["from"] as String?)
+        val rows = mutableListOf<List<WireValue>>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), { })
+        client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { rows.add(it) })
+        client.handleFrame(Json.write(case["queryFrame"]))
+        deliver(client, shape["pokeSequence"])
+
+        val before = rows.size
+
+        client.identity = transition["to"] as String?
+
+        val frames = resent(client)
+        val query = frames.first { it["id"] == "sub_1" }["query"] as Map<*, *>
+        val shapeFrame = frames.first { it["id"] == "shape_1" }
+
+        if (transition["evicts"] == true) {
+            check(!query.containsKey("sinceSeq") && !query.containsKey("sinceEpoch"), "$label: the query resubscribes cold: $query")
+            check(!shapeFrame.containsKey("sinceCheckpoint") && !shapeFrame.containsKey("sinceEpoch"), "$label: and the shape: $shapeFrame")
+            check(rows.size == before + 1, "$label: the shape callback is told")
+            check(canonical(Wire.encode(WireValue.Arr(rows.last()))) == canonical(evicted["shapeCallbackRows"]), "$label: that its view is empty")
+        } else {
+            check(
+                number(query["sinceSeq"]) == number(retained["sinceSeq"]) && query["sinceEpoch"] == retained["sinceEpoch"],
+                "$label: the query keeps its cursor: $query",
+            )
+            check(number(shapeFrame["sinceCheckpoint"]) == number(retained["sinceCheckpoint"]), "$label: the shape keeps its checkpoint: $shapeFrame")
+            check(rows.size == before && rows.last().size == count(retained["shapeRowCount"]), "$label: and its rows")
+        }
+    }
+}
+
+/** The bearer token never reaches a printed value. */
+private fun authTokenRedactedWhenPrinted() {
+    covers("auth_token_redacted_when_printed")
+
+    val token = "lunora-secret-7f3a9c"
+    val client = Client("https://app.example", authToken = token)
+    val options = SubmitOptions("messages:send")
+
+    for (rendered in listOf(client.toString(), "$client", String.format("%s", client), options.toString(), client.offlineQueue.toString())) {
+        check(!rendered.contains(token), "the token leaked into $rendered")
+    }
+}
+
 fun main() {
     wireCodecRoundTrip()
     undefinedIsDistinctFromNull()
@@ -819,6 +1108,12 @@ fun main() {
     resetPokeReplacesShapeMembership()
     pendingPokeBuffersAreBounded()
     concurrentSubscribeAndHandleFrame()
+    shapePokeWithUndecodableRowIsRefusedWhole()
+    malformedFramesAreIgnoredWithoutRaising()
+    rpcUnreadableSuccessBodyRaisesSdkError()
+    subscriptionStreamEndsOnClose()
+    identityChangeEvictsPreviousSession()
+    authTokenRedactedWhenPrinted()
 
     // The optimistic-layer and offline-queue cases, in their own file so this one
     // stays the wire-protocol suite it has always been.

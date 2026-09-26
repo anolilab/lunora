@@ -448,7 +448,10 @@ extension Wire {
         if key is NSNull { return "null" }
         if key is WireUndefined { return "undefined" }
         if let bigInt = key as? WireBigInt { return "big:\(normaliseBigInt(bigInt.digits))" }
-        if let text = key as? String { return "str:\(text)" }
+        // By UTF-16 unit, as JavaScript compares: interpolating the String would
+        // repair a lone surrogate to U+FFFD and collapse `"\ud800"`, `"\ud801"`
+        // and `"�"` into one key.
+        if let text = key as? String { return "str:" + utf16Units(text).map { String($0, radix: 16) }.joined(separator: ",") }
 
         // NSNumber bridges Bool, Int and Double indistinguishably under `as?`, so
         // booleans are identified by their CoreFoundation type first — `as? Bool`

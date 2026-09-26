@@ -61,6 +61,11 @@ final class OptimisticOfflineTest {
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
         emptyShardKeyNeverReachesTheWire();
+        offlineFlushEmptyShardKeyRoutesToDefault();
+        offlineFlushUndecodableResultSettlesCommitted();
+        flushNeverLosesDrainedWrites();
+        offlineFlushClassifiesSingleAndBatchAlike();
+        offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge();
     }
 
     /**
@@ -684,7 +689,7 @@ final class OptimisticOfflineTest {
      * serialise, so a record carrying the codec's native wrappers either raises here or is written
      * as something that does not read back. Holding references made this suite blind to both.
      */
-    private static final class MemoryStore implements PersistenceAdapter {
+    private static class MemoryStore implements PersistenceAdapter {
         final List<Map<String, Object>> records = new ArrayList<>();
         final List<Map<String, Object>> appended = new ArrayList<>();
         final List<String> removed = new ArrayList<>();
@@ -1618,7 +1623,7 @@ final class OptimisticOfflineTest {
                             return new Response(200, "{\"result\":null}");
                         });
 
-        client.identity = "user-b";
+        client.identity("user-b");
 
         QueuedMutation queued =
                 new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
@@ -1881,5 +1886,358 @@ final class OptimisticOfflineTest {
 
         check(threw, "the server's verdict reaches the caller");
         check(seen.get(seen.size() - 1).equals(List.of("a")), "and the overlay is gone");
+    }
+
+    /** A client whose poster records every request body and answers it with {@code answer}. */
+    private static Client recordingClient(
+            List<String> bodies, java.util.function.Function<byte[], Response> answer) {
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, payload) -> {
+                            bodies.add(new String(payload, StandardCharsets.UTF_8));
+
+                            return answer.apply(payload);
+                        });
+
+        client.clientId = "c-1";
+
+        return client;
+    }
+
+    /** Queues {@code ids} as default-shard writes. */
+    private static void enqueueAll(Client client, List<String> ids) {
+        for (String id : ids) {
+            client.offlineQueue().enqueue(entry(id, null));
+        }
+    }
+
+    /** The error code a settled event carries, or null. */
+    private static String settledCode(MutationSettled event) {
+        if (event.error() instanceof Client.ApiException api) {
+            return api.code;
+        }
+
+        return event.error() instanceof OfflineException coded ? coded.code : null;
+    }
+
+    /**
+     * An empty shard key is the default shard on EVERY replay path: neither the single-call body
+     * nor a batch entry may carry a {@code shardKey} key for it.
+     */
+    private static void offlineFlushEmptyShardKeyRoutesToDefault() throws IOException {
+        covers("offline_flush_empty_shard_key_routes_to_default");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "emptyShardKey");
+
+        for (String path : List.of("batch", "lone")) {
+            Map<String, Object> run = map(testCase.get(path));
+            List<String> bodies = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            bodies, body -> new Response(200, echoBatchSlots(body, "null", 1L)));
+
+            for (Object raw : list(run.get("queued"))) {
+                Map<String, Object> queued = map(raw);
+
+                client.offlineQueue()
+                        .enqueue(entry((String) queued.get("id"), (String) queued.get("shardKey")));
+            }
+
+            FlushReport report = client.flushOfflineQueue((String) run.get("flushShardKey"));
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    path + ": every write commits on the default shard, got " + report.committed);
+            check(!bodies.isEmpty(), path + ": the flush sent something");
+
+            for (String body : bodies) {
+                check(!body.contains("shardKey"), path + ": no body carries a shardKey: " + body);
+            }
+        }
+    }
+
+    /**
+     * A write the server committed whose result does not decode settles COMMITTED, carrying the
+     * coded decode error — never retried, never requeued, never lost with the rest of its batch.
+     */
+    private static void offlineFlushUndecodableResultSettlesCommitted() throws IOException {
+        covers("offline_flush_undecodable_result_settles_committed");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "undecodableResult");
+        String rawResult = Json.write(testCase.get("rawResult"));
+        String code = (String) testCase.get("code");
+
+        for (String path : List.of("batch", "lone")) {
+            Map<String, Object> run = map(testCase.get(path));
+            int undecodable =
+                    run.containsKey("undecodableSlot") ? count(run.get("undecodableSlot")) : 0;
+            List<String> bodies = new ArrayList<>();
+            List<String> log = new ArrayList<>();
+            List<MutationSettled> settled = new ArrayList<>();
+            List<Long> confirmed = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            bodies,
+                            body -> {
+                                List<Object> calls = batchCalls(body);
+
+                                if (calls.isEmpty()) {
+                                    return new Response(
+                                            200,
+                                            "{\"commitCursor\":1,\"result\":" + rawResult + "}");
+                                }
+
+                                StringBuilder slots = new StringBuilder();
+
+                                for (int index = 0; index < calls.size(); index++) {
+                                    slots.append(index > 0 ? "," : "")
+                                            .append("{\"id\":")
+                                            .append(index)
+                                            .append(",\"body\":{\"commitCursor\":")
+                                            .append(index + 1)
+                                            .append(",\"result\":")
+                                            .append(index == undecodable ? rawResult : "\"ok\"")
+                                            .append("}}");
+                                }
+
+                                return new Response(200, "{\"results\":[" + slots + "]}");
+                            });
+            MemoryStore store =
+                    new MemoryStore() {
+                        @Override
+                        public void remove(String mutationId) {
+                            log.add("remove:" + mutationId);
+                            super.remove(mutationId);
+                        }
+                    };
+
+            client.offlineQueue(new OfflineQueue().persistence(store));
+            client.onMutationSettled(
+                    event -> {
+                        log.add("settle:" + event.mutationId());
+                        settled.add(event);
+                    });
+
+            for (String id : strings(run.get("queued"))) {
+                QueuedMutation item = entry(id, null);
+
+                item.onCommit = confirmed::add;
+                client.offlineQueue().enqueue(item);
+            }
+
+            FlushReport report = client.flushOfflineQueue(null);
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    path + ": every write commits, got " + report.committed);
+            check(
+                    report.rejected.equals(strings(run.get("rejected"))),
+                    path + ": nothing is rejected");
+            check(
+                    ids(client.offlineQueue().items()).equals(strings(run.get("queuedAfterFlush"))),
+                    path + ": nothing is left queued");
+            check(
+                    store.removed.equals(strings(run.get("persistRemoveCalls"))),
+                    path + ": every durable record is removed, got " + store.removed);
+            check(
+                    confirmed.size() == strings(run.get("committed")).size(),
+                    path + ": every overlay is confirmed against its echoed cursor");
+
+            List<String> decodeFailed = new ArrayList<>();
+
+            for (MutationSettled event : settled) {
+                check(event.status() == MutationStatus.COMMITTED, path + ": settles committed");
+
+                if (event.error() != null) {
+                    check(code.equals(settledCode(event)), path + ": carrying " + code);
+                    check(event.value() == null, path + ": with no value");
+                    decodeFailed.add(event.mutationId());
+                }
+
+                // The outcome is decided (decode) before the record goes, and the record goes
+                // before the settle: never the reverse.
+                check(
+                        log.indexOf("remove:" + event.mutationId())
+                                < log.indexOf("settle:" + event.mutationId()),
+                        path + ": the record is removed before the settle");
+            }
+
+            check(
+                    decodeFailed.equals(strings(run.get("decodeFailed"))),
+                    path + ": the decode error rides the undecodable write, got " + decodeFailed);
+
+            if (run.containsKey("requestsAfterSecondFlush")) {
+                client.flushOfflineQueue(null);
+                check(
+                        bodies.size() == count(run.get("requestsAfterSecondFlush")),
+                        path + ": a second flush sends nothing");
+
+                // The direct call raises the same coded SDK error, not the codec's exception.
+                try {
+                    client.mutation("messages:send", null, null, null);
+                    check(false, "an undecodable result must raise");
+                } catch (Client.ApiException error) {
+                    check(code.equals(error.code), "a direct call raises " + code);
+                }
+            }
+        }
+    }
+
+    /** An unexpected failure nothing classifies, thrown from inside the replay. */
+    private static final class InjectedFailure extends Error {
+        private static final long serialVersionUID = 1L;
+
+        InjectedFailure() {
+            super("injected");
+        }
+    }
+
+    /**
+     * A flush that leaves its replay loop on an unexpected exception puts every drained write it
+     * had not yet settled back on the queue, in order, instead of losing it.
+     */
+    private static void flushNeverLosesDrainedWrites() {
+        int[] requests = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            requests[0]++;
+
+                            if (batchCalls(body).size() > 1) {
+                                return new Response(
+                                        413,
+                                        "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"big\"}}");
+                            }
+
+                            // The first lone slot commits; the next request blows up.
+                            if (requests[0] > 2) {
+                                throw new InjectedFailure();
+                            }
+
+                            return new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+        enqueueAll(client, List.of("f1", "f2", "f3"));
+
+        boolean escaped = false;
+
+        try {
+            client.flushOfflineQueue(null);
+        } catch (InjectedFailure expected) {
+            escaped = true;
+        }
+
+        check(escaped, "the unexpected failure still reaches the caller");
+        check(
+                ids(client.offlineQueue().items()).equals(List.of("f2", "f3")),
+                "the drained writes it never settled are back on the queue, in order, got "
+                        + ids(client.offlineQueue().items()));
+        check(store.removed.equals(List.of("f1")), "only the settled write lost its record");
+    }
+
+    /**
+     * ONE predicate classifies a replay failure on both paths: a coded envelope by its code alone
+     * whatever the status, an envelope-less reply by its status.
+     */
+    private static void offlineFlushClassifiesSingleAndBatchAlike() throws IOException {
+        covers("offline_flush_classifies_single_and_batch_alike");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "replayClassification");
+        Map<String, Object> paths = map(testCase.get("paths"));
+
+        for (Object raw : list(testCase.get("cases"))) {
+            Map<String, Object> scenario = map(raw);
+            String body =
+                    scenario.containsKey("rawBody")
+                            ? (String) scenario.get("rawBody")
+                            : Json.write(scenario.get("body"));
+            int status = count(scenario.get("status"));
+
+            for (String path : List.of("single", "batch")) {
+                String label = scenario.get("name") + " (" + path + ")";
+                List<String> queued = strings(paths.get(path));
+                List<MutationSettled> settled = new ArrayList<>();
+                Client client =
+                        recordingClient(new ArrayList<>(), payload -> new Response(status, body));
+
+                client.onMutationSettled(settled::add);
+                enqueueAll(client, queued);
+
+                FlushReport report = client.flushOfflineQueue(null);
+
+                if ("rejected".equals(scenario.get("outcome"))) {
+                    check(
+                            report.rejected.equals(queued),
+                            label + ": rejected, got " + report.rejected);
+                    check(client.offlineQueue().items().isEmpty(), label + ": nothing requeued");
+
+                    for (MutationSettled event : settled) {
+                        check(
+                                scenario.get("code").equals(settledCode(event)),
+                                label + ": carrying the server's code");
+                    }
+                } else {
+                    check(
+                            report.requeued.equals(queued),
+                            label + ": requeued, got " + report.requeued);
+                    check(
+                            ids(client.offlineQueue().items()).equals(queued),
+                            label + ": left queued in order");
+                    check(settled.isEmpty(), label + ": nothing settled");
+                }
+            }
+        }
+    }
+
+    /**
+     * A 413 is a verdict on the request whatever its body: a batch splits on ANY 413, and a lone
+     * write still refused settles terminally with PAYLOAD_TOO_LARGE.
+     */
+    private static void offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge() throws IOException {
+        covers("offline_flush_batch_splits_on_envelopeless_413");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "envelopelessPayloadTooLarge");
+        String rawBody = (String) testCase.get("rawBody");
+
+        for (String name : List.of("split", "alwaysRefused", "lone")) {
+            Map<String, Object> run = map(testCase.get(name));
+            int above =
+                    run.containsKey("refuseCallsAbove") ? count(run.get("refuseCallsAbove")) : -1;
+            List<MutationSettled> settled = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            new ArrayList<>(),
+                            body ->
+                                    above >= 0 && batchCalls(body).size() <= above
+                                            ? new Response(200, echoBatchSlots(body, "null", 1L))
+                                            : new Response(413, rawBody));
+
+            client.onMutationSettled(settled::add);
+            enqueueAll(client, strings(run.get("queued")));
+
+            FlushReport report = client.flushOfflineQueue(null);
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    name + ": committed, got " + report.committed);
+            check(
+                    report.rejected.equals(strings(run.get("rejected"))),
+                    name + ": rejected, got " + report.rejected);
+            check(
+                    ids(client.offlineQueue().items()).equals(strings(run.get("queuedAfterFlush"))),
+                    name + ": nothing left queued, got " + ids(client.offlineQueue().items()));
+
+            for (MutationSettled event : settled) {
+                if (event.status() == MutationStatus.REJECTED) {
+                    check(
+                            testCase.get("code").equals(settledCode(event)),
+                            name + ": refused with " + testCase.get("code"));
+                }
+            }
+        }
     }
 }

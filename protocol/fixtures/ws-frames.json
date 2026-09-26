@@ -395,6 +395,219 @@
                 "_id": "m3",
                 "text": "new"
             }
+        ],
+        "$comment-undecodableRow": "A poke is applied WHOLE or not at all, per shape: every row it carries is decoded before the view is touched. Starting from `expectedRows` (checkpoint 5, epoch e1), `undecodableRowPokeSequence` resets the shape and carries one row `decodeWire` refuses. A client that cleared the view for the reset and then threw on the bad row left it half-applied — or empty — with nothing reported, and one that skipped the row and applied the rest advanced the checkpoint past a row it never held, so no resume would ever send it again. The view must stay exactly `expectedRows`, the shape's resume checkpoint must stay 5 (`undecodableRowResendCheckpoint`), and the shape's error callback receives `undecodableRowErrorCode` once — the code the reference raises for a frame it cannot decode.",
+        "undecodableRowPokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p3",
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p3",
+                "shapeId": "shape_1",
+                "reset": true,
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m3",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m3",
+                            "text": "fine"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m4",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m4",
+                            "text": "bad",
+                            "n": ["$lunora.wire$", "bigint", "not-a-number"]
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p3",
+                "checkpoint": 12,
+                "epoch": "e1"
+            }
+        ],
+        "undecodableRowResendCheckpoint": 5,
+        "undecodableRowErrorCode": "WIRE_DECODE_FAILED",
+        "$comment-gap": "The refused poke's rows are not lost for good: the server believes it delivered them, and stamps the NEXT part's `baseCheckpoint` (or its `pokeStart`'s) with the checkpoint it thinks this view is at. A client MUST compare it with the checkpoint the view is actually at, as the reference's `applyPokePart` does: on a mismatch (or an epoch mismatch) that is not a `reset`, it drops the view, clears the checkpoint and epoch, tells the shape's callbacks `[]`, SKIPS the ops, and re-sends a COLD `shape_subscribe` (no `sinceCheckpoint`, no `sinceEpoch`) so the server re-seeds the membership. Without the check `gapPokeSequence`, applied right after `undecodableRowPokeSequence`, spliced m5 onto the stale view at checkpoint 13 — m3 lost for good, m1 kept though the refused reseed had removed it. `contiguousPokeSequence` is its counterweight: applied to `expectedRows` (checkpoint 5) with a matching base it applies normally, so a port cannot pass by re-seeding on every based poke.",
+        "gapPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p4", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p4",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 12,
+                "rowsPatch": [{ "op": "insert", "key": "m5", "table": "messages", "value": { "_id": "m5", "text": "after" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p4", "checkpoint": 13, "epoch": "e1" }
+        ],
+        "gapExpectedRows": [],
+        "contiguousPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p5", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p5",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 5,
+                "rowsPatch": [{ "op": "insert", "key": "m6", "table": "messages", "value": { "_id": "m6", "text": "next" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p5", "checkpoint": 6, "epoch": "e1" }
+        ],
+        "contiguousExpectedRows": [
+            { "_id": "m1", "text": "hi" },
+            { "_id": "m2", "text": "yo" },
+            { "_id": "m6", "text": "next" }
         ]
+    },
+    "malformedFrames": {
+        "$comment": "Frames that parse as JSON but are not shaped like any server frame. Each is delivered, one at a time, through the entry point the port's socket read loop uses (raw text where the port takes text), after `setup` has subscribed `sub_1` (functionPath `messages:list`, args {}) and delivered `setupFrame`. None may raise, throw or panic — an exception out of the frame handler ends the read loop and with it every subscription on the client — and none may touch `sub_1`: its callback is not invoked, and the resubscribe `resend_subscriptions` builds afterwards still carries `sinceSeq` 5 and `sinceEpoch` \"e1\". A port whose handler returns a descriptor or an error value may report the frame there; that is not pinned. Note the two frames carrying a STRING cursor for a live subscription: a cursor that is not an integer is not a cursor, and resending it verbatim asked the server to resume from `\"9\"`.",
+        "setupFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "frames": [
+            null,
+            [],
+            "lunora",
+            42,
+            true,
+            {},
+            {
+                "type": 5
+            },
+            {
+                "type": "ack",
+                "id": 5
+            },
+            {
+                "type": "ack",
+                "id": ["sub_1"]
+            },
+            {
+                "type": "data",
+                "id": 5,
+                "data": 1
+            },
+            {
+                "type": "data",
+                "id": ["sub_1"],
+                "data": 1
+            },
+            {
+                "type": "delta",
+                "id": {
+                    "sub": 1
+                },
+                "delta": 1
+            },
+            {
+                "type": "resume",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "settled",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "error",
+                "id": 5,
+                "error": {
+                    "code": "X",
+                    "message": "y"
+                }
+            },
+            {
+                "type": "complete",
+                "id": {}
+            },
+            {
+                "type": "pokeStart"
+            },
+            {
+                "type": "pokeStart",
+                "pokeId": 7
+            },
+            {
+                "type": "pokePart"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "nope",
+                "shapeId": 3,
+                "rowsPatch": "x"
+            },
+            {
+                "type": "pokeEnd"
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": {
+                    "x": 1
+                }
+            }
+        ],
+        "resendSinceSeq": 5,
+        "resendSinceEpoch": "e1"
+    },
+    "identityChange": {
+        "$comment": "What a previous identity left live is evicted when the identity changes to a DIFFERENT one after having been set — a sign-out, or another user signing in. The resume cursors of every query and shape subscription were that identity's position in the changelog, and the shape rows were the rows THAT identity could see: resuming from them under the new identity asks the server for a diff against a view this identity never held and splices it onto someone else's rows. So on such a change every subscription drops its cursor and epoch (the next resubscribe is a cold one), and every shape view is emptied and its callbacks told so (`[]`). A first sign-in (from unset) and a re-assertion of the same identity evict nothing. Setup: `sub_1` (functionPath `messages:list`, args {}) has received `queryFrame`; shape `shape_1` has applied `shape.pokeSequence` (checkpoint 5, epoch e1, two rows). Each transition starts from that state with the identity set to `from` (null = unset) and then sets it to `to`; `evicts` says what the resend frames and the shape view must show afterwards. Dart, which derives its identity from `setAuthToken`, sets it there (a subject of `to`).",
+        "queryFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "transitions": [
+            {
+                "from": null,
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-b",
+                "evicts": true
+            },
+            {
+                "from": "user-a",
+                "to": null,
+                "evicts": true
+            }
+        ],
+        "retained": {
+            "sinceSeq": 5,
+            "sinceEpoch": "e1",
+            "sinceCheckpoint": 5,
+            "shapeRowCount": 2
+        },
+        "evicted": {
+            "shapeRows": [],
+            "shapeCallbackRows": []
+        }
     }
 }

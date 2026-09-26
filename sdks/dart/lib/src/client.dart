@@ -112,13 +112,43 @@ class LunoraClient {
   /// picks it up.
   String? get authToken => transport.authToken;
 
-  set authToken(String? value) => transport.authToken = value;
+  set authToken(String? value) => _changeIdentity(() => transport.authToken = value);
 
   /// A stable subject — a user id — identifying who the client is acting as.
   /// See [LunoraTransport.authSubject].
   String? get authSubject => transport.authSubject;
 
-  set authSubject(String? value) => transport.authSubject = value;
+  set authSubject(String? value) => _changeIdentity(() => transport.authSubject = value);
+
+  /// Apply a credential change, and retire the previous identity's session when
+  /// it changed the identity FROM a set one — a sign-out, or another user
+  /// signing in. The identity is [identityFingerprint]: the subject when set,
+  /// else a digest of the token, so a token refresh with no subject is a change.
+  ///
+  /// Every resume cursor and epoch was that identity's position in the
+  /// changelog, and every shape row was a row IT could see; resuming from them
+  /// under the new identity asks the server for a diff against a view this one
+  /// never held and splices it onto someone else's rows. So they are dropped —
+  /// the next resubscribe is a cold one — and every shape view is emptied, its
+  /// callbacks told `[]`. A first sign-in (from unset) and a re-assertion of the
+  /// same identity evict nothing.
+  void _changeIdentity(void Function() change) {
+    final previous = transport.identityFingerprint();
+
+    change();
+
+    if (previous == null || previous == transport.identityFingerprint()) {
+      return;
+    }
+
+    for (final entry in _subscriptions.values) {
+      entry
+        ..cursor = null
+        ..epoch = null;
+    }
+
+    _shapeRegistry.evictSession();
+  }
 
   /// Identifies this client to the server's idempotency bookkeeping — see
   /// [LunoraTransport.clientId].
@@ -129,7 +159,7 @@ class LunoraClient {
       LunoraTransport.buildRpcBody(functionPath, args, shardKey: shardKey);
 
   /// Decodes one RPC response — see [LunoraTransport.parseRpcResponse].
-  static Object? parseRpcResponse(Map<String, Object?> body, {required int status}) => LunoraTransport.parseRpcResponse(body, status: status);
+  static Object? parseRpcResponse(Object? body, {required int status}) => LunoraTransport.parseRpcResponse(body, status: status);
 
   /// The identity a queued write is stamped with — see
   /// [LunoraTransport.identityFingerprint].
@@ -261,6 +291,15 @@ class LunoraClient {
     _send = null;
     _subscriptions.clear();
     _shapeRegistry.clear();
+
+    final streams = List<MultiStreamController<Object?>>.of(_streams);
+
+    _streams.clear();
+
+    for (final stream in streams) {
+      unawaited(stream.close());
+    }
+
     _queue.clear();
   }
 
@@ -444,11 +483,27 @@ class LunoraClient {
   /// listener AND on a re-listen after cancel, both of which a widget tree does
   /// routinely — a stream held in `State` and handed to two builders, or a
   /// builder that rebuilds after its subscription was cancelled.
+  ///
+  /// [close] ends every stream still open, so a listener sees `done` rather than
+  /// waiting forever on a client that will never feed it again.
   Stream<Object?> watch(String functionPath, {Object? args}) => Stream<Object?>.multi((controller) {
+        if (_closed) {
+          controller.close();
+
+          return;
+        }
+
         final cancel = subscribe(functionPath, args: args, onData: controller.add, onError: controller.addError);
 
-        controller.onCancel = cancel;
+        _streams.add(controller);
+        controller.onCancel = () {
+          _streams.remove(controller);
+          cancel();
+        };
       });
+
+  /// The `watch()` listeners still open, for [close] to end.
+  final Set<MultiStreamController<Object?>> _streams = <MultiStreamController<Object?>>{};
 
   /// Opens a partially-replicated keyed view. `onRows` fires once per applied
   /// poke with the view's full contents, in insertion order. See
@@ -602,7 +657,7 @@ class LunoraClient {
 
         return kind;
       case 'pokeEnd':
-        _shapeRegistry.applyPoke(frame);
+        _shapeRegistry.applyPoke(frame, sender: _send);
 
         return kind;
       default:
@@ -610,12 +665,18 @@ class LunoraClient {
     }
   }
 
+  /// Record a frame's resume watermark — only when it IS one. A cursor that is
+  /// not an integer, or an epoch that is not a string, is not a position in the
+  /// changelog, and storing it verbatim resent `sinceSeq: "9"` on reconnect.
   void _advance(_Subscription entry, Map<String, Object?> frame) {
-    if (frame.containsKey('cursor')) {
-      entry.cursor = frame['cursor'];
+    final cursor = frame['cursor'];
+    final epoch = frame['epoch'];
+
+    if (cursor is int) {
+      entry.cursor = cursor;
     }
-    if (frame.containsKey('epoch')) {
-      entry.epoch = frame['epoch'];
+    if (epoch is String) {
+      entry.epoch = epoch;
     }
   }
 

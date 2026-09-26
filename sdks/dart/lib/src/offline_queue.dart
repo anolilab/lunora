@@ -255,7 +255,15 @@ class QueuedMutation {
   /// True when a live caller is still awaiting this write.
   bool get hasAwaiter => completer != null;
 
+  /// Whether a verdict has been reached on this write. Set FIRST by every
+  /// settle, so a flush that fails unexpectedly part-way can tell a write it
+  /// already decided from one it drained and never got to — and put only the
+  /// second kind back on the queue.
+  bool get settled => _settled;
+  bool _settled = false;
+
   void resolve(Object? value) {
+    _settled = true;
     onSettled?.call(this, null);
 
     if (completer != null && !completer!.isCompleted) {
@@ -263,7 +271,22 @@ class QueuedMutation {
     }
   }
 
+  /// Settle a write the server COMMITTED whose result does not decode.
+  ///
+  /// Committed, so no `onReject`: its optimistic layers were confirmed on its
+  /// commit cursor and must not roll back. [error] reaches the observer and the
+  /// awaiter in place of the value neither can be given.
+  void resolveUndecodable(LunoraApiException error) {
+    _settled = true;
+    onSettled?.call(this, error);
+
+    if (completer != null && !completer!.isCompleted) {
+      completer!.completeError(error);
+    }
+  }
+
   void reject(Object error) {
+    _settled = true;
     onReject?.call(error);
     onSettled?.call(this, error);
 
@@ -356,7 +379,8 @@ class OfflineQueue {
   /// Notified whenever a queued write reaches a terminal verdict — replayed,
   /// rejected by the server, evicted on overflow, discarded by a failed
   /// precondition or an identity change, or abandoned by `close`. `error` is null
-  /// on success.
+  /// on success, and coded `WIRE_DECODE_FAILED` for a write that COMMITTED but
+  /// whose result does not decode — committed all the same, never retried.
   ///
   /// Worth handling, and the only way to see half of them: a RESTORED write has
   /// no awaiter, so its verdict reaches no Future at all.

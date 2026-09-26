@@ -29,7 +29,7 @@ retries and socket library:
 
 ```java
 Client client = new Client("https://my-app.example.com", myPoster);
-client.identity = currentUserId;
+client.identity(currentUserId);
 // The client id is minted per instance. Pin a stable per-device one only when
 // the offline queue is durable — a replayed write is namespaced server-side
 // under the id that issued it.
@@ -43,8 +43,18 @@ Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, 
 ```
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
-`client.resendSubscriptions()` re-subscribes everything after a reconnect —
-queries carrying their resume cursor and shapes their checkpoint and epoch.
+no frame makes it throw — one that is not JSON, not an object, or not shaped
+like any server frame is ignored, and a cursor that is not an integer never replaces
+the tracked one. `client.resendSubscriptions()` re-subscribes everything after a
+reconnect — queries carrying their resume cursor and shapes their checkpoint and
+epoch. A poke is applied to each shape whole or not at all: if any row for a
+shape does not decode, that shape's view, checkpoint and epoch stay as they
+were and its `onError` receives `WIRE_DECODE_FAILED`. A later part whose
+`baseCheckpoint` (or its `pokeStart`'s) is not the checkpoint the view is at, or
+whose epoch differs from the view's, is not spliced on: unless it is a `reset`,
+the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
+and a cold `shape_subscribe` sent at once so the server re-seeds it.
+`client.close()` also ends every open `stream`.
 
 ## Optimistic updates and offline writes
 
@@ -99,9 +109,33 @@ A replay the server rate-limits is re-queued rather than dropped, and the
 envelope's `data.retryAfterMs` comes back as `FlushReport.retryAfterMs`; the
 client also holds the next flush off until that delay passes.
 
-`client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
-token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+A replay failure is classified the same way whether the write went out alone or
+in a batch: a coded error envelope by its code alone, whatever the HTTP status —
+only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
+the refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED` and
+`UNAUTHENTICATED` (held until a token refresh, never settled) re-queue, so a
+coded 5xx is terminal; an envelope whose `data` does not decode keeps its code
+with the `data` dropped — and a reply with no envelope by its
+status: re-queued, except a 413. A 413 is `PAYLOAD_TOO_LARGE` whatever its body,
+so a batch refused with an edge's HTML 413 is halved and retried, and a lone
+write still refused settles terminally with that code.
+
+A write the server committed whose `result` does not decode settles `COMMITTED`
+with no value and an `ApiException` coded `WIRE_DECODE_FAILED` on its settled
+event; its overlay confirms against the echoed cursor and it is never retried.
+A direct `query`/`mutation`/`action` raises that same coded error, and one whose
+body is not a JSON object at all (an HTML page, `null`, `[]`) raises an
+`ApiException` coded `INTERNAL`. A flush interrupted by an unexpected exception
+puts every write it had drained but not yet settled back on the queue.
+
+`client.identity(id)` sets an opaque, **non-secret** stamp — a user id, not a
+bearer token. It is persisted with every queued write and re-checked before that
+write replays, so a restart cannot push one user's queued writes as another.
+Changing it from a set value to a different one (another user, or `null` for
+signed out) also evicts the previous session: every query and shape
+subscription drops its resume cursor and epoch, and every shape view is emptied
+and its `onRows` told `[]`. A first sign-in and re-setting the same value evict
+nothing.
 
 `synchronized` is reentrant, so a consumer callback invoked under the client's
 monitor would not deadlock — it would instead run inside the critical section

@@ -72,20 +72,22 @@ public final class Client {
     }
 
     /** A coded error from an RPC error envelope. */
-    public static final class ApiException extends RuntimeException {
+    public static class ApiException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
         public final String code;
         public final transient Object data;
 
         /**
-         * Whether the call reached no verdict — a 5xx, or a non-2xx carrying no envelope at all (an
-         * edge error page, a WAF block, a proxy).
+         * Whether the call reached no verdict: a reply carrying no readable error envelope at all
+         * (an edge error page, a WAF block, a proxy, a body that is not a JSON object) — except a
+         * 413, which is a verdict on the request whatever its body.
          *
-         * <p>Set where the HTTP STATUS is still in scope, because nothing downstream can recover
-         * it: {@code code} alone cannot tell a {@code BAD_REQUEST} the function returned from the
-         * {@code INTERNAL} this client synthesises for a body that never came from one. See {@link
-         * Submit#isTransient}.
+         * <p>Set where the reply's SHAPE is still in scope, because nothing downstream can recover
+         * it: {@code code} alone cannot tell an {@code INTERNAL} the function returned from the
+         * {@code INTERNAL} this client synthesises for a body that never came from one. A CODED
+         * envelope never sets it, whatever its HTTP status: the server reached a verdict, and its
+         * code alone classifies it (see {@link Submit#isTransient}).
          */
         public final boolean transientFailure;
 
@@ -105,6 +107,33 @@ public final class Client {
      * matters: this reaches the consumer's {@code onError}, which switches on it.
      */
     public static final String CODE_INVALID_FRAME = "INVALID_FRAME";
+
+    /**
+     * The code of the {@link ApiException} a call raises when the server answered SUCCESS but its
+     * {@code result} does not decode. The write behind it committed: a replay settles it {@code
+     * COMMITTED} carrying this error rather than retrying a result that can only come back the
+     * same.
+     */
+    public static final String CODE_WIRE_DECODE_FAILED = "WIRE_DECODE_FAILED";
+
+    /**
+     * A success whose {@code result} would not decode. It keeps the commit cursor the reply echoed,
+     * because the write DID commit and its optimistic overlay confirms against that cursor.
+     */
+    static final class ResultDecodeException extends ApiException {
+        private static final long serialVersionUID = 1L;
+
+        final transient Long commitCursor;
+
+        ResultDecodeException(RuntimeException cause, Long commitCursor) {
+            super(
+                    CODE_WIRE_DECODE_FAILED,
+                    "result does not decode: " + cause.getMessage(),
+                    null,
+                    false);
+            this.commitCursor = commitCursor;
+        }
+    }
 
     private final String baseUrl;
     private final HttpPoster poster;
@@ -131,6 +160,10 @@ public final class Client {
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
+
+    /** The streams {@link #close} ends. */
+    private final Set<Stream> streams = new LinkedHashSet<>();
+
     private int nextId;
     private int nextShapeId;
 
@@ -191,6 +224,23 @@ public final class Client {
          * of the client.
          */
         final Set<String> resets = new LinkedHashSet<>();
+
+        /**
+         * The checkpoint each shape's diff was computed against: its part's {@code baseCheckpoint},
+         * else the {@code pokeStart}'s.
+         */
+        final Map<String, Object> bases = new LinkedHashMap<>();
+
+        /** The {@code pokeStart}'s {@code baseCheckpoint}, the default for every part. */
+        final Object startBase;
+
+        /** The {@code pokeStart}'s epoch, or null. */
+        final String epoch;
+
+        PokeBuffer(Object startBase, String epoch) {
+            this.startBase = startBase;
+            this.epoch = epoch;
+        }
     }
 
     private static final class Shape {
@@ -244,8 +294,60 @@ public final class Client {
      * It is persisted alongside every queued write and re-checked before that write replays, so a
      * restart cannot push one user's queued writes as another. Null means signed out, which is
      * itself an identity a write can be stamped with.
+     *
+     * <p>Behind a setter because changing it is not just a store: see {@link #identity(String)}.
      */
-    public volatile String identity;
+    private volatile String identity;
+
+    /** Who is signed in, as last set by {@link #identity(String)}; null when signed out. */
+    public String identity() {
+        return identity;
+    }
+
+    /**
+     * Sets who is signed in. Changing it FROM a set value to a different one (another user, or
+     * signed out) evicts the previous identity's session: every query and shape subscription drops
+     * its resume cursor and epoch, so the next resubscribe is a cold one, and every shape view is
+     * emptied with its callback told ({@code []}).
+     *
+     * <p>Those cursors were the previous identity's position in the changelog and those rows were
+     * the rows IT could see; resuming from them under the new identity asks the server for a diff
+     * against a view this identity never held and splices it onto someone else's rows. A first
+     * sign-in (from unset) and re-asserting the same identity evict nothing.
+     */
+    public void identity(String next) {
+        List<Delivery> deliveries = new ArrayList<>();
+
+        synchronized (lock) {
+            String previous = identity;
+
+            identity = next;
+
+            if (previous == null || previous.equals(next)) {
+                return;
+            }
+
+            for (Subscription subscription : subscriptions.values()) {
+                subscription.cursor = null;
+                subscription.epoch = null;
+            }
+
+            for (Shape shape : shapes.values()) {
+                shape.rows.clear();
+                shape.order.clear();
+                shape.checkpoint = null;
+                shape.epoch = null;
+
+                if (shape.onRows != null) {
+                    deliveries.add(new Delivery(shape.onRows, new ArrayList<>()));
+                }
+            }
+        }
+
+        for (Delivery delivery : deliveries) {
+            delivery.onRows().accept(delivery.rows());
+        }
+    }
 
     OfflineQueue offlineQueue = new OfflineQueue();
 
@@ -263,6 +365,16 @@ public final class Client {
     public Client(String baseUrl, HttpPoster poster) {
         this.baseUrl = baseUrl;
         this.poster = poster;
+    }
+
+    /**
+     * Names the deployment and nothing else. Written out rather than inherited so that keeping the
+     * bearer token out of a log line is a stated guarantee of this class, not an accident of {@code
+     * Object.toString()} that a future field-dumping override would silently undo.
+     */
+    @Override
+    public String toString() {
+        return "Client(" + baseUrl + ")";
     }
 
     /**
@@ -338,6 +450,7 @@ public final class Client {
      */
     public void close() {
         List<Offline.Discarded> discarded;
+        List<Stream> open;
 
         // Emptied under the monitor, settled outside it: `clear` mutates the same list every other
         // queue call does, while settling rolls optimistic layers back and notifies listeners.
@@ -345,6 +458,13 @@ public final class Client {
             closed = true;
             sender = null;
             discarded = offlineQueue.clear();
+            open = new ArrayList<>(streams);
+        }
+
+        // Every open stream ends: a consumer blocked in its loop would otherwise wait forever on a
+        // client that will never deliver again.
+        for (Stream stream : open) {
+            stream.close();
         }
 
         Submit.reportDiscarded(this, discarded);
@@ -388,29 +508,78 @@ public final class Client {
 
         if (envelope instanceof Map<?, ?> error) {
             Object rawData = ((Map<String, Object>) error).get("data");
-            Object data = rawData == null ? null : Wire.decode(rawData);
+            Object data = decodeErrorData(rawData);
             Object code = ((Map<String, Object>) error).get("code");
             Object message = ((Map<String, Object>) error).get("message");
 
-            // A 5xx is the shard or the edge failing under the call, not a verdict on it, so a
-            // queued write replayed under the same idempotency key is still good.
+            // Classified by its CODE alone, whatever the HTTP status: a coded 5xx is the server's
+            // verdict exactly as a coded 4xx is, and the batch path — which never sees a slot's
+            // status — already classified it that way. One predicate for both paths, so a durable
+            // write's fate cannot depend on how many siblings shared its flush.
             throw new ApiException(
                     code instanceof String text ? text : "INTERNAL",
                     message instanceof String text ? text : "request failed",
                     data,
-                    status >= 500);
+                    false);
         }
 
         if (status < 200 || status > 299) {
-            // No envelope at all, so this body never came from a Lunora function: an edge error
-            // page, a WAF block, a proxy. Nothing reached the shard, which makes it transport
-            // rather than a verdict — the batch path already classified the identical response
-            // that way, and a lone queued write must not be dropped for being alone.
-            throw new ApiException(
-                    "INTERNAL", "HTTP " + status + " without an error envelope", null, true);
+            throw envelopeless(status);
         }
 
-        return Wire.decode(body.get("result"));
+        try {
+            return Wire.decode(body.get("result"));
+        } catch (RuntimeException error) {
+            // A SUCCESS whose result is unreadable: the call committed, so this is not a transport
+            // failure to retry but a coded error carrying the cursor the write committed at.
+            throw new ResultDecodeException(error, parseCommitCursor(body));
+        }
+    }
+
+    /**
+     * The error for a reply that carries no readable envelope: {@code body} is not a JSON object,
+     * or it is a non-2xx object without an {@code error} envelope.
+     *
+     * <p>Such a body never came from a Lunora function — an edge error page, a WAF block, a proxy —
+     * so it is transport rather than a verdict ({@code transientFailure}), and a queued write is
+     * replayed. Except a 413: that is a verdict on the REQUEST whatever its body, since an edge
+     * refuses an oversized body with its own page long before the worker could write its coded
+     * {@code PAYLOAD_TOO_LARGE}. Re-queueing it sent the identical body into the identical refusal
+     * forever.
+     */
+    static ApiException envelopeless(int status) {
+        if (status == 413) {
+            return new ApiException(
+                    Offline.PAYLOAD_TOO_LARGE, "HTTP 413 without an error envelope", null, false);
+        }
+
+        return new ApiException(
+                "INTERNAL", "HTTP " + status + " without a readable error envelope", null, true);
+    }
+
+    /**
+     * An error envelope's {@code data}, decoded — or null when the codec refuses it. The envelope
+     * is still the server's coded verdict: letting the codec's exception escape instead made it
+     * read as a transport failure, or escape past every handler written for this SDK's errors.
+     */
+    static Object decodeErrorData(Object raw) {
+        try {
+            return raw == null ? null : Wire.decode(raw);
+        } catch (RuntimeException error) {
+            return null;
+        }
+    }
+
+    /** {@code text} parsed, when it is a JSON object; null for anything else, never a throw. */
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> parseObject(String text) {
+        try {
+            return text != null && Json.parse(text) instanceof Map<?, ?> map
+                    ? (Map<String, Object>) map
+                    : null;
+        } catch (RuntimeException error) {
+            return null;
+        }
     }
 
     public Object query(String functionPath, Object args, String shardKey) {
@@ -453,7 +622,6 @@ public final class Client {
      * rather than be discarded by {@link #parseRpcResponse}. {@code clientId} overrides this
      * session's, so a replayed write namespaces server-side under the id that ISSUED it.
      */
-    @SuppressWarnings("unchecked")
     RpcReply rpcFull(
             String functionPath,
             Object args,
@@ -484,20 +652,33 @@ public final class Client {
         String payload = Json.write(buildRpcBody(functionPath, args, shardKey));
         Response response =
                 poster.post(join(RPC_PATH), headers, payload.getBytes(StandardCharsets.UTF_8));
-        Map<String, Object> body = (Map<String, Object>) Json.parse(response.body());
+        // A body that is not a JSON object — an HTML page, `null`, `[]` — is an error of THIS
+        // SDK's type, never the parser's, cast's or a null dereference escaping every handler the
+        // caller wrote for this SDK's errors.
+        Map<String, Object> body = parseObject(response.body());
+
+        if (body == null) {
+            throw envelopeless(response.status());
+        }
 
         return new RpcReply(parseRpcResponse(body, response.status()), parseCommitCursor(body));
     }
 
     /**
-     * POST one {@code /_lunora/rpc-batch} chunk, returning the parsed body.
+     * One {@code /_lunora/rpc-batch} reply: its status, and its body when that is a JSON object (an
+     * empty map otherwise). The status is kept because a 413 is a verdict on the request whether or
+     * not its body carries an envelope.
+     */
+    record BatchReply(int status, Map<String, Object> body) {}
+
+    /**
+     * POST one {@code /_lunora/rpc-batch} chunk.
      *
      * <p>No {@code x-lunora-mutation-id} on the request: a batch is ONE transport hop carrying
      * independent calls, so each entry carries its own idempotency key and client id in the body. A
      * single outer header would name one write and de-duplicate the whole chunk against it.
      */
-    @SuppressWarnings("unchecked")
-    Map<String, Object> rpcBatch(List<Object> calls) {
+    BatchReply rpcBatch(List<Object> calls) {
         if (poster == null) {
             throw new ApiException("INTERNAL", "no HTTP poster configured", null, false);
         }
@@ -519,9 +700,9 @@ public final class Client {
                         join(RPC_BATCH_PATH),
                         headers,
                         Json.write(envelope).getBytes(StandardCharsets.UTF_8));
-        Object body = Json.parse(response.body());
+        Map<String, Object> body = parseObject(response.body());
 
-        return body instanceof Map<?, ?> map ? (Map<String, Object>) map : new LinkedHashMap<>();
+        return new BatchReply(response.status(), body == null ? new LinkedHashMap<>() : body);
     }
 
     /**
@@ -758,14 +939,26 @@ public final class Client {
      */
     public Stream stream(String functionPath, Object args, String shardKey) {
         Stream stream = new Stream();
-
-        stream.unsubscribe =
+        Runnable unsubscribe =
                 subscribe(
                         functionPath,
                         args,
                         value -> stream.events.add(new StreamEvent(value, null)),
                         error -> stream.events.add(new StreamEvent(null, error)),
                         shardKey);
+
+        synchronized (lock) {
+            streams.add(stream);
+        }
+
+        stream.unsubscribe =
+                () -> {
+                    synchronized (lock) {
+                        streams.remove(stream);
+                    }
+
+                    unsubscribe.run();
+                };
 
         return stream;
     }
@@ -868,12 +1061,12 @@ public final class Client {
             return null;
         }
 
-        Map<String, Object> frame;
+        // Non-JSON frames, and JSON that is not an object (`null`, `[]`, `42`), are ignored rather
+        // than fatal: an exception out of here ends the socket read loop, and with it every
+        // subscription on the client.
+        Map<String, Object> frame = parseObject(raw);
 
-        try {
-            frame = (Map<String, Object>) Json.parse(raw);
-        } catch (RuntimeException error) {
-            // Non-JSON frames are ignored by the client parser, not fatal.
+        if (frame == null) {
             return null;
         }
 
@@ -1040,6 +1233,12 @@ public final class Client {
                 }
             }
             case "pokeStart" -> {
+                // A poke without a string id opens nothing: its parts and its end could never name
+                // it, and a buffer keyed "null" would be joined by the next id-less frame.
+                if (!(frame.get("pokeId") instanceof String)) {
+                    return kind;
+                }
+
                 synchronized (lock) {
                     // Evict oldest-first at the cap. A LinkedHashMap iterates in insertion
                     // order, so the first key is the oldest buffer; one that old is no
@@ -1051,7 +1250,13 @@ public final class Client {
                         oldest.remove();
                     }
 
-                    pokes.put(String.valueOf(frame.get("pokeId")), new PokeBuffer());
+                    pokes.put(
+                            String.valueOf(frame.get("pokeId")),
+                            new PokeBuffer(
+                                    frame.get("baseCheckpoint") instanceof Number base
+                                            ? base
+                                            : null,
+                                    frame.get("epoch") instanceof String epoch ? epoch : null));
                 }
             }
             case "pokePart" -> bufferPokePart(frame);
@@ -1064,13 +1269,20 @@ public final class Client {
         return kind;
     }
 
+    /**
+     * Advances the resume position to what the frame carries — but only a cursor that IS one (an
+     * integer) and an epoch that is a string. Anything else is not a position: resending a string
+     * cursor verbatim asked the server to resume from {@code "9"}.
+     */
     private static void advance(Subscription entry, Map<String, Object> frame) {
-        if (frame.containsKey("cursor")) {
-            entry.cursor = frame.get("cursor");
+        if (frame.get("cursor") instanceof Number cursor
+                && Double.isFinite(cursor.doubleValue())
+                && cursor.doubleValue() == Math.rint(cursor.doubleValue())) {
+            entry.cursor = cursor;
         }
 
-        if (frame.containsKey("epoch")) {
-            entry.epoch = frame.get("epoch");
+        if (frame.get("epoch") instanceof String epoch) {
+            entry.epoch = epoch;
         }
     }
 
@@ -1104,6 +1316,15 @@ public final class Client {
 
             buffer.parts.computeIfAbsent(shapeId, key -> new ArrayList<>()).addAll(operations);
 
+            Object base =
+                    frame.get("baseCheckpoint") instanceof Number number
+                            ? number
+                            : buffer.startBase;
+
+            if (base != null) {
+                buffer.bases.put(shapeId, base);
+            }
+
             // Recorded sticky (never cleared) so a server that splits one seed across
             // several parts still replaces rather than merges. `reset` is the ONLY
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
@@ -1123,11 +1344,15 @@ public final class Client {
     private void applyPoke(Map<String, Object> frame) {
         List<Delivery> deliveries = new ArrayList<>();
         List<ErrorDelivery> errorDeliveries = new ArrayList<>();
+        List<Map<String, Object>> reseeds = new ArrayList<>();
+        FrameSender socket;
 
         // The view is mutated under the lock; `onRows`/`onError` fire after it is
         // released, with the row snapshot taken while still holding it — so a
         // callback sees one consistent poke even if the next one lands mid-delivery.
         synchronized (lock) {
+            socket = sender;
+
             PokeBuffer buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
 
             if (buffer == null) {
@@ -1138,6 +1363,78 @@ public final class Client {
                 Shape shape = shapes.get(entry.getKey());
 
                 if (shape == null) {
+                    continue;
+                }
+
+                // An epoch mismatch means the changelog forked since this view last applied; a
+                // base mismatch means the diff was computed against a checkpoint the view is not
+                // at (a dropped or refused poke). Splicing it on would corrupt the view, so drop
+                // it, clear its position, skip the ops and re-subscribe COLD so the server
+                // re-seeds it. A reset part is its complete membership, and settles either.
+                Object base = buffer.bases.get(entry.getKey());
+                boolean epochForked =
+                        buffer.epoch != null
+                                && shape.epoch != null
+                                && !buffer.epoch.equals(shape.epoch);
+                boolean baseDiverged =
+                        base instanceof Number expected
+                                && shape.checkpoint instanceof Number actual
+                                && expected.doubleValue() != actual.doubleValue();
+
+                if (!buffer.resets.contains(entry.getKey()) && (epochForked || baseDiverged)) {
+                    shape.rows.clear();
+                    shape.order.clear();
+                    shape.checkpoint = null;
+                    shape.epoch = null;
+
+                    if (shape.onRows != null) {
+                        deliveries.add(new Delivery(shape.onRows, new ArrayList<>()));
+                    }
+
+                    reseeds.add(
+                            buildShapeSubscribeFrame(
+                                    entry.getKey(), shape.name, shape.args, null, null));
+
+                    continue;
+                }
+
+                // Every row is decoded BEFORE the view is touched: a poke is applied whole or
+                // not at all. Clearing for a reset and then failing on a row left the view
+                // half-applied (or empty), and skipping the row while applying the rest advanced
+                // the checkpoint past a row the view never held — so no resume would send it
+                // again. Refused, the view, checkpoint and epoch all stay put and the shape's
+                // error callback is told; the other shapes in the poke still apply.
+                Map<Map<String, Object>, Object> decoded = new java.util.IdentityHashMap<>();
+                RuntimeException failure = null;
+
+                for (Map<String, Object> operation : entry.getValue()) {
+                    Object value = operation.get("value");
+
+                    if ("delete".equals(operation.get("op")) || value == null) {
+                        continue;
+                    }
+
+                    try {
+                        // Caught broadly, not just Wire.WireFormatException: a nested decoder
+                        // throws its own unchecked exceptions (Base64's, say).
+                        decoded.put(operation, Wire.decode(value));
+                    } catch (RuntimeException error) {
+                        failure = error;
+
+                        break;
+                    }
+                }
+
+                if (failure != null) {
+                    if (shape.onError != null) {
+                        errorDeliveries.add(
+                                new ErrorDelivery(
+                                        shape.onError,
+                                        new SubscriptionError(
+                                                CODE_WIRE_DECODE_FAILED,
+                                                "malformed wire value: " + failure.getMessage())));
+                    }
+
                     continue;
                 }
 
@@ -1162,34 +1459,9 @@ public final class Client {
                         continue;
                     }
 
-                    Object value = operation.get("value");
-
                     // A value-less upsert is membership-only; it must not blank an
                     // existing row.
-                    if (value == null) {
-                        continue;
-                    }
-
-                    Object decoded;
-
-                    try {
-                        decoded = Wire.decode(value);
-                    } catch (RuntimeException error) {
-                        // Same rationale as the "data"/"delta" guard above: catch
-                        // broadly, not just Wire.WireFormatException. A malformed row
-                        // must reach the shape's error callback, not vanish or corrupt
-                        // the view — skip only this row rather than dropping the whole
-                        // poke or throwing out of handleFrame.
-                        if (shape.onError != null) {
-                            errorDeliveries.add(
-                                    new ErrorDelivery(
-                                            shape.onError,
-                                            new SubscriptionError(
-                                                    null,
-                                                    "malformed wire value: "
-                                                            + error.getMessage())));
-                        }
-
+                    if (!decoded.containsKey(operation)) {
                         continue;
                     }
 
@@ -1197,7 +1469,7 @@ public final class Client {
                         shape.order.add(key);
                     }
 
-                    shape.rows.put(key, decoded);
+                    shape.rows.put(key, decoded.get(operation));
                 }
 
                 if (frame.containsKey("checkpoint")) {
@@ -1217,6 +1489,12 @@ public final class Client {
 
                     deliveries.add(new Delivery(shape.onRows, rows));
                 }
+            }
+        }
+
+        if (socket != null) {
+            for (Map<String, Object> reseed : reseeds) {
+                socket.send(reseed);
             }
         }
 

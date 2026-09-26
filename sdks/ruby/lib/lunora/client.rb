@@ -35,6 +35,11 @@ module Lunora
   # entry, and this one is not.
   PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
 
+  # A call the server answered with SUCCESS but whose result does not decode. The
+  # call committed; only its value is unreadable, so a queued write settles
+  # +committed+ carrying this code instead of being retried forever.
+  WIRE_DECODE_FAILED = "WIRE_DECODE_FAILED"
+
   # Ceiling on a delay this client will actually sit out, matching the browser
   # client's own clamp. A server (or a proxy inventing one) that names an hour
   # would otherwise strand a durable queue for an hour, with no way for the
@@ -51,11 +56,13 @@ module Lunora
 
   # A coded error from an RPC error envelope.
   #
-  # +transient+ says the call did not reach a verdict — a 5xx, or a non-2xx
-  # carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
-  # set where the STATUS is still in scope, because nothing downstream can
-  # recover it: +code+ alone cannot tell a BAD_REQUEST the function returned from
-  # the INTERNAL this client synthesises for a body that never came from one.
+  # +transient+ says the call did not reach a verdict: the reply carried no
+  # envelope and nothing readable (an edge error page, a WAF block, a proxy). It
+  # is set where the body is still in scope, because nothing downstream can
+  # recover it: +code+ alone cannot tell an INTERNAL the function returned from
+  # the INTERNAL this client synthesises for a body that never came from one. A
+  # CODED envelope is never transient by status — its code is the verdict,
+  # whatever the HTTP status (see +Client#transient?+).
   class ApiError < StandardError
     attr_reader :code, :data, :transient
 
@@ -66,6 +73,12 @@ module Lunora
       @transient = transient
     end
   end
+
+  # The CLIENT failed to decode the result of a call the server answered with
+  # success, so the call committed. A distinct class, because the replay tells a
+  # committed write from a refusal by where the failure arose: a server may send
+  # the same public code WIRE_DECODE_FAILED in an envelope, and that is a refusal.
+  class ResultDecodeError < ApiError; end
 
   # A subscription-scoped error the server pushed.
   SubscriptionError = Struct.new(:code, :message)
@@ -148,17 +161,28 @@ module Lunora
   # same INTERNAL/transient verdict rather than being read as one. Read
   # unguarded it raised NoMethodError/TypeError past every ApiError handler the
   # caller has.
+  #
+  # +body+ is whatever the poster read: the parsed JSON, or the raw text when
+  # the response was not JSON. Anything but a JSON object (+null+, +[]+, a
+  # string, an HTML page) holds neither a result nor an envelope, and raises the
+  # same INTERNAL/transient ApiError rather than the NoMethodError/TypeError that
+  # reading it unguarded raised.
   def parse_rpc_response(body, status)
-    envelope = body["error"]
+    envelope = body.is_a?(Hash) ? body["error"] : nil
 
     if envelope.is_a?(Hash)
-      data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
-      # A 5xx is the shard or the edge failing under the call, not a verdict on
-      # it, so a queued write replayed under the same idempotency key is still
-      # good. See +Client#transient?+.
-      raise ApiError.new(envelope.fetch("code", "INTERNAL"), envelope.fetch("message", "request failed"), data,
-                         status >= 500)
+      data = decode_error_data(envelope["data"])
+      # Classified by its CODE alone (+Client#transient?+), whatever the status:
+      # a coded 5xx is the server's verdict, and the batch path already read it
+      # as one. A status-derived flag made the same reply terminal for a write
+      # replayed in a batch and retried forever for one replayed alone.
+      raise ApiError.new(envelope.fetch("code", "INTERNAL"), envelope.fetch("message", "request failed"), data)
     end
+
+    # A 413 is PAYLOAD_TOO_LARGE whatever its body: an edge in front of the
+    # worker refuses an oversized body with its own page. Read as generic
+    # transport it re-queued a lone write whose replay can only be refused again.
+    raise ApiError.new(PAYLOAD_TOO_LARGE, "HTTP 413 without an error envelope") if status == 413
 
     # No envelope at all, so this body never came from a Lunora function: an edge
     # error page, a WAF block, a proxy. Nothing reached the shard, which makes it
@@ -166,8 +190,29 @@ module Lunora
     # identical response that way, and a lone queued write must not be dropped
     # for being alone.
     raise ApiError.new("INTERNAL", "HTTP #{status} without an error envelope", nil, true) unless (200..299).cover?(status)
+    raise ApiError.new("INTERNAL", "HTTP #{status} with a body that is not a JSON object", nil, true) unless body.is_a?(Hash)
 
-    decode_wire(body["result"])
+    decode_result(body["result"])
+  end
+
+  # A successful call's result, decoded. One that does not decode raises
+  # ResultDecodeError (code WIRE_DECODE_FAILED) rather than the codec's own
+  # error, so a caller can tell "committed, value unreadable" from a transport
+  # failure — which is what a queued write's replay turns on.
+  def decode_result(raw)
+    decode_wire(raw)
+  rescue WireFormatError => e
+    raise ResultDecodeError.new(WIRE_DECODE_FAILED, "result cannot be wire-decoded: #{e.message}")
+  end
+
+  # An error envelope's +data+, decoded — or nil when the codec refuses it. The
+  # envelope is still the server's coded verdict; letting the codec error
+  # escape instead made it an uncoded failure the replay read as transport, and
+  # re-queued the write at the head of the queue forever.
+  def decode_error_data(raw)
+    raw.nil? ? nil : decode_wire(raw)
+  rescue WireFormatError
+    nil
   end
 
   # The CDC cursor a write committed at, echoed on a mutation's response.
@@ -237,9 +282,33 @@ module Lunora
     # path binds every queued write to whatever it reads here.
     def identity = @mutex.synchronize { @identity }
 
+    # A change FROM a set identity to a different one (a sign-out included)
+    # retires what the previous identity left live: every query and shape drops
+    # its resume cursor and epoch, and every shape view is emptied and its
+    # callback told so with +[]+. Those cursors were the previous identity's
+    # position in the changelog and those rows were what IT could see; resuming
+    # from them asks the server for a diff against a view this identity never
+    # held and splices it onto someone else's rows. A first sign-in and a
+    # re-assertion of the same identity evict nothing.
+    #
+    # The socket is the consumer's, so it is the consumer that reconnects it
+    # under the new credential; the resubscribe +resend_subscriptions+ then
+    # builds is a cold one.
     def identity=(value)
-      @mutex.synchronize { @identity = value }
+      deferred = []
+
+      @mutex.synchronize do
+        evict_identity_session(deferred) unless @identity.nil? || @identity == value
+        @identity = value
+      end
+
+      run_callbacks(deferred)
     end
+
+    # The bearer token stays out of every rendering of the client: +p+, +pp+ and
+    # an exception report all go through +inspect+, and the default one lists
+    # every instance variable, +@auth_token+ included.
+    def inspect = "#<#{self.class.name} url=#{@url.inspect}>"
 
     # The durable write queue backing +submit+.
     attr_accessor :offline_queue
@@ -273,6 +342,9 @@ module Lunora
       @flush_not_before = 0.0
       @closed = false
       @settled_listeners = []
+      # The queues backing every open +stream+, closed by +close+ so a consumer
+      # blocked in one returns instead of hanging on a dead client.
+      @streams = []
       @mutex = Mutex.new
     end
 
@@ -306,15 +378,17 @@ module Lunora
       -> { @mutex.synchronize { @settled_listeners.delete(listener) } }
     end
 
-    # Reject every queued write so no caller waits on a dead client. Durable
+    # Reject every queued write so no caller waits on a dead client, and end
+    # every open +stream+ once it has yielded what it already received. Durable
     # storage is untouched: the next session restores those writes.
     def close
-      discarded = @mutex.synchronize do
+      discarded, streams = @mutex.synchronize do
         @closed = true
         @send = nil
-        @offline_queue.clear
+        [@offline_queue.clear, @streams.slice!(0..)]
       end
 
+      streams.each(&:close)
       report_discarded(discarded)
     end
 
@@ -376,9 +450,11 @@ module Lunora
     # case rather than a hazard.
     def stream(function_path, args = nil, shard_key = nil)
       values = Thread::Queue.new
+      @mutex.synchronize { @streams << values }
       unsubscribe = subscribe(function_path, args, ->(value) { values << [:value, value] },
                               ->(error) { values << [:error, error] }, shard_key)
       stop = lambda do
+        @mutex.synchronize { @streams.delete(values) }
         unsubscribe.call
         # Wakes a consumer blocked in `pop` so `each` returns instead of hanging
         # on a subscription nothing will ever push to again.
@@ -463,12 +539,14 @@ module Lunora
 
       frame = parse_frame(raw)
 
-      # Non-JSON frames are ignored by the client parser, not fatal.
-      return nil if frame.nil?
+      # Non-JSON frames are ignored by the client parser, not fatal — and so is
+      # JSON that is not an object (+null+, +[]+, +42+): indexing one raised a
+      # TypeError out of the socket read loop, ending every subscription on it.
+      return nil unless frame.is_a?(Hash)
 
       deferred = []
       kind = @mutex.synchronize { dispatch(frame, deferred) }
-      deferred.each(&:call)
+      run_callbacks(deferred)
       kind
     end
 
@@ -600,9 +678,19 @@ module Lunora
       drained = @mutex.synchronize { queue.drain { |item| Lunora.same_shard?(item.shard_key, shard_key) } }
       return report if drained.empty?
 
-      gated = gate_identity(queue, drained, current_identity, report)
+      begin
+        gated = gate_identity(queue, drained, current_identity, report)
 
-      replay(queue, encodable(queue, gated, report), report)
+        replay(queue, encodable(queue, gated, report), report)
+      ensure
+        # A drained write lives only in this frame until it is settled or
+        # re-queued. Should anything unexpected raise out of the replay, put
+        # every one that was neither back at the front, in order, before the
+        # exception propagates — a flush must never lose a write.
+        handled = (report.committed + report.rejected + report.requeued).to_h { |id| [id, true] }
+        stranded = drained.reject { |item| handled.key?(item.id) }
+        @mutex.synchronize { queue.requeue(stranded) } unless stranded.empty?
+      end
     end
 
     private
@@ -637,7 +725,8 @@ module Lunora
         # the first key is the oldest buffer; one that old is no longer going to
         # see its +pokeEnd+.
         @pokes.shift while @pokes.size >= MAX_PENDING_POKES
-        @pokes[frame["pokeId"]] = { parts: {}, resets: [] }
+        @pokes[frame["pokeId"]] = { base: frame["baseCheckpoint"], bases: {}, epoch: frame["epoch"], parts: {},
+                                    resets: [] }
         kind
       when "pokePart" then buffer_poke_part(frame)
       when "pokeEnd" then apply_poke(frame, deferred)
@@ -702,8 +791,10 @@ module Lunora
     end
 
     def deliver_error(frame, kind, deferred)
-      envelope = frame["error"] || {}
-      message = frame["message"] || envelope["message"] || "subscription error"
+      # Only an OBJECT is an envelope: +"error": 5+ or +[1]+ indexed as one
+      # raised a TypeError out of the read loop.
+      envelope = frame["error"].is_a?(Hash) ? frame["error"] : {}
+      message = [frame["message"], envelope["message"]].find { |text| text.is_a?(String) } || "subscription error"
       error = SubscriptionError.new(envelope["code"], message)
       id = frame["id"]
 
@@ -734,8 +825,10 @@ module Lunora
     def advance(entry, frame)
       return if entry.nil?
 
-      entry[:cursor] = frame["cursor"] if frame.key?("cursor")
-      entry[:epoch] = frame["epoch"] if frame.key?("epoch")
+      # A cursor that is not an integer is not a cursor: kept verbatim, the next
+      # resubscribe asked the server to resume from +"9"+.
+      entry[:cursor] = frame["cursor"] if frame["cursor"].is_a?(Integer)
+      entry[:epoch] = frame["epoch"] if frame["epoch"].is_a?(String)
     end
 
     # Parts buffer until pokeEnd: a poke is defined as an atomic batch, so
@@ -747,7 +840,15 @@ module Lunora
       # no batch to join, and guessing would apply a fragment of one.
       if buffer
         shape_id = frame["shapeId"]
-        buffer[:parts][shape_id] = (buffer[:parts][shape_id] || []) + (frame["rowsPatch"] || [])
+        patch = frame["rowsPatch"] || []
+        # A patch that is not a list is one malformed op, kept so that pokeEnd
+        # refuses this shape's part whole rather than raising here.
+        patch = [patch] unless patch.is_a?(Array)
+        buffer[:parts][shape_id] = (buffer[:parts][shape_id] || []) + patch
+        # The checkpoint the server computed this diff against: the part's own,
+        # else the poke's.
+        base = frame["baseCheckpoint"].nil? ? buffer[:base] : frame["baseCheckpoint"]
+        buffer[:bases][shape_id] = base unless base.nil?
         # A shape gets at most one part per poke, but record the flag sticky
         # (never cleared) so a server that splits a seed across parts still
         # replaces the view rather than merging into it.
@@ -764,6 +865,22 @@ module Lunora
         shape = @shapes[shape_id]
         next if shape.nil?
 
+        # Every row is decoded BEFORE the view is touched, so a poke applies to
+        # a shape whole or not at all. Clearing for a reset and then raising on
+        # a bad row left the view torn (or empty) with nothing reported; skipping
+        # the row advanced the checkpoint past a row it never held, so no resume
+        # would ever send it again. Refused, the view, checkpoint and epoch stay
+        # exactly as they were and the shape's error callback is told.
+        begin
+          decoded = decode_row_ops(operations)
+        rescue WireFormatError => e
+          deliver_error({ "error" => { "code" => WIRE_DECODE_FAILED, "message" => e.message }, "id" => shape_id },
+                        "error", deferred)
+          next
+        end
+
+        next if reseed_on_gap?(shape_id, shape, buffer, deferred)
+
         # A reset part carries the shape's COMPLETE membership, so it REPLACES
         # the view rather than patching it. Merging one keeps every row that left
         # the shape while this client was away: a (re)seed is inserts-only, so
@@ -776,22 +893,68 @@ module Lunora
           shape[:order].clear
         end
 
-        operations.each { |operation| apply_row_op(shape, operation) }
-        shape[:checkpoint] = frame["checkpoint"] if frame.key?("checkpoint")
-        shape[:epoch] = frame["epoch"] if frame.key?("epoch")
-        handler = shape[:on_rows]
-        next if handler.nil?
-
-        # Snapshot under the lock, for the same reason the resend frames are
-        # built under it: the callback must see the view THIS poke produced, not
-        # whatever a later one leaves behind while it is queued.
-        rows = shape[:order].map { |key| shape[:rows][key] }
-        deferred << -> { handler.call(rows) }
+        decoded.each { |operation| apply_row_op(shape, operation) }
+        shape[:checkpoint] = frame["checkpoint"] if frame["checkpoint"].is_a?(Integer)
+        shape[:epoch] = frame["epoch"] if frame["epoch"].is_a?(String)
+        emit_shape_rows(shape, deferred)
       end
 
       "pokeEnd"
     end
 
+    # Drop the view and re-subscribe it cold when this poke was computed against
+    # a position the view is not at; returns whether it did.
+    #
+    # An epoch mismatch means the changelog forked since the view last applied;
+    # a base mismatch means the diff starts from a checkpoint the view never
+    # reached (a refused or dropped poke). Splicing the ops onto the view anyway
+    # lost the refused rows for good. A reset part is exempt: it carries the
+    # complete membership and replaces the view on its own.
+    def reseed_on_gap?(shape_id, shape, buffer, deferred)
+      return false if buffer[:resets].include?(shape_id)
+
+      base = buffer[:bases][shape_id]
+      epoch_forked = !buffer[:epoch].nil? && !shape[:epoch].nil? && buffer[:epoch] != shape[:epoch]
+      base_diverged = !base.nil? && !shape[:checkpoint].nil? && shape[:checkpoint] != base
+      return false unless epoch_forked || base_diverged
+
+      shape[:rows].clear
+      shape[:order].clear
+      shape[:checkpoint] = nil
+      shape[:epoch] = nil
+      emit_shape_rows(shape, deferred)
+
+      sender = @send
+      frame = Lunora.build_shape_subscribe_frame(shape_id, shape[:name], shape[:args])
+      deferred << -> { sender.call(frame) } unless sender.nil?
+      true
+    end
+
+    # Queue +on_rows+ with the view's current contents.
+    #
+    # Snapshotted under the lock, for the same reason the resend frames are built
+    # under it: the callback must see the view THIS change produced, not whatever
+    # a later one leaves behind while it is queued.
+    def emit_shape_rows(shape, deferred)
+      handler = shape[:on_rows]
+      return if handler.nil?
+
+      rows = shape[:order].map { |key| shape[:rows][key] }
+      deferred << -> { handler.call(rows) }
+    end
+
+    # A shape part's row ops with every value decoded, or a WireFormatError for
+    # the first op that is not an object or whose value does not decode.
+    def decode_row_ops(operations)
+      operations.map do |operation|
+        raise WireFormatError, "wire-codec: malformed row op in a poke" unless operation.is_a?(Hash)
+        next operation if operation["op"] == "delete" || operation["value"].nil?
+
+        operation.merge("value" => Lunora.decode_wire(operation["value"]))
+      end
+    end
+
+    # Apply one already-decoded row op.
     def apply_row_op(shape, operation)
       key = operation["key"]
 
@@ -804,7 +967,36 @@ module Lunora
       return if operation["value"].nil?
 
       shape[:order] << key unless shape[:rows].key?(key)
-      shape[:rows][key] = Lunora.decode_wire(operation["value"])
+      shape[:rows][key] = operation["value"]
+    end
+
+    # Retire the previous identity's session; see +identity=+. Runs with the
+    # lock held, so the shape callbacks are queued onto +deferred+.
+    def evict_identity_session(deferred)
+      @subscriptions.each_value do |entry|
+        entry[:cursor] = nil
+        entry[:epoch] = nil
+      end
+
+      @shapes.each_value do |shape|
+        shape[:rows].clear
+        shape[:order].clear
+        shape[:checkpoint] = nil
+        shape[:epoch] = nil
+        emit_shape_rows(shape, deferred)
+      end
+    end
+
+    # Run callbacks queued while the lock was held, each guarded: one consumer
+    # callback that raises must not stop the others (another shape's rows, a
+    # subscription's error) from being delivered, nor end the socket read loop
+    # +handle_frame+ is called from.
+    def run_callbacks(deferred)
+      deferred.each do |callback|
+        callback.call
+      rescue StandardError
+        nil
+      end
     end
 
     def rpc(function_path, args, shard_key, mutation_id)
@@ -818,6 +1010,12 @@ module Lunora
     # +client_id+ overrides this session's, so a replayed write namespaces
     # server-side under the id that ISSUED it.
     def rpc_full(function_path, args, shard_key, mutation_id, client_id = nil)
+      status, body = post_rpc(function_path, args, shard_key, mutation_id, client_id)
+      [Lunora.parse_rpc_response(body, status), Lunora.parse_commit_cursor(body)]
+    end
+
+    # The bare round-trip, returning the poster's [status, body] unread.
+    def post_rpc(function_path, args, shard_key, mutation_id, client_id = nil)
       raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
 
       headers = { "content-type" => "application/json" }
@@ -833,9 +1031,7 @@ module Lunora
         headers["x-lunora-client-id"] = client_id || @client_id
       end
 
-      status, body = @http_post.call(join_url(RPC_PATH), headers,
-                                     JSON.generate(Lunora.build_rpc_body(function_path, args, shard_key)))
-      [Lunora.parse_rpc_response(body, status), Lunora.parse_commit_cursor(body)]
+      @http_post.call(join_url(RPC_PATH), headers, JSON.generate(Lunora.build_rpc_body(function_path, args, shard_key)))
     end
 
     # The socket URL: the origin with its scheme swapped, plus the shard and
@@ -984,9 +1180,20 @@ module Lunora
     # Replay writes one at a time. FIFO is preserved by the loop itself.
     def replay_sequential(queue, sendable, report)
       sendable.each_with_index do |item, index|
+        body = nil
+
         begin
-          value, commit_cursor = rpc_full(item.function_path, item.args, item.shard_key, item.id, item.client_id)
+          status, body = post_rpc(item.function_path, item.args, item.shard_key, item.id, item.client_id)
+          value = Lunora.parse_rpc_response(body, status)
         rescue StandardError => e
+          # The server committed it; only the result is unreadable, and a replay
+          # can only return the same result. Settled committed, carrying the
+          # error, rather than retried forever at the head of the queue.
+          if e.is_a?(ResultDecodeError)
+            settle_commit(queue, item, nil, Lunora.parse_commit_cursor(body), report, e)
+            next
+          end
+
           unless transient?(e)
             settle_terminal(queue, item, e, report)
             next
@@ -1002,9 +1209,7 @@ module Lunora
           return report
         end
 
-        @mutex.synchronize { queue.unpersist(item.id) }
-        settle_committed(item, value, commit_cursor)
-        report.committed << item.id
+        settle_commit(queue, item, value, Lunora.parse_commit_cursor(body), report)
       end
 
       report
@@ -1022,7 +1227,7 @@ module Lunora
     # Re-queuing is the caller's, once and in order, so a write cannot land twice
     # in the queue.
     def replay_batched(queue, items, report)
-      body =
+      status, body =
         begin
           rpc_batch(batch_calls(items))
         rescue StandardError
@@ -1041,14 +1246,21 @@ module Lunora
       # below: a body the worker refused for SIZE, and a code that says "not now"
       # rather than "no".
       envelope = body["error"]
-      return [items, true] unless envelope.is_a?(Hash)
+      # A 413 is a verdict on the request's SIZE whatever its body: an edge in
+      # front of the worker refuses an oversized body with its own HTML page
+      # long before the worker's coded PAYLOAD_TOO_LARGE could be written. Read
+      # as envelope-less transport, the chunk was re-queued whole and the next
+      # flush sent the identical body into the identical refusal, forever.
+      too_large = status == 413 || (envelope.is_a?(Hash) && envelope["code"] == PAYLOAD_TOO_LARGE)
+      return [items, true] unless envelope.is_a?(Hash) || too_large
 
-      error = batch_error(envelope, "batch rejected")
+      error = envelope.is_a?(Hash) ? batch_error(envelope, "batch rejected") : ApiError.new(PAYLOAD_TOO_LARGE, "HTTP 413 without an error envelope")
 
       # The body was too big, not wrong — every entry in it would have committed
       # alone. Halve and retry; the estimate the chunker used cannot see the
-      # framing the worker actually measured, and only the answer can.
-      if error.code == PAYLOAD_TOO_LARGE && items.length > 1
+      # framing the worker actually measured, and only the answer can. A single
+      # write still refused falls through and settles with the verdict.
+      if too_large && items.length > 1
         middle = items.length / 2
         left, stop = replay_batched(queue, items[0...middle], report)
         return [left + items[middle..], true] if stop
@@ -1094,15 +1306,16 @@ module Lunora
     # POST one chunk. No +x-lunora-mutation-id+ on the request: a batch is ONE
     # transport hop carrying independent calls, so each entry carries its own key
     # in the body, and a single outer header would de-duplicate the whole chunk
-    # against one write.
+    # against one write. Returns [status, body], a body that is not a JSON object
+    # read as +{}+.
     def rpc_batch(calls)
       raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
 
       headers = { "content-type" => "application/json" }
       headers["authorization"] = "Bearer #{@auth_token}" if @auth_token
 
-      _status, body = @http_post.call(join_url(RPC_BATCH_PATH), headers, JSON.generate({ "calls" => calls }))
-      body.is_a?(Hash) ? body : {}
+      status, body = @http_post.call(join_url(RPC_BATCH_PATH), headers, JSON.generate({ "calls" => calls }))
+      [status, body.is_a?(Hash) ? body : {}]
     end
 
     # Demux a batch reply back onto the writes it replayed, in input order,
@@ -1161,13 +1374,27 @@ module Lunora
           next
         end
 
-        cursor = slot["commitCursor"]
-        @mutex.synchronize { queue.unpersist(item.id) }
-        settle_committed(item, Lunora.decode_wire(slot["result"]), cursor.is_a?(Integer) ? cursor : nil)
-        report.committed << item.id
+        commit_slot(queue, item, slot, report)
       end
 
       requeue
+    end
+
+    # Settle a slot the server answered with success. Its result is decoded in
+    # its own guard, BEFORE the record goes: a slot whose result does not decode
+    # is still committed, and a decode error escaping here abandoned every later
+    # slot after already deleting this one's durable record.
+    def commit_slot(queue, item, slot, report)
+      value = nil
+      error = nil
+
+      begin
+        value = Lunora.decode_result(slot["result"])
+      rescue ApiError => e
+        error = e
+      end
+
+      settle_commit(queue, item, value, Lunora.parse_commit_cursor(slot), report, error)
     end
 
     # Rebuild an ApiError from a slot's or a batch's error envelope, defaulting
@@ -1176,7 +1403,7 @@ module Lunora
       ApiError.new(
         envelope["code"].is_a?(String) ? envelope["code"] : "INTERNAL",
         envelope["message"].is_a?(String) ? envelope["message"] : fallback,
-        envelope["data"].nil? ? nil : Lunora.decode_wire(envelope["data"])
+        Lunora.decode_error_data(envelope["data"])
       )
     end
 
@@ -1187,6 +1414,15 @@ module Lunora
       report.rejected << item.id
     end
 
+    # The committed counterpart: the outcome is already decided (the result
+    # decoded, or +error+ says it could not be), then the record goes, then the
+    # write settles.
+    def settle_commit(queue, item, value, commit_cursor, report, error = nil)
+      @mutex.synchronize { queue.unpersist(item.id) }
+      settle_committed(item, value, commit_cursor, error)
+      report.committed << item.id
+    end
+
     # Whether a failed replay may be retried rather than dropped.
     #
     # A raw error from the injected poster is the network, not the server: no
@@ -1194,7 +1430,7 @@ module Lunora
     def transient?(error)
       if error.is_a?(ApiError)
         return error.transient || TRANSIENT_ERROR_CODES.include?(error.code) ||
-               RATE_LIMIT_ERROR_CODES.include?(error.code)
+               RATE_LIMIT_ERROR_CODES.include?(error.code) || AUTH_REPLAY_ERROR_CODES.include?(error.code)
       end
 
       true
@@ -1303,9 +1539,13 @@ module Lunora
 
     # Confirm the overlay BEFORE the caller is told, so the gapless drop is
     # already in place when the confirming frame lands.
-    def settle_committed(item, value, commit_cursor)
+    #
+    # +error+ is set only for a write that committed with a result that does not
+    # decode (WIRE_DECODE_FAILED): committed, no value.
+    def settle_committed(item, value, commit_cursor, error = nil)
       settle_layers(item.confirms || [], [], commit_cursor)
-      emit_settled(MutationSettled.new(had_awaiter: item.awaited?, mutation_id: item.id, status: :committed, value: value),
+      emit_settled(MutationSettled.new(error: error, had_awaiter: item.awaited?, mutation_id: item.id, status: :committed,
+                                       value: value),
                    item.on_settled)
     end
 

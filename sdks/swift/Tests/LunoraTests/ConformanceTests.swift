@@ -113,6 +113,16 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
             case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
             case "batch_entry_cap_matches_protocol": try caseBatchEntryCapMatchesProtocol()
+            case "offline_flush_empty_shard_key_routes_to_default": try caseOfflineFlushEmptyShardKeyRoutesToDefault()
+            case "offline_flush_undecodable_result_settles_committed": try caseOfflineFlushUndecodableResultSettlesCommitted()
+            case "offline_flush_classifies_single_and_batch_alike": try caseOfflineFlushClassifiesSingleAndBatchAlike()
+            case "offline_flush_batch_splits_on_envelopeless_413": try caseOfflineFlushBatchSplitsOnEnvelopeless413()
+            case "shape_poke_with_undecodable_row_is_refused_whole": try caseShapePokeWithUndecodableRowIsRefusedWhole()
+            case "malformed_frames_are_ignored_without_raising": try caseMalformedFramesAreIgnoredWithoutRaising()
+            case "rpc_unreadable_success_body_raises_sdk_error": try caseRPCUnreadableSuccessBodyRaisesSDKError()
+            case "subscription_stream_ends_on_close": try caseSubscriptionStreamEndsOnClose()
+            case "identity_change_evicts_previous_session": try caseIdentityChangeEvictsPreviousSession()
+            case "auth_token_redacted_when_printed": caseAuthTokenRedactedWhenPrinted()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -192,6 +202,9 @@ final class ConformanceTests: XCTestCase {
         XCTAssertNoThrow(try Wire.encode(-maximum))
         XCTAssertThrowsError(try Wire.encode(maximum + 1))
         XCTAssertThrowsError(try Wire.encode(-maximum - 1))
+        // Unsigned too, including past Int64.max, where no Int path could see it.
+        XCTAssertThrowsError(try Wire.encode(UInt64(maximum) + 1))
+        XCTAssertThrowsError(try Wire.encode(UInt64.max))
 
         // WireBigInt is the way across, and it keeps every digit.
         XCTAssertEqual(
@@ -294,6 +307,23 @@ final class ConformanceTests: XCTestCase {
         let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
         XCTAssertEqual(Wire.jsonString(truncated), #""\ud83d""#)
         XCTAssertEqual(Wire.jsonString("\u{1F600}"), "\"\u{1F600}\"")
+        // Keys and members differing only by a lone surrogate are distinct to
+        // JavaScript. A Map and a Set keep them apart; a `[String: Any]` cannot
+        // (Swift compares them as U+FFFD), so such an object is refused rather
+        // than silently merged.
+        let lone = #"["\ud800",1],["\ud801",2],["�",3]"#
+        let map = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","map",[\#(lone)]]"#)) as? WireMap
+        let set = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","set",["\ud800","\ud801","�"]]"#)) as? WireSet
+
+        XCTAssertEqual(map?.entries.count, 3, "map keys stay distinct")
+        XCTAssertEqual(set?.items.count, 3, "set members stay distinct")
+        XCTAssertThrowsError(try LunoraJSON.parse(#"{"\ud800":1,"\ud801":2}"#), "an object that cannot hold both keys is refused")
+        XCTAssertEqual(
+            (try? LunoraJSON.parse(#"{"a":1,"a":2}"#) as? [String: Any])?["a"] as? Int,
+            2,
+            "a true duplicate still takes the last value"
+        )
+
         // And the reader keeps one it is sent, so a relayed value round-trips.
         XCTAssertEqual(Wire.jsonString((try? LunoraJSON.parse(#""a\uD800b""#)) as? String ?? ""), #""a\ud800b""#)
     }
@@ -366,6 +396,10 @@ final class ConformanceTests: XCTestCase {
                 guard let apiError = error as? LunoraAPIError else { return XCTFail("expected LunoraAPIError") }
                 XCTAssertEqual(apiError.code, testCase["code"] as? String)
                 XCTAssertEqual(apiError.message, testCase["message"] as? String)
+
+                if testCase["dataDropped"] as? Bool == true {
+                    XCTAssertNil(apiError.data, "\(name): undecodable data is dropped, the coded error kept")
+                }
             }
         }
 
@@ -405,7 +439,74 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    /// A body the RPC call can read neither a result nor an envelope out of — not
+    /// JSON, or JSON that is not an object — fails with THIS SDK's error, never a
+    /// reader error escaping every handler the caller wrote, and never a silent
+    /// nil result the caller takes for a committed write.
+    func caseRPCUnreadableSuccessBodyRaisesSDKError() throws {
+        for testCase in try XCTUnwrap(fixture("rpc.json")["unreadableSuccessBody"] as? [[String: Any]]) {
+            let name = testCase["name"] as? String ?? "?"
+            let status = try XCTUnwrap((testCase["status"] as? NSNumber)?.intValue)
+            let body = Data(try XCTUnwrap(testCase["rawBody"] as? String).utf8)
+            let client = LunoraClient(url: "https://app.example", post: { _, _, _ in (status, body) })
+            let calls: [(String, () throws -> Any)] = [
+                ("query", { try client.query("messages:list") }),
+                ("mutation", { try client.mutation("messages:send") }),
+                ("action", { try client.action("messages:notify") }),
+            ]
+
+            for (verb, call) in calls {
+                XCTAssertThrowsError(try call(), "\(verb) \(name)") { error in
+                    XCTAssertEqual((error as? LunoraAPIError)?.code, testCase["code"] as? String, "\(verb) \(name): \(error)")
+                }
+            }
+        }
+
+        // `{}` is how a function returning nothing is answered.
+        let void = LunoraClient(url: "https://app.example", post: { _, _, _ in (200, Data("{}".utf8)) })
+
+        XCTAssertTrue(try void.query("messages:list") is NSNull, "an empty object is a void result")
+    }
+
     // MARK: - WebSocket frames
+
+    /// A frame the read loop hands over, as the text it arrived as.
+    func frameText(_ frame: Any?) -> String { Wire.stableStringify(frame) }
+
+    /// No frame shaped unlike any server frame may raise out of the handler —
+    /// `handleFrame` cannot throw at all — or touch a live subscription: its
+    /// callback stays silent and its resume cursor stays where it was. A STRING
+    /// cursor is not a cursor; resending it asked the server to resume from `"9"`.
+    func caseMalformedFramesAreIgnoredWithoutRaising() throws {
+        let block = try XCTUnwrap(fixture("ws-frames.json")["malformedFrames"] as? [String: Any])
+        let frames = try XCTUnwrap(block["frames"] as? [Any])
+
+        XCTAssertFalse(frames.isEmpty)
+
+        for (index, frame) in frames.enumerated() {
+            let client = LunoraClient(url: "https://app.example")
+            var fired = 0
+
+            client.attachSocket { _ in }
+            client.subscribe("messages:list", args: [String: Any](), onData: { _ in fired += 1 })
+            client.handleFrame(frameText(block["setupFrame"]))
+            fired = 0
+
+            client.handleFrame(frameText(frame))
+
+            XCTAssertEqual(fired, 0, "frame \(index) must not reach sub_1")
+
+            var resent: [[String: Any]] = []
+
+            client.attachSocket { resent.append($0) }
+            client.resendSubscriptions()
+
+            let query = try XCTUnwrap(resent.first?["query"] as? [String: Any])
+
+            XCTAssertEqual(canonical(query["sinceSeq"]), canonical(block["resendSinceSeq"]), "frame \(index) sinceSeq")
+            XCTAssertEqual(query["sinceEpoch"] as? String, block["resendSinceEpoch"] as? String, "frame \(index) sinceEpoch")
+        }
+    }
 
     func caseClientFrameBuilders() throws {
         let frames = try XCTUnwrap(fixture("ws-frames.json")["clientFrames"] as? [String: Any])
@@ -445,7 +546,7 @@ final class ConformanceTests: XCTestCase {
             sent.removeAll()
 
             let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(testCase["frame"]))
-            let kind = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            let kind = client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
             let expect = try XCTUnwrap(testCase["expect"] as? [String: Any])
 
             XCTAssertEqual(kind, expect["kind"] as? String, name)
@@ -499,7 +600,7 @@ final class ConformanceTests: XCTestCase {
         for frame in frames {
             let raw = try JSONSerialization.data(withJSONObject: frame)
 
-            _ = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            _ = client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
 
             switch runBlocking({ await iterator.next() }) {
             case .value(let value): seen.append(value)
@@ -511,25 +612,61 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(canonical(try Wire.encode(seen)), canonical(testCase["yielded"]), "the stream yields the frames' values, in order")
     }
 
+    /// `close()` ENDS a live stream: the value already delivered is yielded, and
+    /// then the `for await` loop finishes instead of waiting forever on a client
+    /// that will never deliver again.
+    func caseSubscriptionStreamEndsOnClose() throws {
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let frame = try XCTUnwrap((testCase["frames"] as? [Any])?.first)
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+
+        var iterator = client.stream("messages:list", args: ["channel": "general"]).makeAsyncIterator()
+
+        client.handleFrame(frameText(frame))
+
+        guard case .value(let value)?? = runBlocking(timeout: 2, { await iterator.next() }) else {
+            return XCTFail("the delivered value must be yielded")
+        }
+
+        XCTAssertEqual(canonical(try Wire.encode(value)), canonical((testCase["yielded"] as? [Any])?.first))
+
+        client.close()
+
+        guard let after = runBlocking(timeout: 2, { await iterator.next() }) else {
+            return XCTFail("the stream must end within 2 s of close(), not hang")
+        }
+
+        XCTAssertNil(after, "and it ENDS rather than yielding again")
+    }
+
     /// Runs one `async` step to completion from a synchronous test.
     ///
     /// The suite is driven by the manifest through synchronous `case…` methods,
     /// and this is the only asynchronous surface in it — a semaphore here is
     /// cheaper than making every dispatch arm `async`.
     private func runBlocking<T>(_ operation: @escaping () async -> T) -> T {
+        runBlocking(timeout: nil, operation)!
+    }
+
+    /// The same, giving up after `timeout` seconds: nil means it did not finish.
+    private func runBlocking<T>(timeout: TimeInterval?, _ operation: @escaping () async -> T) -> T? {
         let ready = DispatchSemaphore(value: 0)
-        // `nonisolated(unsafe)`: written once inside the task and read once after
-        // the semaphore, which orders the two.
-        nonisolated(unsafe) var result: T?
+        let box = ResultBox<T>()
 
         Task {
-            result = await operation()
+            box.value = await operation()
             ready.signal()
         }
 
-        ready.wait()
+        if let timeout {
+            guard ready.wait(timeout: .now() + timeout) == .success else { return nil }
+        } else {
+            ready.wait()
+        }
 
-        return result!
+        return box.value
     }
 
     // MARK: - Shapes
@@ -561,7 +698,7 @@ final class ConformanceTests: XCTestCase {
         ] {
             let raw = try JSONSerialization.data(withJSONObject: frame)
 
-            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
         }
 
         var resent: [[String: Any]] = []
@@ -601,13 +738,13 @@ final class ConformanceTests: XCTestCase {
         )
         var kind: String?
 
-        XCTAssertNoThrow(kind = try client.handleFrame(try XCTUnwrap(String(data: refused, encoding: .utf8))))
+        XCTAssertNoThrow(kind = client.handleFrame(try XCTUnwrap(String(data: refused, encoding: .utf8))))
         XCTAssertEqual(kind, "error", "the frame is reported, not thrown")
         XCTAssertEqual(errors.first?.code, "INVALID_FRAME")
 
         let good = try JSONSerialization.data(withJSONObject: ["data": ["ok": true], "id": "sub_2", "type": "data"])
 
-        try client.handleFrame(try XCTUnwrap(String(data: good, encoding: .utf8)))
+        client.handleFrame(try XCTUnwrap(String(data: good, encoding: .utf8)))
 
         XCTAssertEqual(delivered.count, 1, "the other subscription is still live")
     }
@@ -624,7 +761,7 @@ final class ConformanceTests: XCTestCase {
 
         for entry in sequence {
             let raw = try JSONSerialization.data(withJSONObject: entry)
-            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
         }
 
         XCTAssertEqual(delivered.count, 1, "a poke applies atomically at pokeEnd")
@@ -643,10 +780,179 @@ final class ConformanceTests: XCTestCase {
 
         for entry in sequence.dropLast() {
             let raw = try JSONSerialization.data(withJSONObject: entry)
-            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
         }
 
         XCTAssertEqual(fired, 0, "the view would be torn if parts applied before pokeEnd")
+    }
+
+    /// The rows a shape view holds right now, read black-box: an empty poke for
+    /// the shape re-delivers its view unchanged.
+    private func probeShapeView(_ client: LunoraClient, _ delivered: () -> [[Any]]) -> [Any]? {
+        client.handleFrame(#"{"type":"pokeStart","pokeId":"probe"}"#)
+        client.handleFrame(#"{"type":"pokePart","pokeId":"probe","shapeId":"shape_1","rowsPatch":[]}"#)
+        client.handleFrame(#"{"type":"pokeEnd","pokeId":"probe"}"#)
+
+        return delivered().last
+    }
+
+    /// A poke applies WHOLE or not at all per shape: a reset carrying one row the
+    /// codec refuses leaves the view, the checkpoint and the epoch untouched,
+    /// fires no rows callback, and reports `INVALID_FRAME` to the shape.
+    func caseShapePokeWithUndecodableRowIsRefusedWhole() throws {
+        let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
+        let client = LunoraClient(url: "https://app.example")
+        var delivered: [[Any]] = []
+        var errors: [LunoraSubscriptionError] = []
+
+        client.attachSocket { _ in }
+        client.subscribeShape(
+            "roomMessages",
+            args: ["room": "general"],
+            onRows: { delivered.append($0) },
+            onError: { errors.append($0) }
+        )
+
+        for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) {
+            client.handleFrame(frameText(entry))
+        }
+
+        delivered.removeAll()
+
+        for entry in try XCTUnwrap(shape["undecodableRowPokeSequence"] as? [Any]) {
+            client.handleFrame(frameText(entry))
+        }
+
+        XCTAssertTrue(delivered.isEmpty, "no rows callback fires for a refused poke")
+        XCTAssertEqual(errors.map(\.code), [shape["undecodableRowErrorCode"] as? String], "the shape hears the refusal once")
+
+        var resent: [[String: Any]] = []
+
+        client.attachSocket { resent.append($0) }
+        client.resendSubscriptions()
+
+        let resend = try XCTUnwrap(resent.first { $0["type"] as? String == "shape_subscribe" })
+
+        XCTAssertEqual(canonical(resend["sinceCheckpoint"]), canonical(shape["undecodableRowResendCheckpoint"]), "checkpoint not advanced")
+        XCTAssertEqual(resend["sinceEpoch"] as? String, "e1")
+        XCTAssertEqual(canonical(probeShapeView(client, { delivered })), canonical(shape["expectedRows"]), "the view is untouched")
+
+        // The server believes it delivered the refused rows, so its next part is
+        // based on a checkpoint this view is not at: that must re-seed the shape,
+        // not splice onto the stale view.
+        resent.removeAll()
+        delivered.removeAll()
+
+        for entry in try XCTUnwrap(shape["gapPokeSequence"] as? [Any]) {
+            client.handleFrame(frameText(entry))
+        }
+
+        XCTAssertEqual(delivered.map { canonical($0) }, [canonical(shape["gapExpectedRows"])], "the callback is told []")
+
+        let cold = resent.filter { $0["type"] as? String == "shape_subscribe" }
+
+        XCTAssertEqual(cold.map { $0["id"] as? String }, ["shape_1"], "a cold shape_subscribe goes out at once")
+        XCTAssertNil(cold.first?["sinceCheckpoint"])
+        XCTAssertNil(cold.first?["sinceEpoch"])
+
+        resent.removeAll()
+        client.resendSubscriptions()
+
+        let later = try XCTUnwrap(resent.first { $0["type"] as? String == "shape_subscribe" })
+
+        XCTAssertNil(later["sinceCheckpoint"], "and a later resend is cold too")
+        XCTAssertNil(later["sinceEpoch"])
+        XCTAssertEqual(canonical(probeShapeView(client, { delivered })), canonical(shape["gapExpectedRows"]))
+
+        // The counterweight: a part based on the checkpoint the view IS at applies.
+        let contiguous = LunoraClient(url: "https://app.example")
+        var contiguousRows: [[Any]] = []
+        var contiguousSent: [[String: Any]] = []
+
+        contiguous.attachSocket { contiguousSent.append($0) }
+        contiguous.subscribeShape("roomMessages", args: ["room": "general"], onRows: { contiguousRows.append($0) })
+
+        for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) + XCTUnwrap(shape["contiguousPokeSequence"] as? [Any]) {
+            contiguous.handleFrame(frameText(entry))
+        }
+
+        XCTAssertEqual(canonical(contiguousRows.last), canonical(shape["contiguousExpectedRows"]), "a contiguous poke applies")
+        XCTAssertEqual(contiguousSent.filter { $0["type"] as? String == "shape_subscribe" }.count, 1, "and re-seeds nothing")
+    }
+
+    /// An identity change FROM a set value evicts the previous session: cursors
+    /// and epochs dropped, shape views emptied with their callbacks told `[]`. A
+    /// first sign-in and a same-value set evict nothing.
+    func caseIdentityChangeEvictsPreviousSession() throws {
+        let frames = try fixture("ws-frames.json")
+        let block = try XCTUnwrap(frames["identityChange"] as? [String: Any])
+        let shape = try XCTUnwrap(frames["shape"] as? [String: Any])
+        let retained = try XCTUnwrap(block["retained"] as? [String: Any])
+        let evicted = try XCTUnwrap(block["evicted"] as? [String: Any])
+        let transitions = try XCTUnwrap(block["transitions"] as? [[String: Any]])
+
+        XCTAssertEqual(transitions.count, 4)
+
+        for transition in transitions {
+            let from = transition["from"] as? String
+            let to = transition["to"] as? String
+            let name = "\(from ?? "nil") -> \(to ?? "nil")"
+            let client = LunoraClient(url: "https://app.example")
+            var shapeRows: [[Any]] = []
+
+            client.identity = from
+            client.attachSocket { _ in }
+            client.subscribe("messages:list", args: [String: Any](), onData: { _ in })
+            client.handleFrame(frameText(block["queryFrame"]))
+            client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { shapeRows.append($0) })
+
+            for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) {
+                client.handleFrame(frameText(entry))
+            }
+
+            shapeRows.removeAll()
+            client.identity = to
+
+            let told = shapeRows
+            var resent: [[String: Any]] = []
+
+            client.attachSocket { resent.append($0) }
+            client.resendSubscriptions()
+
+            let query = try XCTUnwrap(resent.first { $0["type"] as? String == "subscribe" }?["query"] as? [String: Any])
+            let shapeFrame = try XCTUnwrap(resent.first { $0["type"] as? String == "shape_subscribe" })
+            let view = try XCTUnwrap(probeShapeView(client, { shapeRows }))
+
+            if transition["evicts"] as? Bool == true {
+                XCTAssertNil(query["sinceSeq"], name)
+                XCTAssertNil(query["sinceEpoch"], name)
+                XCTAssertNil(shapeFrame["sinceCheckpoint"], name)
+                XCTAssertNil(shapeFrame["sinceEpoch"], name)
+                XCTAssertEqual(told.map { canonical($0) }, [canonical(evicted["shapeCallbackRows"])], "\(name): callbacks told")
+                XCTAssertEqual(canonical(view), canonical(evicted["shapeRows"]), "\(name): view emptied")
+            } else {
+                XCTAssertEqual(canonical(query["sinceSeq"]), canonical(retained["sinceSeq"]), name)
+                XCTAssertEqual(query["sinceEpoch"] as? String, retained["sinceEpoch"] as? String, name)
+                XCTAssertEqual(canonical(shapeFrame["sinceCheckpoint"]), canonical(retained["sinceCheckpoint"]), name)
+                XCTAssertTrue(told.isEmpty, "\(name): nothing evicted, nothing told")
+                XCTAssertEqual(view.count, (retained["shapeRowCount"] as? NSNumber)?.intValue, "\(name): view kept")
+            }
+        }
+    }
+
+    /// The bearer token never reaches a printed or dumped client.
+    func caseAuthTokenRedactedWhenPrinted() {
+        let token = "lunora-secret-7f3a9c"
+        let client = LunoraClient(url: "https://app.example", authToken: token)
+        var dumped = ""
+
+        dump(client, to: &dumped)
+
+        for rendered in [String(describing: client), String(reflecting: client), dumped, "\(client)"] {
+            XCTAssertFalse(rendered.contains(token), "the token leaked: \(rendered)")
+        }
+
+        XCTAssertFalse(dumped.isEmpty)
     }
 
     /// A `reset` part carries the shape's COMPLETE membership, so the view has to
@@ -669,14 +975,14 @@ final class ConformanceTests: XCTestCase {
 
         for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) {
             let raw = try JSONSerialization.data(withJSONObject: entry)
-            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
         }
 
         XCTAssertEqual(canonical(delivered.last), canonical(shape["expectedRows"]), "the cold seed lands before the re-seed")
 
         for entry in try XCTUnwrap(shape["resetPokeSequence"] as? [Any]) {
             let raw = try JSONSerialization.data(withJSONObject: entry)
-            try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
         }
 
         XCTAssertEqual(
@@ -701,27 +1007,27 @@ final class ConformanceTests: XCTestCase {
         client.subscribeShape("roomMessages", args: ["room": "general"], onRows: { delivered.append($0) })
 
         // A poke opened, part-filled, then abandoned when the socket dropped.
-        try client.handleFrame(#"{"type":"pokeStart","pokeId":"stale"}"#)
-        try client.handleFrame(
+        client.handleFrame(#"{"type":"pokeStart","pokeId":"stale"}"#)
+        client.handleFrame(
             #"{"type":"pokePart","pokeId":"stale","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"ghost","value":"ghost-row"}]}"#
         )
 
         for index in 0..<lunoraMaxPendingPokes {
-            try client.handleFrame(#"{"type":"pokeStart","pokeId":"filler-\#(index)"}"#)
+            client.handleFrame(#"{"type":"pokeStart","pokeId":"filler-\#(index)"}"#)
         }
 
         // The abandoned buffer is gone, so its late pokeEnd is a no-op.
-        try client.handleFrame(#"{"type":"pokeEnd","pokeId":"stale"}"#)
+        client.handleFrame(#"{"type":"pokeEnd","pokeId":"stale"}"#)
 
         XCTAssertTrue(delivered.isEmpty, "the ghost row of an evicted poke must never reach the view")
 
         // ...and eviction is oldest-first, not a blanket drop: a live poke still applies.
         let newest = "filler-\(lunoraMaxPendingPokes - 1)"
 
-        try client.handleFrame(
+        client.handleFrame(
             #"{"type":"pokePart","pokeId":"\#(newest)","shapeId":"shape_1","rowsPatch":[{"op":"insert","key":"m1","value":"kept"}]}"#
         )
-        try client.handleFrame(#"{"type":"pokeEnd","pokeId":"\#(newest)"}"#)
+        client.handleFrame(#"{"type":"pokeEnd","pokeId":"\#(newest)"}"#)
 
         XCTAssertEqual(delivered.count, 1, "the newest buffer must survive and apply")
         XCTAssertEqual(canonical(delivered.first), canonical(["kept"]), "the surviving poke applies its rows")
@@ -834,7 +1140,7 @@ final class ConformanceTests: XCTestCase {
 
         DispatchQueue.global().async(group: group) {
             for call in 0..<(threads * perThread) {
-                try? client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":\(call)}")
+                client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":\(call)}")
             }
         }
 
@@ -848,6 +1154,12 @@ final class ConformanceTests: XCTestCase {
 
         XCTAssertEqual(resent.value, threads * perThread, "every concurrent subscribe survived with a distinct id")
     }
+}
+
+/// Carries a `runBlocking` result off the task: written once inside it and read
+/// once after the semaphore, which orders the two.
+private final class ResultBox<T>: @unchecked Sendable {
+    var value: T?
 }
 
 /// Counts frames from the resend, which runs on this thread — a plain `var`

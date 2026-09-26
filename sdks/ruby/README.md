@@ -50,6 +50,24 @@ unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, meth
 `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
 
+`handle_frame` never raises into your read loop: a frame that is not JSON, or
+JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
+tracked), and a consumer callback that raises is contained so the others still
+run. A poke applies to each shape whole or not at all — a row that does not
+decode leaves that shape's view and checkpoint untouched and reaches its error
+callback as `WIRE_DECODE_FAILED`. A poke whose `baseCheckpoint` (or epoch) does
+not match where the view is — the server diffed past rows this client never
+applied — empties the view (its callback receives `[]`), skips the ops and sends
+a cold `shape_subscribe` so the server re-seeds it.
+
+`my_poster.call(url, headers, body)` returns `[status, body]`, `body` being the
+parsed JSON response — or the raw text when it is not JSON. A body that is not a
+JSON object raises `Lunora::ApiError` `INTERNAL`, never a `NoMethodError`.
+
+`client.close` rejects every queued write and ends every `stream` enumerator
+once it has yielded what it already received. The client's `inspect` (and so
+`p`/`pp`) never shows the auth token.
+
 ## Optimistic updates and offline writes
 
 `mutation` is the direct write path: one HTTP round-trip that raises when the
@@ -108,9 +126,28 @@ re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
 `data.retryAfterMs`, and a flush inside that window is a no-op that reports the
 time remaining.
 
+A replay is classified the same way whether the write went out alone or in a
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`, held until a token refresh — re-queue; every other code, a
+coded 5xx included, is terminal), a reply with no envelope as transport
+(re-queued). An envelope whose `data` does not decode is still that coded error,
+raised with `data` nil. A 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch
+splits and retries, and a single write still refused settles rejected with that
+code. A write the server committed whose result this client cannot decode
+settles `committed` with a `Lunora::ResultDecodeError` (code
+`WIRE_DECODE_FAILED`) and no value, and is never replayed; a server that itself
+answers `WIRE_DECODE_FAILED` has refused the write, which settles rejected. Should anything
+unexpected raise out of a flush, every write it had drained but not yet settled
+is put back at the front of the queue before the exception propagates.
+
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Changing
+it from one set value to another (signing out included) drops every
+subscription's resume cursor and epoch and empties every shape view (its
+callback receives `[]`), so reconnect your socket under the new credential and
+the resubscribe is a cold one.
 
 Ruby's `Mutex` is **not reentrant**, so every consumer callback — a transform, a
 `precondition`, a settled listener — runs with the client's lock released. That

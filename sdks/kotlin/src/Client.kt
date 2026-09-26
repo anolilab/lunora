@@ -35,13 +35,24 @@ const val MAX_PENDING_POKES: Int = 64
 enum class Verb { QUERY, MUTATION, ACTION }
 
 /**
+ * The code a call fails with when the server's reply was a SUCCESS whose `result`
+ * does not decode. The write behind it committed: a queued write settles
+ * `COMMITTED` carrying this error, and is never replayed.
+ */
+const val WIRE_DECODE_FAILED: String = "WIRE_DECODE_FAILED"
+
+/**
  * A coded error from an RPC error envelope.
  *
- * [transient] says the call never reached a verdict — a 5xx, or a non-2xx
- * carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
- * set where the HTTP STATUS is still in scope, because nothing downstream can
- * recover it: [code] alone cannot tell a `BAD_REQUEST` the function returned from
- * the `INTERNAL` this client synthesises for a body that never came from one.
+ * [transient] says the call never reached a verdict: a reply carrying NO envelope
+ * at all — an edge error page, a WAF block, a proxy, a body that is not a JSON
+ * object — whatever its status (a 413 excepted: that is `PAYLOAD_TOO_LARGE`, a
+ * verdict on the request). It is set where the reply is still in scope, because
+ * [code] alone cannot tell a `BAD_REQUEST` the function returned from the
+ * `INTERNAL` this client synthesises for a body that never came from one. A CODED
+ * envelope never sets it: its code is the whole classification, whatever the
+ * status, so a coded 5xx is the server's verdict on the single-call path exactly
+ * as it is on the batch path.
  */
 class ApiException(val code: String, message: String, val data: WireValue? = null, val transient: Boolean = false) : RuntimeException(message)
 
@@ -80,15 +91,40 @@ class Client(
      * namespace has to supply that continuity itself.
      */
     @Volatile var clientId: String = "client-${randomId()}",
+    identity: String? = null,
+) {
     /**
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
      * not a bearer token. It is persisted alongside every queued write and
      * re-checked before that write replays, so a restart cannot push one user's
      * queued writes as another. Null means signed out, which is itself an identity
      * a write can be stamped with.
+     *
+     * Changing it FROM a set value to a different one — a sign-out, or another
+     * user signing in — evicts the previous session: every query and shape
+     * subscription drops its resume cursor and epoch, so the next resubscribe is a
+     * cold one, and every shape view is emptied and its callback told so (`[]`).
+     * Those cursors were the previous identity's position in the changelog and
+     * those rows were what IT could see; resuming from them asks the server for a
+     * diff against a view the new identity never held. A first sign-in (from
+     * null) and re-asserting the same identity evict nothing.
      */
-    @Volatile var identity: String? = null,
-) {
+    @Volatile
+    var identity: String? = identity
+        set(value) {
+            val cleared = synchronized(lock) {
+                val previous = field
+
+                field = value
+
+                if (previous == null || previous == value) return
+
+                evictPreviousIdentitySession()
+            }
+
+            for (onRows in cleared) onRows(emptyList())
+        }
+
     /**
      * Guards every field below, and the `cursor`/`epoch`/row state hanging off
      * [Subscription] and [Shape].
@@ -114,6 +150,9 @@ class Client(
     internal val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
+
+    /** The open [Stream]s, so [close] can end them. */
+    private val streams = mutableSetOf<Stream>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -147,8 +186,14 @@ class Client(
      * The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
      * while delivering an ordinary diff to another on the same socket.
      */
-    private class PokeBuffer {
+    private class PokeBuffer(val epoch: Any?, val baseCheckpoint: Any?) {
         val parts = LinkedHashMap<String, MutableList<Map<String, Any?>>>()
+
+        /**
+         * Per shape, the checkpoint the server computed this diff against: the
+         * part's own `baseCheckpoint`, else the `pokeStart`'s.
+         */
+        val bases = mutableMapOf<String, Any>()
 
         /**
          * Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
@@ -207,33 +252,72 @@ class Client(
          * caller believes its mutation committed.
          */
         fun parseRpcResponse(body: Map<*, *>, status: Int): WireValue {
+            checkRpcResponse(body, status)
+
+            return decodeResult(body["result"])
+        }
+
+        /**
+         * Throws the verdict a response carries, if any: its coded envelope, or —
+         * with none — the transport error its non-2xx status stands for.
+         *
+         * A coded envelope is classified by its CODE alone ([isTransient]), never
+         * by the status beside it: the batch path has no per-slot status to read,
+         * so a status rule here made a coded 5xx a retry when a write was queued
+         * alone and a verdict when it shared a flush.
+         */
+        internal fun checkRpcResponse(body: Map<*, *>, status: Int) {
             val envelope = body["error"]
 
-            if (envelope is Map<*, *>) {
-                val data = envelope["data"]?.let { Wire.decode(it) }
+            if (envelope is Map<*, *>) throw envelopeError(envelope, "request failed")
 
-                throw ApiException(
-                    envelope["code"] as? String ?: "INTERNAL",
-                    envelope["message"] as? String ?: "request failed",
-                    data,
-                    // A 5xx is the shard or the edge failing UNDER the call, not a
-                    // verdict on it, so a queued write replayed under the same
-                    // idempotency key is still good. See [isTransient].
-                    status >= 500,
-                )
-            }
+            if (status !in 200..299) throw envelopeless(status)
+        }
 
-            if (status !in 200..299) {
-                // No envelope at all, so this body never came from a Lunora
-                // function: an edge error page, a WAF block, a proxy. Nothing
-                // reached the shard, which makes it transport rather than a
-                // verdict — the batch path already classified the identical
-                // response that way, and a lone queued write must not be dropped
-                // for being alone.
-                throw ApiException("INTERNAL", "HTTP $status without an error envelope", transient = true)
-            }
+        /**
+         * The coded error an envelope carries — a single call's, a batch slot's or a
+         * whole batch's — defaulting a missing code to `INTERNAL`.
+         *
+         * `data` the codec refuses is DROPPED, not thrown: the envelope is still the
+         * server's verdict and its code still classifies it. Throwing the codec's
+         * exception made it look like a transport failure on the single-call path
+         * (re-queued at the head of the queue forever) and aborted a batch's demux.
+         */
+        internal fun envelopeError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
+            envelope["code"] as? String ?: "INTERNAL",
+            envelope["message"] as? String ?: fallback,
+            try {
+                envelope["data"]?.let { Wire.decode(it) }
+            } catch (error: WireFormatException) {
+                null
+            },
+        )
 
-            return Wire.decode(body["result"])
+        /**
+         * A non-2xx reply with no envelope: nothing a Lunora function returned.
+         *
+         * A 413 is a verdict on the REQUEST whatever its body — an edge or proxy
+         * refuses an oversized body with its own page long before the worker could
+         * write the coded one — so it is `PAYLOAD_TOO_LARGE`, terminal for a lone
+         * write and the split signal for a batch. Anything else reached no verdict:
+         * transport, and transient.
+         */
+        internal fun envelopeless(status: Int): ApiException = if (status == 413) {
+            ApiException(PAYLOAD_TOO_LARGE, "HTTP 413 without an error envelope")
+        } else {
+            ApiException("INTERNAL", "HTTP $status without an error envelope", transient = true)
+        }
+
+        /**
+         * Decodes a success's `result`, failing with the SDK's own
+         * [WIRE_DECODE_FAILED] rather than the codec's exception: the call
+         * SUCCEEDED, and a caller — or the replay — has to be able to tell that
+         * apart from a call that never reached the server.
+         */
+        internal fun decodeResult(raw: Any?): WireValue = try {
+            Wire.decode(raw)
+        } catch (error: WireFormatException) {
+            throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
         }
 
         fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null): Map<String, Any?> {
@@ -301,9 +385,10 @@ class Client(
         /**
          * Whether a failed replay may be retried rather than dropped.
          *
-         * Three ways in: [ApiException.transient], set from the HTTP status where
-         * a code cannot say (a 5xx, or a non-2xx with no envelope at all); a shard
-         * code; or a rate limit, which is "not now" rather than "no" and is the
+         * ONE predicate for the single-call and the batch path alike. Three ways
+         * in: [ApiException.transient], set only for a reply carrying no envelope
+         * (a coded envelope is classified by its code alone, whatever the status);
+         * a shard code; or a rate limit, which is "not now" rather than "no" and is the
          * one verdict a durable queue must never honour — the write is valid and
          * the server asked for it later, so dropping it loses data for being
          * punctual.
@@ -321,7 +406,11 @@ class Client(
          * this arm is what keeps one surfacing from anywhere else terminal too.
          */
         fun isTransient(error: Exception): Boolean = when (error) {
-            is ApiException -> error.transient || error.code in TRANSIENT_ERROR_CODES || error.code in RATE_LIMIT_ERROR_CODES
+            is ApiException ->
+                error.transient ||
+                    error.code in TRANSIENT_ERROR_CODES ||
+                    error.code in RATE_LIMIT_ERROR_CODES ||
+                    error.code in AUTH_REPLAY_ERROR_CODES
             is OfflineException -> false
             is WireFormatException -> false
             else -> true
@@ -382,15 +471,19 @@ class Client(
     }
 
     /**
-     * Rejects every queued write so no caller waits on a dead client. Durable
-     * storage is untouched: the next session restores those writes.
+     * Rejects every queued write so no caller waits on a dead client, and ends
+     * every open [Stream], so a loop blocked on one returns instead of waiting
+     * forever on a client nothing will deliver to again. Durable storage is
+     * untouched: the next session restores those writes.
      */
     fun close() {
-        val discarded = synchronized(lock) {
+        val (discarded, open) = synchronized(lock) {
             closed = true
             send = null
-            offlineQueue.clear()
+            offlineQueue.clear() to streams.toList()
         }
+
+        for (stream in open) stream.close()
 
         reportDiscarded(discarded)
     }
@@ -415,10 +508,25 @@ class Client(
     }
 
     private fun rpc(functionPath: String, args: WireValue?, shardKey: String?, mutationId: String?): WireValue =
-        rpcFull(functionPath, args, shardKey, mutationId).result
+        rpcFull(functionPath, args, shardKey, mutationId).value()
 
-    /** One RPC round-trip: the decoded result plus the commit cursor the response echoed. */
-    data class RpcReply(val result: WireValue, val commitCursor: Long?)
+    /**
+     * One RPC round-trip: the decoded result plus the commit cursor the response
+     * echoed.
+     *
+     * [decodeError] is set, and [result] null, when the call SUCCEEDED but its
+     * result does not decode. Returned rather than thrown so the commit cursor
+     * survives it: the write committed, and its overlay is confirmed against that
+     * cursor like any other.
+     */
+    data class RpcReply(val result: WireValue?, val commitCursor: Long?, val decodeError: ApiException? = null) {
+        /** The result, or the [decodeError] thrown. */
+        fun value(): WireValue {
+            decodeError?.let { throw it }
+
+            return checkNotNull(result)
+        }
+    }
 
     /**
      * One round-trip, keeping the echoed `commitCursor`.
@@ -447,20 +555,45 @@ class Client(
 
         val payload = Json.write(buildRpcBody(functionPath, args, shardKey))
         val response = poster(join(RPC_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))
-        val body = Json.parse(response.body) as Map<*, *>
+        // A body that is not a JSON object carries neither a result nor an
+        // envelope — an HTML error page, a proxy's `null` — so it is read the way
+        // every envelope-less reply is, as the SDK's own error, never as the JSON
+        // parser's or a cast's exception escaping every handler the caller wrote.
+        val body = readObject(response.body) ?: throw if (response.status in 200..299) {
+            ApiException("INTERNAL", "HTTP ${response.status} with a body that is not a JSON object", transient = true)
+        } else {
+            envelopeless(response.status)
+        }
 
-        return RpcReply(parseRpcResponse(body, response.status), parseCommitCursor(body))
+        checkRpcResponse(body, response.status)
+
+        val cursor = parseCommitCursor(body)
+
+        return try {
+            RpcReply(decodeResult(body["result"]), cursor)
+        } catch (error: ApiException) {
+            RpcReply(null, cursor, error)
+        }
+    }
+
+    /** [raw] parsed as a JSON object, or null when it is not one (or not JSON at all). */
+    private fun readObject(raw: String): Map<*, *>? = try {
+        Json.parse(raw) as? Map<*, *>
+    } catch (error: IllegalArgumentException) {
+        null
     }
 
     /**
-     * POSTs one `/_lunora/rpc-batch` chunk, returning the parsed body.
+     * POSTs one `/_lunora/rpc-batch` chunk, returning the status and the parsed
+     * body — null when the body is not a JSON object. The status is kept because
+     * a 413 is a verdict on the request whatever its body says.
      *
      * No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
      * carrying independent calls, so each entry carries its own idempotency key
      * and client id in the body. A single outer header would name one write and
      * de-duplicate the whole chunk against it.
      */
-    internal fun rpcBatch(calls: List<Any?>): Map<*, *> {
+    internal fun rpcBatch(calls: List<Any?>): Pair<Int, Map<*, *>?> {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
         val headers = LinkedHashMap<String, String>()
 
@@ -470,7 +603,7 @@ class Client(
         val payload = Json.write(mapOf("calls" to calls))
         val response = poster(join(RPC_BATCH_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))
 
-        return Json.parse(response.body) as? Map<*, *> ?: emptyMap<String, Any?>()
+        return response.status to readObject(response.body)
     }
 
     /**
@@ -583,14 +716,19 @@ class Client(
      */
     fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
         val stream = Stream()
-
-        stream.unsubscribe = subscribe(
+        val unsubscribe = subscribe(
             functionPath,
             args,
             { value -> stream.events.add(StreamEvent(value, null)) },
             { error -> stream.events.add(StreamEvent(null, error)) },
             shardKey,
         )
+
+        stream.unsubscribe = {
+            synchronized(lock) { streams.remove(stream) }
+            unsubscribe()
+        }
+        synchronized(lock) { streams.add(stream) }
 
         return stream
     }
@@ -772,7 +910,12 @@ class Client(
 
                 cancelled?.invoke(SubscriptionError("SUBSCRIPTION_CANCELLED", "subscription was cancelled by the server"))
             }
+            // A poke frame without a string `pokeId` names no poke, and one keyed by
+            // its rendering ("null", "7.0") would be joined by an equally malformed
+            // part or end.
             "pokeStart" -> synchronized(lock) {
+                val pokeId = frame["pokeId"] as? String ?: return kind
+
                 // Evict oldest-first at the cap. A LinkedHashMap iterates in
                 // insertion order, so the first key is the oldest buffer; one
                 // that old is no longer going to see its pokeEnd.
@@ -783,7 +926,7 @@ class Client(
                     oldest.remove()
                 }
 
-                pokes[frame["pokeId"].toString()] = PokeBuffer()
+                pokes[pokeId] = PokeBuffer(frame["epoch"], frame["baseCheckpoint"])
             }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
@@ -813,8 +956,32 @@ class Client(
         return hydrated.shardKeys
     }
 
+    /**
+     * Drops the resume state the previous identity left, under the lock; returns
+     * the shape callbacks to tell (outside it) that their view is now empty.
+     */
+    private fun evictPreviousIdentitySession(): List<(List<WireValue>) -> Unit> {
+        for (entry in subscriptions.values) {
+            entry.cursor = null
+            entry.epoch = null
+        }
+
+        return shapes.values.mapNotNull { shape ->
+            shape.rows.clear()
+            shape.order.clear()
+            shape.checkpoint = null
+            shape.epoch = null
+            shape.onRows
+        }
+    }
+
+    /**
+     * Tracks a frame's resume position. A `cursor` that is not an integer is not
+     * a cursor: resending it verbatim asks the server to resume from `"9"`, so it
+     * leaves the tracked one where it was.
+     */
     private fun advance(entry: Subscription, frame: Map<*, *>) {
-        if (frame.containsKey("cursor")) entry.cursor = frame["cursor"]
+        (frame["cursor"] as? Number)?.toDouble()?.takeIf { it == Math.rint(it) && !it.isInfinite() }?.let { entry.cursor = it }
         if (frame.containsKey("epoch")) entry.epoch = frame["epoch"]
     }
 
@@ -829,8 +996,8 @@ class Client(
         synchronized(lock) {
             // A part for an unknown poke is dropped: without its pokeStart there
             // is no batch to join, and guessing would apply a fragment of one.
-            val buffer = pokes[frame["pokeId"].toString()] ?: return
-            val shapeId = frame["shapeId"].toString()
+            val buffer = pokes[frame["pokeId"] as? String ?: return] ?: return
+            val shapeId = frame["shapeId"] as? String ?: return
 
             buffer.parts.getOrPut(shapeId) { mutableListOf() }.addAll(operations)
 
@@ -839,6 +1006,8 @@ class Client(
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
             // retention re-seed arrives with the epoch unchanged.
             if (frame["reset"] == true) buffer.resets.add(shapeId)
+
+            (frame["baseCheckpoint"] ?: buffer.baseCheckpoint)?.let { buffer.bases[shapeId] = it }
         }
     }
 
@@ -847,11 +1016,52 @@ class Client(
         // with the row snapshot taken while still holding it — so a callback sees
         // one consistent poke even if the next one lands mid-delivery.
         val deliveries = synchronized(lock) {
-            val buffer = pokes.remove(frame["pokeId"].toString()) ?: return
-            val pending = mutableListOf<Pair<(List<WireValue>) -> Unit, List<WireValue>>>()
+            val buffer = pokes.remove(frame["pokeId"] as? String ?: return) ?: return
+            val pending = mutableListOf<() -> Unit>()
+            val sender = send
 
             for ((shapeId, operations) in buffer.parts) {
                 val shape = shapes[shapeId] ?: continue
+
+                // Every row is decoded BEFORE the view is touched: a poke applies
+                // whole or not at all. Decoding inside the apply loop cleared the
+                // view for a reset and then threw on the bad row, leaving it half
+                // applied (or empty) with nothing reported — and the exception ended
+                // the caller's read loop. Refused, the shape keeps its view, its
+                // checkpoint and its epoch, so a resume still asks for the rows it
+                // never held; its error callback hears why.
+                val decoded = try {
+                    operations.map { operation ->
+                        operation to operation["value"]?.takeIf { operation["op"] != "delete" }?.let { Wire.decode(it) }
+                    }
+                } catch (error: WireFormatException) {
+                    shape.onError?.let { onError ->
+                        pending.add { onError(SubscriptionError(WIRE_DECODE_FAILED, error.message ?: "shape rows could not be decoded")) }
+                    }
+
+                    continue
+                }
+
+                // The server computed this diff against `base`. If the view is not at
+                // that checkpoint — a poke was refused or dropped — or the changelog
+                // epoch forked, splicing the ops on corrupts the view for good (the
+                // missed rows never come again). Drop it, skip the ops, tell the
+                // callback `[]` and re-subscribe COLD so the server re-seeds it. A
+                // reset part is the full membership and settles either case itself.
+                val base = buffer.bases[shapeId]
+                val epochForked = buffer.epoch != null && shape.epoch != null && buffer.epoch != shape.epoch
+                val baseDiverged = base != null && shape.checkpoint != null && shape.checkpoint != base
+
+                if (shapeId !in buffer.resets && (epochForked || baseDiverged)) {
+                    shape.rows.clear()
+                    shape.order.clear()
+                    shape.checkpoint = null
+                    shape.epoch = null
+                    shape.onRows?.let { onRows -> pending.add { onRows(emptyList()) } }
+                    sender?.let { pending.add { it(buildShapeSubscribeFrame(shapeId, shape.name, shape.args)) } }
+
+                    continue
+                }
 
                 // A reset part is the shape's complete membership, so it is
                 // authoritative on its own: drop what we hold before applying it.
@@ -863,7 +1073,7 @@ class Client(
                     shape.order.clear()
                 }
 
-                for (operation in operations) {
+                for ((operation, value) in decoded) {
                     val key = operation["key"]?.toString() ?: continue
 
                     if (operation["op"] == "delete") {
@@ -874,23 +1084,27 @@ class Client(
 
                     // A value-less upsert is membership-only; it must not blank an
                     // existing row.
-                    val value = operation["value"] ?: continue
+                    if (value == null) continue
 
                     if (!shape.rows.containsKey(key)) shape.order.add(key)
 
-                    shape.rows[key] = Wire.decode(value)
+                    shape.rows[key] = value
                 }
 
                 if (frame.containsKey("checkpoint")) shape.checkpoint = frame["checkpoint"]
                 if (frame.containsKey("epoch")) shape.epoch = frame["epoch"]
 
-                shape.onRows?.let { onRows -> pending.add(onRows to shape.order.mapNotNull { key -> shape.rows[key] }) }
+                shape.onRows?.let { onRows ->
+                    val rows = shape.order.mapNotNull { key -> shape.rows[key] }
+
+                    pending.add { onRows(rows) }
+                }
             }
 
             pending
         }
 
-        for ((onRows, rows) in deliveries) onRows(rows)
+        for (delivery in deliveries) delivery()
     }
 
     /**

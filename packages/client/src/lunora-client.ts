@@ -43,9 +43,11 @@ import {
     errorEnvelopeOf,
     isAuthReplayFailure,
     isTransientReplayFailure,
+    isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
     replayRetryDelayMs,
     retryAfterData,
+    undecodableResultError,
     unparseableResponseError,
     unreadableSlotError,
     utf8ByteLength,
@@ -425,9 +427,14 @@ interface ClientDebugSnapshot {
 interface MutationSettledEvent {
     /** The write's args, so a listener can describe or re-offer the change. */
     readonly args: Record<string, unknown>;
-    /** Server/queue error code on `rejected` (e.g. `CONFLICT`), when present. */
+
+    /**
+     * Server/queue error code on `rejected` (e.g. `CONFLICT`), when present —
+     * or `WIRE_DECODE_FAILED` on a `committed` write whose result could not be
+     * decoded.
+     */
     readonly code?: string;
-    /** The rejection error on `status: "rejected"`. */
+    /** The rejection error on `status: "rejected"`, or the decode error of a `committed` write whose result could not be read. */
     readonly error?: unknown;
     /** The `<file>:<function>` reference of the mutation. */
     readonly functionPath: string;
@@ -879,6 +886,9 @@ interface PokeBuffer {
 
     /** Shapes whose part carries the COMPLETE membership — their view is dropped before the ops apply. */
     resets: Set<string>;
+
+    /** Shapes a part carried a row the codec refused for, with the reason — their slice of the poke is refused whole at `pokeEnd`. */
+    undecodable: Map<string, unknown>;
 }
 
 /**
@@ -898,8 +908,16 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
 
     error.code = errorBody.code;
 
+    // Guarded: a `data` the codec refuses is dropped, and the envelope stays the
+    // server's coded verdict. Thrown bare, the codec's own exception replaced the
+    // coded error — codeless, so a replay classified it as transport and re-sent
+    // the write forever, and inside a batch demux it abandoned every later slot.
     if (errorBody.data !== undefined) {
-        error.data = decodeWire(errorBody.data);
+        try {
+            error.data = decodeWire(errorBody.data);
+        } catch {
+            // Dropped: see above.
+        }
     }
 
     if (errorBody.hint !== undefined) {
@@ -2024,15 +2042,29 @@ class LunoraClient {
         // through this door instead.
         const identity = this.identityFingerprint();
         let ackWatermark: number | undefined;
+        let result: unknown;
+        // The shard applied the push even when its result does not decode, so the
+        // watermark it acknowledged is recorded before that error propagates —
+        // otherwise the next mutator derives its seq from stale state and the
+        // shard swallows it as a replay.
+        let undecodable: LunoraError | undefined;
 
-        const result = await this.rpc(functionPath, args, options?.shardKey, {
-            captureBookmark: true,
-            clientId: this.clientId,
-            clientSeq,
-            onMutationAck: (lastMutationId) => {
-                ackWatermark = lastMutationId;
-            },
-        });
+        try {
+            result = await this.rpc(functionPath, args, options?.shardKey, {
+                captureBookmark: true,
+                clientId: this.clientId,
+                clientSeq,
+                onMutationAck: (lastMutationId) => {
+                    ackWatermark = lastMutationId;
+                },
+            });
+        } catch (error) {
+            if (!isUndecodableResult(error)) {
+                throw error;
+            }
+
+            undecodable = error;
+        }
 
         if (ackWatermark !== undefined && ackWatermark > (this.clientWatermarks.get(identity ?? "")?.get(bucket) ?? 0)) {
             let bucketWatermarks = this.clientWatermarks.get(identity ?? "");
@@ -2047,6 +2079,10 @@ class LunoraClient {
             }
 
             bucketWatermarks.set(bucket, ackWatermark);
+        }
+
+        if (undecodable !== undefined) {
+            throw undecodable;
         }
 
         // The DO echoes `lastMutationId === clientSeq` only when it ran this push
@@ -5074,8 +5110,9 @@ class LunoraClient {
             return enqueue();
         }
 
+        let commitCursor: number | undefined;
+
         try {
-            let commitCursor: number | undefined;
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
@@ -5105,15 +5142,38 @@ class LunoraClient {
                 return enqueue();
             }
 
-            // A durable replay the worker refused for another user's cookie:
-            // learn who that is, so the sink's next attempt is gated on it.
-            this.noteIdentityMismatch(error);
-
-            // LIFO rollback: see the offline-queue reject path above.
-            rollbackOptimistic(optimisticRollbacks);
+            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks);
 
             throw error;
         }
+    }
+
+    /**
+     * Unwind a direct write's optimistic layers after its RPC threw — or keep
+     * them, when it threw only because a COMMITTED result did not decode: the
+     * write happened, so its predicted value stays until the confirming frame
+     * supersedes it.
+     */
+    private settleFailedDirectWrite(
+        error: unknown,
+        commitCursor: number | undefined,
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        optimisticRollbacks: (() => void)[],
+    ): void {
+        // A durable replay the worker refused for another user's cookie:
+        // learn who that is, so the sink's next attempt is gated on it.
+        this.noteIdentityMismatch(error);
+
+        if (isUndecodableResult(error)) {
+            for (const confirm of optimisticConfirms) {
+                confirm(commitCursor);
+            }
+
+            return;
+        }
+
+        // LIFO rollback: see the offline-queue reject path above.
+        rollbackOptimistic(optimisticRollbacks);
     }
 
     /**
@@ -5228,7 +5288,12 @@ class LunoraClient {
                     // discarded — `mutationId` is the entry's stable id.
                     this.queuedIdentities.delete(mutationId);
 
-                    rollbackOptimistic(optimisticRollbacks);
+                    // A write that committed with an undecodable result was
+                    // already confirmed through `onCommit`; only a write that
+                    // did NOT happen takes its predicted value back.
+                    if (!isUndecodableResult(error)) {
+                        rollbackOptimistic(optimisticRollbacks);
+                    }
 
                     reject(error instanceof Error ? error : new Error(String(error)));
                 },
@@ -6252,6 +6317,16 @@ class LunoraClient {
             throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
         }
 
+        // Valid JSON that is not an object (`null`, `[]`, a bare string) carries
+        // no envelope and no result either — reading `.lastMutationId` off a
+        // `null` below raised a raw `TypeError` past every handler written for
+        // this client's errors. Classified by status like an unparseable body.
+        const parsed: unknown = body;
+
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+        }
+
         const envelope = errorEnvelopeOf(body);
 
         if (envelope !== undefined) {
@@ -6281,7 +6356,11 @@ class LunoraClient {
         this.learnDefaultShardKey(response, shardKey);
         this.recordShardCursor(shardKey, body.commitCursor);
 
-        return decodeWire(body.result);
+        try {
+            return decodeWire(body.result);
+        } catch (error) {
+            throw undecodableResultError(error);
+        }
     }
 
     /**
@@ -7457,6 +7536,7 @@ class LunoraClient {
             lastMutationId: new Map(),
             parts: new Map(),
             resets: new Set(),
+            undecodable: new Map(),
         });
     }
 
@@ -7469,14 +7549,31 @@ class LunoraClient {
             return;
         }
 
-        const existing = buffer.parts.get(message.shapeId) ?? [];
-
         // Wire-decode each row-op's post-image (no-op on a pure-JSON value), so a
         // shape carrying a `bytes`/`bigint` column applies real values locally.
         // Loop rather than `push(...map())` — a large `rowsPatch` would otherwise
         // allocate an intermediate array and risk the JS argument-count ceiling.
-        for (const op of message.rowsPatch) {
-            existing.push(op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> });
+        //
+        // Decoded into a scratch list BEFORE anything is buffered: a row the
+        // codec refuses used to throw out of this handler half-way through the
+        // push, and the poke's `pokeEnd` then applied the rest and advanced the
+        // checkpoint past rows the view never held — with nothing reported.
+        const decoded: RowOp[] = [];
+
+        try {
+            for (const op of message.rowsPatch) {
+                decoded.push(op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> });
+            }
+        } catch (error) {
+            buffer.undecodable.set(message.shapeId, error);
+
+            return;
+        }
+
+        const existing = buffer.parts.get(message.shapeId) ?? [];
+
+        for (const op of decoded) {
+            existing.push(op);
         }
         buffer.parts.set(message.shapeId, existing);
 
@@ -7508,10 +7605,25 @@ class LunoraClient {
 
         this.pokeBuffers.delete(key);
 
-        for (const shapeId of buffer.parts.keys()) {
+        // A shape whose slice carried a row the codec refused keeps its view, its
+        // checkpoint and its epoch exactly as they were: applying the decodable
+        // rest would advance the resume position past a row it never held, so no
+        // resume would ever send that row again.
+        for (const [shapeId, error] of buffer.undecodable) {
             const state = this.shapeSubscriptions.get(shapeId);
 
             if (state) {
+                fanSubscriptionError(state.errorCallbacks, {
+                    code: "WIRE_DECODE_FAILED",
+                    message: `could not decode a poke for this shape — ${error instanceof Error ? error.message : String(error)}`,
+                });
+            }
+        }
+
+        for (const shapeId of buffer.parts.keys()) {
+            const state = this.shapeSubscriptions.get(shapeId);
+
+            if (state && !buffer.undecodable.has(shapeId)) {
                 this.applyPokePart(state, buffer, message);
             }
         }
@@ -9138,6 +9250,20 @@ class LunoraClient {
         return true;
     }
 
+    /**
+     * Settle a write the server COMMITTED whose result does not decode. It is
+     * `committed` — its optimistic layer confirms against the echoed cursor like
+     * any success — but there is no value to hand the caller, so the awaiter is
+     * rejected with the decode error and the settled event carries it.
+     */
+    private settleReplayUndecodable(item: QueuedMutation, error: LunoraError, commitCursor: number | undefined): void {
+        this.unpersist(item.id);
+        this.recordShardCursor(item.shardKey, commitCursor);
+        item.onCommit?.(commitCursor);
+        item.reject(error);
+        this.emitItemSettled(item, "committed", error);
+    }
+
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
     private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
         this.unpersist(item.id);
@@ -9166,8 +9292,9 @@ class LunoraClient {
                 continue;
             }
 
+            let commitCursor: number | undefined;
+
             try {
-                let commitCursor: number | undefined;
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     // The cursor the write was COMPOSED at, carried through the
@@ -9187,6 +9314,14 @@ class LunoraClient {
 
                 this.settleReplaySuccess(item, value, commitCursor);
             } catch (error) {
+                // Committed, with a result nobody can read: replaying returns the
+                // same reply, so settle it rather than classify it.
+                if (isUndecodableResult(error)) {
+                    this.settleReplayUndecodable(item, error, commitCursor);
+
+                    continue;
+                }
+
                 if (!this.shouldRequeueReplayFailure(error)) {
                     this.settleReplayTerminal(item, error);
 
@@ -9425,11 +9560,31 @@ class LunoraClient {
                     this.settleReplayTerminal(item, error);
                 }
             } else {
-                this.settleReplaySuccess(item, decodeWire(inner.result), inner.commitCursor);
+                this.settleReplayBatchResult(item, inner);
             }
         }
 
         return requeue;
+    }
+
+    /**
+     * Settle one batch slot that answered with a result. Decoded per slot: one
+     * result the codec refuses must not abandon the slots after it (committed
+     * writes left pending and unsettled for the rest of the session), and its
+     * own write DID commit.
+     */
+    private settleReplayBatchResult(item: QueuedMutation, inner: RpcEnvelopeBody): void {
+        let value: unknown;
+
+        try {
+            value = decodeWire(inner.result);
+        } catch (error) {
+            this.settleReplayUndecodable(item, undecodableResultError(error), inner.commitCursor);
+
+            return;
+        }
+
+        this.settleReplaySuccess(item, value, inner.commitCursor);
     }
 }
 

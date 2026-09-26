@@ -324,7 +324,15 @@ envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday sh
 it unchecked raises its own language's error past every handler the caller
 wrote.
 
-Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`.
+A 2xx body that is not a JSON OBJECT — `null`, `[]`, a bare string or number, an
+HTML page — carries neither a result nor an envelope, and is classified by
+status the same way (`INTERNAL`, a transport error). `{}` is not one of these: it
+is how a function returning nothing is answered. A 2xx whose `result` does not
+DECODE is different again: the call ran and, for a mutation, committed, so the
+client raises `WIRE_DECODE_FAILED` rather than a transport error, and an offline
+replay settles that write committed instead of retrying it (§4.3).
+
+Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`, `unreadableSuccessBody`.
 
 ### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
 
@@ -387,7 +395,15 @@ Four rules a conforming client MUST follow, because each one is a durable write:
 - A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
   or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
   entry — it could not reach the shard, or a limiter refused to look — so it is
-  retried rather than reported failed. Every other coded error is a verdict, and
+  retried rather than reported failed. So is a refused CREDENTIAL —
+  `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
+  rather than settles: a write queued offline replays with the bearer it held
+  when it went offline, often expired by reconnect, and a token refresh is what
+  lets it through. An envelope whose `data` does not decode is still that coded
+  error: the `data` is dropped and the code classifies it. And a server that
+  answers `WIRE_DECODE_FAILED` refused the write — only a result the CLIENT could
+  not decode marks one committed, so a client tells the two apart by where the
+  failure arose, never by the code string. Every other coded error is a verdict, and
   terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
   `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
   as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
@@ -410,13 +426,27 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   `{"error": "bad gateway"}` as an envelope discards durable writes that the
   same reply, classified by its 502, keeps.
 - A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
-  more than one entry MUST be split and retried rather than settled. A client
+  more than one entry MUST be split and retried rather than settled — on ANY
+  `413`, with or without an envelope, since an edge refuses an oversized body with
+  its own page before the worker can write a coded one. A single entry still
+  refused settles with `PAYLOAD_TOO_LARGE`, coded or not. A client
   also holds the request body under the 1 MiB cap up front, splitting before it
   sends — chunking by the 500-entry cap alone refuses a whole chunk of durable
   writes as soon as they average a couple of KiB each.
 
 The same classification governs a **single-call** replay, so a durable write's
-fate never depends on how many siblings were queued alongside it.
+fate never depends on how many siblings were queued alongside it. A coded
+envelope is classified by its CODE alone, whatever the HTTP status: a coded `500`
+is the server's verdict and terminal on both paths, a `503` carrying
+`SHARD_UNAVAILABLE` transient on both. Only a reply with no envelope falls back
+to its status (below).
+
+A slot — or a single-call reply — that SUCCEEDED but whose `result` does not
+decode is COMMITTED. It settles committed (its optimistic layer confirmed, its
+durable record removed) with the decode error attached, and is never retried:
+replaying returns the same result. Each slot is decoded on its own, so one such
+result never abandons the slots after it, and a client removes a durable record
+only after it has decided the slot's outcome.
 
 A response carrying no `{ error }` envelope to classify — a proxy's HTML page, a
 captive portal, a truncated body — is classified by its HTTP status, and MUST be:
@@ -440,7 +470,18 @@ the calls, the slot outcomes and the normative entry cap, and
 
 Frames are JSON text. A keepalive is the literal non-JSON string `lunora-ping`
 (the server auto-responds `lunora-pong` without waking the DO); non-JSON frames
-are ignored by the client parser.
+are ignored by the client parser. So is a frame that parses but is not shaped
+like any below — not an object, an `id` that is not a string, a `cursor` that is
+not an integer: a client MUST NOT raise out of its frame handler over one (that
+ends the read loop and every subscription on the socket), and a non-integer
+`cursor` never replaces the tracked one. `malformedFrames` in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins it.
+
+The server caps a frame it RECEIVES at 1Mi UTF-16 units (`MAX_WS_FRAME_UNITS`),
+but nothing but the platform bounds what it SENDS: a large query result or shape
+seed is one frame, up to the Workers per-message WebSocket limit of 32 MiB. A
+client whose WebSocket library has a smaller default (Python's `websockets`
+defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 ### 5.1 Client → server frames
 
@@ -598,8 +639,18 @@ A `RowOp` is `{ op: "insert"|"update"|"delete", key, table, value? }`. The clien
 `pokeEnd`: `insert`/`update` set `key → decodeWire(value)` in the shape's keyed
 view; `delete` removes `key` (a value-less upsert is a membership-only no-op).
 The view's checkpoint advances to `pokeEnd.checkpoint`. A socket that drops
-mid-poke discards the buffer and re-seeds on reconnect (no torn view). An
-`epoch` mismatch or a `baseCheckpoint` gap forces a full re-seed.
+mid-poke discards the buffer and re-seeds on reconnect (no torn view). A shape
+whose parts carry a row `decodeWire` refuses is refused WHOLE for that poke:
+every row is decoded before the view is touched, and on a failure the view, its
+checkpoint and its epoch stay as they were and the shape's error listeners are
+told (`WIRE_DECODE_FAILED`) — applying the decodable rest would advance the
+resume position past a row the view never held. Other shapes in the poke still
+apply. The refused rows come back through the NEXT poke: the server stamps its
+`baseCheckpoint` with the checkpoint it believes it delivered, which no longer
+matches the view's, so the base check below re-seeds the shape
+(`undecodableRowPokeSequence` then `gapPokeSequence` in
+`fixtures/ws-frames.json`). An `epoch` mismatch or a `baseCheckpoint` gap forces
+a full re-seed.
 
 A buffer is released at `pokeEnd`, and a poke abandoned mid-flight never sends
 one — so a client MUST bound its pending buffers and evict oldest-first, rather
@@ -635,13 +686,15 @@ the part to splice on cleanly, and takes precedence over `pokeStart.baseCheckpoi
 own delivered-through cursor. Absent means the sender cannot name a base and the
 gap check is disarmed for that part.
 
-> **Outstanding in the non-JS ports.** Only `@lunora/client` acts on this field:
-> on a mismatch it drops the shape's view, clears its cursor, skips the ops and
-> re-subscribes. None of the eight SDKs implements the comparison — one stores
-> the value and never reads it, the rest only mention it in a comment about
-> `reset`. A poke can genuinely be dropped on the cross-DO owner→relay POST, so
-> until a port adds the check its shape views can diverge where the JS client
-> recovers. A port adding it needs no wire change; the field is already sent.
+On a mismatch with the view's checkpoint — or an `epoch` that differs from the
+view's — a part that is not a `reset` makes the client drop the shape's view,
+clear its checkpoint and epoch, tell its listeners `[]`, skip the ops and send a
+COLD `shape_subscribe` (no `sinceCheckpoint`/`sinceEpoch`) so the server re-seeds
+it. A view with no checkpoint yet has nothing to diverge from. The reference and
+all eight `sdks/*` ports implement it; before they did, a poke dropped on the
+cross-DO owner→relay POST — or refused for an undecodable row — was spliced over
+by the next one, losing its rows for good. `gapPokeSequence` and its
+counterweight `contiguousPokeSequence` pin both directions.
 
 ### 5.4 Delta runs and the resume cursor
 

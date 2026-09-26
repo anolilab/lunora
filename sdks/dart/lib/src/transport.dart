@@ -116,38 +116,90 @@ class LunoraTransport {
 
   /// Returns the decoded result, or throws [LunoraApiException].
   ///
-  /// [status] is required for correctness, not diagnostics: `protocol/README.md`
-  /// §4.2 says a non-2xx whose body carries no `error` envelope surfaces as an
-  /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
-  /// returns null and throws nothing — the caller believes its mutation
-  /// committed.
-  static Object? parseRpcResponse(Map<String, Object?> body, {required int status}) {
-    final envelope = body['error'];
+  /// [body] is the parsed JSON body, or null when it was not JSON. [status] is
+  /// required for correctness, not diagnostics: `protocol/README.md` §4.2 says a
+  /// non-2xx whose body carries no `error` envelope surfaces as an INTERNAL
+  /// transport error. Without it a 502 with body `{"message":"…"}` returns null
+  /// and throws nothing — the caller believes its mutation committed.
+  static Object? parseRpcResponse(Object? body, {required int status}) {
+    final error = replyError(body, status: status);
+
+    if (error != null) {
+      throw error;
+    }
+
+    return decodeResult((body! as Map<String, Object?>)['result']);
+  }
+
+  /// What a reply says went wrong, or null when it is a readable success.
+  ///
+  /// The ONE classification every path shares — a direct call, a lone replay, a
+  /// whole-batch reply and a batch slot — so a durable write's fate cannot depend
+  /// on how many siblings were queued with it:
+  ///
+  /// - A CODED envelope is the server's verdict, whatever the status: a coded
+  ///   5xx is terminal, and the transient codes are recognised by code alone
+  ///   (`isTransientFailure`).
+  /// - A 413 without one is still `PAYLOAD_TOO_LARGE`, and terminal: an edge or
+  ///   proxy refuses an oversized body with its own page before the worker can
+  ///   answer, and re-queueing the identical body parks the queue forever.
+  /// - Anything else without one — a non-2xx, or a body that is not a JSON
+  ///   object — never came from a Lunora function, so it is transport: coded
+  ///   `INTERNAL` and marked transient, never a language exception.
+  static LunoraApiException? replyError(Object? body, {required int status}) {
+    final envelope = body is Map<String, Object?> ? body['error'] : null;
 
     if (envelope is Map<String, Object?>) {
-      final data = envelope['data'];
-
-      throw LunoraApiException(
+      return LunoraApiException(
         envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
         envelope['message'] is String ? envelope['message'] as String : 'request failed',
-        data == null ? null : decodeWire(data),
-        // A 5xx is the shard or the edge failing UNDER the call, not a verdict
-        // on it, so a queued write replayed under the same idempotency key is
-        // still good. See `isTransientFailure`.
-        status >= 500,
+        _decodeData(envelope['data']),
       );
     }
 
-    if (status < 200 || status > 299) {
-      // No envelope at all, so this body never came from a Lunora function: an
-      // edge error page, a WAF block, a proxy. Nothing reached the shard, which
-      // makes it transport rather than a verdict — the batch path already
-      // classified the identical response that way, and a lone queued write must
-      // not be dropped for being alone.
-      throw LunoraApiException('INTERNAL', 'HTTP $status without an error envelope', null, true);
+    if (status == 413) {
+      return const LunoraApiException(payloadTooLarge, 'HTTP 413 without an error envelope');
     }
 
-    return decodeWire(body['result']);
+    if (status < 200 || status > 299) {
+      return LunoraApiException('INTERNAL', 'HTTP $status without an error envelope', null, true);
+    }
+
+    if (body is! Map<String, Object?>) {
+      return LunoraApiException('INTERNAL', 'HTTP $status with a body that is not a JSON object', null, true);
+    }
+
+    return null;
+  }
+
+  /// An envelope's `data`, or null when it does not decode: the code and message
+  /// are the verdict, and a detail the codec refuses must not turn it into a
+  /// throw that loses it.
+  static Object? _decodeData(Object? data) {
+    try {
+      return data == null ? null : decodeWire(data);
+    } on WireFormatException {
+      return null;
+    }
+  }
+
+  /// A success's `result`, or [wireDecodeFailed] when it does not decode.
+  static Object? decodeResult(Object? result) {
+    try {
+      return decodeWire(result);
+    } on WireFormatException catch (error) {
+      throw LunoraApiException(wireDecodeFailed, 'the call committed but its result cannot be wire-decoded: ${error.message}');
+    }
+  }
+
+  /// Reads a response body as JSON, or null when it is not JSON. An empty body
+  /// reads as `{}`.
+  static Object? readBody(String body) {
+    try {
+      return body.isEmpty ? const <String, Object?>{} : jsonDecode(body);
+    } on FormatException {
+      return null;
+    }
   }
 
   /// The headers every request carries.
@@ -170,6 +222,15 @@ class LunoraTransport {
   /// Make one RPC. [issuedBy] overrides the client id, which a REPLAY needs: a
   /// restored write must land in the namespace that issued it.
   Future<LunoraRpcOutcome> rpc(String functionPath, {Object? args, String? shardKey, String? mutationId, String? issuedBy}) async {
+    final outcome = await rpcUndecoded(functionPath, args: args, shardKey: shardKey, mutationId: mutationId, issuedBy: issuedBy);
+
+    return (result: decodeResult(outcome.result), commitCursor: outcome.commitCursor);
+  }
+
+  /// [rpc] with the result left in its WIRE form, so a replay can decide what a
+  /// committed write whose result does not decode means for it (it is still
+  /// committed) instead of meeting the decode failure as an exception.
+  Future<LunoraRpcOutcome> rpcUndecoded(String functionPath, {Object? args, String? shardKey, String? mutationId, String? issuedBy}) async {
     final poster = post;
 
     if (poster == null) {
@@ -181,11 +242,17 @@ class LunoraTransport {
       requestHeaders(mutationId: mutationId, issuedBy: issuedBy),
       jsonEncode(buildRpcBody(functionPath, args, shardKey: shardKey)),
     );
-    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
-    final cursor = body['commitCursor'];
+    final body = readBody(response.body);
+    final error = replyError(body, status: response.status);
 
-    return (result: parseRpcResponse(body, status: response.status), commitCursor: cursor is int ? cursor : null);
+    if (error != null) {
+      throw error;
+    }
+
+    final success = body! as Map<String, Object?>;
+    final cursor = success['commitCursor'];
+
+    return (result: success['result'], commitCursor: cursor is int ? cursor : null);
   }
 
   /// The identity a queued write is stamped with, and gated on at replay.

@@ -98,8 +98,17 @@ public enum LunoraJSON {
                 skipWhitespace()
                 try expect(":")
                 skipWhitespace()
-                // Last duplicate wins, as `JSON.parse` does.
-                result[key] = try value(depth: depth + 1)
+                let item = try value(depth: depth + 1)
+
+                // Last duplicate wins, as `JSON.parse` does. But Swift compares a
+                // lone surrogate as U+FFFD, so `"\ud800"` and `"\ud801"` are ONE
+                // `[String: Any]` key here and two to JavaScript: merging them
+                // would silently drop a member, so such an object is refused.
+                if let existing = result.index(forKey: key), Wire.utf16Units(result[existing].key) != Wire.utf16Units(key) {
+                    throw failure()
+                }
+
+                result[key] = item
                 skipWhitespace()
 
                 switch current {

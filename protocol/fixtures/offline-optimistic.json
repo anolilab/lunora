@@ -254,6 +254,168 @@
             "mutationIdHeaders": ["m1", "m2", "m3"],
             "persistRemoveCalls": ["m1", "m2"],
             "confirmedCommitCursor": 4
+        },
+        "emptyShardKey": {
+            "$comment": "An EMPTY shard key is the default shard, exactly as an absent one is: the queue drains the two together (`shardDrain`), so the replay must route them together too. A port that omitted the key on its single-call body but sent `\"shardKey\": \"\"` on its batch entries replayed the same write to the default shard when it was queued alone and to a different Durable Object — the one the runtime names `\"\"` — when it shared a flush, with its optimistic overlay tracking neither. `queued` entries carry `shardKey` verbatim (null = absent); every request body the flush sends, single or batch entry, must carry NO `shardKey` key at all.",
+            "batch": {
+                "queued": [
+                    {
+                        "id": "e1",
+                        "shardKey": ""
+                    },
+                    {
+                        "id": "e2",
+                        "shardKey": null
+                    }
+                ],
+                "flushShardKey": null,
+                "committed": ["e1", "e2"]
+            },
+            "lone": {
+                "queued": [
+                    {
+                        "id": "e3",
+                        "shardKey": ""
+                    }
+                ],
+                "flushShardKey": null,
+                "committed": ["e3"]
+            }
+        },
+        "undecodableResult": {
+            "$comment": "A write the server COMMITTED whose result does not decode is still committed: replaying it can only return the same undecodable result, so retrying it forever parks the head of the queue, and letting the decode error escape a batch flush loses every later slot. It settles `committed` — its overlay confirmed, its durable record removed, reported in `committed` — and carries the coded decode error (`code`) on its settled event, with no value. Every other slot in the batch settles as usual and nothing is left queued. `rawResult` is the literal `result` the undecodable slot (or lone response) holds; every other slot answers `{\"result\": \"ok\", \"commitCursor\": <n>}`.",
+            "rawResult": ["$lunora.wire$", "bigint", "not-a-number"],
+            "code": "WIRE_DECODE_FAILED",
+            "batch": {
+                "queued": ["u1", "u2", "u3"],
+                "undecodableSlot": 1,
+                "committed": ["u1", "u2", "u3"],
+                "decodeFailed": ["u2"],
+                "rejected": [],
+                "queuedAfterFlush": [],
+                "persistRemoveCalls": ["u1", "u2", "u3"]
+            },
+            "lone": {
+                "queued": ["s1"],
+                "committed": ["s1"],
+                "decodeFailed": ["s1"],
+                "rejected": [],
+                "queuedAfterFlush": [],
+                "persistRemoveCalls": ["s1"],
+                "requestsAfterSecondFlush": 1
+            }
+        },
+        "replayClassification": {
+            "$comment": "ONE predicate classifies a replay failure, whether the write went out alone (single call) or in a batch (a whole-batch reply with no `results`), because a durable write's fate must not depend on how many siblings were queued with it (protocol/README.md 4.3). A CODED envelope is classified by its code alone — a coded 5xx is the server's verdict and terminal on both paths, and a transient code re-queues on both; its HTTP status does not change that. A reply with NO envelope is classified by status. Three classes are pinned beside that rule, all as the reference has them. A refused CREDENTIAL (`UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`) HOLDS the write rather than settling it: a write queued offline replays with whatever bearer the client held when it went offline, which has very often expired by reconnect, and settling it destroys the user's own durable write over a problem one token refresh fixes. An envelope whose `data` does not decode is still an envelope: the undecodable `data` is dropped and the error classified by its code, never as a transport failure (which re-queued it at the head of the queue forever) and never by letting the codec error escape. And a server that answers with the public code `WIRE_DECODE_FAILED` has REFUSED the write — only a result the CLIENT failed to decode is a committed write (see `undecodableResult`), so a port must tell the two apart by where the failure arose, not by the code string. Each case is run twice: once with `paths.single` queued (one write, the single-call path) and once with `paths.batch` (two writes, one batch request); the response below answers every request of that run. `body` is the JSON response body; `rawBody` is a literal body that is not JSON. `outcome` applies to every write of the run.",
+            "paths": {
+                "single": ["r1"],
+                "batch": ["r1", "r2"]
+            },
+            "cases": [
+                {
+                    "name": "coded-500-is-a-verdict",
+                    "status": 500,
+                    "body": {
+                        "error": {
+                            "code": "INTERNAL",
+                            "message": "handler threw"
+                        }
+                    },
+                    "outcome": "rejected",
+                    "code": "INTERNAL"
+                },
+                {
+                    "name": "coded-503-transient-code",
+                    "status": 503,
+                    "body": {
+                        "error": {
+                            "code": "SHARD_UNAVAILABLE",
+                            "message": "shard unreachable"
+                        }
+                    },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-409-is-a-verdict",
+                    "status": 409,
+                    "body": {
+                        "error": {
+                            "code": "CONFLICT",
+                            "message": "stale"
+                        }
+                    },
+                    "outcome": "rejected",
+                    "code": "CONFLICT"
+                },
+                {
+                    "name": "envelope-less-502",
+                    "status": 502,
+                    "rawBody": "<html><body>502 Bad Gateway</body></html>",
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-unauthorized-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "UNAUTHORIZED", "message": "sign in" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-token-expired-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "TOKEN_EXPIRED", "message": "token expired" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-unauthenticated-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "UNAUTHENTICATED", "message": "who are you" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-409-undecodable-data",
+                    "status": 409,
+                    "body": { "error": { "code": "CONFLICT", "message": "stale", "data": ["$lunora.wire$", "bigint", "not-a-number"] } },
+                    "outcome": "rejected",
+                    "code": "CONFLICT"
+                },
+                {
+                    "name": "coded-503-undecodable-data",
+                    "status": 503,
+                    "body": { "error": { "code": "SHARD_UNAVAILABLE", "message": "shard unreachable", "data": ["$lunora.wire$", "bigint", "not-a-number"] } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-wire-decode-failed-is-a-verdict",
+                    "status": 500,
+                    "body": { "error": { "code": "WIRE_DECODE_FAILED", "message": "the server could not decode the call" } },
+                    "outcome": "rejected",
+                    "code": "WIRE_DECODE_FAILED"
+                }
+            ]
+        },
+        "envelopelessPayloadTooLarge": {
+            "$comment": "A 413 is a verdict on the REQUEST whether or not it carries an envelope, and an edge or proxy in front of the worker refuses an oversized body with its own HTML page long before the worker's coded `PAYLOAD_TOO_LARGE` could be written. Such a reply has no envelope, and classifying it by the generic envelope-less rule re-queued the chunk whole: the next flush sent the identical body into the identical refusal, so the shard's queue parked forever. A batch of more than one write is split and retried on ANY 413 (`split`: the poster refuses every batch carrying more than `refuseCallsAbove` calls and accepts the rest); a lone write — or a chunk halved down to one — that is still refused settles terminally with `code`, the same verdict a coded 413 reaches (`alwaysRefused`, `lone`: every request is refused). `rawBody` is the literal body of every 413.",
+            "rawBody": "<html><body>413 Request Entity Too Large</body></html>",
+            "code": "PAYLOAD_TOO_LARGE",
+            "split": {
+                "queued": ["p1", "p2", "p3", "p4"],
+                "refuseCallsAbove": 1,
+                "committed": ["p1", "p2", "p3", "p4"],
+                "rejected": [],
+                "queuedAfterFlush": []
+            },
+            "alwaysRefused": {
+                "queued": ["q1", "q2"],
+                "committed": [],
+                "rejected": ["q1", "q2"],
+                "queuedAfterFlush": []
+            },
+            "lone": {
+                "queued": ["l1"],
+                "committed": [],
+                "rejected": ["l1"],
+                "queuedAfterFlush": []
+            }
         }
     }
 }
