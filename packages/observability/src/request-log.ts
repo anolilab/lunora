@@ -269,15 +269,18 @@ const redactSecrets = (value: unknown, captureRaw = false): unknown => {
  *
  * On a STRING (`errorMessage`, a URL, a log line), every URL loses its query,
  * fragment and userinfo; `name=value`, `name: value` and `"name":"value"` pairs
- * with a credential name are masked; `Basic …` is masked; and `standardRules`'
- * value patterns (emails, long digit runs, `Bearer …`, JWTs) apply. Every string
- * is truncated to 4 KiB in what is stored, and once 16 KiB of one value has been
- * examined the remaining strings are replaced with a marker, so no arg can hold
- * the Durable Object in regex work.
+ * with a credential name are masked; `Basic …`, `Bearer …` and `Digest …` are
+ * masked; and so is a bare token in prose with no name attached, when its format
+ * has a distinctive vendor prefix (`failed with sk_live_…`, `ghp_…`, `xoxb-…`,
+ * `AKIA…`, JWTs, … — see `SECRET_VALUE_RULES`), all by `maskCredentials`.
+ * `standardRules`' value patterns (emails, long digit runs) then mask PII. Every
+ * string is truncated to 4 KiB in what is stored, and once 16 KiB of one value has
+ * been examined the remaining strings are replaced with a marker, so no arg can
+ * hold the Durable Object in regex work.
  *
- * Still NOT caught: a bare credential in prose with no name attached
- * (`failed with sk_live_…`). This is a credential-and-PII net, not proof that no
- * secret can reach the log.
+ * Still NOT caught: a bare secret with no name attached and no vendor prefix (a
+ * random hex key, a password in a sentence). This is a credential-and-PII net,
+ * not proof that no secret can reach the log.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can

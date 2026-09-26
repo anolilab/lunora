@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { maskCredentials, SECRET_VALUE_SHAPES } from "../../../shared/credential-redaction";
+import { maskCredentials, MAY_HOLD_SECRET_VALUE, SECRET_VALUE_RULES } from "../../../shared/credential-redaction";
 import { redactArgs, redactSecrets } from "../src/request-log";
 
 /**
@@ -396,6 +396,14 @@ const BARE_SECRETS: ReadonlyArray<[string, string]> = [
     ["Slack bot token", fake("xoxb-", 50, "1234-FAKE0-")],
     ["Slack user token", fake("xoxp-", 50, "1234-FAKE0-")],
     ["Slack app-level token", fake("xapp-1-", 40, "FAKE0-")],
+    ["Slack configuration token", fake("xoxe-1-", 50, "FAKE0-")],
+    ["Slack client token", fake("xoxc-", 50, "1234-FAKE0-")],
+    ["Slack session cookie token", fake("xoxd-", 50, "FAKE0fake9")],
+    ["GitLab pipeline trigger token", fake("glptt-", 40, "deadbeef")],
+    ["GitLab deploy token", fake("gldt-", 20)],
+    ["Google OAuth client secret", fake("GOCSPX-", 28, "FAKE_fake-")],
+    ["Google OAuth access token", fake("ya29.", 60, "FAKE_fake-")],
+    ["OpenAI legacy key", `${fake("sk-", 20)}T3BlbkFJ${fake("", 20)}`],
     ["AWS access key id", fake("AKIA", 16, "FAKE0")],
     ["AWS temporary access key id", fake("ASIA", 16, "FAKE0")],
     ["Google API key", fake("AIza", 35, "FAKE_fake-")],
@@ -454,6 +462,40 @@ describe("span redaction of look-alikes", () => {
     });
 });
 
+describe.each(sinks)("%s redaction of a bare secret glued to the text before it", (_sink, redact) => {
+    const ghp = fake("ghp_", 36);
+    const stripe = fake("sk_live_", 30);
+
+    it.each([
+        ["a url-encoded `=`", `key%3D${ghp}`, "key%3D<REDACTED>"],
+        ["a url-encoded space", `msg%20${ghp}`, "msg%20<REDACTED>"],
+        ["a JSON-escaped newline", String.raw`{"log":"retry\n${ghp}"}`, String.raw`{"log":"retry\n<REDACTED>"}`],
+        ["an env-style name", `STRIPE_${stripe}`, "STRIPE_<REDACTED>"],
+    ])("masks a token after %s", (_name, input, expected) => {
+        expect.assertions(1);
+
+        expect(redact(input)).toBe(expected);
+    });
+});
+
+describe.each(sinks)("%s redaction at the 4 KiB cap", (_sink, redact) => {
+    it("masks a token that straddles the cap instead of cutting it short enough to slip through", () => {
+        expect.assertions(1);
+
+        const filler = "lorem ipsum ".repeat(340); // 4080 characters
+
+        expect(redact(`${filler} ${fake("ghp_", 36)}`)).toBe(`${filler} <REDACTED>`);
+    });
+
+    it("still marks a string it dropped text from", () => {
+        expect.assertions(1);
+
+        const filler = "lorem ipsum ".repeat(340);
+
+        expect(redact(`${filler} ${fake("ghp_", 36)} ${"x".repeat(500)}`)).toBe(`${`${filler} <REDACTED> ${"x".repeat(500)}`.slice(0, 4096)}…[truncated]`);
+    });
+});
+
 describe("secret value shapes stay linear", () => {
     const adversarial = [
         "sk_live_x",
@@ -472,29 +514,40 @@ describe("secret value shapes stay linear", () => {
         "dop_v1_",
         "npm_",
         "hf_",
+        "ya29.",
+        "GOCSPX-",
         // One character short of a match, and a prefix repeated inside its own run.
         `ghp_${"a".repeat(29)}`,
         "AIza-".repeat(8),
         "xoxb".repeat(8),
+        "eyJ-".repeat(8),
+        "%3DeyJ-".repeat(8),
     ]
         .join(" ")
         .repeat(1000)
         .slice(0, 160_000);
 
-    it("scans a 160 KB adversarial string in milliseconds", () => {
-        expect.assertions(2);
-
-        const started = performance.now();
-        const scanned = adversarial.replaceAll(SECRET_VALUE_SHAPES, "<REDACTED>");
-        const elapsed = performance.now() - started;
-
-        expect(adversarial).toHaveLength(160_000);
-        expect([elapsed < 250, scanned === adversarial]).toStrictEqual([true, true]);
-    });
-
-    it("keeps the 4 KiB cap on the whole redaction", () => {
+    it.each([
+        ["a 160 KB adversarial string", adversarial],
+        ["a JWT header repeated inside one run", "eyJ-".repeat(40_000)],
+    ])("redacts %s in milliseconds, keeping the 4 KiB cap", (_name, input) => {
         expect.assertions(1);
 
-        expect(redactSecrets(adversarial)).toBe(`${adversarial.slice(0, 4096)}…[truncated]`);
+        const started = performance.now();
+        const redacted = maskCredentials(input);
+        const elapsed = performance.now() - started;
+
+        expect([elapsed < 100, redacted]).toStrictEqual([true, `${input.slice(0, 4096)}…[truncated]`]);
+    });
+});
+
+describe("secret value rules", () => {
+    it.each(SECRET_VALUE_RULES.map((rule) => [rule.name, rule] as const))("%s has a fixture that it matches and the pre-check admits", (_name, rule) => {
+        expect.assertions(1);
+
+        const shape = new RegExp(`${rule.prefix}${rule.body}`, "u");
+        const fixtures = BARE_SECRETS.map(([, secret]) => secret).filter((secret) => shape.test(secret));
+
+        expect([fixtures.length > 0, fixtures.every((secret) => MAY_HOLD_SECRET_VALUE.test(secret))]).toStrictEqual([true, true]);
     });
 });
