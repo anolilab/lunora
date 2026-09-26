@@ -235,6 +235,12 @@ mismatch. After seeding it opens the live WebSocket subscription on the same
 `(functionPath, args, shardKey)` the loader used, so every later delta updates
 the ref exactly like `useQuery`.
 
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch.
+
 Pass `{ onError }` as the second argument to observe a subscription-scoped error
 the server pushes after hydration (a session expiry, an RLS denial). Without it
 such an error is dropped and the ref keeps rendering the SSR snapshot as if it

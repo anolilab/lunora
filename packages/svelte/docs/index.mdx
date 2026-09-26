@@ -233,6 +233,12 @@ hydration mismatch. When the store gains its first subscriber on the client, a
 live WS subscription attaches and every subsequent delta re-emits, exactly like a
 plain `query` store.
 
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch.
+
 Pass `{ onError }` as the third argument (after the optional `client`) to observe
 a subscription-scoped error the server pushes after hydration (a session expiry,
 an RLS denial). Without it such an error is dropped and the store keeps

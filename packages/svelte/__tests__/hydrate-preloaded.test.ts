@@ -27,7 +27,7 @@ const createFakeClient = () => {
         return unsubscribe;
     });
 
-    const client = { subscribe } as unknown as LunoraClient;
+    const client = { identityEpoch: () => 0, onIdentityChange: () => () => undefined, subscribe } as unknown as LunoraClient;
 
     return {
         client,

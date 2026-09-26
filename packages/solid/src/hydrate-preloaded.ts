@@ -30,6 +30,12 @@ import { onMounted } from "./solid-compat";
  * Pass `onError` to surface a subscription-scoped error the server pushes (a
  * session expiry, an RLS denial). Without it such an error is dropped and the
  * accessor keeps rendering the SSR snapshot as if it were live.
+ *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires that identity
+ * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (mounted
+ * then or later) stops using it and returns `undefined` until the live value
+ * arrives — matching `@lunora/react`'s `usePreloadedQuery`.
  */
 const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Accessor<T> => {
     const client = useLunora();
@@ -38,11 +44,19 @@ const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: Subsc
 
     // Seed synchronously: the signal already holds the SSR value before the
     // first render reads it, so there is no `undefined`/loading window.
-    const [data, setData] = createSignal<T>(value);
+    const [data, setData] = createSignal<T>(client.identityEpoch() === 0 ? value : (undefined as T));
 
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
-    onMounted(() => client.subscribe(functionRef, args, (next) => setData(() => next as T), { onError: options.onError, shardKey }));
+    onMounted(() => {
+        const offIdentity = client.onIdentityChange(() => setData(() => undefined as T));
+        const unsubscribe = client.subscribe(functionRef, args, (next) => setData(() => next as T), { onError: options.onError, shardKey });
+
+        return () => {
+            offIdentity();
+            unsubscribe();
+        };
+    });
 
     return data;
 };
