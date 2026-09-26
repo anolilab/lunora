@@ -7,6 +7,8 @@
  * receives. Keeping resolution here means the five framework providers share one
  * defaulting path instead of each re-implementing it.
  */
+import { notifyLunoraSessionChange } from "@lunora/auth/plugins/client";
+
 import type { DiscoveredConfig } from "./discovery";
 import { PLUGIN_ID_TO_FLOW } from "./discovery";
 import { derivePluginFlags, FLOW_NAMES } from "./flow-gate";
@@ -160,10 +162,10 @@ interface AuthUIConfig {
     onError?: (error: unknown) => void;
 
     /**
-     * Called after any successful auth mutation (sign-in/out, 2FA verify). Wire
-     * it to refresh your app's session state — e.g. re-resolve the Lunora
-     * identity store — since a same-origin cookie sign-in has no token change to
-     * trigger `useAuth` on its own.
+     * Called after any successful auth mutation (sign-in/out, 2FA verify,
+     * account switch). Every `LunoraClient` in the page is already told first
+     * and re-resolves who is signed in, so no Lunora wiring is needed here —
+     * use it for your own session state (e.g. `authClient.getSession()`).
      */
     onSessionChange?: () => void;
 
@@ -414,7 +416,14 @@ const resolveContext = (config: AuthUIConfig, discovered?: DiscoveredConfig): Co
         localization: resolveLocalization(config.localization),
         nav: config.nav,
         onError: guardCallback(config.onError),
-        onSessionChange: config.onSessionChange,
+        onSessionChange: (): void => {
+            // A cookie sign-in or sign-out is invisible to the Lunora client;
+            // tell it, so it re-resolves the session instead of serving the
+            // previous user's rows. Before the app's own handler, so that
+            // handler sees a client that already knows.
+            notifyLunoraSessionChange();
+            config.onSessionChange?.();
+        },
         organization: {
             allowUserToCreate: discovered?.organization?.allowUserToCreate ?? true,
             invitationLimit: discovered?.organization?.invitationLimit,

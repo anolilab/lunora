@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { onSessionChanged } from "../../../../shared/session-change";
 import type { AuthClient, AuthResponse, AuthSession, ControllerContext } from "../../src/core";
 import {
     createChangeEmailController,
@@ -275,5 +276,37 @@ describe("signOut", () => {
         expect(client.signOut as ReturnType<typeof vi.fn>).toHaveBeenCalled();
         expect(onSessionChange).toHaveBeenCalledTimes(1);
         expect(nav.replace).toHaveBeenCalledWith("/bye");
+    });
+
+    it("tells every Lunora client in the page, before the app's own handler", async () => {
+        expect.assertions(1);
+
+        const order: string[] = [];
+        const release = onSessionChanged(() => order.push("lunora"));
+        const context = resolveContext({
+            authClient: stubClient(),
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            onSessionChange: () => order.push("app"),
+            redirects: { afterSignOut: "/bye", signIn: "/sign-in" },
+        });
+
+        await signOut(context);
+        release();
+
+        expect(order).toStrictEqual(["lunora", "app"]);
+    });
+
+    it("tells the Lunora clients even when the app registers no handler", async () => {
+        expect.assertions(1);
+
+        let heard = 0;
+        const release = onSessionChanged(() => {
+            heard += 1;
+        });
+
+        await signOut(resolveContext({ authClient: stubClient(), nav: { navigate: vi.fn(), replace: vi.fn() } }));
+        release();
+
+        expect(heard).toBe(1);
     });
 });

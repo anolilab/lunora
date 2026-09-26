@@ -1,6 +1,7 @@
-import { useLunora } from "@lunora/react";
+import { useAuth, useQuery } from "@lunora/react";
 import type { CSSProperties, ReactElement } from "react";
 
+import { api } from "../../lunora/_generated/api.js";
 import { authClient } from "./auth-client.js";
 import { AuthUiAccount } from "./AuthUiAccount.js";
 import { AuthUiDemo } from "./AuthUiDemo.js";
@@ -18,9 +19,33 @@ const HEADER_STYLE: CSSProperties = {
     padding: "8px 16px",
 };
 
+/**
+ * `?authstore=1`: also mount `@lunora/react`'s `useAuth`, which resolves the
+ * Lunora identity itself. Without the flag the app reads its session through
+ * better-auth alone, and the Lunora client learns who it is from
+ * `lunoraSessionSync()` and its sockets — the two shapes an app can take.
+ */
+const IdentityStore = (): null => {
+    useAuth();
+
+    return null;
+};
+
+/** The signed-in user's private notes, live, beside the account cards. */
+const AccountNotes = (): ReactElement => {
+    const notes = useQuery(api.notes.list, {});
+
+    return (
+        <ul data-testid="account-notes">
+            {(notes ?? []).map((note) => (
+                <li key={note._id}>{note.text}</li>
+            ))}
+        </ul>
+    );
+};
+
 export const App = (): ReactElement => {
     const session = authClient.useSession();
-    const client = useLunora();
 
     if (session.isPending) {
         return <p style={LOADING_STYLE}>Loading…</p>;
@@ -51,6 +76,7 @@ export const App = (): ReactElement => {
                     </span>
                 </header>
                 <AuthUiAccount />
+                <AccountNotes />
             </>
         );
     }
@@ -63,20 +89,15 @@ export const App = (): ReactElement => {
                 </span>
                 <button
                     onClick={() => {
-                        // A cookie sign-out changes nothing the Lunora client can
-                        // see; asking it who is signed in now is what retires the
-                        // previous user's live queries and cached rows.
-                        void (async () => {
-                            await authClient.signOut();
-                            await client.getCurrentUser();
-                        })();
+                        void authClient.signOut();
                     }}
                     type="button"
                 >
                     Sign out
                 </button>
             </header>
-            <Chat />
+            {search.includes("authstore=1") ? <IdentityStore /> : null}
+            <Chat userId={session.data.user.id} />
         </>
     );
 };
