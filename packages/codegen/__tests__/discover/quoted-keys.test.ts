@@ -54,6 +54,27 @@ describe("quoted object keys read as their runtime key", () => {
         ]);
     });
 
+    it("reads a numeric key as the runtime's canonical string of its value", () => {
+        expect.assertions(1);
+
+        // `{ 0x10: … }` is the key "16" at runtime, `{ 1e3: … }` is "1000", and
+        // `{ 1.50: … }` is "1.5". TypeScript's scanner already normalises a
+        // numeric literal's text to that value, which `propertyNameText` reads
+        // through `getLiteralText()` — this pins it.
+        write(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { 0x10: "hex", 1e3: "exp", 1_000_000: "sep", 0b11: "bin", 1.50: "frac", 7: "plain" });
+            export default crons;
+        `,
+        );
+
+        expect(Object.keys(discoverCrons(newProject(), workdir)[0]?.args ?? {})).toStrictEqual(["3", "7", "16", "1000", "1000000", "1.5"]);
+    });
+
     it("reads quoted schema table and field names", () => {
         expect.assertions(2);
 
