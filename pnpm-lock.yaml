@@ -5240,6 +5240,9 @@ importers:
 
   tests/auth-ui-solid-v2:
     devDependencies:
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@lunora/auth-ui':
         specifier: workspace:*
         version: link:../../packages/auth-ui
