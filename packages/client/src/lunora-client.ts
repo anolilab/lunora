@@ -1080,6 +1080,37 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
 };
 
 /**
+ * The `expectSubject` a replayed write carries: the user its identity stamp
+ * names, so the worker refuses it when the request resolves to anyone else.
+ *
+ * The replay gate compares the stamp with what this client believes, and
+ * under a cookie session that belief can be stale — a sign-out and another
+ * user's sign-in change no token, and the socket's `open` flush runs before
+ * its `identity` frame lands. Only the server sees the cookie the write is
+ * about to ride, so it is the server that has to check.
+ *
+ * Sent on every replay made without a bearer token, whatever resolved the
+ * stamp — a socket's `identity` frame labels the session in apps that never
+ * call `getCurrentUser()` too. An app without auth stamps `null` and its
+ * requests resolve to nobody, so the header always passes there. A bearer
+ * request (`authToken`, the one the request is sent with) states its
+ * credential explicitly and the gate already matched it; a token-hash or
+ * missing stamp names no user.
+ */
+const replayExpectation = (stamp: null | string | undefined, authToken: null | string): { expectSubject?: null | string } => {
+    if (authToken !== null) {
+        return {};
+    }
+
+    if (stamp === null) {
+        // eslint-disable-next-line unicorn/no-null -- queued while signed out
+        return { expectSubject: null };
+    }
+
+    return stamp?.startsWith("subj:") === true ? { expectSubject: stamp.slice("subj:".length) } : {};
+};
+
+/**
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
@@ -5116,7 +5147,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
-                ...this.replayExpectation(options.replayIdentity),
+                ...replayExpectation(options.replayIdentity, this.authToken),
                 mutationId,
                 onCommitCursor: (cursor) => {
                     commitCursor = cursor;
@@ -6192,7 +6223,16 @@ class LunoraClient {
      * instead of running twice.
      */
     private rpcRequestHeaders(
-        flags: { attachBookmark?: boolean; baselineSeq?: number; clientId?: string; clientSeq?: number; expectSubject?: null | string; mutationId?: string },
+        flags: {
+            attachBookmark?: boolean;
+            /** A replay's bearer, snapshotted when its flush pass was gated; omitted, the live token is sent. */
+            authToken?: null | string;
+            baselineSeq?: number;
+            clientId?: string;
+            clientSeq?: number;
+            expectSubject?: null | string;
+            mutationId?: string;
+        },
         shardKey?: string,
     ): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
@@ -6216,8 +6256,10 @@ class LunoraClient {
             headers["x-lunora-min-seq"] = shardCursor.toString();
         }
 
-        if (this.authToken) {
-            headers["authorization"] = `Bearer ${this.authToken}`;
+        const authToken = flags.authToken === undefined ? this.authToken : flags.authToken;
+
+        if (authToken) {
+            headers["authorization"] = `Bearer ${authToken}`;
         }
 
         if (flags.mutationId) {
@@ -6268,6 +6310,8 @@ class LunoraClient {
         shardKey: string | undefined,
         flags: {
             attachBookmark?: boolean;
+            /** A replay's bearer, snapshotted when its flush pass was gated; see `drainOfflineQueue`. */
+            authToken?: null | string;
             /** CDC cursor this write was composed against; see `rpcRequestHeaders`. */
             baselineSeq?: number;
             captureBookmark?: boolean;
@@ -8762,10 +8806,26 @@ class LunoraClient {
         const flush = (async () => {
             await (previous ?? Promise.resolve());
 
+            // The credential this pass gates on and sends with, pinned for the
+            // whole pass: every replay awaits the network, so a `setAuthToken`
+            // can land mid-pass, and reading the live token there would send
+            // writes gated as one user under another user's bearer (a bearer
+            // request carries no `expectSubject` for the worker to refuse it
+            // on). No await separates this read from the gate in the drain.
+            const { authToken } = this;
+
             try {
-                await this.drainOfflineQueue(shardKey);
+                await this.drainOfflineQueue(shardKey, authToken);
             } catch {
                 /* per-item verdicts are settled inside the drain — never poison the chain */
+            }
+
+            // A token set mid-pass applies from the next pass, which re-gates
+            // whatever this one left queued. `setAuthToken` cannot start that
+            // pass itself: the queue was drained when it ran, so it saw nothing
+            // to flush.
+            if (!this.closed && this.authToken !== authToken && this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
             }
         })();
 
@@ -8780,7 +8840,7 @@ class LunoraClient {
         }
     }
 
-    private async drainOfflineQueue(shardKey: string | undefined): Promise<void> {
+    private async drainOfflineQueue(shardKey: string | undefined, authToken: null | string): Promise<void> {
         // Drop stale writes whose precondition no longer holds before draining
         // the remaining valid mutations for replay. Each conflicted entry is
         // rejected with `OFFLINE_PRECONDITION_FAILED` inline.
@@ -8859,7 +8919,7 @@ class LunoraClient {
         // into `/_lunora/rpc-batch` round trips (plan 088 follow-on) — the
         // flaky-reconnect win (N queued writes → a handful of RTTs, not N).
         if (encodable.length === 1) {
-            await this.replaySequential(encodable, shardKey);
+            await this.replaySequential(encodable, shardKey, authToken);
             this.scheduleRateLimitedRetry(shardKey);
 
             return;
@@ -8875,7 +8935,7 @@ class LunoraClient {
         for (let start = 0; start < encodable.length; start += MAX_BATCH_ENTRIES) {
             const chunk = encodable.slice(start, start + MAX_BATCH_ENTRIES);
             // eslint-disable-next-line no-await-in-loop -- chunks replay sequentially to preserve FIFO ordering across the flush
-            const outcome = await this.replayBatched(chunk, shardKey);
+            const outcome = await this.replayBatched(chunk, shardKey, authToken);
 
             toRequeue.push(...outcome.requeue);
 
@@ -9163,7 +9223,7 @@ class LunoraClient {
      * soon as the credential moves, which is the only thing that can change the
      * answer.
      */
-    private shouldRequeueReplayFailure(error: unknown): boolean {
+    private shouldRequeueReplayFailure(error: unknown, authToken: null | string): boolean {
         // The worker found a different user on the cookie than the one the
         // write was queued by. Not a verdict on the write: ask who is signed in
         // now, and let the replay gate settle it against the answer — terminal
@@ -9173,9 +9233,12 @@ class LunoraClient {
         }
 
         if (isAuthReplayFailure(error)) {
-            const refusedCredential = this.hashToken(this.authToken ?? "");
+            const refusedCredential = this.hashToken(authToken ?? "");
 
-            if (this.authRefusalNotifiedFor !== refusedCredential) {
+            // A refusal of a token the app has already replaced says nothing
+            // about the current one: the pass that follows the swap re-sends
+            // under it, so asking for another refresh would be spurious.
+            if (authToken === this.authToken && this.authRefusalNotifiedFor !== refusedCredential) {
                 this.authRefusalNotifiedFor = refusedCredential;
                 this.notifyTokenExpired();
             }
@@ -9184,36 +9247,6 @@ class LunoraClient {
         }
 
         return isTransientReplayFailure(error);
-    }
-
-    /**
-     * The `expectSubject` a replayed write carries: the user its identity stamp
-     * names, so the worker refuses it when the request resolves to anyone else.
-     *
-     * The replay gate compares the stamp with what this client believes, and
-     * under a cookie session that belief can be stale — a sign-out and another
-     * user's sign-in change no token, and the socket's `open` flush runs before
-     * its `identity` frame lands. Only the server sees the cookie the write is
-     * about to ride, so it is the server that has to check.
-     *
-     * Sent on every replay made without a bearer token, whatever resolved the
-     * stamp — a socket's `identity` frame labels the session in apps that never
-     * call `getCurrentUser()` too. An app without auth stamps `null` and its
-     * requests resolve to nobody, so the header always passes there. A bearer
-     * request states its credential explicitly and the gate already matched it;
-     * a token-hash or missing stamp names no user.
-     */
-    private replayExpectation(stamp: null | string | undefined): { expectSubject?: null | string } {
-        if (this.authToken !== null) {
-            return {};
-        }
-
-        if (stamp === null) {
-            // eslint-disable-next-line unicorn/no-null -- queued while signed out
-            return { expectSubject: null };
-        }
-
-        return stamp?.startsWith("subj:") === true ? { expectSubject: stamp.slice("subj:".length) } : {};
     }
 
     /**
@@ -9284,7 +9317,7 @@ class LunoraClient {
      * stamp. The batch path classifies a slot by the same rule, so a durable write's
      * fate never depends on how many siblings happened to be queued alongside it.
      */
-    private async replaySequential(items: QueuedMutation[], shardKey: string | undefined): Promise<void> {
+    private async replaySequential(items: QueuedMutation[], shardKey: string | undefined, authToken: null | string): Promise<void> {
         for (let index = 0; index < items.length; index += 1) {
             const item = items[index];
 
@@ -9297,6 +9330,7 @@ class LunoraClient {
             try {
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
+                    authToken,
                     // The cursor the write was COMPOSED at, carried through the
                     // queue — never re-derived here, which would hand the shard the
                     // newer state this write must be judged against.
@@ -9305,7 +9339,7 @@ class LunoraClient {
                     // The id that queued the write, not the live session's — see the
                     // `clientId` stamp in `enqueueOfflineMutation`.
                     clientId: item.clientId ?? this.clientId,
-                    ...this.replayExpectation(item.identity),
+                    ...replayExpectation(item.identity, authToken),
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {
                         commitCursor = cursor;
@@ -9322,7 +9356,7 @@ class LunoraClient {
                     continue;
                 }
 
-                if (!this.shouldRequeueReplayFailure(error)) {
+                if (!this.shouldRequeueReplayFailure(error, authToken)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
@@ -9361,7 +9395,11 @@ class LunoraClient {
      * rather than sending on. The caller re-queues once, in order, so requeuing is
      * NOT done here.
      */
-    private async replayBatched(items: QueuedMutation[], shardKey: string | undefined): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
+    private async replayBatched(
+        items: QueuedMutation[],
+        shardKey: string | undefined,
+        authToken: null | string,
+    ): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
         if (!this.fetchImpl) {
             return { requeue: items, stop: true };
         }
@@ -9393,7 +9431,7 @@ class LunoraClient {
         // Over the worker's body cap — sending it would earn one `413` covering
         // every write in the chunk. Halve and retry instead.
         if (items.length > 1 && utf8ByteLength(body) > MAX_BATCH_BODY_BYTES) {
-            return await this.replayBatchedHalves(items, shardKey);
+            return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
         let response: Response;
@@ -9412,7 +9450,8 @@ class LunoraClient {
                 // speaks for all of them (an unstamped legacy write has none).
                 headers: this.rpcRequestHeaders({
                     attachBookmark: true,
-                    ...this.replayExpectation(items.find((item) => item.identity !== undefined)?.identity),
+                    authToken,
+                    ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
                 }),
                 method: "POST",
             });
@@ -9433,7 +9472,7 @@ class LunoraClient {
         // retry; only a lone write that is itself over the cap falls through to
         // the terminal envelope below (replaying it can never succeed).
         if (response.status === 413 && items.length > 1) {
-            return await this.replayBatchedHalves(items, shardKey);
+            return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
         let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] };
@@ -9446,7 +9485,7 @@ class LunoraClient {
             // Not a Lunora envelope at all (an edge's HTML page) — classified by
             // HTTP status, since re-queuing every such reply unconditionally
             // parks a chunk the edge REFUSED at the head of the outbox forever.
-            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, retryAfterHeader), shardKey);
+            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, retryAfterHeader), shardKey, authToken);
         }
 
         // Whole-batch rejection with no per-slot results: one outcome covering
@@ -9463,10 +9502,10 @@ class LunoraClient {
                     ? unparseableResponseError(response.status, response.statusText, retryAfterHeader)
                     : reconstructErrorWithRetryAfter(whole, retryAfterHeader);
 
-            return this.settleWholeBatchError(items, error, shardKey);
+            return this.settleWholeBatchError(items, error, shardKey, authToken);
         }
 
-        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey), stop: false };
+        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey, authToken), stop: false };
     }
 
     /**
@@ -9482,8 +9521,9 @@ class LunoraClient {
         items: QueuedMutation[],
         error: Error & { code?: string },
         shardKey: string | undefined,
+        authToken: null | string,
     ): { requeue: QueuedMutation[]; stop: boolean } {
-        if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error))) {
+        if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error, authToken))) {
             this.noteReplayRetryDelay(shardKey, error);
 
             return { requeue: items, stop: true };
@@ -9502,15 +9542,19 @@ class LunoraClient {
      * until it fits (or reaches one write, which is then the server's verdict to
      * give). A `stop` on the first half leaves the second unsent and queued.
      */
-    private async replayBatchedHalves(items: QueuedMutation[], shardKey: string | undefined): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
+    private async replayBatchedHalves(
+        items: QueuedMutation[],
+        shardKey: string | undefined,
+        authToken: null | string,
+    ): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
         const middle = Math.ceil(items.length / 2);
-        const first = await this.replayBatched(items.slice(0, middle), shardKey);
+        const first = await this.replayBatched(items.slice(0, middle), shardKey, authToken);
 
         if (first.stop) {
             return { requeue: [...first.requeue, ...items.slice(middle)], stop: true };
         }
 
-        const second = await this.replayBatched(items.slice(middle), shardKey);
+        const second = await this.replayBatched(items.slice(middle), shardKey, authToken);
 
         return { requeue: [...first.requeue, ...second.requeue], stop: second.stop };
     }
@@ -9532,6 +9576,7 @@ class LunoraClient {
         items: QueuedMutation[],
         results: { body?: RpcEnvelopeBody; id?: number }[],
         shardKey: string | undefined,
+        authToken: null | string,
     ): QueuedMutation[] {
         const bySlot = new Map<number, RpcEnvelopeBody>();
 
@@ -9553,7 +9598,7 @@ class LunoraClient {
             } else if ("error" in inner) {
                 const error = slotError(inner);
 
-                if (this.shouldRequeueReplayFailure(error)) {
+                if (this.shouldRequeueReplayFailure(error, authToken)) {
                     this.noteReplayRetryDelay(shardKey, error);
                     requeue.push(item);
                 } else {
