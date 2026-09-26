@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.146...@lunora/client@1.0.0-alpha.147) (2026-09-26)
+
+### Bug Fixes
+
+* **client:** send a flush's replays with the token it gated on ([#853](https://github.com/anolilab/lunora/issues/853)) ([3646bd0](https://github.com/anolilab/lunora/commit/3646bd0cdcdcacbde6d9723c738acde0c3580acf))
+
 ## @lunora/client [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.145...@lunora/client@1.0.0-alpha.146) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES
