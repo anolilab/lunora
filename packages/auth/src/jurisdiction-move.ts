@@ -2,7 +2,7 @@
  * Copying DO-backed auth from its un-pinned object into the jurisdiction-pinned one.
  *
  * A Durable Object name maps to a different object per jurisdiction, so pinning the
- * auth object (`.jurisdiction(j, { pinAuthAndVoice: true })`) starts it empty while
+ * auth object (`.jurisdiction(j, { pinAuth: true })`) starts it empty while
  * every user, account and session stays in the object the un-pinned namespace still
  * resolves. This moves them across.
  *

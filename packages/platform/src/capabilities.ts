@@ -487,7 +487,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         authJurisdictionMove: {
             level: "native",
-            note: "Durable Object jurisdictions. The un-pinned and the pinned auth object are two objects on one namespace (namespace.jurisdiction()), and the __lunora_admin__:copyAuthToJurisdiction / purgeUnpinnedAuth admin ops copy between them over the objects' secret-gated internal route, driven from the worker. Present only for DO-backed auth pinned with .jurisdiction(…, { pinAuthAndVoice: true })",
+            note: "Durable Object jurisdictions. The un-pinned and the pinned auth object are two objects on one namespace (namespace.jurisdiction()), and the __lunora_admin__:copyAuthToJurisdiction / purgeUnpinnedAuth admin ops copy between them over the objects' secret-gated internal route, driven from the worker. Present only for DO-backed auth pinned with .jurisdiction(…, { pinAuth: true })",
         },
         agents: {
             level: "emulated",

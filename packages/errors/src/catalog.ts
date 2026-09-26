@@ -150,13 +150,13 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
-    /** Build-time-only (codegen): `.jurisdiction()` would move voice sessions / DO-backed auth to new, empty objects without `{ pinAuthAndVoice: true }`. */
+    /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
         hint: [
-            "The schema declares `.jurisdiction(...)` and the project has a voice-enabled agent or DO-backed auth (`.auth({ namespace })`). Pinning those objects to the jurisdiction resolves them to new, empty ones. For DO-backed auth that means every user, account and session stays in the unpinned object. Voice session objects store nothing: transcripts are agent-thread rows in the already-pinned shards, so only live sessions drop.",
+            "The schema declares `.jurisdiction(...)` and the project has DO-backed auth (`.auth({ namespace })`). Pinning the auth object to the jurisdiction resolves it to a new, empty one: every user, account and session stays in the unpinned object until copied across. Voice sessions are pinned without an acknowledgement: they store nothing, and their transcripts are rows in the already-pinned shards.",
             "",
             // eslint-disable-next-line no-secrets/no-secrets -- admin op names, not credentials
-            'Acknowledge with `.jurisdiction("eu", { pinAuthAndVoice: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.',
+            'Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.',
         ],
         status: 422,
         title: "Unacknowledged jurisdiction move",
@@ -385,7 +385,7 @@ export const ERROR_CATALOG = {
 
     /** Copying DO-backed auth into its jurisdiction-pinned object (`__lunora_admin__:copyAuthToJurisdiction` / `purgeUnpinnedAuth`). */
     AUTH_MOVE_NOT_CONFIGURED: {
-        hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`, and the auth object's `internalSecret` set.",
+        hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuth: true })`, and the auth object's `internalSecret` set.",
         status: 400,
         title: "Auth jurisdiction move not configured",
     },

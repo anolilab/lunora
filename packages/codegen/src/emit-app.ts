@@ -92,11 +92,11 @@ interface EmitAppOptions {
     jurisdiction?: JurisdictionIR;
 
     /**
-     * `.jurisdiction("…", { pinAuthAndVoice: true })`. DO-backed auth is pinned
-     * only then: unacknowledged, pinning would resolve every user to a new,
-     * empty auth object (codegen refuses a project it can see doing that).
+     * `.jurisdiction("…", { pinAuth: true })`. DO-backed auth is pinned only
+     * then: unacknowledged, pinning would resolve every user to a new, empty
+     * auth object (codegen refuses a project it can see doing that).
      */
-    jurisdictionPinsAuthAndVoice?: boolean;
+    jurisdictionPinsAuth?: boolean;
 
     /**
      * Every table the schema declares. Emitted as a literal `listSchemaTables`
@@ -749,10 +749,10 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
 /**
  * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
  * users, sessions, and credentials, so it must live where every other DO does.
- * Only once the move is acknowledged — see {@link EmitAppOptions.jurisdictionPinsAuthAndVoice}.
+ * Only once the move is acknowledged — see {@link EmitAppOptions.jurisdictionPinsAuth}.
  */
 const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
-    options.jurisdiction && options.jurisdictionPinsAuthAndVoice === true
+    options.jurisdiction && options.jurisdictionPinsAuth === true
         ? `
                 // The schema's jurisdiction pins the auth object like every other DO.
                 jurisdiction: ${JSON.stringify(options.jurisdiction)},`

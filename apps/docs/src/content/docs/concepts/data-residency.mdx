@@ -38,11 +38,11 @@ reaches**:
 - **`ctx.scheduler`**: the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
 - **`ctx.containers`**: container DOs and their lifecycle reporting.
 - **Voice agents**: each voice-enabled agent's `VoiceSessionDO`, which holds the
-  live session for `/_lunora/voice/<agent>`, once acknowledged (see
+  live session for `/_lunora/voice/<agent>` (see
   [Pinning auth and voice](#pinning-auth-and-voice)).
 - **DO-backed auth**: when `.auth()` is wired with a `namespace` (the auth tables
   live in a Durable Object), that object is pinned too, so users, sessions, and
-  credentials stay in-region — again once acknowledged.
+  credentials stay in-region — once acknowledged.
 
 It does **not** pin, by design:
 
@@ -71,32 +71,34 @@ It does **not** pin, by design:
 ## Pinning auth and voice
 
 Voice sessions and DO-backed auth were not pinned by earlier releases, even with
-`.jurisdiction(...)` declared. Pinning them now moves them exactly the way a
-jurisdiction change moves everything else: each resolves to a **new, empty
-object**, and the old data stays in the un-pinned one. For DO-backed auth that
-means every user, account, session and credential. Nothing about the upgrade
-changes your schema, so the drift gate below does not fire.
+`.jurisdiction(...)` declared. Nothing about the upgrade changes your schema, so
+the drift gate below does not fire for either.
 
-So both are pinned only on an explicit acknowledgement:
-
-```ts
-export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndVoice: true });
-```
-
-Without it, codegen **refuses** a project that declares `.jurisdiction(...)`
-and has a voice-enabled agent or an `.auth({ namespace })` (DO-backed auth),
-pointing at the declaration. It also refuses when it cannot tell — an `.auth(…)`
-whose options it cannot read — because for D1-mode auth the acknowledgement
-changes nothing. Until you acknowledge, DO-backed auth stays on the un-pinned
-object, where its data is.
-
-### Voice: nothing to move
+### Voice: pinned automatically, nothing to move
 
 A `VoiceSessionDO` keeps no storage of its own. It holds the live socket and the
 audio of the utterance in progress, and writes every transcript turn to the
 agent's thread tables, which are rows in the app's shards: already pinned, and
-covered by `lunora export`. Pinning voice drops the sessions that are live at the
-deploy; clients reconnect into the pinned objects and continue the same threads.
+covered by `lunora export`. So a declared jurisdiction pins voice sessions with
+no acknowledgement. The only effect is that sessions live at the deploy drop;
+clients reconnect into the pinned objects and continue the same threads.
+
+### DO-backed auth: acknowledge first
+
+Pinning the auth object moves it the way a jurisdiction change moves everything
+else: it resolves to a **new, empty object**, and every user, account, session
+and credential stays in the un-pinned one until you copy them across. So it is
+pinned only on an explicit acknowledgement:
+
+```ts
+export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuth: true });
+```
+
+Without it, codegen **refuses** a project that declares `.jurisdiction(...)` and
+has an `.auth({ namespace })` (DO-backed auth), pointing at the declaration. It
+also refuses when it cannot tell — an `.auth(…)` whose options it cannot read —
+because for D1-mode auth the acknowledgement changes nothing. Until you
+acknowledge, DO-backed auth stays on the un-pinned object, where its data is.
 
 ### DO-backed auth: copy, verify, then purge
 
@@ -132,7 +134,7 @@ sign-ins land in the pinned object, which is empty until the copy runs.
 #### Acknowledge and deploy
 
 ```ts
-export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndVoice: true });
+export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuth: true });
 ```
 
 ```bash

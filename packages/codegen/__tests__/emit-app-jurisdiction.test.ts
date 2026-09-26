@@ -68,7 +68,7 @@ describe("emitApp — schema jurisdiction", () => {
     it("pins the DO-backed auth object once the move is acknowledged", () => {
         expect.assertions(1);
 
-        const output = emitApp({ ...baseOptions, hasAuth: true, jurisdiction: "eu", jurisdictionPinsAuthAndVoice: true });
+        const output = emitApp({ ...baseOptions, hasAuth: true, jurisdiction: "eu", jurisdictionPinsAuth: true });
         const wiring = /createDoAuthWiring\(\{[\s\S]*?\}\);/u.exec(output)?.[0] ?? "";
 
         expect(wiring.match(/jurisdiction: "eu",/gu)).toHaveLength(1);

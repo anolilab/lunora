@@ -46,7 +46,7 @@ const buildAuthJurisdictionMoveRpc =
         const move = deps.getMove();
 
         if (move === undefined) {
-            throw new LunoraError("moving auth into the jurisdiction needs DO-backed auth pinned with `.jurisdiction(…, { pinAuthAndVoice: true })`", {
+            throw new LunoraError("moving auth into the jurisdiction needs DO-backed auth pinned with `.jurisdiction(…, { pinAuth: true })`", {
                 code: "AUTH_MOVE_NOT_CONFIGURED",
                 status: 400,
             });
