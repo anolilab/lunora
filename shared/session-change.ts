@@ -21,6 +21,13 @@
  * plugin. Browser only: off a page there is no cookie jar to share, so nothing
  * is posted or listened for.
  *
+ * **Same-origin tabs only.** Both a `BroadcastChannel` and a `storage` event
+ * are scoped to one origin. A tab on another origin that shares the cookie —
+ * `app.example.com` beside `admin.example.com` under a parent-domain cookie —
+ * hears nothing: it switches identity when its socket next reconnects. Its
+ * writes stay safe meanwhile, because every replay names the user that queued
+ * it and the worker refuses it for anyone else.
+ *
  * Keyed on a `Symbol.for` global, so copies of this file inlined into separate
  * bundles (it is bundler-inlined, not a package) still share one registry, one
  * tab id and one channel.
@@ -106,16 +113,27 @@ const attachToOtherTabs = (tab: string): (() => void) => {
         runListeners().catch(() => undefined);
     };
 
-    if (typeof BroadcastChannel === "function") {
-        const channel = new BroadcastChannel(CHANNEL_NAME);
+    // An opaque-origin document (a sandboxed iframe, `data:`) refuses to build a
+    // channel at all. That must not take the `LunoraClient` constructor down
+    // with it, nor cost the `storage` trigger below: go on without the channel.
+    let channel: BroadcastChannel | undefined;
 
-        channel.addEventListener("message", (event: MessageEvent<Partial<SessionChangeMessage> | null>) => {
+    try {
+        channel = typeof BroadcastChannel === "function" ? new BroadcastChannel(CHANNEL_NAME) : undefined;
+    } catch {
+        channel = undefined;
+    }
+
+    if (channel !== undefined) {
+        const open = channel;
+
+        open.addEventListener("message", (event: MessageEvent<Partial<SessionChangeMessage> | null>) => {
             if (event.data?.type === "lunora:session-change" && event.data.tab !== tab) {
                 onRemote();
             }
         });
         stops.push(() => {
-            channel.close();
+            open.close();
         });
     }
 

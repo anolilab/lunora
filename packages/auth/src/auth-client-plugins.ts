@@ -145,9 +145,11 @@ interface LunoraSessionSyncPlugin {
 }
 
 /**
- * Tell every `LunoraClient` in the page, and in the browser's other tabs (they
- * share the cookie), that the auth session may have changed, so each asks
- * `/get-session` who is signed in now.
+ * Tell every `LunoraClient` in the page, and in the browser's other tabs on the
+ * same origin, that the auth session may have changed, so each asks
+ * `/get-session` who is signed in now. A tab on another origin that shares the
+ * cookie is not reached: it switches on its next socket reconnect, and the
+ * worker's replay check keeps its writes safe meanwhile.
  *
  * Needed for a **cookie** session: a sign-in or sign-out sets or clears an
  * `HttpOnly` cookie in a request the Lunora client never sees, and nothing it

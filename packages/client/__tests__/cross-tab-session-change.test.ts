@@ -259,6 +259,38 @@ describe("a session change in another tab", () => {
         client.close();
     });
 
+    it("still constructs, and still hears better-auth's sign-out, where BroadcastChannel throws", async () => {
+        expect.assertions(3);
+
+        // An opaque-origin document (a sandboxed iframe, `data:`) refuses to
+        // construct a channel at all.
+        vi.stubGlobal(
+            "BroadcastChannel",
+            // Constructible, so `new` reaches the throw the browser raises.
+            class RefusingBroadcastChannel extends EventTarget {
+                public constructor() {
+                    super();
+
+                    throw new DOMException("The operation is insecure.", "SecurityError");
+                }
+            },
+        );
+
+        const server = createCookieServer("user-a");
+        const { client, identityChanges } = await liveClient(server);
+
+        await expect(notifySessionChanged()).resolves.toBeUndefined();
+
+        server.state.user = null;
+        storageEvent("better-auth.message", { data: { trigger: "signout" }, event: "session" });
+        await settle();
+
+        expect(client.currentIdentity()).toBeNull();
+        expect(identityChanges()).toBe(1);
+
+        client.close();
+    });
+
     it("stops listening once closed", async () => {
         expect.assertions(1);
 
