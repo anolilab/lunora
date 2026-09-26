@@ -53,9 +53,11 @@ const createAuthFakeClient = (options: { user?: User | null; userResolves?: bool
 
     // `expectIdentityResolution` is how the identity store declares itself to
     // the client on attach; this double has no gates to arm, so it only has to
-    // exist.
+    // exist. `onIdentityChange` likewise: the store listens for a retired
+    // cookie session, which this double never has.
     const client = {
         expectIdentityResolution: () => undefined,
+        onIdentityChange: () => () => undefined,
         getAuthToken,
         getCurrentUser,
         onAuthTokenChange,

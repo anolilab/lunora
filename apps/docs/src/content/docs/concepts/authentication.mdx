@@ -222,6 +222,51 @@ the rest. Outside React, the underlying primitives are
 `client.setAuthToken(token)` / `getAuthToken()` / `onAuthTokenChange(fn)` on the
 `LunoraClient`.
 
+### Cookie sessions: how the client learns the session changed
+
+With a cookie session (better-auth's default, and what `@lunora/auth-ui` uses)
+the client holds no token, so signing out or signing in as someone else changes
+nothing it can see. It learns who is signed in from the server: from
+`/get-session`, and from the `identity` frame every socket sends when it
+connects. Any change it hears about (a sign-out, a sign-in after a sign-out, a
+different user) retires the previous session. Every live query is blanked, the
+sockets reconnect on the new cookie, and `@lunora/react` clears its query cache.
+
+A sign-in or sign-out **in place**, without a reload, is reported for you:
+
+- `@lunora/auth-ui`'s flows tell every `LunoraClient` in the page themselves.
+- `createLunoraAuthClient` installs `lunoraSessionSync()`, a better-auth client
+  plugin that does the same after every auth request that can change the
+  session. If you call `createAuthClient` yourself, add it:
+
+```ts
+import { lunoraSessionSync } from "@lunora/auth/plugins/client";
+import { createAuthClient } from "better-auth/react";
+
+export const authClient = createAuthClient({ plugins: [lunoraSessionSync()] });
+```
+
+A session changed any other way (another tab, a custom endpoint) reaches the
+client when its socket next reconnects. Call `notifyLunoraSessionChange()` from
+`@lunora/auth/plugins/client` to report it sooner.
+
+`/get-session` answering `401` or with no user counts as signed out. Any other
+failure, including a `403` from a WAF or bot challenge in front of the auth
+route, is not a verdict on anyone. The client keeps the identity it has.
+
+**Offline writes cannot change hands.** A write replayed under a cookie session
+names the user who queued it (`x-lunora-expect-subject`), and the worker
+refuses it with `409 IDENTITY_MISMATCH` when the cookie now belongs to someone
+else. For that check to work, your worker's `resolveIdentity` must return the
+**same `userId` as better-auth's `user.id`**, and RPC requests must carry the
+session cookie (a cross-origin client needs `credentials: "include"`).
+Otherwise every replay is refused, and the client logs a one-time warning that
+names this cause.
+
+If you set `security.cors.allowedHeaders`, your list is added to the headers the
+client sends on its own. It no longer replaces them, so a list written before a
+new client header existed cannot block that header.
+
 ## Feeding row-level security
 
 `ctx.auth` is also the input to authorization. An ad-hoc `if (!ctx.auth.userId)`

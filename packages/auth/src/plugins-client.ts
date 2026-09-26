@@ -32,8 +32,8 @@
 
 // `lunoraAuthPlugins` — assemble the standard client plugin array from feature
 // toggles (used by the scaffolded `lunora/auth-ui/client.ts`).
-export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles } from "./auth-client-plugins";
-export { createLunoraAuthClient, lunoraAuthPlugins } from "./auth-client-plugins";
+export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles, LunoraSessionSyncPlugin } from "./auth-client-plugins";
+export { createLunoraAuthClient, lunoraAuthPlugins, lunoraSessionSync, notifyLunoraSessionChange } from "./auth-client-plugins";
 // Client half of `apiKey` — `authClient.apiKey.create/list/delete`.
 export { apiKeyClient } from "@better-auth/api-key/client";
 // Client half of the `oauthProvider` plugin. Replaces `oidcClient`, which went with

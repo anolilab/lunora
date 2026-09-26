@@ -6582,6 +6582,15 @@ abstract class ShardDO {
             // `onConnect` lifecycle hooks under the socket's verified identity.
             const attachment = this.readAttachment(ws);
 
+            // Tell the client which user this socket was authenticated as, and
+            // "nobody" as an explicit `null`. A cookie-session client holds no
+            // token, so this answer is the only way it can tell a sign-out or a
+            // different user's sign-in from the session it already shows. Sent
+            // on every `connect`, including a re-sent one: the answer is the
+            // socket's, and repeating it costs one small frame.
+            // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+            trySendFrame(ws, JSON.stringify({ subject: attachment.userId ?? null, type: "identity" }));
+
             // Idempotent: a socket announces `connect` exactly once. A re-sent
             // (or duplicate) frame must not re-fire `onConnect`, or it would
             // out-number the single `onDisconnect` at close.
@@ -6618,8 +6627,9 @@ abstract class ShardDO {
             // if `context` is what made it too large and the whole attachment
             // fails to serialize, `connected` doesn't survive either, even
             // though only `context` was ever documented as at-risk. A resent
-            // `connect` (there's no ack frame for this envelope, so a client may
-            // legitimately retry after a timeout) would then re-enter this
+            // `connect` (the `identity` reply above is no ack — an older server
+            // sends none — so a client may legitimately retry after a
+            // timeout) would then re-enter this
             // branch and re-fire `onConnect` — `webSocketClose` still only fires
             // `onDisconnect` once, breaking the symmetry the `connected === true`
             // check above exists to guarantee.

@@ -42,6 +42,8 @@ import {
     usernameClient,
 } from "better-auth/client/plugins";
 
+import { notifySessionChanged } from "../../../shared/session-change";
+
 /**
  * Which client plugins to include. Each defaults to `false`.
  *
@@ -129,6 +131,70 @@ interface CreateLunoraAuthClientOptions {
 const currentOrigin = (): string | undefined => (globalThis as { location?: { origin?: string } }).location?.origin;
 
 /**
+ * What {@link lunoraSessionSync} returns: a better-auth client plugin, typed
+ * narrowly rather than as `BetterAuthClientPlugin` — widening a plugin to that
+ * type collapses better-auth's session inference on the client it joins.
+ */
+interface LunoraSessionSyncPlugin {
+    fetchPlugins: {
+        hooks: { onSuccess: (context: { request: { method?: string } }) => void };
+        id: string;
+        name: string;
+    }[];
+    id: "lunora-session-sync";
+}
+
+/**
+ * Tell every `LunoraClient` in the page that the auth session may have changed,
+ * so each asks `/get-session` who is signed in now.
+ *
+ * Needed for a **cookie** session: a sign-in or sign-out sets or clears an
+ * `HttpOnly` cookie in a request the Lunora client never sees, and nothing it
+ * can observe changes. Until it re-resolves, its live queries keep showing the
+ * previous user's rows over a socket still authenticated as them.
+ * {@link lunoraSessionSync} (installed by {@link createLunoraAuthClient}) and
+ * `@lunora/auth-ui` call it for you; call it yourself after a session change
+ * made any other way.
+ *
+ * Resolves once every client has re-resolved (or failed to), so code that
+ * reads `client.currentIdentity()` next can `await` it. Never rejects.
+ */
+const notifyLunoraSessionChange = async (): Promise<void> => notifySessionChanged();
+
+/**
+ * A better-auth client plugin that, after every successful auth request that
+ * can change the session (anything but a `GET` — sign-in, sign-up, sign-out,
+ * 2FA, account switch, session revocation), calls
+ * {@link notifyLunoraSessionChange}.
+ *
+ * {@link createLunoraAuthClient} always installs it. Add it yourself when you
+ * call `createAuthClient` directly:
+ *
+ * ```ts
+ * export const authClient = createAuthClient({ plugins: [lunoraSessionSync()] });
+ * ```
+ */
+const lunoraSessionSync = (): LunoraSessionSyncPlugin => {
+    return {
+        fetchPlugins: [
+            {
+                hooks: {
+                    onSuccess: (context: { request: { method?: string } }): void => {
+                        if ((context.request.method ?? "GET").toUpperCase() !== "GET") {
+                            // Fire and forget: better-auth's own callers need not wait.
+                            notifySessionChanged().catch(() => undefined);
+                        }
+                    },
+                },
+                id: "lunora-session-sync",
+                name: "lunora-session-sync",
+            },
+        ],
+        id: "lunora-session-sync",
+    };
+};
+
+/**
  * Build a better-auth client with Lunora's standard plugin set from toggles.
  *
  * You pass your framework's `createAuthClient` in — `better-auth/react`,
@@ -159,9 +225,9 @@ const createLunoraAuthClient = <TClient>(
         ...rest,
         baseURL: baseURL ?? currentOrigin(),
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- `LunoraAuthClientPlugin` is `ReturnType<typeof organizationClient>`, and better-auth types that return as `any`, so every plugin array spreads as `any`. Verified with a `const check: never = p` probe. Not fixable here without hand-writing a plugin type that would then drift from better-auth's.
-        plugins: [...lunoraAuthPlugins(plugins), ...oneTap, ...extraPlugins],
+        plugins: [lunoraSessionSync(), ...lunoraAuthPlugins(plugins), ...oneTap, ...extraPlugins],
     });
 };
 
-export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles };
-export { createLunoraAuthClient, lunoraAuthPlugins };
+export type { CreateLunoraAuthClientOptions, LunoraAuthClientPlugin, LunoraAuthPluginToggles, LunoraSessionSyncPlugin };
+export { createLunoraAuthClient, lunoraAuthPlugins, lunoraSessionSync, notifyLunoraSessionChange };

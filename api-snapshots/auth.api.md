@@ -1460,6 +1460,25 @@ interface LunoraAuthPluginToggles {
 }
 ```
 
+### `LunoraSessionSyncPlugin` (interface)
+
+```ts
+interface LunoraSessionSyncPlugin {
+    fetchPlugins: {
+        hooks: {
+            onSuccess: (context: {
+                request: {
+                    method?: string;
+                };
+            }) => void;
+        };
+        id: string;
+        name: string;
+    }[];
+    id: "lunora-session-sync";
+}
+```
+
 ### `adminClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1512,6 +1531,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 const lunoraAuthPlugins: (toggles?: LunoraAuthPluginToggles) => LunoraAuthClientPlugin[];
 ```
 
+### `lunoraSessionSync` (const)
+
+```ts
+const lunoraSessionSync: () => LunoraSessionSyncPlugin;
+```
+
 ### `magicLinkClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1519,6 +1544,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `multiSessionClient` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `notifyLunoraSessionChange` (const)
+
+```ts
+const notifyLunoraSessionChange: () => Promise<void>;
+```
 
 ### `oauthDeviceAuthorizationClient` (const)
 
