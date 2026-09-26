@@ -908,8 +908,16 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
 
     error.code = errorBody.code;
 
+    // Guarded: a `data` the codec refuses is dropped, and the envelope stays the
+    // server's coded verdict. Thrown bare, the codec's own exception replaced the
+    // coded error — codeless, so a replay classified it as transport and re-sent
+    // the write forever, and inside a batch demux it abandoned every later slot.
     if (errorBody.data !== undefined) {
-        error.data = decodeWire(errorBody.data);
+        try {
+            error.data = decodeWire(errorBody.data);
+        } catch {
+            // Dropped: see above.
+        }
     }
 
     if (errorBody.hint !== undefined) {

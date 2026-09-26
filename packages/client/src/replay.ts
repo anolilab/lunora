@@ -326,7 +326,7 @@ const undecodableResults = new WeakSet<Error>();
 const undecodableResultError = (cause: unknown): LunoraError => {
     const error = new LunoraError(
         "WIRE_DECODE_FAILED",
-        `LunoraClient: the server committed the call but its result could not be decoded — ${cause instanceof Error ? cause.message : String(cause)}`,
+        `LunoraClient: the call succeeded but its result could not be decoded (a mutation has still committed) — ${cause instanceof Error ? cause.message : String(cause)}`,
         { cause },
     );
 

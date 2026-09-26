@@ -367,4 +367,54 @@ describe("replies the client cannot decode", () => {
 
         client.close();
     });
+
+    it("raises a coded error whose data does not decode with the data dropped, not the codec's exception", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({
+            fetch: async () => Response.json({ error: { code: "CONFLICT", data: UNDECODABLE, message: "stale" } }, { status: 409 }),
+            url: "https://app.example",
+        });
+
+        const failure: { code?: string; data?: unknown; message?: string } = await client.query(fnRef("posts:list"), {}).then(
+            () => {
+                return {};
+            },
+            (error_: unknown) => error_ as { code?: string; data?: unknown; message?: string },
+        );
+
+        expect(failure).toMatchObject({ code: "CONFLICT", message: "stale" });
+        expect(failure.data).toBeUndefined();
+
+        client.close();
+    });
+
+    it("classifies a batch slot whose error data does not decode by its code, and settles the slots after it", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            Response.json({
+                results: [
+                    { body: { error: { code: "CONFLICT", data: UNDECODABLE, message: "stale" } }, id: 0 },
+                    { body: { commitCursor: 4, result: "b" }, id: 1 },
+                ],
+            }),
+        );
+        const client = offlineClient(fetchMock);
+
+        goOffline(client);
+
+        const outcomes = ["a", "b"].map((title) => outcomeOf(client.mutation(fnRef("posts:create"), { title })));
+
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(outcomes.map((outcome) => outcome.value)).toStrictEqual([{ rejected: "CONFLICT" }, { committed: "b" }]);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
 });
