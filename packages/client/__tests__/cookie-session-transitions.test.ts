@@ -229,6 +229,23 @@ describe("cookie session: the server's answer drives every transition", () => {
         client.close();
     });
 
+    it("a → nobody: a `401` from `/get-session` is a sign-out too", async () => {
+        expect.assertions(2);
+
+        const { client, identityChanges, server } = await liveClient("user-a");
+
+        server.fetchImpl.mockImplementation(async (input: unknown) =>
+            String(input).includes("get-session") ? Response.json({ message: "unauthorized" }, { status: 401 }) : Response.json({ result: { ok: true } }),
+        );
+        await client.getCurrentUser();
+        await settle();
+
+        expect(client.currentIdentity()).toBeNull();
+        expect(identityChanges()).toBe(1);
+
+        client.close();
+    });
+
     it("a bearer token set after a resolved sign-out is the identity, not `nobody`", async () => {
         expect.assertions(2);
 
@@ -388,6 +405,34 @@ describe("cookie session: the auth gate follows the server's answer", () => {
         await reconnectAs(sockets, "user-b");
 
         expect(store.getStatus()).toBe("authenticated");
+        expect(store.getUser()).toStrictEqual({ id: "user-b" });
+
+        client.close();
+    });
+
+    it("asks again for a subject whose earlier probe got no answer", async () => {
+        expect.assertions(2);
+
+        const { client, server, sockets } = await liveClient("user-a");
+        const store = getIdentityStore(client);
+        const answer = server.fetchImpl.getMockImplementation();
+
+        // B's first probe cannot reach the server.
+        server.state.user = "user-b";
+        server.fetchImpl.mockImplementationOnce(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        await reconnectAs(sockets, "user-b");
+
+        expect(store.getStatus()).toBe("unreachable");
+
+        // B signs out and back in: the store asks again rather than skipping B.
+        server.fetchImpl.mockImplementation(answer ?? (async () => Response.json({})));
+        server.state.user = null;
+        await reconnectAs(sockets, null);
+        server.state.user = "user-b";
+        await reconnectAs(sockets, "user-b");
+
         expect(store.getUser()).toStrictEqual({ id: "user-b" });
 
         client.close();

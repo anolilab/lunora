@@ -186,6 +186,11 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
                 return undefined;
             })
             .catch(() => {
+                // No answer, so nothing disagreed: the next change to the same
+                // subject may ask again. (Only an ANSWER that contradicts the
+                // socket keeps `askedFor` set — see the listener below.)
+                askedFor = undefined;
+
                 if (current === generation) {
                     // The endpoint could not be reached. Whatever credential the
                     // app has — a bearer token, or a cookie this code cannot see
@@ -246,7 +251,10 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     // and recovers on its next token change instead.
     client.onConnectionStatus((next) => {
         if (next === "connected" && status === "unreachable") {
-            refresh();
+            // Ask, never short-circuit: a probe that failed after an earlier
+            // answer would otherwise turn a cookie session's recovery into an
+            // instant `unauthenticated` off its (always) absent token.
+            refresh(true);
         }
     });
 

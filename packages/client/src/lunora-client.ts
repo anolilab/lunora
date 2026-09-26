@@ -2135,6 +2135,15 @@ class LunoraClient {
                 // A response, and therefore an answer — see `identitySettled`.
                 this.identitySettled = true;
 
+                // 401/403 is the server saying "no session" — under a cookie
+                // session, a sign-out, adopted like a `200 null`. A bearer
+                // session ignores a null user inside `adoptResolvedSubject`,
+                // and any other status (a 5xx, a 404) is no verdict on anyone.
+                if (response.status === 401 || response.status === 403) {
+                    // eslint-disable-next-line unicorn/no-null -- the resolved "no session" answer
+                    this.adoptResolvedSubject(requestToken, null, requestGeneration);
+                }
+
                 // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
                 return null;
             }
