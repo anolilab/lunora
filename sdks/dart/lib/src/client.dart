@@ -657,7 +657,7 @@ class LunoraClient {
 
         return kind;
       case 'pokeEnd':
-        _shapeRegistry.applyPoke(frame);
+        _shapeRegistry.applyPoke(frame, sender: _send);
 
         return kind;
       default:

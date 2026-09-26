@@ -79,6 +79,11 @@ void caseRpcResponses() {
       if (testCase.containsKey('dataWire')) {
         equals(canonical(encodeWire(error.data)), canonical(testCase['dataWire']), 'error data for ${testCase['name']}');
       }
+
+      // `data` the codec refuses is dropped; the coded verdict stands.
+      if (testCase['dataDropped'] == true) {
+        equals(error.data, null, 'undecodable error data is dropped for ${testCase['name']}');
+      }
     }
   }
 }

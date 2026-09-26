@@ -390,6 +390,33 @@ void caseShapePokeWithUndecodableRowIsRefusedWhole() {
     ..resendSubscriptions();
   equals(resent.single['sinceCheckpoint'], shape['undecodableRowResendCheckpoint'], 'the checkpoint did not advance past rows the view never held');
   equals(resent.single['sinceEpoch'], 'e1', 'nor did the epoch');
+
+  // The server believes it delivered the refused rows, so its next part is
+  // based on checkpoint 12 while the view is at 5: a gap, which re-seeds the
+  // shape cold instead of splicing m5 onto a stale view.
+  resent.clear();
+  _feed(client, shape['gapPokeSequence']);
+
+  equals(canonical(delivered), canonical(<Object?>[shape['gapExpectedRows']]), 'a gap empties the view and tells its callback []');
+  equals(canonical(resent.map((frame) => frame['type']).toList()), canonical(<Object?>['shape_subscribe']), 'a gap re-subscribes the shape at once');
+
+  if (resent.length == 1) {
+    equals(resent.single['id'], 'shape_1', 'the re-subscribe is for the gapped shape');
+    check(!resent.single.containsKey('sinceCheckpoint') && !resent.single.containsKey('sinceEpoch'), 'the gap re-subscribe is cold');
+  }
+
+  resent.clear();
+  client.resendSubscriptions();
+  check(!resent.single.containsKey('sinceCheckpoint') && !resent.single.containsKey('sinceEpoch'), 'a later resend is cold too');
+
+  // The counterweight: a poke based on the checkpoint the view IS at applies.
+  final contiguous = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final contiguousRows = <List<Object?>>[];
+
+  contiguous.subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'}, onRows: contiguousRows.add);
+  _feed(contiguous, shape['pokeSequence']);
+  _feed(contiguous, shape['contiguousPokeSequence']);
+  equals(canonical(contiguousRows.last), canonical(shape['contiguousExpectedRows']), 'a contiguous based poke applies without a re-seed');
 }
 
 /// No frame shape can make the read loop's entry point raise, and none of these

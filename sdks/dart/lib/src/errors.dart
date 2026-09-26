@@ -116,10 +116,25 @@ const String wireDecodeFailed = 'WIRE_DECODE_FAILED';
 /// ONE predicate for the single-call and batch replay paths alike. An uncoded
 /// throw is a transport failure and always transient. A coded one is transient
 /// when no envelope was read ([LunoraApiException.transient]), when the shard
-/// never reached the write, or when the server asked for it later — and a coded
+/// never reached the write, when the server asked for it later, or when it
+/// refused the credential rather than the write ([authReplayErrorCodes]) — and a coded
 /// envelope is judged by its code alone, never by the HTTP status it came with.
 bool isTransientFailure(Object error) =>
-    error is! LunoraApiException || error.transient || transientBatchErrorCodes.contains(error.code) || rateLimitErrorCodes.contains(error.code);
+    error is! LunoraApiException ||
+    error.transient ||
+    transientBatchErrorCodes.contains(error.code) ||
+    rateLimitErrorCodes.contains(error.code) ||
+    authReplayErrorCodes.contains(error.code);
+
+/// Codes that refused the CREDENTIAL, not the write.
+///
+/// A write queued offline replays with whatever bearer the client held when it
+/// went offline, which has very often expired by the time it reconnects.
+/// Settling the write on that refusal destroys the user's own durable write
+/// over a problem one token refresh fixes, so it HOLDS: it stays queued and
+/// persisted, and replays on the next flush — which is the caller's to trigger
+/// once a fresh credential is set (`setConnected`, or `flushOfflineQueue`).
+const Set<String> authReplayErrorCodes = <String>{'TOKEN_EXPIRED', 'UNAUTHENTICATED', 'UNAUTHORIZED'};
 
 /// The longest delay a rate limit may hold a flush off for, matching the
 /// reference client's own clamp.

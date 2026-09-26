@@ -50,8 +50,17 @@ typedef _RowOp = ({String key, bool delete, Object? value});
 /// marked as a full (re)seed. One buffer rather than two maps kept in step by
 /// hand, so both are dropped together at `pokeEnd`.
 class _Poke {
+  _Poke(this.epoch, this.baseCheckpoint);
+
+  /// The `pokeStart`'s epoch and base checkpoint; a part's own base overrides it.
+  final Object? epoch;
+  final Object? baseCheckpoint;
+
   final Map<String, List<Map<String, Object?>>> parts = <String, List<Map<String, Object?>>>{};
   final Set<String> resets = <String>{};
+
+  /// The checkpoint each shape's diff was computed against, where one was sent.
+  final Map<String, Object?> bases = <String, Object?>{};
 }
 
 /// How many un-applied poke buffers a registry retains before evicting the
@@ -143,7 +152,7 @@ class ShapeRegistry {
         _pokes.remove(_pokes.keys.first);
       }
 
-      _pokes[pokeId] = _Poke();
+      _pokes[pokeId] = _Poke(frame['epoch'], frame['baseCheckpoint']);
     }
   }
 
@@ -180,10 +189,19 @@ class ShapeRegistry {
     if (frame['reset'] == true) {
       buffer.resets.add(shapeId);
     }
+
+    final base = frame['baseCheckpoint'] ?? buffer.baseCheckpoint;
+
+    if (base != null) {
+      buffer.bases[shapeId] = base;
+    }
   }
 
   /// Apply a buffered poke in one transaction and deliver each affected view.
-  void applyPoke(Map<String, Object?> frame) {
+  ///
+  /// [sender] is the socket, when one is attached: a shape whose poke no longer
+  /// lines up with its view is re-subscribed on it at once.
+  void applyPoke(Map<String, Object?> frame, {LunoraFrameSender? sender}) {
     final pokeId = frame['pokeId'];
 
     if (pokeId is! String) {
@@ -209,6 +227,36 @@ class ShapeRegistry {
         continue;
       }
 
+      // A forked epoch means the changelog timeline changed under the view (a
+      // reset or recycled Durable Object); a base that is not the view's
+      // checkpoint means this diff was computed against a state the view is not
+      // at — a dropped or refused poke. Splicing the ops on would corrupt it:
+      // after a refused reseed the next poke put its row onto the stale view and
+      // advanced the checkpoint past rows it never held. So, unless the part is a
+      // reset (which replaces the view anyway), drop the view, its checkpoint and
+      // its epoch, tell the callbacks `[]`, skip the ops, and re-subscribe cold so
+      // the server re-seeds the membership.
+      final base = buffer.bases[shapeEntry.key];
+      final epochForked = buffer.epoch != null && shape.epoch != null && buffer.epoch != shape.epoch;
+      final baseDiverged = base != null && shape.checkpoint != null && base != shape.checkpoint;
+
+      if (!buffer.resets.contains(shapeEntry.key) && (epochForked || baseDiverged)) {
+        shape.rows.clear();
+        shape.order.clear();
+        shape.checkpoint = null;
+        shape.epoch = null;
+
+        final onRows = shape.onRows;
+
+        if (onRows != null) {
+          deliveries.add(MapEntry(onRows, const <Object?>[]));
+        }
+
+        sender?.call(buildSubscribeFrame(shapeEntry.key, shape.name, args: shape.args));
+
+        continue;
+      }
+
       // Every row is decoded BEFORE the view is touched, so a poke applies to a
       // shape whole or not at all. Decoding row by row as it applied cleared the
       // view for a reset and then threw on the bad row — the view left empty or
@@ -227,7 +275,7 @@ class ShapeRegistry {
         final onError = shape.onError;
 
         if (onError != null) {
-          refusals.add(MapEntry(onError, LunoraSubscriptionError('INVALID_FRAME', error.message)));
+          refusals.add(MapEntry(onError, LunoraSubscriptionError(wireDecodeFailed, error.message)));
         }
 
         continue;

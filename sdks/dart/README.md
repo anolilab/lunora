@@ -49,6 +49,12 @@ await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
 carrying each subscription's resume cursor.
 
+A shape poke is applied whole or not at all: a row the codec refuses leaves the
+view as it was and reaches the shape's `onError` coded `WIRE_DECODE_FAILED`. A
+poke whose `baseCheckpoint` is not the view's checkpoint (or whose epoch forked)
+and is not a reset empties the view, calls `onRows([])`, and re-subscribes the
+shape cold on the attached socket so the server re-seeds it.
+
 ### A live query is a `Stream`
 
 The row that is the reason this port exists. Each listener opens its own
@@ -128,11 +134,24 @@ coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
 is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS`) re-queue; a reply with no envelope re-queues,
 except a `413`, which splits a batch and settles a lone write
-`PAYLOAD_TOO_LARGE`. A write the server committed whose result does not decode is
-still committed: its overlay confirms, and it settles with `WIRE_DECODE_FAILED`
-(the same code a direct call throws) instead of a value, never retried. A flush
-that fails unexpectedly part-way puts every write it had not yet settled back on
-the queue, and never throws.
+`PAYLOAD_TOO_LARGE`. A refused credential (`UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`) HOLDS the write — queued and persisted, not settled — until
+the next flush after you set a fresh token. An envelope whose `data` does not
+decode is still that coded error, with the `data` dropped. A write the server
+committed whose result does not decode is still committed: its overlay confirms,
+and it settles with `WIRE_DECODE_FAILED` (the same code a direct call throws)
+instead of a value, never retried — that is decided by where the decode failed,
+so a server that itself answers `WIRE_DECODE_FAILED` has refused the write. A
+flush that fails unexpectedly part-way puts every write it had not yet settled
+back on the queue, and never throws.
+
+**Behaviour change for batch replays of an empty shard key.** An earlier version
+of this port sent `"shardKey": ""` on each batch entry whose shard key was
+empty, while a write replayed alone went to the default shard. The runtime
+routes `""` to a Durable Object literally named `""`, so writes replayed in a
+batch by that version landed there. This client now sends no shard key for an
+empty one, and reads and writes the default shard. Data already written to the
+`""` Durable Object is not migrated.
 
 Every RPC fails with `LunoraApiException` — coded `INTERNAL` when the body is not
 a JSON object (an HTML error page, `null`, `[]`) — never with a raw
