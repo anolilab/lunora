@@ -107,6 +107,24 @@ describe("mail follows the app's declared jurisdiction", () => {
     });
 });
 
+describe("captured mail under a contradicting jurisdiction", () => {
+    afterEach(() => {
+        resetAppJurisdiction();
+    });
+
+    it("fails the send instead of reporting a success-shaped id for mail it never recorded", async () => {
+        expect.assertions(2);
+
+        declareAppJurisdiction("eu");
+
+        const { log, namespace } = recordingNamespace();
+        const sink = createCaptureSink({ LUNORA_ADMIN_TOKEN: "secret", SHARD: namespace }, undefined, "us");
+
+        await expect(sink.record({ subject: "Hi", to: "a@b.test" })).rejects.toThrow('jurisdiction "us" contradicts');
+        expect(log).toStrictEqual([]);
+    });
+});
+
 describe("declareAppJurisdiction", () => {
     afterEach(() => {
         resetAppJurisdiction();

@@ -80,8 +80,6 @@ interface PostShardRpcOptions {
     adminToken: string;
     /** The JSON-serialisable RPC envelope (`{ args, functionPath, shardKey? }`). */
     envelope: unknown;
-    /** Optional data-residency jurisdiction the shard is pinned to. */
-    jurisdiction?: DurableObjectJurisdiction;
     /** Diagnostic prefix for failure errors (e.g. the caller + target function). */
     label: string;
     /** Shard the RPC targets. */
@@ -95,12 +93,15 @@ interface PostShardRpcOptions {
  * inbound dispatcher (`handler.ts`) and the outbound dev capture sink
  * (`from-env.ts`) call through here so the two paths cannot drift.
  *
+ * `namespace` is already scoped by {@link applyJurisdiction}: the callers resolve
+ * the jurisdiction themselves, so a residency misconfiguration is a separate
+ * failure from a shard RPC that did not go through.
+ *
  * Throws a {@link LunoraError} on a non-2xx response or an error envelope
  * (labelled with `options.label`); returns the parsed JSON body otherwise.
  */
 const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpcOptions): Promise<unknown> => {
-    const scoped = applyJurisdiction(namespace, options.jurisdiction);
-    const stub = scoped.get(scoped.idFromName(options.shardKey));
+    const stub = namespace.get(namespace.idFromName(options.shardKey));
     const response = await stub.fetch("https://shard.internal/rpc", {
         body: JSON.stringify(options.envelope),
         headers: {
