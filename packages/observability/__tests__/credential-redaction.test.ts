@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { maskCredentials } from "../../../shared/credential-redaction";
 import { redactArgs, redactSecrets } from "../src/request-log";
 
 /**
@@ -35,12 +36,10 @@ const CREDENTIAL_KEYS = [
     "otp",
     "otpToken",
     "passwordConfirmation",
-    "pin",
     "privateKey",
     "pwd",
     "refreshToken",
     "salt",
-    "session",
     "sessionId",
     "sid",
     "signature",
@@ -48,8 +47,11 @@ const CREDENTIAL_KEYS = [
     "x-signature",
 ] as const;
 
-/** Keys `standardRules` names exactly; it masks them whole, booleans included, under its own placeholder. */
-const STANDARD_KEYS = { password: "<PASSWORD>", secret: "<SECRET>", token: "<TOKEN>" } as const;
+/** A masked value: `<REDACTED>`, or on the log sink the placeholder `standardRules` stamps over it (`<PASSWORD>`, `<APIKEY>`). */
+const MASKED = expect.stringMatching(/^<[A-Z]+>$/) as unknown;
+
+/** Keys `standardRules` names exactly. The log sink masks them whole, booleans included; the span sink keeps a boolean. */
+const STANDARD_KEYS = ["password", "secret", "token"] as const;
 
 const BENIGN_KEYS = ["code", "passwordChangedAt", "secretary", "shardKey", "tokenizer"] as const;
 
@@ -70,10 +72,15 @@ describe.each(sinks)("%s redaction by key", (_sink, redact) => {
         });
     });
 
-    it.each(Object.entries(STANDARD_KEYS))("masks a numeric %s, an OTP or PIN being the usual case", (key, placeholder) => {
+    it.each(STANDARD_KEYS)("masks a numeric %s, an OTP or PIN being the usual case", (key) => {
         expect.assertions(1);
 
-        expect(Object.values(VALUES).map((value) => redactField(redact, key, value))).toStrictEqual(Object.values(VALUES).map(() => placeholder));
+        expect([VALUES.array, VALUES.number, VALUES.object, VALUES.string].map((value) => redactField(redact, key, value))).toStrictEqual([
+            MASKED,
+            MASKED,
+            MASKED,
+            MASKED,
+        ]);
     });
 
     it.each(BENIGN_KEYS)("leaves %s alone", (key) => {
@@ -153,5 +160,156 @@ describe("span redaction keeps ids", () => {
         };
 
         expect(redactSecrets(attributes)).toStrictEqual(attributes);
+    });
+});
+
+const CODE_AND_CONCATENATED_KEYS = [
+    "accesskey",
+    "apiKeys",
+    "apikey",
+    "authCode",
+    "cardNo",
+    "hotp",
+    "mfaCode",
+    "mfa_code",
+    "OTP_CODE",
+    "otpCode",
+    "otp_code",
+    "passcode",
+    "pinCode",
+    "privKey",
+    "privatekey",
+    "recoveryCode",
+    "secretKeys",
+    "secret_key_base",
+    "secretkey",
+    "securityCode",
+    "sessionid",
+    "totp",
+    "twoFactorCode",
+    "verificationCode",
+] as const;
+
+describe.each(sinks)("%s redaction of one-time codes and concatenated key names", (_sink, redact) => {
+    it.each(CODE_AND_CONCATENATED_KEYS)("masks the string and numeric value of %s", (key) => {
+        expect.assertions(1);
+
+        expect([redactField(redact, key, "482913-x"), redactField(redact, key, 482_913)]).toStrictEqual([MASKED, MASKED]);
+    });
+
+    it.each(["code", "errorCode", "statusCode", "countryCode", "zipCode"])("leaves %s alone, since error and status codes need to show", (key) => {
+        expect.assertions(1);
+
+        expect([redactField(redact, key, "E_TIMEOUT"), redactField(redact, key, 504)]).toStrictEqual(["E_TIMEOUT", 504]);
+    });
+});
+
+describe.each(sinks)("%s redaction keeps app data stored under ambiguous words", (_sink, redact) => {
+    it.each([
+        ["cards", [{ title: "todo" }]],
+        ["card", { done: false, title: "todo" }],
+        ["sessions", [{ room: "r1", startedAt: 1 }]],
+        ["session", { expiresAt: 1, userId: "u1" }],
+        ["pins", [{ lat: 1, lng: 2 }]],
+        ["pass", { tier: "gold", zone: "A" }],
+    ])("walks, rather than blanks, a %s container", (key, value) => {
+        expect.assertions(1);
+
+        expect(redactField(redact, key, value)).toStrictEqual(value);
+    });
+
+    it("still masks a scalar under the same words, and credentials nested inside the container", () => {
+        expect.assertions(1);
+
+        expect(redact({ card: "4111111111111111", pin: 1234, session: { token: "t-1", userId: "u1" } })).toStrictEqual({
+            card: "<REDACTED>",
+            pin: "<REDACTED>",
+            session: { token: MASKED, userId: "u1" },
+        });
+    });
+});
+
+describe.each(sinks)("%s redaction of more string forms", (_sink, redact) => {
+    it.each([
+        ["password: correct horse battery", "password: <REDACTED>"],
+        ["password: correct horse battery, user=a", "password: <REDACTED>, user=a"],
+        [String.raw`payload {\"password\":\"hunter2\",\"user\":\"a\"}`, String.raw`payload {\"password\":\"<REDACTED>\",\"user\":\"a\"}`],
+        ["psql --password hunter2 --host db", "psql --password <REDACTED> --host db"],
+        ["apikey=k1 passcode=482913", "apikey=<REDACTED> passcode=<REDACTED>"],
+    ])("%s", (input, expected) => {
+        expect.assertions(1);
+
+        expect(redact(input)).toBe(expected);
+    });
+
+    it("masks a PEM private key body, not only its header", () => {
+        expect.assertions(2);
+
+        const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nSECRETBODYLINE\n-----END PRIVATE KEY-----";
+        const redacted = redact(`privateKey: ${pem}\ntail`) as string;
+
+        expect(redacted).not.toMatch(/MIIEv|SECRETBODYLINE/);
+        expect(redacted).toContain("tail");
+    });
+
+    it("masks a curl -u credential", () => {
+        expect.assertions(1);
+
+        // The log sink also masks the host; the credential is what matters here.
+        expect(redact("run curl -u admin:hunter2 https://api.example.test/x")).toMatch(/^run curl -u <REDACTED> https:\/\/\S+\/x$/);
+    });
+
+    it("drops the userinfo of a URL whose password holds an unencoded slash", () => {
+        expect.assertions(1);
+
+        expect(redact("db postgres://u:p/ss@db.example.test/app")).not.toMatch(/p\/ss|u:p/);
+    });
+});
+
+describe.each(sinks)("%s redaction budget", (_sink, redact) => {
+    it("redacts 256 strings of 4 KiB in milliseconds, replacing what exceeds the budget with a marker", () => {
+        expect.assertions(3);
+
+        const big = Object.fromEntries(Array.from({ length: 256 }, (_, index) => [`field${String(index)}`, `note ${"lorem ipsum dolor ".repeat(228)}`]));
+        const started = performance.now();
+        const redacted = redact(big) as Record<string, string>;
+        const elapsed = performance.now() - started;
+
+        expect(elapsed).toBeLessThan(1000);
+        expect(redacted["field0"]?.startsWith("note lorem")).toBe(true);
+        expect(redacted["field255"]).toBe("[redaction budget exceeded]");
+    });
+});
+
+describe.each(sinks)("%s redaction of class instances", (_sink, redact) => {
+    it("masks credential properties of a class instance", () => {
+        expect.assertions(1);
+
+        class Credentials {
+            public readonly apiKey = "k-1";
+
+            public readonly user = "u1";
+        }
+
+        expect(redact({ credentials: new Credentials(), from: new Credentials() })).toStrictEqual({
+            credentials: "<REDACTED>",
+            from: { apiKey: MASKED, user: "u1" },
+        });
+    });
+
+    it("keeps a cycle through class instances finite", () => {
+        expect.assertions(1);
+
+        class Node {
+            public next: Node | undefined;
+
+            public readonly token = "t-1";
+        }
+
+        const node = new Node();
+
+        node.next = node;
+
+        expect(() => maskCredentials({ node })).not.toThrow();
     });
 });

@@ -69,21 +69,77 @@ const EXPLAIN_ISSUE_CONTEXT_CAP = 200;
 const UNTRUSTED_FENCE = "-----BEGIN UNTRUSTED ERROR REPORT-----";
 
 /**
- * The marker as a model reads it, not as `===` does: a model treats
- * `-----begin untrusted error report-----`, `BEGIN_UNTRUSTED_ERROR_REPORT` or a
- * copy with zero-width characters between the letters as the same boundary. So
- * the letters of the marker's words are matched with up to four non-alphanumeric
- * characters between any two, case-insensitively, after {@link normalizeForFence}
- * has folded fullwidth forms and dropped zero-width / format characters. The
- * words are what make it a marker, so they are what gets replaced; the dashes
- * left around `[fence]` carry no meaning on their own.
+ * Latin letters a forged marker can be spelled with instead: Cyrillic and Greek
+ * homoglyphs, plus the digits that read as letters (`ERR0R`, `UNTRUST3D`).
+ * Consulted only to FIND a marker — the caller's text is never rewritten.
  */
-// Each letter of the marker's words, with up to four separators between any two
-// (`\B` is every position between two letters).
-const UNTRUSTED_FENCE_LOOKALIKE = new RegExp("BEGINUNTRUSTEDERRORREPORT".replaceAll(/\B/g, String.raw`[^\dA-Z]{0,4}`), "gi");
+const LOOKALIKES: Readonly<Record<string, string>> = {
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "5": "s",
+    "6": "g",
+    "7": "t",
+    "8": "b",
+    ɑ: "a",
+    ɡ: "g",
+    α: "a",
+    β: "b",
+    ε: "e",
+    ι: "i",
+    ν: "n",
+    ο: "o",
+    ρ: "p",
+    τ: "t",
+    υ: "u",
+    а: "a",
+    в: "b",
+    г: "r",
+    е: "e",
+    н: "n",
+    о: "o",
+    р: "p",
+    с: "c",
+    т: "t",
+    у: "y",
+    ѕ: "s",
+    і: "i",
+    ј: "j",
+    ԁ: "d",
+    ս: "u",
+};
 
-/** NFKC folds fullwidth and other compatibility forms to ASCII; `\p{Cf}` is every zero-width / format character. */
-const normalizeForFence = (value: string): string => value.normalize("NFKC").replaceAll(/\p{Cf}/gu, "");
+/** The marker's words as a model reads them — letters only, for both ends of a block. */
+const FORGED_MARKERS = ["beginuntrustederrorreport", "enduntrustederrorreport"] as const;
+
+/**
+ * The letters of `value` folded for marker matching — NFKD (fullwidth → ASCII,
+ * accents split off), lowercased, homoglyphs mapped, and combining marks and
+ * every other non-letter dropped — each paired with the index of the source
+ * character it came from, so a match can be cut out of the ORIGINAL text.
+ */
+const foldLetters = (value: string): { letters: string; sources: number[] } => {
+    let letters = "";
+    const sources: number[] = [];
+
+    let index = 0;
+
+    // By code point, so an astral look-alike (mathematical bold `𝐁`) folds too.
+    for (const char of value) {
+        for (const part of char.normalize("NFKD").toLowerCase()) {
+            const letter = LOOKALIKES[part] ?? part;
+
+            if (letter >= "a" && letter <= "z") {
+                letters += letter;
+                sources.push(index);
+            }
+        }
+
+        index += char.length;
+    }
+
+    return { letters, sources };
+};
 
 /**
  * Deadline for one explainer inference. `binding.run` is awaited on a
@@ -100,7 +156,37 @@ const EXPLAIN_ISSUE_TIMEOUT_MS = 10_000;
  * marker is still a real error the operator needs explained, and refusing it
  * would turn a cosmetic collision into a denied explanation.
  */
-const fenceSafe = (value: string): string => normalizeForFence(value).replaceAll(UNTRUSTED_FENCE_LOOKALIKE, "[fence]");
+const fenceSafe = (value: string): string => {
+    const { letters, sources } = foldLetters(value);
+    const cuts: [number, number][] = [];
+
+    // Any spelling that folds to the marker's letters reads as the marker to a
+    // model: separators of any kind or length, zero-width characters, accents,
+    // homoglyphs, case.
+    for (const marker of FORGED_MARKERS) {
+        for (let found = letters.indexOf(marker); found !== -1; found = letters.indexOf(marker, found + marker.length)) {
+            const last = sources[found + marker.length - 1] as number;
+
+            cuts.push([sources[found] as number, last + String.fromCodePoint(value.codePointAt(last) as number).length]);
+        }
+    }
+
+    if (cuts.length === 0) {
+        return value;
+    }
+
+    let output = "";
+    let cursor = 0;
+
+    for (const [start, end] of cuts.toSorted((a, b) => a[0] - b[0])) {
+        if (start >= cursor) {
+            output += `${value.slice(cursor, start)}[fence]`;
+            cursor = end;
+        }
+    }
+
+    return output + value.slice(cursor);
+};
 
 /**
  * Structural projection of the Workers `AI` binding's `run` method — declared

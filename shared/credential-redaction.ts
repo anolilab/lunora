@@ -4,9 +4,10 @@
  * Bundler-inlined source (see `shared/`), zero-dependency on purpose: the
  * request log / Logpush / span pipeline (`@lunora/observability`) and the auth
  * audit log (`@lunora/auth`) both need it, and neither may depend on the other.
- * Each caller still runs its own `@visulima/redact` rule set afterwards for
- * PII and value-shaped patterns; this module owns the part those rules got
- * wrong — WHICH key names and `name=value` pairs hold a credential.
+ * The request log and the audit log still run their `@visulima/redact` rule
+ * sets afterwards for PII; span, event, link and metric attributes use this
+ * module alone, because those rules cost ~20 µs per call on the Durable
+ * Object's only thread.
  *
  * Why not `@visulima/redact` wildcard key rules (`*token*`): they match
  * substrings, so `tokenizer`, `secretary` and `passwordChangedAt` were masked
@@ -19,20 +20,27 @@
 const SENSITIVE_WORDS = new Set([
     "auth",
     "authorization",
+    "bearer",
     "card",
+    "cc",
     "cookie",
     "credential",
     "cvc",
     "cvv",
     "dsn",
     "hmac",
+    "hotp",
     "iban",
     "jwt",
+    "kek",
+    "mnemonic",
     "otp",
     "pass",
+    "passcode",
     "passphrase",
     "passwd",
     "password",
+    "pem",
     "pin",
     "pwd",
     "salt",
@@ -43,21 +51,53 @@ const SENSITIVE_WORDS = new Set([
     "signature",
     "ssn",
     "token",
+    "totp",
+    "verifier",
 ]);
 
+/**
+ * Sensitive words that also name ordinary app data (`cards` on a kanban board,
+ * `sessions` in a calendar, map `pins`, a transit `pass`). Under these a string
+ * or number is still masked, but an object or array is walked instead, so the
+ * credentials inside it are masked and the rest of the data survives.
+ */
+const SCALAR_ONLY_WORDS = new Set(["card", "pass", "pin", "session"]);
+
 /** A word that only names a credential after one of these (`apiKey`, `privateKey`, not `shardKey`, `cacheKey`). */
-const KEY_QUALIFIERS = new Set(["access", "api", "client", "encryption", "master", "private", "secret", "signing"]);
+const KEY_QUALIFIERS = new Set(["access", "api", "client", "encryption", "master", "priv", "private", "secret", "signing"]);
+
+/** A `code` is a credential only after one of these (`otpCode`, `recoveryCode`); a bare `code` / `errorCode` / `statusCode` is not. */
+const CODE_QUALIFIERS = new Set([
+    "2fa",
+    "auth",
+    "authorization",
+    "backup",
+    "factor",
+    "hotp",
+    "mfa",
+    "otp",
+    "pin",
+    "recovery",
+    "reset",
+    "security",
+    "totp",
+    "verification",
+    "verify",
+]);
 
 /** Two-word credentials whose parts are harmless alone. */
-const COMPOUND_CREDENTIALS = new Set(["connection string", "database url"]);
+const COMPOUND_CREDENTIALS = new Set(["card no", "connection string", "database url", "one time"]);
 
-/** Single lowercase words that are concatenated credential names (`apikey`, `accesstoken`). */
+/** Single lowercase words that are (or end in) a concatenated credential name (`apikey`, `useraccesstoken`). */
 const CONCATENATED_SUFFIXES = [
     "accesskey",
     "apikey",
     "authorization",
     "cookie",
     "credential",
+    "mfacode",
+    "otpcode",
+    "passcode",
     "passphrase",
     "passwd",
     "password",
@@ -71,13 +111,14 @@ const CONCATENATED_SUFFIXES = [
 
 /**
  * Words that may FOLLOW the sensitive word and still name the credential itself
- * (`passwordHash`, `sessionId`, `passwordConfirmation`). Anything else after it
- * names something about the credential (`passwordChangedAt`, `tokenType`,
- * `secretName`), which is not secret.
+ * (`passwordHash`, `sessionId`, `passwordConfirmation`, `secret_key_base`).
+ * Anything else after it names something about the credential
+ * (`passwordChangedAt`, `tokenType`, `secretName`), which is not secret.
  */
 const VALUE_WORDS = new Set([
     "again",
     "b64",
+    "base",
     "base64",
     "bytes",
     "confirm",
@@ -92,6 +133,7 @@ const VALUE_WORDS = new Set([
     "id",
     "input",
     "key",
+    "no",
     "num",
     "number",
     "plain",
@@ -108,12 +150,21 @@ const VALUE_WORDS = new Set([
 const COUNT_LAST_WORDS = new Set(["count", "counts", "length", "limit", "limits", "size", "tokens", "total", "usage"]);
 const COUNT_FIRST_WORDS = new Set(["max", "min", "num", "total"]);
 
-/** Strings longer than this are truncated before any pattern runs, so one oversized arg cannot stall a Durable Object in regex work. */
+/** Longest single string examined; the rest is cut before any pattern runs. */
 const MAX_REDACTED_STRING_LENGTH = 4096;
+
+/**
+ * Characters examined per redacted VALUE (an args object, a log field bag), not
+ * per string: 256 strings of 4 KiB each would otherwise cost seconds in the
+ * callers' PII regexes. Strings met after it is spent become {@link BUDGET_MARKER}.
+ */
+const MAX_REDACTED_TOTAL_LENGTH = 16_384;
 
 const REDACTED = "<REDACTED>";
 
-type KeyClass = "count-secret" | "none" | "secret";
+const BUDGET_MARKER = "[redaction budget exceeded]";
+
+type KeyClass = "count-secret" | "none" | "scalar-secret" | "secret";
 
 const splitWords = (key: string): string[] =>
     key
@@ -123,25 +174,40 @@ const splitWords = (key: string): string[] =>
         .split(/[^a-z\d]+/)
         .filter((word) => word.length > 0);
 
-const isSensitiveWord = (words: ReadonlyArray<string>, index: number): boolean => {
-    const word = words[index] as string;
-    const previous = index > 0 ? (words[index - 1] as string) : undefined;
+const singular = (word: string): string => (word.length > 3 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word);
 
-    if (SENSITIVE_WORDS.has(word) || (word.endsWith("s") && SENSITIVE_WORDS.has(word.slice(0, -1)))) {
-        return true;
+/** The sensitive word at `index` (singular), or `undefined`. */
+const sensitiveWordAt = (words: ReadonlyArray<string>, index: number): string | undefined => {
+    const word = singular(words[index] as string);
+    const previous = index > 0 ? singular(words[index - 1] as string) : undefined;
+
+    if (SENSITIVE_WORDS.has(word)) {
+        return word;
     }
 
-    if (previous !== undefined && ((word === "key" && KEY_QUALIFIERS.has(previous)) || COMPOUND_CREDENTIALS.has(`${previous} ${word}`))) {
-        return true;
+    if (previous !== undefined) {
+        if (word === "key" && KEY_QUALIFIERS.has(previous)) {
+            return "key";
+        }
+
+        if (word === "code" && CODE_QUALIFIERS.has(previous)) {
+            return "code";
+        }
+
+        if (COMPOUND_CREDENTIALS.has(`${previous} ${word}`)) {
+            return `${previous} ${word}`;
+        }
     }
 
-    return CONCATENATED_SUFFIXES.some((suffix) => word.length > suffix.length && word.endsWith(suffix));
+    return CONCATENATED_SUFFIXES.some((suffix) => word.endsWith(suffix)) ? word : undefined;
 };
 
 /**
- * Classify a key name. `"secret"`: the value is a credential. `"count-secret"`:
- * a measurement of credentials (`maxTokens`, `tokenUsage`) — numbers and nested
- * objects are kept, bare strings are not. `"none"`: leave it to the caller's rules.
+ * Classify a key name. `"secret"`: the value is a credential. `"scalar-secret"`:
+ * a credential when it is a string or number, app data when it is a container
+ * (see {@link SCALAR_ONLY_WORDS}). `"count-secret"`: a measurement of
+ * credentials (`maxTokens`, `tokenUsage`) — numbers and nested objects are kept,
+ * bare strings are not. `"none"`: not a credential key.
  */
 const classifyKey = (key: string): KeyClass => {
     const words = splitWords(key);
@@ -153,12 +219,18 @@ const classifyKey = (key: string): KeyClass => {
     const isCount = COUNT_LAST_WORDS.has(words.at(-1) as string) || COUNT_FIRST_WORDS.has(words[0] as string);
 
     for (let index = words.length - 1; index >= 0; index -= 1) {
-        if (isSensitiveWord(words, index)) {
+        const sensitive = sensitiveWordAt(words, index);
+
+        if (sensitive !== undefined) {
             if (isCount) {
                 return "count-secret";
             }
 
-            return words.slice(index + 1).every((word) => VALUE_WORDS.has(word)) ? "secret" : "none";
+            if (!words.slice(index + 1).every((word) => VALUE_WORDS.has(word))) {
+                return "none";
+            }
+
+            return SCALAR_ONLY_WORDS.has(sensitive) && index === words.length - 1 ? "scalar-secret" : "secret";
         }
     }
 
@@ -168,32 +240,51 @@ const classifyKey = (key: string): KeyClass => {
 /** Mask a value held under a credential key: everything but a boolean or `null` (no credential is one). */
 const maskValue = (value: unknown): unknown => (typeof value === "boolean" || value === null || value === undefined ? value : REDACTED);
 
-/** A URL's query, fragment and userinfo, which carry signatures, tokens and passwords. */
+/**
+ * A URL with its query, fragment and userinfo dropped — they carry signatures,
+ * tokens and passwords. The userinfo ends at the LAST `@` before the query,
+ * provided a `user:password` colon precedes it that is not a `host:port`, so a
+ * password holding an unencoded `/` (`u:p/ss@host`) is still found.
+ */
 const stripUrl = (url: string): string => {
     const scheme = url.indexOf("://") + 3;
-    const authorityEnd = url.slice(scheme).search(/[/?#]/);
-    const authority = authorityEnd === -1 ? url.slice(scheme) : url.slice(scheme, scheme + authorityEnd);
-    const rest = authorityEnd === -1 ? "" : url.slice(scheme + authorityEnd);
-    const host = authority.slice(authority.lastIndexOf("@") + 1);
-    const query = rest.search(/[?#]/);
+    const beforeQuery = url.slice(scheme).split(/[?#]/, 1)[0] as string;
+    const at = beforeQuery.lastIndexOf("@");
+    const colon = beforeQuery.indexOf(":");
+    const firstSlash = beforeQuery.indexOf("/");
+    const isPort = colon !== -1 && /^\d+$/.test(beforeQuery.slice(colon + 1, firstSlash === -1 ? undefined : firstSlash));
+    const hasUserinfo = at !== -1 && (firstSlash === -1 || at < firstSlash || (colon !== -1 && colon < at && !isPort));
 
-    return `${url.slice(0, scheme)}${host}${query === -1 ? rest : rest.slice(0, query)}`;
+    return `${url.slice(0, scheme)}${hasUserinfo ? beforeQuery.slice(at + 1) : beforeQuery}`;
 };
 
 const URL_IN_TEXT = /\b[a-z][\d+.a-z-]{1,15}:\/\/[^\s"'<>()[\]{}]+/gi;
 
-/** `Authorization: Basic …` and friends. Bearer is caught by the callers' rules, Basic was not. */
-const AUTH_SCHEME = /\b(Basic|Digest)\s+[\w+/=.~-]{4,}/g;
+/** A PEM private key, header through footer (or to the end of the text when the footer was cut off). */
+const PEM_PRIVATE_KEY = /-----BEGIN ([A-Z ]{0,32}PRIVATE KEY)-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g;
 
-/** A `name` + separator (`=`, `:`, with optional quotes around the name). The value is read separately, only when the name is a credential. */
-const ASSIGNMENT_NAME = /(?<![\w.-])(["']?)([A-Za-z_][\w.-]{0,63})\1[ \t]{0,4}[:=][ \t]{0,4}/g;
+/** Tokens recognisable by shape alone: an auth scheme and its credential, a JWT, an AWS access-key id. */
+const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}|\beyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*|\bAKIA[\dA-Z]{16}\b/g;
+
+/** CLI credential flags: `curl -u user:pass`, `--password hunter2`. */
+const CLI_CREDENTIAL = /(\s|^)(-u|--user|--password|--pass|--token|--api-key)(\s+|=)[^\s"']+/g;
+
+/** A `name` + separator (`=`, `:`, with optional — possibly escaped — quotes around the name). The value is read separately, only when the name is a credential. */
+const ASSIGNMENT_NAME = /(?<![\w.-])(\\?["']?)([A-Za-z_][\w.-]{0,63})\1[ \t]{0,4}([:=])[ \t]{0,4}/g;
 
 /**
  * The value after a credential's separator: an auth scheme and its token
- * (`Authorization: Bearer …` must lose both words, or the token outlives its
- * scheme), a quoted run (closing quote optional), or a bare token.
+ * (`Authorization: Bearer …` must lose both words), an escaped-quoted,
+ * quoted (closing quote optional) or bare run.
  */
-const ASSIGNMENT_VALUE = /(?:basic|bearer|digest|token)\s+[^\s"&'),;\]}]+|"[^\n"]*"?|'[^\n']*'?|[^\s"&'),;\]}]+/iy;
+const ASSIGNMENT_VALUE = /(?:basic|bearer|digest|token)\s+[^\s"&'),;\]}]+|\\"(?:[^"\\\n]|\\[^"])*(?:\\")?|"[^\n"]*"?|'[^\n']*'?|[^\s"&'),;\]}]+/iy;
+
+/**
+ * After `name: value` — prose, a YAML-ish line — an unquoted credential runs to
+ * the end of its clause, so `password: correct horse battery` loses every word:
+ * up to a newline, `,` or `;`, a closing bracket, or the next `name:` / `name=`.
+ */
+const CLAUSE_TAIL = /(?:[ \t]+(?![A-Za-z_][\w.-]{0,63}[:=])[^\s,;)\]}]+)*/y;
 
 /**
  * Mask `name=value` / `name: value` / `"name":"value"` pairs whose name is a
@@ -221,78 +312,116 @@ const maskAssignments = (text: string): string => {
             continue;
         }
 
-        const quote = value[0].startsWith('"') || value[0].startsWith("'") ? (value[0][0] as string) : "";
+        const raw = value[0];
+        const quote = raw.startsWith('\\"') ? '\\"' : raw.startsWith('"') || raw.startsWith("'") ? (raw[0] as string) : "";
+        let valueEnd = valueStart + raw.length;
 
-        output += `${text.slice(cursor, valueStart)}${quote}${REDACTED}${quote}`;
-        cursor = valueStart + value[0].length;
+        if (quote === "" && match[3] === ":") {
+            CLAUSE_TAIL.lastIndex = valueEnd;
+            valueEnd += CLAUSE_TAIL.exec(text)?.[0].length ?? 0;
+        }
+
+        output += `${text.slice(cursor, valueStart)}${quote}${REDACTED}${raw.length > quote.length && raw.endsWith(quote) ? quote : ""}`;
+        cursor = valueEnd;
         ASSIGNMENT_NAME.lastIndex = cursor;
     }
 
     return output + text.slice(cursor);
 };
 
-const maskString = (value: string): string => {
-    const capped = value.length > MAX_REDACTED_STRING_LENGTH ? `${value.slice(0, MAX_REDACTED_STRING_LENGTH)}…[truncated]` : value;
+/** Cheap pre-check: a string with none of these cannot hold anything the patterns mask. */
+const MAY_HOLD_CREDENTIAL = /[:=@]|basic|bearer|digest|eyJ|AKIA|-u\b|--/i;
 
-    return maskAssignments(capped.replaceAll(URL_IN_TEXT, stripUrl).replaceAll(AUTH_SCHEME, `$1 ${REDACTED}`));
-};
+interface Budget {
+    remaining: number;
+}
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-    if (typeof value !== "object" || value === null) {
-        return false;
+const maskString = (value: string, budget: Budget): string => {
+    if (budget.remaining <= 0) {
+        return BUDGET_MARKER;
     }
 
-    const prototype = Object.getPrototypeOf(value) as unknown;
+    const capped = value.length > MAX_REDACTED_STRING_LENGTH ? `${value.slice(0, MAX_REDACTED_STRING_LENGTH)}…[truncated]` : value;
 
-    return prototype === Object.prototype || prototype === null;
+    budget.remaining -= capped.length;
+
+    if (!MAY_HOLD_CREDENTIAL.test(capped)) {
+        return capped;
+    }
+
+    return maskAssignments(
+        capped
+            .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
+            .replaceAll(URL_IN_TEXT, stripUrl)
+            .replaceAll(TOKEN_SHAPES, (_match, scheme: string | undefined) => (scheme === undefined ? REDACTED : `${scheme} ${REDACTED}`))
+            .replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`),
+    );
 };
+
+/** Built-ins whose own enumerable properties are not what they carry — walking them would turn a `Date` into `{}`. */
+const isOpaqueObject = (value: object): boolean =>
+    value instanceof Error ||
+    value instanceof Date ||
+    value instanceof RegExp ||
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet ||
+    value instanceof Promise ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value) ||
+    typeof (value as { toJSON?: unknown }).toJSON === "function";
 
 const MAX_DEPTH = 32;
 
-const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings: boolean): unknown => {
+const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings: boolean, budget: Budget): unknown => {
     if (typeof value === "string") {
-        return maskStrings ? REDACTED : maskString(value);
+        return maskStrings ? REDACTED : maskString(value, budget);
     }
 
-    if (Array.isArray(value) || isPlainObject(value)) {
-        if (seen.has(value) || depth >= MAX_DEPTH) {
-            return REDACTED;
-        }
-
-        seen.add(value);
-
-        const result = Array.isArray(value)
-            ? value.map((item) => walk(item, seen, depth + 1, maskStrings))
-            : Object.fromEntries(
-                  Object.entries(value).map(([key, item]) => {
-                      const kind = classifyKey(key);
-
-                      if (kind === "secret") {
-                          return [key, maskValue(item)];
-                      }
-
-                      // A measurement of credentials: numbers stay, containers are
-                      // walked, and a bare string under it (or in an array under it,
-                      // `accessTokens: ["…"]`) is the credential itself.
-                      return [key, walk(item, seen, depth + 1, kind === "count-secret" && (typeof item === "string" || Array.isArray(item)))];
-                  }),
-              );
-
-        seen.delete(value);
-
-        return result;
+    if (typeof value !== "object" || value === null || (!Array.isArray(value) && isOpaqueObject(value))) {
+        return value;
     }
 
-    return value;
+    if (seen.has(value) || depth >= MAX_DEPTH) {
+        return REDACTED;
+    }
+
+    seen.add(value);
+
+    // Plain objects, and class instances by their own enumerable properties —
+    // exactly what `JSON.stringify` would ship for them.
+    const result = Array.isArray(value)
+        ? value.map((item) => walk(item, seen, depth + 1, maskStrings, budget))
+        : Object.fromEntries(
+              Object.entries(value).map(([key, item]) => {
+                  const kind = classifyKey(key);
+
+                  if (kind === "secret" || (kind === "scalar-secret" && (typeof item !== "object" || item === null))) {
+                      return [key, maskValue(item)];
+                  }
+
+                  // A measurement of credentials: numbers stay, containers are
+                  // walked, and a bare string under it (or in an array under it,
+                  // `accessTokens: ["…"]`) is the credential itself.
+                  return [key, walk(item, seen, depth + 1, kind === "count-secret" && (typeof item === "string" || Array.isArray(item)), budget)];
+              }),
+          );
+
+    seen.delete(value);
+
+    return result;
 };
 
 /**
- * Mask credentials in `value` — by key name on objects (any depth), and by
- * `name=value`, `Basic …` and URL shape in strings (query, fragment and userinfo
- * dropped) — and cap every string at {@link MAX_REDACTED_STRING_LENGTH}.
- * Returns a copy; the input is never mutated. Class instances, `Map`s and
- * `Error`s are returned as-is for the caller's redactor to handle.
+ * Mask credentials in `value` — by key name on objects and class instances (any
+ * depth), and in strings by `name=value` / `name: value`, auth-scheme, JWT, PEM,
+ * CLI-flag and URL shape (query, fragment and userinfo dropped). Every string is
+ * capped at {@link MAX_REDACTED_STRING_LENGTH}, and once
+ * {@link MAX_REDACTED_TOTAL_LENGTH} characters of one value have been examined,
+ * later strings become a marker. Returns a copy; the input is never mutated.
+ * `Error`s, `Date`s, collections and values with a `toJSON` are returned as-is.
  */
-const maskCredentials = (value: unknown): unknown => walk(value, new WeakSet(), 0, false);
+const maskCredentials = (value: unknown): unknown => walk(value, new WeakSet(), 0, false, { remaining: MAX_REDACTED_TOTAL_LENGTH });
 
-export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH };
+export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH, MAX_REDACTED_TOTAL_LENGTH };

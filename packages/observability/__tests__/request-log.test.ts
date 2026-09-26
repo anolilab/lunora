@@ -948,15 +948,16 @@ describe("emitLogEvent (ctx.log → console)", () => {
         expect(event).toMatchObject({
             function: "messages:list",
             level: "info",
-            message: 'hello {"token":"s3cr3t"}',
+            // The rendered message goes through the same credential masking as
+            // `fields`: the console line is what Workers Logs / Logpush keep.
+            message: 'hello {"token":"<REDACTED>"}',
             shard: "room-9",
             source: "lunora",
             type: "log",
             userId: "user-1",
         });
         // The structured `args` array is deliberately omitted from the console event;
-        // it stays on the opt-in `onLog` sink. (The secret is still in `message` here
-        // because the developer chose to log the object — same as a raw console.log.)
+        // it stays on the opt-in `onLog` sink.
         expect(event.args).toBeUndefined();
         expect(Object.keys(event)).not.toContain("args");
     });

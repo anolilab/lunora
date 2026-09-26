@@ -37,8 +37,7 @@
 
 import { fingerprintError } from "@lunora/fingerprint";
 import type { SqlExec } from "@lunora/shard-engine";
-import type { Rules } from "@visulima/redact";
-import { createRedactor, credentialRules, standardRules } from "@visulima/redact";
+import { createRedactor, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
 import type { LogEvent } from "../../../shared/log-event";
@@ -231,27 +230,21 @@ interface ReadIssuesOptions {
     userId?: string;
 }
 
-const redactValue = createRedactor(standardRules);
-
 /**
- * `credentialRules` minus its bare value-shape rules — 32 / 40 alphanumeric
- * characters (`apikey`, `awskey`) and base58 / hex wallet addresses (`crypto`).
- * Those match by length alone, so on a span they turn a 32-hex trace id, an
- * undashed uuid or a git sha into `<APIKEY>` / `<AWSKEY>`: the ids a trace is
- * read by. Credential KEYS are caught by `maskCredentials` instead.
+ * `standardRules` without its exact `pass` key rule: that rule blanks whatever a
+ * `pass` key holds, so a transit or event `pass` object vanished from the log.
+ * `maskCredentials` already masks a scalar `pass` and walks a container one.
  */
-const SPAN_CREDENTIAL_RULES: Rules = credentialRules.filter((rule) => typeof rule !== "object" || !["apikey", "awskey", "crypto"].includes(rule.key));
-
-const redactSecretValue = createRedactor(SPAN_CREDENTIAL_RULES);
+const redactValue = createRedactor(standardRules, { exclude: ["pass"] });
 
 /**
- * Mask credentials only, leaving PII alone: `maskCredentials` (credential key
- * names, `name=value` pairs, `Basic …`, URL query / fragment / userinfo) plus
- * {@link SPAN_CREDENTIAL_RULES} (bearer, JWT, Slack, AWS access-key id). For
- * span, event, link and metric attributes: {@link redactArgs}' PII rules key on
- * names like `id`, `url` and `date` and mask uuids, so they would erase the very
- * `order.id` / `url` attributes a trace is read by, while a secret in a span is
- * what must never reach a third-party collector. `captureRaw` as in
+ * Mask credentials only, leaving PII alone: `maskCredentials` — credential key
+ * names, `name=value` pairs, auth schemes, JWTs, PEM keys, URL query / fragment
+ * / userinfo. For span, event, link and metric attributes: {@link redactArgs}'
+ * PII rules key on names like `id`, `url` and `date` and mask uuids, so they
+ * would erase the very `order.id` / `url` attributes a trace is read by, and
+ * `@visulima/redact`'s regexes cost ~20 µs per call on the Durable Object's only
+ * thread, where every span, event and metric pays it. `captureRaw` as in
  * {@link redactArgs}.
  */
 const redactSecrets = (value: unknown, captureRaw = false): unknown => {
@@ -259,7 +252,7 @@ const redactSecrets = (value: unknown, captureRaw = false): unknown => {
         return value;
     }
 
-    return redactSecretValue(maskCredentials(value));
+    return maskCredentials(value);
 };
 
 /**
@@ -277,9 +270,10 @@ const redactSecrets = (value: unknown, captureRaw = false): unknown => {
  * On a STRING (`errorMessage`, a URL, a log line), every URL loses its query,
  * fragment and userinfo; `name=value`, `name: value` and `"name":"value"` pairs
  * with a credential name are masked; `Basic …` is masked; and `standardRules`'
- * value patterns (emails, long digit runs, `Bearer …`, JWTs) apply. Strings are
- * capped at 4 KiB first so one oversized arg cannot hold the Durable Object in
- * regex work.
+ * value patterns (emails, long digit runs, `Bearer …`, JWTs) apply. Every string
+ * is truncated to 4 KiB in what is stored, and once 16 KiB of one value has been
+ * examined the remaining strings are replaced with a marker, so no arg can hold
+ * the Durable Object in regex work.
  *
  * Still NOT caught: a bare credential in prose with no name attached
  * (`failed with sk_live_…`). This is a credential-and-PII net, not proof that no
@@ -639,7 +633,9 @@ const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}
         fields: input.fields === undefined ? undefined : redactArgs(input.fields, captureRaw),
         function: input.functionPath,
         level: input.level,
-        message: input.message,
+        // The rendered message carries whatever the handler logged, and this line
+        // is what Workers Logs / Logpush keep — redacted like `fields`.
+        message: redactArgs(input.message, captureRaw) as string,
         shard: input.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
         spanId: input.spanId,
