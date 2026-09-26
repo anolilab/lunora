@@ -135,7 +135,15 @@ has no caller left to tell — is reported to `client.on_mutation_settled`.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Left
+`None`, a write is stamped with a digest of `client.auth_token` instead (the
+reference client's, never the token itself), and `None` only when there is no
+token either — so a write queued under one token is never sent with another.
+Under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token
+at all it is held, unsettled, until one is set. Setting `identity` is what lets
+a token refresh keep the queue. A record persisted by an earlier build with a
+`None` stamp is rejected the same way once a token is held, since `None` then
+said nothing about whose write it was.
 Changing it FROM a set value (a sign-out, or another user signing in) evicts the
 previous session: every query and shape subscription drops its resume cursor and
 epoch, each query's callbacks receive its blanked value (`None` unless an
@@ -150,12 +158,13 @@ How a replayed write settles, on the single-call and the batch path alike:
   code alone, whatever the HTTP status: `SHARD_UNAVAILABLE`, `SHARD_ERROR`,
   `RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue, and so do the refused
   credentials `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` (the write
-  is held for a fresh token, not destroyed — while `connect_and_run` is live
-  and `client.identity` is set, setting a different, non-`None`
-  `client.auth_token` re-flushes its shard; otherwise call `flush_offline_queue`
-  after setting it, as on a reconnect. The identity is what keeps that flush
-  from sending one user's write with another's token, so with none set a token
-  change flushes nothing, and on an account switch set the new identity first.
+  is held for a fresh token, not destroyed — while `connect_and_run` is live,
+  setting a different, non-`None` `client.auth_token` re-flushes its shard;
+  otherwise call `flush_offline_queue` after setting it, as on a reconnect. The
+  identity gate keeps that flush from sending one user's write with another's
+  token: with `client.identity` set the write replays under the new token while
+  the identity is unchanged (on an account switch set the new identity first),
+  and with none set the new token is a new identity, so the write is rejected.
   One flush runs per shard: a flush asked for while one runs makes it pass over
   the queue again); every other code — a coded 500 and
   a server-sent `WIRE_DECODE_FAILED` included — settles `rejected`. An envelope

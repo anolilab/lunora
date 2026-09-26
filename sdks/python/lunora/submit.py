@@ -36,8 +36,8 @@ from .offline import (
     OFFLINE_WRITE_UNENCODABLE,
     OfflineError,
     QueuedMutation,
-    identity_allows_replay,
     random_id,
+    replay_identity_verdict,
     same_shard,
 )
 from .optimistic import (
@@ -169,7 +169,8 @@ class FlushReport:
         #: Ids dropped on a server verdict, an identity change, an unencodable
         #: payload, or a stale precondition.
         self.rejected: list[str] = []
-        #: Ids left queued for the next reconnect after a transient failure.
+        #: Ids left queued for the next flush: a transient failure, or held
+        #: because nobody is signed in to say whose write it is.
         self.requeued: list[str] = []
         #: Ids dropped because their precondition no longer held.
         self.conflicted: list[str] = []
@@ -368,7 +369,8 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
             return report
 
         queue = client.offline_queue
-        current_identity = client._identity
+        current_identity = client._identity_fingerprint()
+        current_token = client._auth_token
         pending = queue.items()
 
     # The consumer's predicate, evaluated with the lock RELEASED and over a
@@ -396,12 +398,19 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         return report
 
     # Gated against ONE identity snapshot: a flush is a single authenticated
-    # burst, so every write in it necessarily runs under one identity.
+    # burst, so every write in it necessarily runs under one identity. A write
+    # whose owner cannot be told (nobody signed in) is HELD: back on the queue,
+    # still persisted, unsettled — the reference's "unknown" verdict.
     sendable: list = []
     terminal: list = []
 
     for item in drained:
-        if not identity_allows_replay(item.identity, current_identity):
+        verdict = replay_identity_verdict(item.identity, current_identity, current_token)
+
+        if verdict == "unknown":
+            continue
+
+        if verdict == "mismatch":
             terminal.append((item, OfflineError(OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")))
             continue
 
@@ -441,13 +450,14 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
                     break
     finally:
         # EVERY drained write that did not settle goes back to the FRONT, in
-        # order: a transient failure, a slot the server never answered, the
-        # chunks after a stop — and whatever was still in hand when something
-        # unexpected raised. The replay paths never requeue themselves; doing it
-        # once, here, is what keeps an exception from losing drained writes that
-        # were no longer in the queue and not yet settled.
+        # order: a held write, a transient failure, a slot the server never
+        # answered, the chunks after a stop — and whatever was still in hand when
+        # something unexpected raised. The replay paths never requeue themselves;
+        # doing it once, here, is what keeps an exception from losing drained
+        # writes that were no longer in the queue and not yet settled. Over
+        # `drained`, not `sendable`, so a held write keeps its place in line.
         settled = set(report.committed) | set(report.rejected)
-        leftover = [item for item in sendable if item.id not in settled]
+        leftover = [item for item in drained if item.id not in settled]
 
         if leftover:
             with client._lock:
@@ -795,7 +805,7 @@ def _build_entry(client: LunoraClient, options: SubmitOptions, write_id: str, co
         function_path=options.function_path,
         # Bound at enqueue time, so the write can only ever replay as whoever
         # made it.
-        identity=client._identity,
+        identity=client._identity_fingerprint(),
         live_awaiter=True,
         mutation_id=write_id,
         on_settled=options.on_settled,

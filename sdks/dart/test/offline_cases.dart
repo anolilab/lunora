@@ -756,21 +756,15 @@ Future<void> caseIdentityChangeDiscardsQueuedWrites() async {
 }
 
 /// The identity stamp is a digest, not the token: an app's queue file must not
-/// become somewhere a bearer token sits at rest. Values captured from the
-/// reference client, so the two cannot drift apart silently.
+/// become somewhere a bearer token sits at rest. The values are the reference
+/// client's, read from the shared fixture python asserts too, so no port can
+/// drift from it silently.
 void caseTokenDigestMatchesTheReferenceClient() {
-  const expectations = <(String, String)>[
-    ('', '0:ztntfp:45h'),
-    ('a', '1:1r9wi7g:3t3a'),
-    ('token-abc', '9:6xtdsz:ku9cs9'),
-    ('eyJhbGciOiJIUzI1NiJ9.payload.sig', 'w:t846r5:1i09z6p'),
-    // A surrogate pair, because the digest walks code UNITS and a rune-wise
-    // walk would silently produce a different value here and nowhere else.
-    ('\u{1F511}ünïcode', '9:zq7trr:4ipgmf'),
-  ];
+  for (final raw in _scenario('tokenIdentity')['digests']! as List<Object?>) {
+    final spec = raw! as Map<String, Object?>;
+    final token = spec['token']! as String;
 
-  for (final (token, want) in expectations) {
-    equals(LunoraClient(url: 'https://app.example', authToken: token).identityFingerprint(), want, 'digest of a ${token.length}-unit token');
+    equals(LunoraClient(url: 'https://app.example', authToken: token).identityFingerprint(), spec['digest'], 'digest of a ${token.length}-unit token');
   }
 
   equals(LunoraClient(url: 'https://app.example').identityFingerprint(), null, 'no token is the signed-out identity');

@@ -32,7 +32,7 @@ from functools import partial
 from typing import Any, Callable, Optional, Union
 
 from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_failed, reply_error
-from .offline import OfflineQueue, random_id
+from .offline import OfflineQueue, random_id, token_digest
 from .optimistic import drop_confirmed_layers, fold_optimistic
 from .submit import (
     FlushReport,
@@ -430,23 +430,23 @@ class LunoraClient:
         """The bearer token every RPC carries; the next call picks up a new one.
 
         Setting a DIFFERENT, non-``None`` token while :meth:`connect_and_run` is
-        live also re-flushes its shard, provided :attr:`identity` is set. A
-        queued write the old token was refused for (``TOKEN_EXPIRED``,
+        live also re-flushes its shard, as the reference's ``setAuthToken``
+        does. A queued write the old token was refused for (``TOKEN_EXPIRED``,
         ``UNAUTHENTICATED``, ``UNAUTHORIZED``) is held for exactly this, and
         nothing else would replay it: only a reconnect flushes, and a healthy
         socket does not reconnect.
 
-        Only with an identity, because the identity is what the replay gate
-        checks and a token alone cannot say whose it is. With ``identity`` left
-        ``None`` every write is stamped ``None`` and matches any token, so a
-        flush here would send one user's held write with the next user's
-        credential. The reference client closes that by keying its identity on
-        a digest of the token; this port's identity is the app's own stamp, so
-        without one a token change flushes nothing and the write waits for the
-        caller's flush. The flush runs on the loop, not in this setter, and
-        judges each write against :attr:`identity` as it is then, so on an
-        account switch set the new identity first. Outside ``connect_and_run``
-        the flush is the caller's, as every other one is.
+        The flush is identity-gated, so it cannot send one user's write with
+        the next user's credential. With :attr:`identity` set, a write replays
+        under the new token only while the identity is unchanged — on an account
+        switch set the new identity first; the flush runs on the loop, not in
+        this setter, and reads the identity as it is then. With none set the
+        identity is the token's digest, so a new token is a new identity: the
+        refused write is rejected ``OFFLINE_IDENTITY_CHANGED`` rather than
+        replayed, exactly as the reference rejects it, and setting an identity
+        is how a refresh keeps it. A token cleared to ``None`` flushes nothing:
+        there is no credential to replay with. Outside ``connect_and_run`` the
+        flush is the caller's, as every other one is.
         """
 
         return self._auth_token
@@ -455,9 +455,25 @@ class LunoraClient:
     def auth_token(self, value: Optional[str]) -> None:
         with self._lock:
             changed, self._auth_token = value != self._auth_token, value
-            listeners = list(self._token_listeners) if value is not None and self._identity is not None else []
+            listeners = list(self._token_listeners) if value is not None else []
         if changed:
             _run_callbacks(listeners)
+
+    def _identity_fingerprint(self) -> Optional[str]:
+        """Who a write queued now belongs to; call with the lock held.
+
+        :attr:`identity` when set, else :func:`~lunora.offline.token_digest` of
+        :attr:`auth_token`, else ``None`` — the reference's
+        ``identityFingerprint``. Without the digest branch every write made with
+        no identity was stamped ``None`` and matched any token, so a flush after
+        an account switch sent the previous user's writes with the new user's
+        credential.
+        """
+
+        if self._identity is not None:
+            return self._identity
+
+        return None if self._auth_token is None else token_digest(self._auth_token)
 
     @property
     def identity(self) -> Optional[str]:
@@ -465,8 +481,11 @@ class LunoraClient:
 
         A user id, not a bearer token. It is persisted alongside every queued
         write and re-checked before the write replays, so a restart cannot push
-        one user's queued writes as another. ``None`` means signed out, which is
-        itself an identity a write can be stamped with.
+        one user's queued writes as another. Left ``None``, a write is stamped
+        with a digest of :attr:`auth_token` instead (``None`` with no token
+        either), so a new token is a new identity and a token refresh rejects
+        the writes queued under the old one; set this to keep them across a
+        refresh.
         """
 
         with self._lock:
