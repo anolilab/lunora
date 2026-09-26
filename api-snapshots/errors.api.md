@@ -192,6 +192,15 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Offline identity changed";
     };
+    readonly IDENTITY_MISMATCH: {
+        readonly hint: readonly [
+            "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
+            "",
+            "`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie."
+        ];
+        readonly status: 409;
+        readonly title: "Session changed since the write was queued";
+    };
     readonly CODEGEN_DIAGNOSTIC: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
