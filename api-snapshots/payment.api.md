@@ -261,6 +261,7 @@ interface VerifyCreemSignatureInput {
 
 ```ts
 interface VerifyStandardWebhookInput {
+    readonly keyEncoding?: "base64" | "utf8";
     readonly now?: number;
     readonly payload: string;
     readonly secret: string;

@@ -270,8 +270,10 @@ Polar signs webhooks with the [**Standard Webhooks**](https://www.standardwebhoo
 scheme (the same scheme svix uses): three headers (`webhook-id`,
 `webhook-timestamp`, and `webhook-signature`) over
 `base64(HMAC_SHA256(secret, "{id}.{timestamp}.{body}"))`. The adapter verifies
-them against `webhookSecret` (the `whsec_` prefix is stripped and the remainder
-base64-decoded to the key) with a replay-window check.
+them against `webhookSecret` with a replay-window check. The HMAC key is the
+secret's UTF-8 bytes exactly as Polar shows it, `polar_whs_` prefix included —
+the same key `@polar-sh/sdk`'s `validateEvent` uses. Unlike Dodo Payments and
+Autumn, Polar's secret is **not** base64-decoded.
 
 ### Create the endpoint in Polar
 

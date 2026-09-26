@@ -14,9 +14,10 @@ import { createExecutionContext, createMessageBatch, env, getQueueResult } from 
 import { describe, expect, it, vi } from "vitest";
 
 import createQueues from "../../src/create-queues";
+import { sealRequeue } from "../../src/requeue-envelope";
 import type { QueueBindingLike } from "../../src/types";
 import type { SmokeBody } from "./test-worker";
-import testWorker, { declineDeliveries, deliveries } from "./test-worker";
+import testWorker, { declineDeliveries, deliveries, requeuedSends } from "./test-worker";
 
 describe("@lunora/queue (workerd)", () => {
     it("ctx.queues producer sends through a real Queue binding", async () => {
@@ -103,4 +104,52 @@ describe("@lunora/queue (workerd)", () => {
         // (The delay's value is asserted in the Node suite: `getQueueResult` does not report `delaySeconds`.)
         expect(declineDeliveries.filter((delivery) => delivery.id === first!.id)).toHaveLength(1);
     }, 15_000);
+
+    // On the last delivery (`max_retries: 2`, so attempt 3) the broker grants no
+    // retry: the message would be dropped while its call is still running. It
+    // goes back on its own queue as a delayed copy instead, and only then is the
+    // original acked.
+    it("re-enqueues a message declined on its last delivery as a delayed copy, then acks it", async () => {
+        expect.hasAssertions();
+
+        const sendsBefore = requeuedSends.length;
+        const batch = createMessageBatch<SmokeBody>("decline-queue", [
+            { attempts: 3, body: { text: "last-try" }, id: "decline-last-1", timestamp: new Date() },
+        ]);
+        const context = createExecutionContext();
+
+        await testWorker.queue(batch, env);
+
+        const result = await getQueueResult(batch, context);
+
+        // COUNTS: acked once, retried never, one copy sent through the real binding.
+        expect(result.explicitAcks).toStrictEqual(["decline-last-1"]);
+        expect(result.retryMessages).toStrictEqual([]);
+        expect(requeuedSends.slice(sendsBefore)).toStrictEqual([
+            { body: await sealRequeue("test-token", "decline-last-1", { text: "last-try" }), options: { contentType: "json", delaySeconds: 900 } },
+        ]);
+    });
+
+    // Sent straight through the binding, past `ctx.queues`' own refusal: an
+    // envelope without a valid MAC must not make the handler see another id.
+    it("delivers a body imitating a re-enqueued copy as-is, under the broker's own id", async () => {
+        expect.hasAssertions();
+
+        const before = deliveries.length;
+        const forged = { "$lunora.requeued$": { body: JSON.stringify({ text: "forged" }), id: "victim-1", mac: "0".repeat(64) } };
+
+        await env.QUEUE_SMOKE_QUEUE.send(forged as unknown as SmokeBody);
+
+        await vi.waitFor(
+            () => {
+                expect(deliveries.slice(before)).toHaveLength(1);
+            },
+            { interval: 50, timeout: 5000 },
+        );
+
+        const [delivered] = deliveries.slice(before);
+
+        expect(delivered?.body).toStrictEqual(forged);
+        expect(delivered?.id).not.toBe("victim-1");
+    });
 });

@@ -1,3 +1,16 @@
+## @lunora/payment [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.148...@lunora/payment@1.0.0-alpha.149) (2026-09-25)
+
+### Bug Fixes
+
+* **payment:** key Polar webhook HMAC with the secret's utf-8 bytes ([#835](https://github.com/anolilab/lunora/issues/835)) ([f62e82b](https://github.com/anolilab/lunora/commit/f62e82b01ffd6c6cd2426eeee5b4285b4592bf9c))
+
+## @lunora/payment [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.147...@lunora/payment@1.0.0-alpha.148) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/payment [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.146...@lunora/payment@1.0.0-alpha.147) (2026-09-25)
 
 

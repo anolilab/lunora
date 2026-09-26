@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1092,6 +1092,285 @@ describe("reconcileWranglerBindings", () => {
             expect(text).toContain("// consumers first on purpose");
             // Only the one value changed: the entry stays on its line, and consumers stay ahead of producers.
             expect(text).toContain(`{ "queue": "receipt-queue", "max_retries": 5 },`);
+        });
+
+        // These start from a consumer that already carries a field `defineQueue`
+        // no longer declares. Whether it goes depends on the ownership record in
+        // package.json: only a field reconcile wrote, still at the value it wrote, is removed.
+        describe("an option removed from defineQueue", () => {
+            const seedManifest = (lunora?: Record<string, unknown>): void => {
+                writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`, "utf8");
+            };
+
+            const readManifest = (): Record<string, unknown> => JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;
+
+            it("removes a dead-letter queue reconcile wrote once defineQueue drops it", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+                seedManifest({ queueTuning: { queues: { "receipt-queue": { dead_letter_queue: "receipt-dlq", max_retries: 5 } } } });
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(result.updated).toStrictEqual(["queues.consumers/receipt-queue (removed dead_letter_queue)"]);
+                expect(receiptConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue" });
+                // The record now owns only what is still declared.
+                expect(readManifest()["lunora"]).toStrictEqual({ queueTuning: { queues: { "receipt-queue": { max_retries: 5 } } } });
+            });
+
+            it("keeps a field changed by hand after reconcile wrote it, and says so", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 7 }`);
+                seedManifest({ crons: ["0 3 * * *"], queueTuning: { queues: { "receipt-queue": { max_retries: 5 } } } });
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }));
+
+                expect(receiptConsumer()).toStrictEqual({ max_retries: 7, queue: "receipt-queue" });
+                expect(result.warnings.filter((warning) => warning.includes("changed by hand"))).toHaveLength(1);
+                // Nothing is owned any more, so the record goes; the unrelated key stays.
+                expect(readManifest()["lunora"]).toStrictEqual({ crons: ["0 3 * * *"] });
+            });
+
+            it("keeps the field when nothing records that reconcile wrote it", () => {
+                expect.assertions(2);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+                seedManifest();
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(result.changed).toBe(false);
+                expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue" });
+            });
+
+            it("takes back out, on a later pass, a field an earlier pass wrote", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                seedManifest();
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }));
+
+                expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue" });
+
+                const second = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }));
+
+                expect(second.updated).toStrictEqual(["queues.consumers/receipt-queue (removed max_retries, removed dead_letter_queue)"]);
+                expect(receiptConsumer()).toStrictEqual({ queue: "receipt-queue" });
+            });
+
+            // A formatter may keep the record inline, or in another key order.
+            // A pass that owns the same fields must leave package.json alone.
+            it.each([
+                ["inline", `{ "name": "app", "lunora": { "queueTuning": { "queues": { "receipt-queue": { "max_retries": 5 } } } } }\n`],
+                [
+                    "reordered",
+                    `{\n  "lunora": {\n    "queueTuning": { "queues": { "receipt-queue": { "dead_letter_queue": "receipt-dlq", "max_retries": 5 } } }\n  },\n  "name": "app"\n}\n`,
+                ],
+            ])("leaves an %s record byte-identical when nothing changed", (label, manifest) => {
+                expect.assertions(1);
+
+                seedConsumer(
+                    label === "inline"
+                        ? `{ "queue": "receipt-queue", "max_retries": 5 }`
+                        : `{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`,
+                );
+                writeFileSync(join(root, "package.json"), manifest, "utf8");
+
+                reconcileWranglerBindings(
+                    root,
+                    baseInferred({ queues: [receiptQueue(label === "inline" ? { maxRetries: 5 } : { deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
+                );
+
+                expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
+            });
+
+            it("writes the record without reformatting the rest of package.json", () => {
+                expect.assertions(1);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                writeFileSync(join(root, "package.json"), `{\n  "name": "app",\n  "scripts": { "dev": "lunora dev" }\n}\n`, "utf8");
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(readFileSync(join(root, "package.json"), "utf8")).toBe(
+                    `{\n  "name": "app",\n  "scripts": { "dev": "lunora dev" },\n  "lunora": {\n    "queueTuning": {\n      "queues": {\n        "receipt-queue": {\n          "max_retries": 5\n        }\n      }\n    }\n  }\n}\n`,
+                );
+            });
+
+            it("removes a dropped field's trailing comment with it, and keeps every other comment", () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [
+            {
+                "queue": "receipt-queue", // the receipts
+                "max_retries": 5, // raised in March
+                "dead_letter_queue": "receipt-dlq" // the dlq
+            },
+        ],
+    },
+}
+`,
+                    "utf8",
+                );
+                seedManifest({ queueTuning: { queues: { "receipt-queue": { dead_letter_queue: "receipt-dlq", max_retries: 5 } } } });
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                // The field before the removed last one loses its now-trailing comma, not its comment.
+                expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain(`            {
+                "queue": "receipt-queue", // the receipts
+                "max_retries": 5 // raised in March
+            },`);
+            });
+
+            it("reports a package.json it cannot write as its own failure, after wrangler.jsonc was updated", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                seedManifest();
+                chmodSync(join(root, "package.json"), 0o444);
+
+                try {
+                    const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                    expect(result.changed).toBe(true);
+                    expect(receiptConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue" });
+                    expect(
+                        result.warnings.filter((warning) => warning.includes("wrangler.jsonc was updated") && warning.includes("package.json")),
+                    ).toHaveLength(1);
+                } finally {
+                    chmodSync(join(root, "package.json"), 0o644);
+                }
+            });
+        });
+
+        // An `env.<name>` block declares its own consumers, usually under
+        // environment-suffixed queue names that only its own producers map back to
+        // a `defineQueue` export.
+        describe("a consumer inside the env block a --env deploy targets", () => {
+            const seedEnvironment = (consumer: string): void => {
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [{ "queue": "receipt-queue", "max_retries": 3 }],
+    },
+    "env": {
+        "production": {
+            "queues": {
+                "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue-prod" }],
+                "consumers": [${consumer}],
+            },
+        },
+    },
+}
+`,
+                    "utf8",
+                );
+                writeFileSync(join(root, "package.json"), `{ "name": "app" }\n`, "utf8");
+            };
+
+            const productionConsumer = (): Record<string, unknown> => readConfig().env.production.queues.consumers[0] as Record<string, unknown>;
+
+            it("retunes it through the block's own producer, but leaves dead_letter_queue to the user", () => {
+                expect.assertions(4);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod", "max_retries": 3, "max_concurrency": 2 }`);
+
+                const result = reconcileWranglerBindings(
+                    root,
+                    baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
+                    "production",
+                );
+
+                // COUNTS: both scopes retuned, one DLQ warning for the env consumer.
+                expect(result.updated).toStrictEqual([
+                    "queues.consumers/receipt-queue (max_retries, dead_letter_queue)",
+                    "env.production.queues.consumers/receipt-queue-prod (max_retries)",
+                ]);
+                expect(productionConsumer()).toStrictEqual({ max_concurrency: 2, max_retries: 5, queue: "receipt-queue-prod" });
+                expect(result.warnings.filter((warning) => warning.includes("dead_letter_queue"))).toHaveLength(1);
+                expect(readConfig().env.production.queues.consumers).toHaveLength(1);
+            });
+
+            it("leaves the env block alone without --env", () => {
+                expect.assertions(1);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod", "max_retries": 3 }`);
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(productionConsumer()).toStrictEqual({ max_retries: 3, queue: "receipt-queue-prod" });
+            });
+
+            it("takes back out a field an earlier --env pass wrote into the block", () => {
+                expect.assertions(2);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod" }`);
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), "production");
+
+                expect(productionConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue-prod" });
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }), "production");
+
+                expect(productionConsumer()).toStrictEqual({ queue: "receipt-queue-prod" });
+            });
+
+            const seedBlock = (queues: string): void => {
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [{ "queue": "receipt-queue", "max_retries": 5 }],
+    },
+    "env": { "production": { "queues": ${queues} } },
+}
+`,
+                    "utf8",
+                );
+                writeFileSync(join(root, "package.json"), `{ "name": "app" }\n`, "utf8");
+            };
+
+            it("does not also retune a same-named consumer when the block's producer maps the binding elsewhere", () => {
+                expect.assertions(3);
+
+                seedBlock(`{
+            "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "billing-prod" }],
+            "consumers": [{ "queue": "billing-prod" }, { "queue": "receipt-queue" }],
+        }`);
+
+                const result = reconcileWranglerBindings(
+                    root,
+                    baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
+                    "production",
+                );
+
+                // COUNTS: exactly the one consumer the block's producer names.
+                expect(readConfig().env.production.queues.consumers).toStrictEqual([{ max_retries: 5, queue: "billing-prod" }, { queue: "receipt-queue" }]);
+                expect(result.warnings.filter((warning) => warning.includes("defineQueue declares deadLetterQueue"))).toHaveLength(1);
+                expect(result.warnings.filter((warning) => warning.includes("env.production.queues.consumers/receipt-queue:"))).toHaveLength(1);
+            });
+
+            it("matches by name when the block declares no producers, and names a consumer it matches to nothing", () => {
+                expect.assertions(2);
+
+                seedBlock(`{ "consumers": [{ "queue": "receipt-queue" }, { "queue": "other-worker-queue-prod" }] }`);
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), "production");
+
+                expect(readConfig().env.production.queues.consumers).toStrictEqual([
+                    { max_retries: 5, queue: "receipt-queue" },
+                    { queue: "other-worker-queue-prod" },
+                ]);
+                expect(result.warnings.filter((warning) => warning.includes("other-worker-queue-prod"))).toHaveLength(1);
+            });
         });
     });
 
