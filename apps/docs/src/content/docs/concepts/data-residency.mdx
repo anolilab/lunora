@@ -74,9 +74,8 @@ Voice sessions and DO-backed auth were not pinned by earlier releases, even with
 `.jurisdiction(...)` declared. Pinning them now moves them exactly the way a
 jurisdiction change moves everything else: each resolves to a **new, empty
 object**, and the old data stays in the un-pinned one. For DO-backed auth that
-means every user, account, session and credential; for voice, every stored
-transcript. Nothing about the upgrade changes your schema, so the drift gate
-below does not fire.
+means every user, account, session and credential. Nothing about the upgrade
+changes your schema, so the drift gate below does not fire.
 
 So both are pinned only on an explicit acknowledgement:
 
@@ -91,18 +90,111 @@ whose options it cannot read — because for D1-mode auth the acknowledgement
 changes nothing. Until you acknowledge, DO-backed auth stays on the un-pinned
 object, where its data is.
 
-Before acknowledging on an app with existing users or transcripts, decide what
-happens to that data. There is no built-in copy path:
+### Voice: nothing to move
 
-- **DO-backed auth**: `lunora export` does not read the auth object, so users
-  and sessions do not travel with the table rows. Either accept a fresh user
-  base (everyone signs up / signs in again), or move the rows yourself: the old
-  object is still reachable through the un-pinned namespace
-  (`env.AUTH.get(env.AUTH.idFromName("auth"))`) until you delete it, and its
-  tables are better-auth's own, so a one-off script can read them there and
-  write them through the pinned object.
-- **Voice**: transcripts in the un-pinned `VoiceSessionDO`s are left behind. Live
-  sessions end at the deploy; clients reconnect into the pinned objects.
+A `VoiceSessionDO` keeps no storage of its own. It holds the live socket and the
+audio of the utterance in progress, and writes every transcript turn to the
+agent's thread tables, which are rows in the app's shards: already pinned, and
+covered by `lunora export`. Pinning voice drops the sessions that are live at the
+deploy; clients reconnect into the pinned objects and continue the same threads.
+
+### DO-backed auth: copy, verify, then purge
+
+`lunora export` does not read the auth object, so users and sessions need their
+own copy. Two admin operations do it, served by the deployed worker and gated by
+the admin bearer like every other `__lunora_admin__:*` op:
+
+- `__lunora_admin__:copyAuthToJurisdiction` copies **every table** in the
+  un-pinned auth object into the pinned one: better-auth's tables for whatever
+  plugins you run, the auth audit log, the rate limiter, and any table a plugin
+  adds later. A table the pinned object lacks is created from the un-pinned
+  object's own definition.
+- `__lunora_admin__:purgeUnpinnedAuth` drops every table in the un-pinned object.
+
+Do this in a short maintenance window. Once the acknowledgement is deployed,
+sign-ins land in the pinned object, which is empty until the copy runs.
+
+<Steps>
+
+<Step>
+
+#### Acknowledge and deploy
+
+```ts
+export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndVoice: true });
+```
+
+```bash
+lunora codegen && lunora deploy
+```
+
+From here the un-pinned object receives no more writes, so the copy cannot miss
+one.
+
+</Step>
+
+<Step>
+
+#### Copy
+
+```bash
+LUNORA_ADMIN_TOKEN=… lunora run __lunora_admin__:copyAuthToJurisdiction \
+  --url https://app.example.com
+```
+
+The answer lists every table with its counts:
+
+```json
+{
+    "done": true,
+    "tables": [
+        { "table": "user", "sourceRows": 1840, "copied": 1840, "skipped": 0, "targetRows": 1840 },
+        { "table": "session", "sourceRows": 2311, "copied": 2311, "skipped": 0, "targetRows": 2311 }
+    ]
+}
+```
+
+It is safe to run again. The pinned object records how far each table got, so a
+run that stopped part-way (a dropped connection, a timeout) resumes where it
+stopped, and a run after a finished copy writes nothing. One call copies a bounded
+number of pages; a large auth object answers `done: false`, and you call it again
+until it answers `done: true`.
+
+It **refuses** a pinned object that already has users and holds no earlier copy
+(`AUTH_MOVE_TARGET_NOT_EMPTY`): someone signed up between the deploy and the copy,
+and copying would merge two user bases. `--args '{"force":true}'` copies anyway.
+A row whose id or unique key (an email, say) already exists in the pinned object
+is kept as it is and counted under `skipped`.
+
+</Step>
+
+<Step>
+
+#### Verify
+
+Check that `targetRows` matches `sourceRows` for every table, and sign in as a
+known user. `skipped` is `0` unless you forced the copy.
+
+</Step>
+
+<Step>
+
+#### Purge the un-pinned copy
+
+```bash
+LUNORA_ADMIN_TOKEN=… lunora run __lunora_admin__:purgeUnpinnedAuth \
+  --url https://app.example.com
+```
+
+**Do not skip this.** Until you purge, the users, password hashes and sessions you
+pinned to keep in the jurisdiction are still stored outside it. The copy never
+deletes them on its own: a copy you have not verified is not a reason to lose the
+only other one. The purge refuses (`AUTH_MOVE_INCOMPLETE`) until a copy has
+finished for every table the un-pinned object holds.
+
+</Step>
+
+</Steps>
 
 ## Set it once: changing it strands data
 
@@ -233,5 +325,5 @@ Leave them to expire or delete them from the Cloudflare dashboard.
     **Scheduled jobs and sessions don't ride along.** `lunora export` covers table rows, not `SchedulerDO` timer state. In-flight `runAfter` / `runAt` / cron
     jobs in the old region are lost; re-enqueue anything that must survive the move. D1-backed auth sessions are unaffected by the jurisdiction change and stay
     put. DO-backed auth is not: its users and sessions stay in the old region's auth object, and `lunora export` does not read them, so they do not move with
-    the table rows.
+    the table rows. The auth copy above only moves an un-pinned object into its pinned one; it does not move auth between two jurisdictions.
 </Callout>
