@@ -292,4 +292,79 @@ describe("replies the client cannot decode", () => {
 
         client.close();
     });
+
+    it("keeps a direct write's optimistic value when it committed but its result does not decode", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({
+            fetch: async () => Response.json({ commitCursor: 7, result: UNDECODABLE }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("c:get"), {}, (value) => received.push(value));
+        latestSocket().open();
+
+        const subscribe = latestSocket()
+            .sent.map((raw) => JSON.parse(raw) as { id?: string; type: string })
+            .find((frame) => frame.type === "subscribe");
+
+        latestSocket().receive({ delta: 0, id: subscribe?.id, type: "delta" });
+
+        await expect(client.mutation(fnRef("c:get"), {}, { optimistic: () => 9 })).rejects.toMatchObject({ code: "WIRE_DECODE_FAILED" });
+
+        // The write committed: its predicted value stays until the confirming
+        // frame supersedes it, instead of reverting to the pre-write 0.
+        expect(received).toStrictEqual([0, 9]);
+
+        client.close();
+    });
+
+    it("keeps a replayed write's optimistic value when it committed but its result does not decode", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const client = offlineClient(async () => Response.json({ commitCursor: 7, result: UNDECODABLE }));
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("c:get"), {}, (value) => received.push(value));
+        latestSocket().open();
+
+        const subscribe = latestSocket()
+            .sent.map((raw) => JSON.parse(raw) as { id?: string; type: string })
+            .find((frame) => frame.type === "subscribe");
+
+        latestSocket().receive({ delta: 0, id: subscribe?.id, type: "delta" });
+        latestSocket().triggerClose();
+
+        const outcome = outcomeOf(client.mutation(fnRef("c:get"), {}, { optimistic: () => 9 }));
+
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(outcome.value).toStrictEqual({ rejected: "WIRE_DECODE_FAILED" });
+        expect(received.at(-1)).toBe(9);
+
+        client.close();
+    });
+
+    it("advances the custom-mutator watermark a reply acknowledged even when its result does not decode", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({
+            fetch: async () => Response.json({ lastMutationId: 5, result: UNDECODABLE }),
+            url: "https://app.example",
+        });
+
+        await expect(client.callMutator("messages:send", {}, { clientSeq: 5 })).rejects.toMatchObject({ code: "WIRE_DECODE_FAILED" });
+
+        // The shard applied seq 5; a mutator runtime seeding from a stale
+        // watermark would reissue it and have the write swallowed as a replay.
+        expect(client.confirmedMutationWatermark()).toBe(5);
+
+        client.close();
+    });
 });

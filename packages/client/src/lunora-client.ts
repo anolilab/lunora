@@ -2033,15 +2033,29 @@ class LunoraClient {
         // through this door instead.
         const identity = this.identityFingerprint();
         let ackWatermark: number | undefined;
+        let result: unknown;
+        // The shard applied the push even when its result does not decode, so the
+        // watermark it acknowledged is recorded before that error propagates —
+        // otherwise the next mutator derives its seq from stale state and the
+        // shard swallows it as a replay.
+        let undecodable: LunoraError | undefined;
 
-        const result = await this.rpc(functionPath, args, options?.shardKey, {
-            captureBookmark: true,
-            clientId: this.clientId,
-            clientSeq,
-            onMutationAck: (lastMutationId) => {
-                ackWatermark = lastMutationId;
-            },
-        });
+        try {
+            result = await this.rpc(functionPath, args, options?.shardKey, {
+                captureBookmark: true,
+                clientId: this.clientId,
+                clientSeq,
+                onMutationAck: (lastMutationId) => {
+                    ackWatermark = lastMutationId;
+                },
+            });
+        } catch (error) {
+            if (!isUndecodableResult(error)) {
+                throw error;
+            }
+
+            undecodable = error;
+        }
 
         if (ackWatermark !== undefined && ackWatermark > (this.clientWatermarks.get(identity ?? "")?.get(bucket) ?? 0)) {
             let bucketWatermarks = this.clientWatermarks.get(identity ?? "");
@@ -2056,6 +2070,10 @@ class LunoraClient {
             }
 
             bucketWatermarks.set(bucket, ackWatermark);
+        }
+
+        if (undecodable !== undefined) {
+            throw undecodable;
         }
 
         // The DO echoes `lastMutationId === clientSeq` only when it ran this push
@@ -5083,8 +5101,9 @@ class LunoraClient {
             return enqueue();
         }
 
+        let commitCursor: number | undefined;
+
         try {
-            let commitCursor: number | undefined;
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
@@ -5114,15 +5133,38 @@ class LunoraClient {
                 return enqueue();
             }
 
-            // A durable replay the worker refused for another user's cookie:
-            // learn who that is, so the sink's next attempt is gated on it.
-            this.noteIdentityMismatch(error);
-
-            // LIFO rollback: see the offline-queue reject path above.
-            rollbackOptimistic(optimisticRollbacks);
+            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks);
 
             throw error;
         }
+    }
+
+    /**
+     * Unwind a direct write's optimistic layers after its RPC threw — or keep
+     * them, when it threw only because a COMMITTED result did not decode: the
+     * write happened, so its predicted value stays until the confirming frame
+     * supersedes it.
+     */
+    private settleFailedDirectWrite(
+        error: unknown,
+        commitCursor: number | undefined,
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        optimisticRollbacks: (() => void)[],
+    ): void {
+        // A durable replay the worker refused for another user's cookie:
+        // learn who that is, so the sink's next attempt is gated on it.
+        this.noteIdentityMismatch(error);
+
+        if (isUndecodableResult(error)) {
+            for (const confirm of optimisticConfirms) {
+                confirm(commitCursor);
+            }
+
+            return;
+        }
+
+        // LIFO rollback: see the offline-queue reject path above.
+        rollbackOptimistic(optimisticRollbacks);
     }
 
     /**
@@ -5237,7 +5279,12 @@ class LunoraClient {
                     // discarded — `mutationId` is the entry's stable id.
                     this.queuedIdentities.delete(mutationId);
 
-                    rollbackOptimistic(optimisticRollbacks);
+                    // A write that committed with an undecodable result was
+                    // already confirmed through `onCommit`; only a write that
+                    // did NOT happen takes its predicted value back.
+                    if (!isUndecodableResult(error)) {
+                        rollbackOptimistic(optimisticRollbacks);
+                    }
 
                     reject(error instanceof Error ? error : new Error(String(error)));
                 },
