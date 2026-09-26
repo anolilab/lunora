@@ -224,6 +224,23 @@ public final class Client {
          * of the client.
          */
         final Set<String> resets = new LinkedHashSet<>();
+
+        /**
+         * The checkpoint each shape's diff was computed against: its part's {@code baseCheckpoint},
+         * else the {@code pokeStart}'s.
+         */
+        final Map<String, Object> bases = new LinkedHashMap<>();
+
+        /** The {@code pokeStart}'s {@code baseCheckpoint}, the default for every part. */
+        final Object startBase;
+
+        /** The {@code pokeStart}'s epoch, or null. */
+        final String epoch;
+
+        PokeBuffer(Object startBase, String epoch) {
+            this.startBase = startBase;
+            this.epoch = epoch;
+        }
     }
 
     private static final class Shape {
@@ -481,7 +498,7 @@ public final class Client {
 
         if (envelope instanceof Map<?, ?> error) {
             Object rawData = ((Map<String, Object>) error).get("data");
-            Object data = rawData == null ? null : Wire.decode(rawData);
+            Object data = decodeErrorData(rawData);
             Object code = ((Map<String, Object>) error).get("code");
             Object message = ((Map<String, Object>) error).get("message");
 
@@ -528,6 +545,19 @@ public final class Client {
 
         return new ApiException(
                 "INTERNAL", "HTTP " + status + " without a readable error envelope", null, true);
+    }
+
+    /**
+     * An error envelope's {@code data}, decoded — or null when the codec refuses it. The envelope
+     * is still the server's coded verdict: letting the codec's exception escape instead made it
+     * read as a transport failure, or escape past every handler written for this SDK's errors.
+     */
+    static Object decodeErrorData(Object raw) {
+        try {
+            return raw == null ? null : Wire.decode(raw);
+        } catch (RuntimeException error) {
+            return null;
+        }
     }
 
     /** {@code text} parsed, when it is a JSON object; null for anything else, never a throw. */
@@ -1210,7 +1240,13 @@ public final class Client {
                         oldest.remove();
                     }
 
-                    pokes.put(String.valueOf(frame.get("pokeId")), new PokeBuffer());
+                    pokes.put(
+                            String.valueOf(frame.get("pokeId")),
+                            new PokeBuffer(
+                                    frame.get("baseCheckpoint") instanceof Number base
+                                            ? base
+                                            : null,
+                                    frame.get("epoch") instanceof String epoch ? epoch : null));
                 }
             }
             case "pokePart" -> bufferPokePart(frame);
@@ -1270,6 +1306,15 @@ public final class Client {
 
             buffer.parts.computeIfAbsent(shapeId, key -> new ArrayList<>()).addAll(operations);
 
+            Object base =
+                    frame.get("baseCheckpoint") instanceof Number number
+                            ? number
+                            : buffer.startBase;
+
+            if (base != null) {
+                buffer.bases.put(shapeId, base);
+            }
+
             // Recorded sticky (never cleared) so a server that splits one seed across
             // several parts still replaces rather than merges. `reset` is the ONLY
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
@@ -1289,11 +1334,15 @@ public final class Client {
     private void applyPoke(Map<String, Object> frame) {
         List<Delivery> deliveries = new ArrayList<>();
         List<ErrorDelivery> errorDeliveries = new ArrayList<>();
+        List<Map<String, Object>> reseeds = new ArrayList<>();
+        FrameSender socket;
 
         // The view is mutated under the lock; `onRows`/`onError` fire after it is
         // released, with the row snapshot taken while still holding it — so a
         // callback sees one consistent poke even if the next one lands mid-delivery.
         synchronized (lock) {
+            socket = sender;
+
             PokeBuffer buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
 
             if (buffer == null) {
@@ -1304,6 +1353,38 @@ public final class Client {
                 Shape shape = shapes.get(entry.getKey());
 
                 if (shape == null) {
+                    continue;
+                }
+
+                // An epoch mismatch means the changelog forked since this view last applied; a
+                // base mismatch means the diff was computed against a checkpoint the view is not
+                // at (a dropped or refused poke). Splicing it on would corrupt the view, so drop
+                // it, clear its position, skip the ops and re-subscribe COLD so the server
+                // re-seeds it. A reset part is its complete membership, and settles either.
+                Object base = buffer.bases.get(entry.getKey());
+                boolean epochForked =
+                        buffer.epoch != null
+                                && shape.epoch != null
+                                && !buffer.epoch.equals(shape.epoch);
+                boolean baseDiverged =
+                        base instanceof Number expected
+                                && shape.checkpoint instanceof Number actual
+                                && expected.doubleValue() != actual.doubleValue();
+
+                if (!buffer.resets.contains(entry.getKey()) && (epochForked || baseDiverged)) {
+                    shape.rows.clear();
+                    shape.order.clear();
+                    shape.checkpoint = null;
+                    shape.epoch = null;
+
+                    if (shape.onRows != null) {
+                        deliveries.add(new Delivery(shape.onRows, new ArrayList<>()));
+                    }
+
+                    reseeds.add(
+                            buildShapeSubscribeFrame(
+                                    entry.getKey(), shape.name, shape.args, null, null));
+
                     continue;
                 }
 
@@ -1340,7 +1421,7 @@ public final class Client {
                                 new ErrorDelivery(
                                         shape.onError,
                                         new SubscriptionError(
-                                                CODE_INVALID_FRAME,
+                                                CODE_WIRE_DECODE_FAILED,
                                                 "malformed wire value: " + failure.getMessage())));
                     }
 
@@ -1398,6 +1479,12 @@ public final class Client {
 
                     deliveries.add(new Delivery(shape.onRows, rows));
                 }
+            }
+        }
+
+        if (socket != null) {
+            for (Map<String, Object> reseed : reseeds) {
+                socket.send(reseed);
             }
         }
 

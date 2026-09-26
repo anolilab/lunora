@@ -905,7 +905,7 @@ public final class Submit {
         return new ApiException(
                 envelope.get("code") instanceof String code ? code : "INTERNAL",
                 envelope.get("message") instanceof String message ? message : fallback,
-                envelope.get("data") == null ? null : Wire.decode(envelope.get("data")),
+                Client.decodeErrorData(envelope.get("data")),
                 // The HTTP status is not in scope on the batch path — `rpcBatch` returns the parsed
                 // body only — so a batch envelope is classified by its CODE alone. That is enough:
                 // an envelope-less non-2xx never reaches here (it parses to no `results` and no
@@ -924,7 +924,8 @@ public final class Submit {
         if (error instanceof ApiException api) {
             return api.transientFailure
                     || Offline.TRANSIENT_ERROR_CODES.contains(api.code)
-                    || Offline.RATE_LIMIT_ERROR_CODES.contains(api.code);
+                    || Offline.RATE_LIMIT_ERROR_CODES.contains(api.code)
+                    || Offline.AUTH_REPLAY_ERROR_CODES.contains(api.code);
         }
 
         return !(error instanceof OfflineException) && !(error instanceof Wire.WireFormatException);

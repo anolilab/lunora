@@ -49,8 +49,12 @@ the tracked one. `client.resendSubscriptions()` re-subscribes everything after a
 reconnect — queries carrying their resume cursor and shapes their checkpoint and
 epoch. A poke is applied to each shape whole or not at all: if any row for a
 shape does not decode, that shape's view, checkpoint and epoch stay as they
-were and its `onError` receives `INVALID_FRAME`. `client.close()` also ends
-every open `stream`.
+were and its `onError` receives `WIRE_DECODE_FAILED`. A later part whose
+`baseCheckpoint` (or its `pokeStart`'s) is not the checkpoint the view is at, or
+whose epoch differs from the view's, is not spliced on: unless it is a `reset`,
+the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
+and a cold `shape_subscribe` sent at once so the server re-seeds it.
+`client.close()` also ends every open `stream`.
 
 ## Optimistic updates and offline writes
 
@@ -107,8 +111,11 @@ client also holds the next flush off until that delay passes.
 
 A replay failure is classified the same way whether the write went out alone or
 in a batch: a coded error envelope by its code alone, whatever the HTTP status —
-only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED` and `TOO_MANY_REQUESTS`
-re-queue, so a coded 5xx is terminal — and a reply with no envelope by its
+only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
+the refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED` and
+`UNAUTHENTICATED` (held until a token refresh, never settled) re-queue, so a
+coded 5xx is terminal; an envelope whose `data` does not decode keeps its code
+with the `data` dropped — and a reply with no envelope by its
 status: re-queued, except a 413. A 413 is `PAYLOAD_TOO_LARGE` whatever its body,
 so a batch refused with an edge's HTML 413 is halved and retried, and a lone
 write still refused settles terminally with that code.

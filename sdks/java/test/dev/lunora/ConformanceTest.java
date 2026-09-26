@@ -639,6 +639,11 @@ public final class ConformanceTest {
                 check(
                         error.getMessage().equals(testCase.get("message")),
                         "message for " + testCase.get("name"));
+
+                // Data the codec refuses is dropped; the coded verdict still stands.
+                if (Boolean.TRUE.equals(testCase.get("dataDropped"))) {
+                    check(error.data == null, "data is dropped for " + testCase.get("name"));
+                }
             }
         }
     }
@@ -1193,7 +1198,7 @@ public final class ConformanceTest {
         check(
                 errors.size() == 1
                         && shape.get("undecodableRowErrorCode").equals(errors.get(0).code()),
-                "the shape's error callback gets INVALID_FRAME once, got " + errors);
+                "the shape's error callback gets the fixture's code once, got " + errors);
         check(
                 otherDelivered.size() == 1
                         && canonical(otherDelivered.get(0))
@@ -1215,6 +1220,65 @@ public final class ConformanceTest {
                 canonical(shapeView(client, delivered))
                         .equals(canonical(shape.get("expectedRows"))),
                 "the view is exactly what it was before the refused poke");
+
+        // The server believes it delivered the refused rows, so its next part is based on a
+        // checkpoint this view never reached: the shape must re-seed rather than splice onto it.
+        delivered.clear();
+        sent.clear();
+
+        for (Object frame : (List<Object>) shape.get("gapPokeSequence")) {
+            client.handleFrame(Json.write(frame));
+        }
+
+        check(
+                canonical(delivered).equals(canonical(List.of(List.of()))),
+                "a diverged base empties the view and tells the callback [], got " + delivered);
+
+        Map<String, Object> cold = resent(sent, "shape_1");
+
+        check(
+                "shape_subscribe".equals(cold.get("type"))
+                        && !cold.containsKey("sinceCheckpoint")
+                        && !cold.containsKey("sinceEpoch"),
+                "and re-subscribes the shape cold at once, sent " + sent);
+
+        sent.clear();
+        client.resendSubscriptions();
+
+        Map<String, Object> resubscribe = resent(sent, "shape_1");
+
+        check(
+                !resubscribe.containsKey("sinceCheckpoint")
+                        && !resubscribe.containsKey("sinceEpoch"),
+                "a later resend is cold too, got " + resubscribe);
+        check(
+                canonical(shapeView(client, delivered))
+                        .equals(canonical(shape.get("gapExpectedRows"))),
+                "the gapped rows were never spliced on");
+
+        // The counterweight: a poke based on the checkpoint the view IS at applies normally.
+        Client contiguous = new Client("https://app.example", null);
+        List<Map<String, Object>> contiguousSent = new ArrayList<>();
+        List<List<Object>> contiguousDelivered = new ArrayList<>();
+
+        contiguous.attachSocket(contiguousSent::add);
+        contiguous.subscribeShape("roomMessages", args, contiguousDelivered::add, null);
+
+        for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+            contiguous.handleFrame(Json.write(frame));
+        }
+
+        contiguousSent.clear();
+
+        for (Object frame : (List<Object>) shape.get("contiguousPokeSequence")) {
+            contiguous.handleFrame(Json.write(frame));
+        }
+
+        check(
+                canonical(contiguousDelivered.get(contiguousDelivered.size() - 1))
+                        .equals(canonical(shape.get("contiguousExpectedRows"))),
+                "a contiguous based poke applies, got " + contiguousDelivered);
+        check(contiguousSent.isEmpty(), "and re-seeds nothing");
     }
 
     /**
