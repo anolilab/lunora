@@ -1,3 +1,165 @@
+## @lunora/vue [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.174...@lunora/vue@1.0.0-alpha.175) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient.getCurrentUser()` answering "no session" under a
+cookie session now signs the client out (`onIdentityChange` fires if a user was
+known), and `ServerMessage` gains `ServerIdentityMessage`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): adopt a 401 sign-out and keep the auth gate recoverable
+
+- `getCurrentUser()` treated a `401`/`403` from `/get-session` as "no session"
+  but did not adopt it, so a cookie sign-out answered that way left the
+  identity on the previous user. It is now adopted like a `200 null`; a bearer
+  session still ignores a null user, and a 5xx or 404 is still no verdict.
+- The identity store's recovery from `unreachable` on reconnect now always
+  asks. After an earlier answer, a cookie session's refresh otherwise short-
+  circuited to `unauthenticated` off its absent token.
+- A probe that gets no answer no longer blocks the next probe for the same
+  subject. Only an answer that contradicts the socket does, which is what
+  keeps a disagreeing resolver from looping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(runtime): add custom CORS headers to the client's own, not replace them
+
+`security.cors.allowedHeaders` replaced the default allowlist. A cross-origin
+app whose list predated a header `@lunora/client` sends on its own failed that
+request's preflight. The client can only read that as a network error, so a
+replayed offline write carrying `x-lunora-expect-subject` was retried as
+transient forever and never landed.
+
+An app's list is now added to the defaults, which are exactly the headers the
+client sends unprompted.
+* **client:** `security.cors.allowedHeaders` can no longer remove a default
+header from the preflight allowlist.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(client): name the queuing user on every cookie-session replay
+
+A replay carried `x-lunora-expect-subject` only when the app called
+`getCurrentUser()` or used the identity store. A socket's `identity` frame
+labels queued writes `subj:A` in every app, though. So an app that reads its
+session through better-auth alone replayed A's write without the header. If the
+cookie changed hands while offline (another tab) and the flush ran before the new
+socket's frame, the write committed as B. Every replay without a bearer token
+now carries the header. An app without auth stamps `null` and resolves to nobody,
+so the header always passes there.
+
+Also:
+- `setAuthToken` re-flushes the queue only when a replay verdict input changed.
+  A write the worker refused triggered a probe, and the probe's unchanged answer
+  re-flushed the write into the same refusal. That hot loop is gone.
+- A refusal followed by a probe that names the same user logs one warning:
+  `resolveIdentity` and `/get-session` resolve different ids, or RPC requests
+  carry no cookie.
+- A `403` from `/get-session` is no longer a sign-out. A WAF or bot challenge on
+  that route wiped the screen and the durable read cache of a signed-in user.
+  Only `401` or an empty session is.
+- In a browser, each client listens for a page-wide session-change signal
+  (`shared/session-change.ts`) and re-resolves the session when it fires.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(auth): tell the Lunora client about every cookie sign-in and sign-out
+
+Under a cookie session a sign-in or sign-out in place changed nothing the
+Lunora client could see. Its socket kept serving the previous user's rows until
+it dropped, unless the app remembered to call `client.getCurrentUser()`
+afterwards. Neither auth-ui nor a direct better-auth setup did.
+
+- `lunoraSessionSync()` in `@lunora/auth/plugins/client` is a better-auth client
+  plugin. After every successful non-GET auth request it signals every
+  `LunoraClient` in the page to re-resolve the session.
+  `createLunoraAuthClient` always installs it, so the scaffolded auth-ui client
+  has it too. `notifyLunoraSessionChange()` reports a change made any other way.
+- `@lunora/auth-ui` signals on every session change (sign-in, sign-out, 2FA,
+  account switch) from the shared `resolveContext`, so all six ports and the
+  registry copies do it whatever client the app built. The app's own
+  `onSessionChange` runs after.
+- The playground now relies on this alone. It installs `lunoraSessionSync()`,
+  reads its session through better-auth, and makes no manual calls.
+  `?authstore=1` also mounts `useAuth` for the variant that probes. The
+  account cards stay in the page on sign-out, as under an SPA router.
+
+The authentication docs describe the automatic path and the id-equality
+requirement between `resolveIdentity` and better-auth's `user.id`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(errors): register IDENTITY_MISMATCH in the error catalog
+
+The worker's refusal of a replayed write whose cookie changed hands mints
+`IDENTITY_MISMATCH`. It was missing from `ERROR_CATALOG`, which the catalog
+registration test requires of every minted code. It is registered as a 409 with
+a hint that names the one misconfiguration causing it for a signed-in user: a
+`resolveIdentity` whose `userId` differs from better-auth's `user.id`. The
+message carries no backend detail, so the code is not `internal`. The errors
+reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(solid): give the Solid 2 auth fake an onIdentityChange
+
+The identity store now subscribes to `LunoraClient.onIdentityChange` so a
+retired cookie session updates the gate. The Solid 2 adapter's `createAuth`
+tests build their own client double without it. Every test in the file then
+died in the store's constructor, which halted Solid 2's reactive system. The
+double gets the method, as the other adapters' fakes already have.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(auth-ui): run onSessionChange once the Lunora clients know the new session
+
+auth-ui signalled the session change and then called the app's `onSessionChange`
+straight away, while each Lunora client's `/get-session` probe was still in
+flight. A handler that read `client.currentIdentity()` right after an account
+switch saw the previous user, contrary to the docs.
+
+The session-change signal now returns a promise that settles once every
+listener's work has settled. For a `LunoraClient`, that work is its re-resolve.
+`notifyLunoraSessionChange()` returns it too, so other callers can await it.
+auth-ui runs the app's handler after it, capped at 5s so a probe that never
+answers cannot hold the handler, often the app's own session refresh, back
+forever. The better-auth plugin still fires and forgets.
+* **client:** `AuthUIConfig.onSessionChange` now runs after the Lunora clients
+re-resolve the session, asynchronously, rather than synchronously inside the flow.
+`notifyLunoraSessionChange()` returns `Promise<void>`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(auth): await notifyLunoraSessionChange in its listener test
+
+`notifyLunoraSessionChange()` returns a promise since it waits for every Lunora
+client to re-resolve the session. The listener test left it floating, which
+`@typescript-eslint/no-floating-promises` rejects. Awaiting it also makes the
+assertion wait for the listeners rather than rely on them being synchronous.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **client:** retire a cookie session when the server says it changed ([#842](https://github.com/anolilab/lunora/issues/842)) ([301f24c](https://github.com/anolilab/lunora/commit/301f24c44f55655bb8d84fe4ecc8e50508c81796))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.139
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.84
+
 ## @lunora/vue [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.173...@lunora/vue@1.0.0-alpha.174) (2026-09-26)
 
 
