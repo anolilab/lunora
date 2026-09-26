@@ -141,6 +141,7 @@ change that adds or removes a capability.
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Rate-limit backoff            | ✅⁵    | ✅⁵ | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
+| Re-flush on a new token       | ✅⁹    | ➖⁹ | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
 | Row-delta merge into a list   | ❌⁷    | ❌⁷ | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
 | `chunk` / `whisper` frames    | ❌⁸    | ❌⁸ | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
@@ -247,6 +248,27 @@ in `protocol/README.md` §5.2 and reach the default arm of every port's frame
 switch, where they are ignored. No port sends `stream`, `whisper_subscribe` or
 `whisper` either, so nothing arrives to drop; the gap is that a deployment using
 those features has no non-JS client for them.
+
+⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
+`UNAUTHORIZED`) is held in all eight, and every replay reads the token current
+when it is sent.** What differs is who starts that replay. The two ports that
+flush on their own when a socket connects — dart (`setConnected`) and python's
+`connect_and_run` — also flush when a new token is set while connected, as the
+reference's `setAuthToken` does; before, the held write waited for a reconnect
+that a healthy socket never makes. The other six (➖) never flush on their own at
+all, so there is no flush to be missing: the app that refreshes the token calls
+the flush, as it does on every reconnect. Dart gates that flush the way the
+reference does, because its identity is a subject kept apart from the token: a
+token set while a subject is established leaves the subject UNCONFIRMED — the new
+token may be the same user's refresh or another user's sign-in — and queued
+writes are held, neither sent nor dropped, until `authSubject` is set again for
+it (the same id replays them, another id rejects them). With no subject the
+identity is the token's digest, so a new token is a new identity and the writes
+are rejected `OFFLINE_IDENTITY_CHANGED`, exactly as the reference rejects them;
+supplying `authSubject` is how a refresh keeps them. Python's identity is an
+explicit stamp, so on an account switch set it before the token.
+`offline_write_held_for_credential_replays_after_token_refresh` runs the refresh
+in all eight and in the reference.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -870,7 +892,7 @@ the row as "a case exists and runs under this name", and rely on the assertions
 themselves for the rest.
 
 **The manifest holds a suite to every name in
-`protocol/conformance-cases.json` — 52 of them today; it cannot hold one that ran
+`protocol/conformance-cases.json` — 53 of them today; it cannot hold one that ran
 nothing at all.** Six of these eight test tools exit 0 having collected NO tests
 — `unittest discover` finding no matching module, an empty `test/test_*.rb`
 glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
@@ -1067,6 +1089,16 @@ assumed:
   with `?`, so `"a\ud800b"` keyed and travelled as `"a?b"`; Swift's
   `JSONSerialization` refused the whole body, and a `try?` swallowed that, so the
   queued write never replayed and blocked every write behind it.
+
+    KEYS that differ only by one are a second matter. The four whose maps key on a
+    UTF-16 string — python, java, kotlin, dart — keep `{"\ud800":1,"\ud801":2,"�":3}`
+    as three members, as JavaScript does. Swift's `String` equality reads a lone
+    surrogate as U+FFFD, so a `[String: Any]` holds one of the three: such an
+    object decodes to `[WireKey: Any]` instead, keyed by UTF-16 code unit, and
+    every other object stays `[String: Any]`. Map keys and Set members were
+    already compared by code unit there. The bytes and stable key match the
+    reference's, pinned port-locally in `string_escaping_matches_json_stringify`.
+
 - **`Error` own props carrying `__proto__`.** The decode side handles it (an own
   data property, never the setter), but the ENCODE side's Error branch writes
   `properties[key] = …` with no such guard, so the prop lands on the props
