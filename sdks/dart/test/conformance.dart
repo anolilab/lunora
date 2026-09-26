@@ -23,6 +23,7 @@ import 'key_cases.dart';
 import 'model_cases.dart';
 import 'offline_cases.dart';
 import 'optimistic_cases.dart';
+import 'replay_cases.dart';
 import 'rpc_cases.dart';
 import 'wire_cases.dart';
 
@@ -102,6 +103,17 @@ Future<void> main() async {
   await run(caseLoneQueuedWriteSurvivesAnEnvelopeLess502);
   await run(caseRateLimitedReplayRequeuesAndDefers);
   await run(caseRateLimitedBatchSlotIsTransient);
+  await run(caseEmptyShardKeyRoutesToDefault);
+  await run(caseUndecodableResultSettlesCommitted);
+  await run(caseReplayClassifiesSingleAndBatchAlike);
+  await run(caseBatchSplitsOnEnvelopelessPayloadTooLarge);
+  await run(caseUnexpectedFailureRequeuesUnsettledWrites);
+  await run(caseShapePokeWithUndecodableRowIsRefusedWhole);
+  await run(caseMalformedFramesAreIgnoredWithoutRaising);
+  await run(caseRpcUnreadableSuccessBodyRaisesSdkError);
+  await run(caseSubscriptionStreamEndsOnClose);
+  await run(caseIdentityChangeEvictsPreviousSession);
+  await run(caseAuthTokenRedactedWhenPrinted);
 
   await run(caseOptimisticLayerRebasesOntoAServerFrame);
   await run(caseOptimisticLayerDropsOnItsCommitCursor);

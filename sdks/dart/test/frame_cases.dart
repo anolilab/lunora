@@ -338,3 +338,160 @@ void caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop() {
       ]),
       'every OTHER subscription keeps delivering');
 }
+
+/// Feeds every frame of [sequence] through the read loop's entry point.
+void _feed(LunoraClient client, Object? sequence) {
+  for (final frame in sequence! as List<Object?>) {
+    client.handleFrame(jsonEncode(frame));
+  }
+}
+
+/// The view a shape holds right now, read back through the only public window
+/// onto it: a poke carrying an empty, non-reset part re-delivers the view as is.
+List<Object?> _shapeView(LunoraClient client, List<List<Object?>> delivered) {
+  _feed(client, <Object?>[
+    <String, Object?>{'type': 'pokeStart', 'pokeId': 'probe'},
+    <String, Object?>{'type': 'pokePart', 'pokeId': 'probe', 'shapeId': 'shape_1', 'rowsPatch': <Object?>[]},
+    <String, Object?>{'type': 'pokeEnd', 'pokeId': 'probe'},
+  ]);
+
+  return delivered.removeLast();
+}
+
+/// A poke is applied WHOLE or not at all, per shape: a row the codec refuses
+/// leaves the view, its checkpoint and its callbacks exactly as they were, and
+/// reaches the shape's error callback instead of escaping the read loop.
+void caseShapePokeWithUndecodableRowIsRefusedWhole() {
+  covers('shape_poke_with_undecodable_row_is_refused_whole');
+
+  final shape = fixture('ws-frames.json')['shape']! as Map<String, Object?>;
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final delivered = <List<Object?>>[];
+  final errors = <LunoraSubscriptionError>[];
+
+  client.subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'}, onRows: delivered.add, onError: errors.add);
+  _feed(client, shape['pokeSequence']);
+  delivered.clear();
+
+  try {
+    _feed(client, shape['undecodableRowPokeSequence']);
+  } on Object catch (error) {
+    failures.add('an undecodable row escaped the read loop: $error');
+  }
+
+  equals(delivered.length, 0, 'no rows callback fires for the refused poke');
+  equals(canonical(errors.map((error) => error.code).toList()), canonical(<Object?>[shape['undecodableRowErrorCode']]), 'the shape is told once, coded');
+  equals(canonical(_shapeView(client, delivered)), canonical(shape['expectedRows']), 'the view is untouched: no reset clear, no row applied');
+
+  final resent = <Map<String, Object?>>[];
+
+  client
+    ..attachSocket(resent.add)
+    ..resendSubscriptions();
+  equals(resent.single['sinceCheckpoint'], shape['undecodableRowResendCheckpoint'], 'the checkpoint did not advance past rows the view never held');
+  equals(resent.single['sinceEpoch'], 'e1', 'nor did the epoch');
+}
+
+/// No frame shape can make the read loop's entry point raise, and none of these
+/// touches a live subscription — including a STRING cursor, which is not one.
+void caseMalformedFramesAreIgnoredWithoutRaising() {
+  covers('malformed_frames_are_ignored_without_raising');
+
+  final case_ = fixture('ws-frames.json')['malformedFrames']! as Map<String, Object?>;
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final seen = <Object?>[];
+
+  client.subscribe('messages:list', args: const <String, Object?>{}, onData: seen.add, onError: (_) => seen.add('error'));
+  client.handleFrame(jsonEncode(case_['setupFrame']));
+  seen.clear();
+
+  for (final frame in case_['frames']! as List<Object?>) {
+    try {
+      client.handleFrame(jsonEncode(frame));
+    } on Object catch (error) {
+      failures.add('frame ${jsonEncode(frame)} raised $error');
+    }
+  }
+
+  equals(seen.length, 0, 'no malformed frame reaches sub_1');
+
+  final resent = <Map<String, Object?>>[];
+
+  client
+    ..attachSocket(resent.add)
+    ..resendSubscriptions();
+
+  final query = resent.single['query']! as Map<String, Object?>;
+
+  equals(query['sinceSeq'], case_['resendSinceSeq'], 'the resume cursor is untouched');
+  equals(query['sinceEpoch'], case_['resendSinceEpoch'], 'and so is the epoch');
+}
+
+/// `close()` finishes every live `watch()` stream: the value delivered before
+/// it still arrives, then the stream is done — a `StreamBuilder` is not left
+/// waiting on a client that will never feed it again.
+Future<void> caseSubscriptionStreamEndsOnClose() async {
+  covers('subscription_stream_ends_on_close');
+
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final events = StreamIterator<Object?>(client.watch('messages:list', args: const <String, Object?>{}));
+  final first = events.moveNext();
+
+  pushData(client, 'sub_1', <String, Object?>{'n': 1});
+  client.close();
+
+  equals(await first.timeout(const Duration(seconds: 2), onTimeout: () => false), true, 'the value delivered before close arrives');
+  equals(canonical(events.current), canonical(<String, Object?>{'n': 1}), 'and it is that value');
+  equals(await events.moveNext().timeout(const Duration(seconds: 2), onTimeout: () => true), false, 'then the stream ends');
+}
+
+/// Changing the identity FROM a set value retires what that identity left live:
+/// every resume cursor and epoch, and every shape view (its callbacks told
+/// `[]`). A first sign-in and a re-assertion of the same identity evict nothing.
+void caseIdentityChangeEvictsPreviousSession() {
+  covers('identity_change_evicts_previous_session');
+
+  final case_ = fixture('ws-frames.json')['identityChange']! as Map<String, Object?>;
+  final shape = fixture('ws-frames.json')['shape']! as Map<String, Object?>;
+  final retained = case_['retained']! as Map<String, Object?>;
+  final evicted = case_['evicted']! as Map<String, Object?>;
+
+  for (final transition in objectList(case_['transitions'])) {
+    final what = '${transition['from']} -> ${transition['to']}';
+    final client = LunoraClient(url: 'https://app.example', authSubject: transition['from'] as String?)..attachSocket((_) {});
+    final delivered = <List<Object?>>[];
+
+    client
+      ..subscribe('messages:list', args: const <String, Object?>{})
+      ..subscribeShape('roomMessages', args: <String, Object?>{'room': 'general'}, onRows: delivered.add);
+    client.handleFrame(jsonEncode(case_['queryFrame']));
+    _feed(client, shape['pokeSequence']);
+    delivered.clear();
+
+    client.authSubject = transition['to'] as String?;
+
+    final notified = List<List<Object?>>.of(delivered);
+    final resent = <Map<String, Object?>>[];
+
+    client
+      ..attachSocket(resent.add)
+      ..resendSubscriptions();
+
+    final query = resent.firstWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>;
+    final shapeFrame = resent.firstWhere((frame) => frame['type'] == 'shape_subscribe');
+    final view = _shapeView(client, delivered);
+
+    if (transition['evicts'] == true) {
+      check(!query.containsKey('sinceSeq') && !query.containsKey('sinceEpoch'), '$what: the query resubscribes cold');
+      check(!shapeFrame.containsKey('sinceCheckpoint') && !shapeFrame.containsKey('sinceEpoch'), '$what: the shape resubscribes cold');
+      equals(canonical(view), canonical(evicted['shapeRows']), '$what: the shape view is emptied');
+      equals(canonical(notified), canonical(<Object?>[evicted['shapeCallbackRows']]), '$what: and its callbacks are told so');
+    } else {
+      equals(query['sinceSeq'], retained['sinceSeq'], '$what: the query keeps its cursor');
+      equals(query['sinceEpoch'], retained['sinceEpoch'], '$what: and its epoch');
+      equals(shapeFrame['sinceCheckpoint'], retained['sinceCheckpoint'], '$what: the shape keeps its checkpoint');
+      equals(view.length, retained['shapeRowCount'], '$what: and its rows');
+      equals(notified.length, 0, '$what: and no callback is told anything');
+    }
+  }
+}

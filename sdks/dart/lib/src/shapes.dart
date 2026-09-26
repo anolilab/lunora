@@ -43,6 +43,9 @@ class _ShapeSubscription {
   Object? epoch;
 }
 
+/// One row op, decoded and ready to apply.
+typedef _RowOp = ({String key, bool delete, Object? value});
+
 /// One poke in flight: the row ops buffered per shape, plus the shapes this poke
 /// marked as a full (re)seed. One buffer rather than two maps kept in step by
 /// hand, so both are dropped together at `pokeEnd`.
@@ -197,11 +200,36 @@ class ShapeRegistry {
     // row snapshot taken before delivery — so a callback that re-enters this
     // client sees one consistent poke rather than a half-applied one.
     final deliveries = <MapEntry<LunoraRowsCallback, List<Object?>>>[];
+    final refusals = <MapEntry<LunoraErrorCallback, LunoraSubscriptionError>>[];
 
     for (final shapeEntry in buffer.parts.entries) {
       final shape = _shapes[shapeEntry.key];
 
       if (shape == null) {
+        continue;
+      }
+
+      // Every row is decoded BEFORE the view is touched, so a poke applies to a
+      // shape whole or not at all. Decoding row by row as it applied cleared the
+      // view for a reset and then threw on the bad row — the view left empty or
+      // half-applied, nothing reported, and the exception out through the read
+      // loop. Refused, the view, its checkpoint and its epoch stay exactly where
+      // they were, so the next resume asks for these rows again; other shapes in
+      // the same poke still apply.
+      final List<_RowOp> operations;
+
+      try {
+        operations = <_RowOp>[
+          for (final operation in shapeEntry.value)
+            if (_decodeRowOp(operation) case final decoded?) decoded,
+        ];
+      } on WireFormatException catch (error) {
+        final onError = shape.onError;
+
+        if (onError != null) {
+          refusals.add(MapEntry(onError, LunoraSubscriptionError('INVALID_FRAME', error.message)));
+        }
+
         continue;
       }
 
@@ -216,7 +244,7 @@ class ShapeRegistry {
         shape.order.clear();
       }
 
-      for (final operation in shapeEntry.value) {
+      for (final operation in operations) {
         _applyRowOp(shape, operation);
       }
 
@@ -234,19 +262,38 @@ class ShapeRegistry {
       }
     }
 
+    for (final refusal in refusals) {
+      refusal.key(refusal.value);
+    }
     for (final delivery in deliveries) {
       delivery.key(delivery.value);
     }
   }
 
-  static void _applyRowOp(_ShapeSubscription shape, Map<String, Object?> operation) {
+  /// One row op with its value decoded, or null for an op that changes nothing:
+  /// a key that is not a string, or a value-less upsert, which is
+  /// membership-only and must not blank an existing row. Throws
+  /// [WireFormatException] for a value the codec refuses.
+  static _RowOp? _decodeRowOp(Map<String, Object?> operation) {
     final key = operation['key'];
 
     if (key is! String) {
-      return;
+      return null;
     }
 
     if (operation['op'] == 'delete') {
+      return (key: key, delete: true, value: null);
+    }
+
+    final value = operation['value'];
+
+    return value == null ? null : (key: key, delete: false, value: decodeWire(value));
+  }
+
+  static void _applyRowOp(_ShapeSubscription shape, _RowOp operation) {
+    final key = operation.key;
+
+    if (operation.delete) {
       if (shape.rows.remove(key) != null) {
         shape.order.remove(key);
       }
@@ -254,18 +301,32 @@ class ShapeRegistry {
       return;
     }
 
-    // A value-less upsert is membership-only; it must not blank an existing row.
-    final value = operation['value'];
-
-    if (value == null) {
-      return;
-    }
-
     if (!shape.rows.containsKey(key)) {
       shape.order.add(key);
     }
 
-    shape.rows[key] = decodeWire(value);
+    shape.rows[key] = operation.value;
+  }
+
+  /// The previous identity's session is over: every view is emptied, its
+  /// callbacks are told so with `[]`, and its checkpoint and epoch are dropped so
+  /// the next resubscribe is a cold one. A resume from them would ask the server
+  /// for a diff against rows this identity never held, and splice it onto them.
+  void evictSession() {
+    final views = List<_ShapeSubscription>.of(_shapes.values);
+
+    _pokes.clear();
+
+    for (final shape in views) {
+      shape.rows.clear();
+      shape.order.clear();
+      shape.checkpoint = null;
+      shape.epoch = null;
+    }
+
+    for (final shape in views) {
+      shape.onRows?.call(const <Object?>[]);
+    }
   }
 
   /// Drop every view and every poke in flight.

@@ -107,3 +107,55 @@ void caseNon2xxWithoutErrorEnvelopeFails() {
     }
   }
 }
+
+/// A response the RPC cannot read a result OR an error envelope out of — a body
+/// that is not JSON, or JSON that is not an object — fails with this SDK's own
+/// error type, coded, never with a language exception. `{}` stays a valid void
+/// result.
+Future<void> caseRpcUnreadableSuccessBodyRaisesSdkError() async {
+  covers('rpc_unreadable_success_body_raises_sdk_error');
+
+  LunoraClient over(int status, String body) => LunoraClient(url: 'https://app.example', post: (url, headers, sent) async => LunoraHttpResponse(status, body));
+
+  for (final testCase in objectList(fixture('rpc.json')['unreadableSuccessBody'])) {
+    final client = over(testCase['status']! as int, testCase['rawBody']! as String);
+    final calls = <String, Future<Object?> Function()>{
+      'query': () => client.query('messages:list'),
+      'mutation': () => client.mutation('messages:send'),
+      'action': () => client.action('messages:notify'),
+    };
+
+    for (final call in calls.entries) {
+      final what = '${call.key} over ${testCase['name']}';
+
+      try {
+        await call.value();
+        failures.add('$what — expected a LunoraApiException, got a result');
+      } on LunoraApiException catch (error) {
+        equals(error.code, testCase['code'], 'error code for $what');
+      } on Object catch (error) {
+        failures.add('$what — a ${error.runtimeType} escaped instead of a LunoraApiException: $error');
+      }
+    }
+  }
+
+  equals(await over(200, '{}').query('messages:list'), null, 'an empty object is a void result');
+}
+
+/// The bearer token never reaches a printed value.
+void caseAuthTokenRedactedWhenPrinted() {
+  covers('auth_token_redacted_when_printed');
+
+  const token = 'lunora-secret-7f3a9c';
+  final client = LunoraClient(url: 'https://app.example', authToken: token);
+
+  for (final (what, printed) in <(String, String)>[
+    ('client', client.toString()),
+    ('client interpolated', '$client'),
+    ('transport', client.transport.toString()),
+    ('offline queue', client.offlineQueue.toString()),
+    ('safeToString', Error.safeToString(client)),
+  ]) {
+    check(!printed.contains(token), '$what printed the auth token: $printed');
+  }
+}

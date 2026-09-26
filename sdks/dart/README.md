@@ -65,7 +65,15 @@ StreamBuilder<Object?>(
 ```
 
 The callback-shaped `client.subscribe(...)` every sibling port has is there too,
-for a value whose lifetime is not a widget's.
+for a value whose lifetime is not a widget's. `client.close()` ends every
+`watch()` stream still open, so a listener sees `done` rather than waiting on a
+client that will never feed it again.
+
+Changing the identity from a set one — `authSubject` or, with no subject,
+`authToken` — to a different one or to none retires the previous session: every
+subscription resubscribes cold (no `sinceSeq`/`sinceCheckpoint`), and every
+shape view is emptied, its `onRows` called with `[]`. A first sign-in and
+re-setting the same identity change nothing.
 
 ## Optimistic updates and offline writes
 
@@ -114,6 +122,21 @@ terminally on the first flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being
 retried forever, and every discard — including one the capacity cap evicts out of
 a _restored_ queue, which has no caller left to tell — reaches the queue's
 `onSettled`.
+
+How a replay reads the reply is one rule for a lone write and a batch alike: a
+coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
+is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+`RATE_LIMITED`, `TOO_MANY_REQUESTS`) re-queue; a reply with no envelope re-queues,
+except a `413`, which splits a batch and settles a lone write
+`PAYLOAD_TOO_LARGE`. A write the server committed whose result does not decode is
+still committed: its overlay confirms, and it settles with `WIRE_DECODE_FAILED`
+(the same code a direct call throws) instead of a value, never retried. A flush
+that fails unexpectedly part-way puts every write it had not yet settled back on
+the queue, and never throws.
+
+Every RPC fails with `LunoraApiException` — coded `INTERNAL` when the body is not
+a JSON object (an HTML error page, `null`, `[]`) — never with a raw
+`FormatException` or cast error.
 
 ### Three things this port does differently
 
