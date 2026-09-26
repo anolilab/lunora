@@ -186,6 +186,11 @@ class TestEcmaScriptSpellings(unittest.TestCase):
         # JSON.stringify leaves <, > and & raw and does not escape U+2028/9.
         self.assertEqual(stable_stringify("a<b>&c"), '"a<b>&c"')
         self.assertEqual(stable_stringify("  "), '"  "')
+        # A lone surrogate is escaped as `\udXXX`, lowercase, as JSON.stringify
+        # writes it (a Python str holds a well-formed pair as ONE code point, so
+        # every surrogate it holds is lone).
+        self.assertEqual(stable_stringify("a\ud800b\udfff"), '"a\\ud800b\\udfff"')
+        self.assertEqual(stable_stringify("\U0001f600"), '"\U0001f600"')
 
 
 class TestTransportErrors(unittest.TestCase):

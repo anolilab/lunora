@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -652,7 +653,14 @@ def _utf16_sort_key(value: str) -> tuple:
 def _json_string(text: str) -> str:
     import json
 
-    return json.dumps(text, ensure_ascii=False)
+    # `ensure_ascii=False` writes a lone surrogate raw, where JSON.stringify
+    # escapes it as `\udXXX` — so the key differed from the reference's for the
+    # same argument. A str holds a well-formed pair as one code point, so every
+    # surrogate left here is lone.
+    return _LONE_SURROGATE.sub(lambda match: f"\\u{ord(match.group()):04x}", json.dumps(text, ensure_ascii=False))
+
+
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def stable_stringify(value: Any) -> str:
