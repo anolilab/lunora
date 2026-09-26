@@ -55,7 +55,25 @@ unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
 
 `HandleFrame(raw)` is what you call with each inbound WebSocket message;
 `ResendSubscriptions()` re-subscribes everything after a reconnect — queries and
-shape views alike — carrying each one's resume cursor or checkpoint.
+shape views alike — carrying each one's resume cursor or checkpoint. A frame
+that is not shaped like any server frame is ignored without panicking, and a
+cursor that is not an integer never replaces the tracked one. A poke applies
+per shape whole or not at all: a row that will not decode leaves that shape's
+view, checkpoint and epoch untouched and reaches its error callback as
+`INVALID_FRAME`.
+
+`Stream` returns a channel for `for event := range …`; it closes when the
+returned `Unsubscribe` runs or when `client.Close()` does, and closing it never
+races a frame being delivered.
+
+Any reply the RPC cannot read a result or an error envelope out of (a non-JSON
+body, or JSON that is not an object — `null`, `[]`, `"ok"`) fails with an
+`APIError` coded `INTERNAL`; `{}` is a void result. A success whose `result`
+does not decode fails with `WIRE_DECODE_FAILED` (for `Submit`, alongside the
+committed outcome).
+
+`client.String()`/`GoString()` redact `AuthToken`, so `%v`, `%+v`, `%#v` and
+`%s` of a `*Client` never print the bearer token.
 
 ## Optimistic updates and offline writes
 
@@ -110,9 +128,24 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.OnMutationSettled`.
 
+A replay failure is classified by ONE rule on the single-call and batch paths:
+a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+`RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue; every other code — a coded 5xx
+included — is terminal), a reply with no envelope by its status (re-queued). A
+413 is `PAYLOAD_TOO_LARGE` with or without an envelope: a batch splits and
+retries, a lone write still refused settles terminally. A write the server
+committed whose result does not decode settles `committed`, carrying a
+`WIRE_DECODE_FAILED` error on its settled event, and is never re-sent; a panic
+escaping a flush puts every drained-but-unsettled write back at the front of
+the queue before it propagates.
+
 `client.SetIdentity` records an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Changing
+it FROM a set identity to a different one (or to nil) evicts the previous
+session: every subscription drops its resume cursor and epoch (query callbacks
+see the value re-folded over no server base), and every shape view is emptied,
+its callback receiving `[]`. A first sign-in and a same-value set evict nothing.
 
 `OfflineQueue` is deliberately not internally locked: the client that owns it
 already holds a mutex over its subscription registry, and no queue method settles

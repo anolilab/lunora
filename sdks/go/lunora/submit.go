@@ -188,7 +188,9 @@ func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
 //
 // It returns as soon as the write is either committed or durably queued. A queued
 // write's optimistic overlay stays displayed until the replay's commit cursor is
-// reached by a server frame; a failed one rolls back.
+// reached by a server frame; a failed one rolls back. A write that committed but
+// whose result could not be decoded returns its committed outcome together with
+// an APIError coded CodeWireDecodeFailed.
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
 	closed := c.closed
@@ -245,7 +247,7 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	// No client id argument: rpcFull falls back to Client.ClientID(), which is the
 	// id issuing this write.
 	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "")
-	if err != nil {
+	if err != nil && !isUndecodableResult(err) {
 		c.settleLayers(nil, rollbacks, nil)
 
 		return MutationOutcome{}, err
@@ -253,10 +255,11 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 
 	// Confirmed against the write's COMMITTED cursor, so the overlay drops when
 	// (or once) a frame at that cursor lands — never on this call's return, which
-	// races the socket broadcast.
+	// races the socket broadcast. A write whose result would not decode still
+	// committed: its overlay confirms, and the outcome comes back WITH the error.
 	c.settleLayers(confirms, nil, commitCursor)
 
-	return MutationOutcome{CommitCursor: commitCursor, MutationID: writeID, Status: MutationCommitted, Value: value}, nil
+	return MutationOutcome{CommitCursor: commitCursor, MutationID: writeID, Status: MutationCommitted, Value: value}, err
 }
 
 // HydrateOfflineQueue restores writes persisted in a prior session and returns
@@ -325,6 +328,39 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	if len(drained) == 0 {
 		return report
 	}
+
+	// A drained write lives only in this call's locals until it is settled or
+	// requeued, so a panic nothing anticipated (a consumer's poster, a callback)
+	// would take it with it. Put every such write back at the front, in order,
+	// then let the panic continue.
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		handled := map[string]bool{}
+
+		for _, ids := range [][]string{report.Committed, report.Rejected, report.Requeued} {
+			for _, id := range ids {
+				handled[id] = true
+			}
+		}
+
+		var unsettled []*QueuedMutation
+
+		for _, item := range drained {
+			if !handled[item.ID] {
+				unsettled = append(unsettled, item)
+			}
+		}
+
+		c.mu.Lock()
+		queue.Requeue(unsettled)
+		c.mu.Unlock()
+
+		panic(recovered)
+	}()
 
 	// Gated against ONE identity snapshot: a flush is a single authenticated
 	// burst, so every write in it necessarily runs under one identity.
@@ -517,9 +553,11 @@ func (c *Client) noteRetryAfter(report *FlushReport, err error) {
 func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutation, report *FlushReport) {
 	for index, item := range replayable {
 		value, commitCursor, err := c.rpcFull(item.FunctionPath, item.Args, item.ShardKey, item.ID, item.ClientID)
-		if err == nil {
+		if err == nil || isUndecodableResult(err) {
+			// An undecodable result is still a commit: re-sending returns the same
+			// unreadable result, so it settles committed carrying the error.
 			c.unpersist(queue, item.ID)
-			c.settleCommitted(item, value, commitCursor)
+			c.settleCommitted(item, value, commitCursor, err)
 			report.Committed = append(report.Committed, item.ID)
 
 			continue
@@ -594,7 +632,7 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 		calls = append(calls, call)
 	}
 
-	body, err := c.rpcBatch(calls)
+	status, body, err := c.rpcBatch(calls)
 	if err != nil {
 		// Transport failure — nothing committed, so retry everything.
 		return items, true
@@ -604,19 +642,20 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 		return c.settleBatchSlots(queue, items, results, report), false
 	}
 
-	// No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
-	// bad request, an authorization denial — and therefore terminal for every
-	// entry; anything else is transport, and transient.
-	envelope, ok := body["error"].(map[string]any)
-	if !ok {
-		return items, true
+	// No per-slot results: one verdict on the whole batch, classified by the
+	// predicate the single-call path uses. A coded envelope by its code alone —
+	// a bad request, an authorization denial, a coded 5xx are terminal for every
+	// entry; a reply with no envelope by its status — transport, except a 413.
+	batchError := envelopelessError(status, "no error envelope")
+	if envelope, ok := body["error"].(map[string]any); ok {
+		batchError = batchSlotError(envelope, "batch rejected")
 	}
 
-	batchError := batchSlotError(envelope, "batch rejected")
-
 	// The body was too big, not wrong — every entry in it would have committed
-	// alone. Halve and retry; the estimate chunkBatches used cannot see the
-	// framing the worker actually measured, and only the answer can.
+	// alone. Halve and retry, whether or not the 413 carried an envelope (an edge
+	// in front of the worker refuses with its own page): the estimate
+	// chunkBatches used cannot see the framing actually measured, and only the
+	// answer can. A chunk of one falls through to the terminal verdict below.
 	if batchError.Code == CodePayloadTooLarge && len(items) > 1 {
 		middle := len(items) / 2
 		left, stop := c.replayBatched(queue, items[:middle], report)
@@ -730,20 +769,19 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 			commitCursor = &exact
 		}
 
+		// Decoded BEFORE the durable record goes, so the outcome is decided first.
+		// A slot whose result will not decode still COMMITTED: replaying it can
+		// only return the identical unreadable result, so it settles committed,
+		// carrying the decode error, and the loop carries on to the next slot.
+		var settleErr error
+
 		value, err := DecodeWire(payload["result"])
 		if err != nil {
-			// A slot whose payload will not decode is a server answer this client
-			// cannot read. Terminal, like any other verdict: replaying it produces
-			// the identical undecodable payload.
-			c.unpersist(queue, item.ID)
-			c.settleRejected(item, APIError{Code: "INTERNAL", Message: "batch slot result could not be decoded: " + err.Error()})
-			report.Rejected = append(report.Rejected, item.ID)
-
-			continue
+			settleErr = APIError{Code: CodeWireDecodeFailed, Message: "batch slot result could not be decoded: " + err.Error()}
 		}
 
 		c.unpersist(queue, item.ID)
-		c.settleCommitted(item, value, commitCursor)
+		c.settleCommitted(item, value, commitCursor, settleErr)
 		report.Committed = append(report.Committed, item.ID)
 	}
 
@@ -856,6 +894,14 @@ func (c *Client) settleRejected(entry *QueuedMutation, err error) {
 		MutationID: entry.ID,
 		Status:     MutationRejected,
 	}, entry.OnSettled)
+}
+
+// isUndecodableResult reports a call that committed but whose result could not
+// be decoded — a commit, never a failure to retry.
+func isUndecodableResult(err error) bool {
+	var apiError APIError
+
+	return errors.As(err, &apiError) && apiError.Code == CodeWireDecodeFailed
 }
 
 // isTransient reports whether a failed replay may be retried rather than dropped.
@@ -1011,13 +1057,15 @@ func (c *Client) newQueuedWriteLocked(
 }
 
 // settleCommitted confirms the overlay BEFORE the caller is told, so the gapless
-// drop is already in place when the confirming frame lands.
-func (c *Client) settleCommitted(item *QueuedMutation, value any, commitCursor *int64) {
+// drop is already in place when the confirming frame lands. err is non-nil only
+// for a commit whose result could not be decoded (CodeWireDecodeFailed).
+func (c *Client) settleCommitted(item *QueuedMutation, value any, commitCursor *int64, err error) {
 	if item.OnCommit != nil {
 		item.OnCommit(commitCursor)
 	}
 
 	c.emitSettled(MutationSettled{
+		Err:        err,
 		HadAwaiter: item.LiveAwaiter,
 		MutationID: item.ID,
 		Status:     MutationCommitted,
