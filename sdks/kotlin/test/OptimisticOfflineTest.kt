@@ -1546,6 +1546,63 @@ private fun offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge() {
     }
 }
 
+/**
+ * A write refused for its CREDENTIAL is held, and replays under the next token set
+ * for the same user — read when the replay is SENT, not when it was queued. This
+ * port never flushes on its own, so the app flushes again after the refresh.
+ */
+private fun offlineWriteHeldForCredentialReplaysAfterTokenRefresh() {
+    covers("offline_write_held_for_credential_replays_after_token_refresh")
+
+    val case = scenario("offlineQueue", "credentialRefresh")
+    val identity = case["identity"] as String
+    val staleToken = case["staleToken"] as String
+    val refusal = case["refusal"] as Map<*, *>
+    val authorizations = mutableListOf<String?>()
+    val flush = Flush { _, headers, _ ->
+        val authorization = headers["authorization"]
+
+        authorizations.add(authorization)
+
+        if (authorization == "Bearer $staleToken") {
+            HttpResponse(count(refusal["status"]), Json.write(refusal["body"]))
+        } else {
+            HttpResponse(200, "{\"result\":null}")
+        }
+    }
+
+    flush.client.authToken = staleToken
+    flush.client.identity = identity
+
+    for (id in ids(case["queued"])) {
+        val item = QueuedMutation(id!!, "messages:send", WireValue.Obj(emptyList()))
+
+        item.identity = Identity.Of(identity)
+        flush.client.offlineQueue.enqueue(item)
+    }
+
+    for ((phase, expectedRaw) in listOf("afterRefusal" to case["afterRefusal"], "afterRefresh" to case["afterRefresh"])) {
+        if (phase == "afterRefresh") {
+            flush.client.authToken = case["freshToken"] as String
+        }
+
+        val expected = expectedRaw as Map<*, *>
+        val report = flush.client.flushOfflineQueue()
+
+        check(report.committed == ids(expected["committed"]), "$phase: committed ${report.committed}")
+        check(report.rejected == ids(expected["rejected"]), "$phase: rejected ${report.rejected}")
+        check(queuedIds(flush.client.offlineQueue.items()) == ids(expected["queuedAfterFlush"]), "$phase: queue after the flush")
+
+        if (phase == "afterRefusal") {
+            check(flush.settled.isEmpty(), "a credential refusal is not a verdict: nothing settles")
+            check(flush.store.removed.isEmpty(), "and the durable record stays")
+        }
+    }
+
+    check(flush.client.identity == identity, "the refresh leaves the identity unchanged")
+    check(authorizations == ids(case["authorizationHeaders"]), "authorization headers in order: $authorizations")
+}
+
 /** Runs every optimistic-layer and offline-queue case. */
 internal fun runOptimisticOfflineCases() {
     optimisticLayerRebasesOntoServerFrame()
@@ -1572,4 +1629,5 @@ internal fun runOptimisticOfflineCases() {
     offlineFlushUndecodableResultSettlesCommitted()
     offlineFlushClassifiesSingleAndBatchAlike()
     offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge()
+    offlineWriteHeldForCredentialReplaysAfterTokenRefresh()
 }

@@ -150,7 +150,14 @@ How a replayed write settles, on the single-call and the batch path alike:
   code alone, whatever the HTTP status: `SHARD_UNAVAILABLE`, `SHARD_ERROR`,
   `RATE_LIMITED` and `TOO_MANY_REQUESTS` re-queue, and so do the refused
   credentials `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` (the write
-  is held for a fresh token, not destroyed); every other code — a coded 500 and
+  is held for a fresh token, not destroyed — while `connect_and_run` is live
+  and `client.identity` is set, setting a different, non-`None`
+  `client.auth_token` re-flushes its shard; otherwise call `flush_offline_queue`
+  after setting it, as on a reconnect. The identity is what keeps that flush
+  from sending one user's write with another's token, so with none set a token
+  change flushes nothing, and on an account switch set the new identity first.
+  One flush runs per shard: a flush asked for while one runs makes it pass over
+  the queue again); every other code — a coded 500 and
   a server-sent `WIRE_DECODE_FAILED` included — settles `rejected`. An envelope
   whose `data` does not decode keeps its code, with `data` dropped.
 - A reply with **no envelope** (an edge page, a proxy, a body that is not a JSON

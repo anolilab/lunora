@@ -43,6 +43,12 @@
         "own error type, streams that end on close, a session evicted on an identity",
         "change, and a bearer token that never reaches a printed value.",
         "",
+        "The last name holds a write refused for its credential until a fresh token",
+        "is set, then replays it under that token (fixtures/offline-optimistic.json",
+        "`credentialRefresh`). Every port had the hold; the one that flushes on its",
+        "own when its socket connects did not flush when a new token landed, so the",
+        "held write waited for a reconnect that a healthy socket never makes.",
+        "",
         "A name here is required of EVERY port, so it may only assert behaviour",
         "every port has. Where one legitimately differs the difference belongs in",
         "the capability matrix, not here."
@@ -99,6 +105,7 @@
         "rpc_unreadable_success_body_raises_sdk_error",
         "subscription_stream_ends_on_close",
         "identity_change_evicts_previous_session",
-        "auth_token_redacted_when_printed"
+        "auth_token_redacted_when_printed",
+        "offline_write_held_for_credential_replays_after_token_refresh"
     ]
 }

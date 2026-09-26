@@ -30,6 +30,7 @@ extension Wire {
         if let double = value as? Double { return formatDouble(double) }
         if let array = value as? [Any] { return "[" + array.map { stableStringify($0) }.joined(separator: ",") + "]" }
         if let dictionary = value as? [String: Any] { return stableObject(dictionary) }
+        if let object = value as? [WireKey: Any] { return stableObject(object) }
 
         return "null"
     }
@@ -40,28 +41,22 @@ extension Wire {
     }
 
     private static func stableObject(_ value: [String: Any]) -> String {
-        // JavaScript compares strings by UTF-16 code unit. Swift's `<` compares
-        // by Unicode scalar, which agrees inside the BMP but not above it: an
-        // astral character is its high surrogate (0xD83D) as UTF-16 yet its
-        // full scalar (0x1F600) to Swift, so it sorts before U+FFFD there and
-        // after it here. Comparing UTF-16 views reproduces JavaScript exactly.
-        let pairs = value.filter { !($0.value is WireUndefined) }
-        let sorted = pairs.sorted { lessUTF16($0.key, $1.key) }
-        return "{" + sorted.map { "\(jsonString($0.key)):\(stableStringify($0.value))" }.joined(separator: ",") + "}"
+        stableObject(value.map { (utf16Units($0.key), $0.value) })
     }
 
-    private static func lessUTF16(_ a: String, _ b: String) -> Bool {
-        var left = utf16Units(a).makeIterator()
-        var right = utf16Units(b).makeIterator()
-        while true {
-            switch (left.next(), right.next()) {
-            case (let l?, let r?):
-                if l != r { return l < r }
-            case (nil, .some): return true
-            case (.some, nil): return false
-            case (nil, nil): return false
-            }
-        }
+    private static func stableObject(_ value: [WireKey: Any]) -> String {
+        stableObject(value.map { ($0.key.utf16, $0.value) })
+    }
+
+    /// An object's fields by their keys' UTF-16 code units, which is how
+    /// JavaScript compares strings. Swift's `<` compares by Unicode scalar, which
+    /// agrees inside the BMP but not above it: an astral character is its high
+    /// surrogate (0xD83D) as UTF-16 yet its full scalar (0x1F600) to Swift, so it
+    /// sorts before U+FFFD there and after it here. Each key is read into units
+    /// once, not once per comparison.
+    private static func stableObject(_ fields: [(key: [UInt16], value: Any)]) -> String {
+        let sorted = fields.filter { !($0.value is WireUndefined) }.sorted { $0.key.lexicographicallyPrecedes($1.key) }
+        return "{" + sorted.map { "\(jsonString(units: $0.key)):\(stableStringify($0.value))" }.joined(separator: ",") + "}"
     }
 
     private static func formatNumber(_ number: NSNumber) -> String {
@@ -136,8 +131,9 @@ extension Wire {
     /// This is also the transport's string writer, so it must never fail: a lone
     /// surrogate made `JSONSerialization` throw, and the offline queue re-queued
     /// that write — and every one behind it — on every flush, forever.
-    static func jsonString(_ value: String) -> String {
-        let units = utf16Units(value)
+    static func jsonString(_ value: String) -> String { jsonString(units: utf16Units(value)) }
+
+    static func jsonString(units: [UInt16]) -> String {
         var quoted = "\""
         var index = 0
 

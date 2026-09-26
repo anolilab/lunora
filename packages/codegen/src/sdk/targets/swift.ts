@@ -210,10 +210,11 @@ const renderCall = (method: SdkMethod): string => {
             ? `return ${call}`
             : [
                   `let raw = ${call}`,
-                  // `.fragmentsAllowed`, because a result schema of `v.string()`
-                  // renders as a typealias to a scalar — and without the option
-                  // `data(withJSONObject:)` throws on any top-level non-container.
-                  `        let data = try JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed])`,
+                  // The transport's own writer, not `JSONSerialization`: that one
+                  // raises an Objective-C exception — a crash, not a throw — on a
+                  // value it cannot write, such as the `[WireKey: Any]` an object
+                  // with lone-surrogate keys decodes to, or a NaN.
+                  `        let data = Data(Wire.stableStringify(raw).utf8)`,
                   `        return try JSONDecoder().decode(${method.resultType}.self, from: data)`,
               ].join("\n");
 

@@ -214,6 +214,37 @@ class TestReplayManifestCases(unittest.TestCase):
                     if event.status == "rejected":
                         self.assertEqual(event.error.code, case["code"])
 
+    def test_held_write_replays_after_token_refresh(self):
+        covers("offline_write_held_for_credential_replays_after_token_refresh")
+        case = OFFLINE["credentialRefresh"]
+        stale, refusal = f"Bearer {case['staleToken']}", case["refusal"]
+        headers = []
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            return (refusal["status"], refusal["body"]) if sent.get("authorization") == stale else (200, {"result": None})
+
+        run = _Run(post, [])
+        run.client.identity = case["identity"]
+        run.client.auth_token = case["staleToken"]
+        for mutation_id in case["queued"]:
+            run.client.offline_queue.enqueue(QueuedMutation("messages:send", {}, mutation_id=mutation_id, identity=case["identity"]))
+
+        report = run.flush()
+        self.assertEqual(report.committed, case["afterRefusal"]["committed"])
+        self.assertEqual(report.rejected, case["afterRefusal"]["rejected"])
+        self.assertEqual(run.queued(), case["afterRefusal"]["queuedAfterFlush"])
+        self.assertEqual((run.settled, run.store.removed), ([], []), "held: unsettled and still persisted")
+
+        # A refresh: the identity unchanged. Outside `connect_and_run` the flush
+        # is the caller's; `test_connect_and_run` asserts the loop's own.
+        run.client.auth_token = case["freshToken"]
+        report = run.flush()
+        self.assertEqual(report.committed, case["afterRefresh"]["committed"])
+        self.assertEqual(report.rejected, case["afterRefresh"]["rejected"])
+        self.assertEqual(run.queued(), case["afterRefresh"]["queuedAfterFlush"])
+        self.assertEqual(headers, case["authorizationHeaders"])
+
 
 class TestRpcManifestCases(unittest.TestCase):
     def test_unreadable_success_body_raises_sdk_error(self):

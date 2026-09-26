@@ -353,6 +353,7 @@ class OfflineQueue {
     this.onSizeChange,
     this.onSettled,
     this.onPersistenceError,
+    this.onHeld,
   });
 
   /// The cap. Reaching it drops the OLDEST entry.
@@ -390,6 +391,13 @@ class OfflineQueue {
   /// permission. A failed `append` means the write is queued in memory but NOT
   /// durable, so it will not survive a restart.
   final void Function(PersistenceOperation operation, Object error, String? mutationId)? onPersistenceError;
+
+  /// Notified when a flush leaves writes queued, unsent, because it cannot tell
+  /// who holds the credential: a token set while an `authSubject` is in place,
+  /// and not yet confirmed by setting the subject again, or nobody signed in.
+  /// Nothing else reports it, and the writes wait until the subject is set, so
+  /// this is how a stalled queue is found.
+  final void Function(List<QueuedMutation> held)? onHeld;
 
   final List<QueuedMutation> _items = <QueuedMutation>[];
 

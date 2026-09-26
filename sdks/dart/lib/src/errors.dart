@@ -132,8 +132,8 @@ bool isTransientFailure(Object error) =>
 /// went offline, which has very often expired by the time it reconnects.
 /// Settling the write on that refusal destroys the user's own durable write
 /// over a problem one token refresh fixes, so it HOLDS: it stays queued and
-/// persisted, and replays on the next flush — which is the caller's to trigger
-/// once a fresh credential is set (`setConnected`, or `flushOfflineQueue`).
+/// persisted, and replays on the next flush — which setting a fresh token
+/// starts by itself on every connected shard (see `LunoraClient.authToken`).
 const Set<String> authReplayErrorCodes = <String>{'TOKEN_EXPIRED', 'UNAUTHENTICATED', 'UNAUTHORIZED'};
 
 /// The longest delay a rate limit may hold a flush off for, matching the

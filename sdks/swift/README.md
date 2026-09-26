@@ -183,11 +183,29 @@ can carry and `JSONSerialization` refused. An integer literal off the wire past
 ±(2^53−1) decodes to the double `JSON.parse` reads; a native `Int` or `UInt64`
 that large is still refused on encode.
 
-Swift compares a lone surrogate as U+FFFD, so `"\ud800"` and `"\ud801"` are one
-`String` to it and two to JavaScript. `WireMap` keys and `WireSet` members are
-compared by UTF-16 unit and stay distinct; a `[String: Any]` cannot hold both, so
-a JSON object whose keys differ only that way is refused as invalid JSON (the
-frame is ignored, an RPC reply is `INTERNAL`) rather than silently merged.
+Swift compares a lone surrogate as U+FFFD, so `"\ud800"`, `"\ud801"` and `"�"`
+are one `String` to it and three to JavaScript. `WireMap` keys and `WireSet`
+members are compared by UTF-16 unit and stay distinct. A `[String: Any]` cannot
+hold all three, so a JSON object whose keys differ only that way decodes to a
+`[WireKey: Any]`, keyed by UTF-16 code unit; every other object is still a
+`[String: Any]`. `encode`, `decode` and `stableStringify` take both, so such a
+value re-encodes to the reference's bytes and keys the same.
+
+```swift
+if let object = value as? [WireKey: Any] {
+    let named = object["id"]                     // a literal is a key
+    let lone = object[WireKey(utf16: [0xD800])]  // a key no literal can spell
+    let text = object.keys.map(\.string)         // a String view per key
+}
+```
+
+**Behaviour change.** Such an object used to be refused as invalid JSON: the frame
+was ignored and an RPC reply was `INTERNAL`. It now arrives as `[WireKey: Any]`
+where code that casts to `[String: Any]` finds nil. An `Error`'s props are still
+a `[String: Any]`, so props whose keys differ only by a lone surrogate are refused
+as a malformed frame. Generated typed results are decoded from the transport's own
+writer rather than `JSONSerialization`, which crashes on a `[WireKey: Any]` or a
+NaN instead of throwing.
 
 ### One thing to know about generated models
 
