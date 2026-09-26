@@ -173,6 +173,33 @@ describe("lunora data-transfer", () => {
             expect(readFileSync(outPath, "utf8")).toBe(yesterday);
         });
 
+        it("leaves no staged .partial behind once a mid-stream failure has been reported", async () => {
+            expect.assertions(2);
+
+            const outPath = join(workDir, "dump.ndjson");
+            // Errors before the stream's lazy open can finish: the case where an
+            // unlink issued straight after destroy() ran ahead of the file's creation.
+            const failingBody = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.error(new Error("connection reset"));
+                },
+            });
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: failingBody, json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                "connection reset",
+            );
+
+            // Give a still-pending open the chance to land before looking.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 50);
+            });
+
+            expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
+        });
+
         it("discards the staged dump when the commit rename fails", async () => {
             expect.assertions(2);
 

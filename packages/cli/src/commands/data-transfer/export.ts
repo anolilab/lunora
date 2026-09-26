@@ -166,7 +166,24 @@ const discardPartialExport = async (sink: NodeJS.WritableStream, stagePath: stri
         return;
     }
 
-    (sink as ReturnType<typeof createWriteStream>).destroy();
+    const stream = sink as ReturnType<typeof createWriteStream>;
+
+    // `createWriteStream` opens its file asynchronously. Unlinking straight
+    // after `destroy()` can run before that open completes: the unlink then
+    // misses (ENOENT, ignored) and the open creates the `.partial` afterwards,
+    // leaving it on disk. Wait for the stream to close first.
+    await new Promise<void>((resolve) => {
+        if (stream.closed) {
+            resolve();
+
+            return;
+        }
+
+        stream.once("close", () => {
+            resolve();
+        });
+        stream.destroy();
+    });
 
     try {
         await unlink(stagePath);
