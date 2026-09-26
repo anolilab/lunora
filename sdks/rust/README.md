@@ -51,8 +51,12 @@ from their resume cursor and shape views from their checkpoint and epoch. A
 own `on_error` as `INVALID_FRAME` rather than returned from `handle_frame`, so
 one bad frame cannot end your read loop and with it every other subscription.
 The same goes for a poke: a shape whose part carries a row the codec refuses
-keeps its view, checkpoint and epoch untouched and hears `INVALID_FRAME` on its
-`on_error`, while every other shape in the poke applies. A frame shaped like no
+keeps its view, checkpoint and epoch untouched and hears `WIRE_DECODE_FAILED` on
+its `on_error`, while every other shape in the poke applies. A later poke whose
+`baseCheckpoint` (or epoch) no longer matches the view's — the server believes
+it delivered the refused rows — is not spliced on: the view is emptied, its
+`on_rows` told `[]`, and a cold `shape_subscribe` goes out at once so the server
+re-seeds it (a `reset` part is exempt: it replaces the view anyway). A frame shaped like no
 server frame is ignored, and a `cursor` that is not an integer never replaces
 the tracked one.
 
@@ -111,9 +115,13 @@ has no caller left to tell — reaches `client.on_mutation_settled`.
 
 One rule classifies a failed replay, whether the write went out alone or in a
 batch: a CODED envelope is classified by its code alone, whatever the HTTP
-status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED` and
-`TOO_MANY_REQUESTS` re-queue, every other code (a coded 500 included) settles
-`rejected` — and a reply with no envelope re-queues, except a 413.
+status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`,
+`TOO_MANY_REQUESTS` and the refused credentials `UNAUTHORIZED`, `TOKEN_EXPIRED`
+and `UNAUTHENTICATED` (held for the next token) re-queue, every other code (a
+coded 500, or a server's own `WIRE_DECODE_FAILED`, included) settles `rejected` —
+and a reply with no envelope re-queues, except a 413. An envelope whose `data`
+does not decode is still that coded error, with `data` dropped (`None`), on
+every path including a direct `query`/`mutation`/`action`.
 
 A flush chunks itself by bytes as well as by entries, and a chunk refused with a
 413 — the worker's coded `PAYLOAD_TOO_LARGE` or a proxy's HTML page alike — is
@@ -126,7 +134,9 @@ passes.
 A replayed write the server committed but whose result does not decode settles
 `Committed` — overlay confirmed, durable record removed — with no value and the
 decode error coded `WIRE_DECODE_FAILED` on its settled event. It is never
-retried: the replay could only return the same result.
+retried: the replay could only return the same result. An online `submit` reports
+the same thing: `Ok` with status `Committed`, a `Null` value and
+`MutationOutcome::error` holding the coded `WIRE_DECODE_FAILED`.
 
 The identity is an opaque, **non-secret** stamp — a user id, not a bearer token
 — set with `client.set_identity(…)`. It is persisted with every queued write and

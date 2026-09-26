@@ -71,6 +71,13 @@ pub const TRANSIENT_ERROR_CODES: [&str; 2] = ["SHARD_ERROR", "SHARD_UNAVAILABLE"
 /// `responseError.with-data`).
 pub const RATE_LIMIT_ERROR_CODES: [&str; 2] = ["RATE_LIMITED", "TOO_MANY_REQUESTS"];
 
+/// The coded errors that refused the CREDENTIAL, not the write, so a replay HOLDS
+/// the write rather than settling it. A write queued offline replays with the
+/// bearer held when it went offline, which has very often expired by reconnect;
+/// settling it destroyed the user's own durable write over a problem one token
+/// refresh fixes.
+pub const AUTH_REPLAY_ERROR_CODES: [&str; 3] = ["TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"];
+
 /// The longest delay a rate-limit hint is honoured for, matching the reference
 /// client's clamp. A server — or a proxy rewriting for one — that names hours
 /// would otherwise park a durable queue for hours on one unvalidated number.

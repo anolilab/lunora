@@ -1733,6 +1733,29 @@ pub fn offline_flush_undecodable_result_settles_committed() {
         count(&spec["requestsAfterSecondFlush"]),
         "lone: a second flush sends nothing"
     );
+
+    a_direct_submit_with_an_undecodable_result_commits(&raw, &code);
+}
+
+/// The ONLINE `submit` path reaches the same verdict as the replay: the write
+/// committed, so the outcome is `Committed` with its overlay confirmed, no value
+/// and the coded decode error — not a bare codec error that reads as a failure.
+fn a_direct_submit_with_an_undecodable_result_commits(raw: &Value, code: &str) {
+    let result = raw.clone();
+    let (mut client, _requests) = replying_client(move |_request| (200, serde_json::to_vec(&json!({ "commitCursor": 7, "result": result })).expect("body")));
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let subscription = client.subscribe(FUNCTION, args(), None, None);
+    let outcome = client
+        .submit(SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(WireValue::String("pending".into()))))
+        .expect("a committed write is not a failed submit");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    assert_eq!(outcome.commit_cursor, Some(7));
+    assert_eq!(outcome.value, WireValue::Null);
+    assert_eq!(outcome.error.map(|error| error.code), Some(code.to_string()));
+    assert_eq!(layers(&client, &subscription), 1, "the overlay is confirmed, not rolled back");
 }
 
 /// Every write in `queued` settled committed; exactly `failed` carry `code` and

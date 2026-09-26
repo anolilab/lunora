@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
-use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE};
+use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
 use crate::submit::{args_key, matches};
@@ -168,10 +168,10 @@ pub fn parse_rpc_response(body: &Value, status: u16) -> Result<WireValue, Client
 /// committed-but-undecodable result from a failed call.
 pub(crate) fn rpc_result(body: &Value, status: u16) -> Result<&Value, ClientError> {
     if let Some(envelope) = body.get("error").and_then(Value::as_object) {
-        let data = match envelope.get("data") {
-            Some(Value::Null) | None => None,
-            Some(inner) => Some(decode_wire(inner)?),
-        };
+        // Data the codec refuses is DROPPED, never allowed to turn the envelope
+        // into a codec error: the envelope is still the server's coded verdict,
+        // and a codec error would neither carry its code nor classify by it.
+        let data = envelope.get("data").filter(|inner| !inner.is_null()).and_then(|inner| decode_wire(inner).ok());
 
         return Err(ClientError::Api(Box::new(ApiError {
             code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
@@ -365,6 +365,22 @@ enum PokeOp {
 struct ShapePart {
     operations: Vec<Value>,
     reset: bool,
+    /// The checkpoint the server computed this part's diff against: the part's
+    /// own `baseCheckpoint`, else its `pokeStart`'s.
+    base: Option<Value>,
+}
+
+/// One buffered poke: its parts per shape, plus what its `pokeStart` said.
+#[derive(Default)]
+struct PokeBuffer {
+    base: Option<Value>,
+    epoch: Option<Value>,
+    parts: HashMap<String, ShapePart>,
+}
+
+/// A field that is present and not `null`.
+fn present(frame: &Value, field: &str) -> Option<Value> {
+    frame.get(field).filter(|value| !value.is_null()).cloned()
 }
 
 /// A Lunora deployment client.
@@ -429,7 +445,7 @@ pub struct Client {
     pub(crate) send: Option<FrameSender>,
     pub(crate) subscriptions: HashMap<String, Subscription>,
     shapes: HashMap<String, ShapeSubscription>,
-    pokes: HashMap<String, HashMap<String, ShapePart>>,
+    pokes: HashMap<String, PokeBuffer>,
     poke_order: VecDeque<String>,
     next_id: usize,
     next_shape_id: usize,
@@ -1004,7 +1020,13 @@ impl Client {
             }
             "pokeStart" => {
                 if let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) {
-                    if self.pokes.insert(poke_id.to_string(), HashMap::new()).is_none() {
+                    let buffer = PokeBuffer {
+                        base: present(&frame, "baseCheckpoint"),
+                        epoch: present(&frame, "epoch"),
+                        parts: HashMap::new(),
+                    };
+
+                    if self.pokes.insert(poke_id.to_string(), buffer).is_none() {
                         self.poke_order.push_back(poke_id.to_string());
                     }
 
@@ -1040,10 +1062,14 @@ impl Client {
         // A part for an unknown poke is dropped: without its pokeStart there is
         // no batch to join, and guessing would apply a fragment of one.
         if let Some(buffer) = self.pokes.get_mut(poke_id) {
-            let part = buffer.entry(shape_id.to_string()).or_default();
+            let part = buffer.parts.entry(shape_id.to_string()).or_default();
 
             part.operations.extend(operations);
             part.reset |= frame.get("reset").and_then(Value::as_bool).unwrap_or(false);
+
+            if let Some(base) = present(frame, "baseCheckpoint").or_else(|| buffer.base.clone()) {
+                part.base = Some(base);
+            }
         }
     }
 
@@ -1052,7 +1078,7 @@ impl Client {
     ///
     /// A shape whose part holds a row the codec refuses keeps its view, its
     /// checkpoint and its epoch exactly as they were — no reset clear, no ops,
-    /// no `on_rows` — and its `on_error` hears `INVALID_FRAME`. Clearing the view
+    /// no `on_rows` — and its `on_error` hears `WIRE_DECODE_FAILED`. Clearing the view
     /// for a reset and then failing on the row left it half-applied or empty;
     /// skipping the row and applying the rest advanced the checkpoint past a row
     /// the view never held, so no resume would send it again. Every other shape
@@ -1072,7 +1098,7 @@ impl Client {
 
         self.poke_order.retain(|candidate| candidate != poke_id);
 
-        for (shape_id, part) in buffer {
+        for (shape_id, part) in buffer.parts {
             let Some(shape) = self.shapes.get_mut(&shape_id) else {
                 continue;
             };
@@ -1082,7 +1108,7 @@ impl Client {
                 Err(error) => {
                     if let Some(handler) = &shape.on_error {
                         handler(&SubscriptionError {
-                            code: Some(CODE_INVALID_FRAME.to_string()),
+                            code: Some(CODE_WIRE_DECODE_FAILED.to_string()),
                             message: error.to_string(),
                         });
                     }
@@ -1090,6 +1116,33 @@ impl Client {
                     continue;
                 }
             };
+
+            // An epoch mismatch means the changelog forked since we last applied;
+            // a base mismatch means this diff was computed against a checkpoint
+            // the view is not at — a dropped or refused poke the server believes
+            // it delivered. Splicing the ops on would corrupt the view for good,
+            // so (unless the part is a reset, which settles either in one step)
+            // drop the view, clear the checkpoint and epoch, tell the callbacks,
+            // SKIP the ops, and re-subscribe COLD so the server re-seeds it.
+            let epoch_forked = buffer.epoch.is_some() && shape.epoch.is_some() && buffer.epoch != shape.epoch;
+            let base_diverged = part.base.is_some() && shape.checkpoint.is_some() && part.base != shape.checkpoint;
+
+            if !part.reset && (epoch_forked || base_diverged) {
+                shape.rows.clear();
+                shape.order.clear();
+                shape.checkpoint = None;
+                shape.epoch = None;
+
+                if let Some(handler) = &shape.on_rows {
+                    handler(&[]);
+                }
+
+                if let (Some(send), Ok(cold)) = (&self.send, build_shape_subscribe_frame(&shape_id, &shape.name, shape.args.as_ref(), None, None)) {
+                    send(&cold);
+                }
+
+                continue;
+            }
 
             // A `reset` part carries the shape's COMPLETE membership, so it is
             // authoritative on its own: drop whatever we hold, then apply it.
@@ -1307,7 +1360,11 @@ mod tests {
             .handle_frame(&poke_end("poke2", "cp2", "epoch2").to_string())
             .expect("a bad row must not fail handle_frame");
 
-        assert_eq!(*errors.lock().unwrap(), vec![Some(CODE_INVALID_FRAME.to_string())], "reported on the shape");
+        assert_eq!(
+            *errors.lock().unwrap(),
+            vec![Some(CODE_WIRE_DECODE_FAILED.to_string())],
+            "reported on the shape"
+        );
         assert_eq!(*fired.lock().unwrap(), 1, "on_rows must not fire for the failed batch");
 
         let shape = client.shapes.get(&shape_id).expect("shape");
@@ -1382,7 +1439,7 @@ mod tests {
             );
             assert_eq!(
                 *errors_b.lock().unwrap(),
-                vec![Some(CODE_INVALID_FRAME.to_string())],
+                vec![Some(CODE_WIRE_DECODE_FAILED.to_string())],
                 "attempt {attempt}: shape_b is told"
             );
 

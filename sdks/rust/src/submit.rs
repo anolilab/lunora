@@ -14,9 +14,9 @@ use std::time::{Duration, Instant};
 use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
-    identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES,
-    MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
+    identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, AUTH_REPLAY_ERROR_CODES,
+    CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES,
+    MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -48,6 +48,10 @@ pub struct MutationOutcome {
     pub mutation_id: String,
     pub value: WireValue,
     pub commit_cursor: Option<i64>,
+    /// `WIRE_DECODE_FAILED` when the write COMMITTED but its result does not
+    /// decode (`value` is then `Null`); `None` otherwise. The same report a
+    /// replayed write's settled event carries.
+    pub error: Option<ApiError>,
 }
 
 /// The terminal verdict on a queued write, once it replays.
@@ -198,6 +202,7 @@ impl Client {
 
             return Ok(MutationOutcome {
                 commit_cursor: None,
+                error: None,
                 mutation_id: write_id,
                 status: MutationStatus::Queued,
                 value: WireValue::Null,
@@ -208,15 +213,19 @@ impl Client {
             Ok((result, commit_cursor)) => {
                 // Confirmed against the write's COMMITTED cursor, so the overlay
                 // drops when (or once) a frame at that cursor lands — never on
-                // this call's return, which races the socket broadcast. Before
-                // the decode: a result that does not decode still committed.
+                // this call's return, which races the socket broadcast. A result
+                // that does not decode still committed, so it is reported beside
+                // the committed outcome rather than as a failed call.
                 self.confirm_layers(&layers, commit_cursor);
+
+                let (value, error) = decode_committed(&result);
 
                 Ok(MutationOutcome {
                     commit_cursor,
+                    error,
                     mutation_id: write_id,
                     status: MutationStatus::Committed,
-                    value: decode_wire(&result)?,
+                    value,
                 })
             }
             Err(error) => {
@@ -623,13 +632,7 @@ impl Client {
     /// overlay is confirmed BEFORE the caller is told, so the gapless drop is
     /// already in place when the confirming frame lands.
     fn settle_committed(&mut self, entry: &QueuedMutation, result: &Value, commit_cursor: Option<i64>, report: &mut FlushReport) {
-        let (value, error) = match decode_wire(result) {
-            Ok(value) => (value, None),
-            Err(error) => (
-                WireValue::Null,
-                Some(coded(CODE_WIRE_DECODE_FAILED, &format!("committed, but its result does not decode: {error}"))),
-            ),
-        };
+        let (value, error) = decode_committed(result);
 
         self.offline_queue.unpersist(&entry.id);
         self.confirm_layers(&entry.layers, commit_cursor);
@@ -806,6 +809,19 @@ impl Client {
     }
 }
 
+/// A committed write's result, or — when THIS client cannot decode it — no value
+/// and the coded `WIRE_DECODE_FAILED`. Decided by where the failure arose, never
+/// by a code string: a server that answers `WIRE_DECODE_FAILED` refused the write.
+fn decode_committed(result: &Value) -> (WireValue, Option<ApiError>) {
+    match decode_wire(result) {
+        Ok(value) => (value, None),
+        Err(error) => (
+            WireValue::Null,
+            Some(coded(CODE_WIRE_DECODE_FAILED, &format!("committed, but its result does not decode: {error}"))),
+        ),
+    }
+}
+
 /// Rebuilds an [`ApiError`] from a slot's or a batch's error envelope,
 /// defaulting the way `parse_rpc_response` does.
 fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
@@ -888,9 +904,13 @@ pub fn retry_after_ms(error: &ApiError) -> Option<i64> {
     })
 }
 
-/// Whether a coded server answer left the write still worth replaying.
+/// Whether a coded server answer left the write still worth replaying: a shard
+/// blip, a rate limit, a refused credential (held for the next token), or a
+/// reply with no envelope at all.
 fn api_is_transient(error: &ApiError) -> bool {
-    error.transient || TRANSIENT_ERROR_CODES.contains(&error.code.as_str()) || RATE_LIMIT_ERROR_CODES.contains(&error.code.as_str())
+    let code = error.code.as_str();
+
+    error.transient || TRANSIENT_ERROR_CODES.contains(&code) || RATE_LIMIT_ERROR_CODES.contains(&code) || AUTH_REPLAY_ERROR_CODES.contains(&code)
 }
 
 /// Whether a failed replay may be retried rather than dropped.

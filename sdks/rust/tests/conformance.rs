@@ -438,6 +438,10 @@ fn rpc_responses() {
             Err(ClientError::Api(error)) => {
                 assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
                 assert_eq!(error.message, case["message"].as_str().unwrap(), "{name}");
+
+                if case["dataDropped"] == json!(true) {
+                    assert_eq!(error.data, None, "{name}: undecodable data is dropped");
+                }
             }
             other => panic!("expected an ApiError for {name}, got {other:?}"),
         }
@@ -995,6 +999,61 @@ fn shape_poke_with_undecodable_row_is_refused_whole() {
         canonical(&shape["expectedRows"]),
         "the view is untouched"
     );
+
+    // The server believes it delivered the refused rows, so the next poke is
+    // based on checkpoint 12 while the view is at 5: a gap. The view is dropped,
+    // its callbacks told `[]`, the ops skipped, and a COLD re-subscribe sent.
+    rows.lock().expect("rows").clear();
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["gapPokeSequence"]);
+
+    let told: Vec<Value> = rows
+        .lock()
+        .expect("rows")
+        .iter()
+        .map(|delivered| encode_wire(&WireValue::Array(delivered.clone())).expect("encode"))
+        .collect();
+
+    assert_eq!(told, vec![shape["gapExpectedRows"].clone()], "the callbacks are told the view emptied");
+
+    let resubscribes: Vec<Value> = sent
+        .lock()
+        .expect("sent")
+        .iter()
+        .filter(|frame| frame["type"] == json!("shape_subscribe"))
+        .cloned()
+        .collect();
+
+    assert_eq!(resubscribes.len(), 1, "a re-seed is requested at once");
+    assert_eq!(resubscribes[0]["id"], json!("shape_1"));
+    assert!(
+        resubscribes[0].get("sinceCheckpoint").is_none() && resubscribes[0].get("sinceEpoch").is_none(),
+        "cold"
+    );
+
+    let frame = resent(&client, &sent, "shape_subscribe");
+
+    assert!(
+        frame.get("sinceCheckpoint").is_none() && frame.get("sinceEpoch").is_none(),
+        "a later resume is cold too"
+    );
+    assert_eq!(shape_view(&mut client, &rows), shape["gapExpectedRows"], "the gap's ops were skipped");
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    let (mut client, sent, (rows, _errors)) = shape_client();
+
+    deliver(&mut client, &shape["pokeSequence"]);
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["contiguousPokeSequence"]);
+
+    let delivered = rows.lock().expect("rows").last().cloned().expect("delivered");
+
+    assert_eq!(
+        canonical(&encode_wire(&WireValue::Array(delivered)).expect("encode")),
+        canonical(&shape["contiguousExpectedRows"]),
+        "a contiguous poke applies"
+    );
+    assert!(sent.lock().expect("sent").is_empty(), "and re-seeds nothing");
 }
 
 /// Frames shaped like no server frame are ignored: none may fail
