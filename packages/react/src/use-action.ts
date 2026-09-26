@@ -56,8 +56,9 @@ interface ActionHook<F extends FunctionReference> {
  * `client.action` sends no idempotency key, so a retry after a 502 on an action
  * that already ran server-side would run it a second time. `useMutation` pins
  * both the same way, for a different reason: `client.mutation` queues an
- * offline write itself, and a paused call would never reach that queue. An
- * action has no queue at all, so offline it fails fast.
+ * offline write itself, and a paused call would never reach that queue (it
+ * waits for the network itself only when the client cannot queue). An action
+ * has no queue at all, so offline it fails fast.
  *
  * **What it deliberately does not carry.** There is no `optimistic` /
  * `optimisticUpdate` and no `withOptimisticUpdate`, which `useMutation` has. An

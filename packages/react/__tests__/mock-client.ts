@@ -154,6 +154,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     const asClient = {
         acquireConnectionContext: acquireConnectionContextFunction,
         action: actionFunction,
+        canQueueOffline: () => true,
         close: closeFunction,
         connectionStatus: connectionStatusFunction,
         currentIdentity: currentIdentityFunction,

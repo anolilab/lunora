@@ -865,6 +865,8 @@ const createDevMockClient = (): LunoraClient =>
         },
         // The dev mock has one fixed identity, so nothing ever retires it.
         onIdentityChange: (): (() => void) => noop,
+        // Writes resolve in memory, so the hook never needs to hold one for the network.
+        canQueueOffline: (): boolean => true,
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.

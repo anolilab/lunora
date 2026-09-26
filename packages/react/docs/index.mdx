@@ -75,10 +75,12 @@ To bind the same update to every call of a handle, use
 `withOptimisticUpdate(update)`, which returns the same handle with the update
 applied by default.
 
-Offline, `mutate` still calls `client.mutation` at once: the optimistic update
-paints, and the write goes to the offline queue (or your durable outbox) to
-replay on reconnect. TanStack never pauses or retries the call; the queue owns
-replays.
+Offline, `mutate` calls `client.mutation` at once when the client can queue the
+write: the optimistic update paints, and the write goes to the offline queue (or
+your durable outbox) to replay on reconnect. Before the shard's first connect
+(unless `queueBeforeFirstConnect` is set), or on a client with no WebSocket, the
+client cannot queue, so the call waits until the browser is back online and then
+sends. TanStack never retries; the queue owns replays.
 
 ## `useAction(fn)`
 
@@ -93,11 +95,10 @@ second's outcome. A success clears `error`; a failure leaves the previous `data`
 in place, so a transient error does not blank the view. `reset()` clears both,
 but does not cancel an in-flight call — its result still lands.
 
-Like `useMutation`, the call never pauses while offline and is never retried.
-Unlike a mutation, it is not queued either: `client.action` has no offline queue
-and sends no idempotency key, so a paused call would fire minutes later on
-reconnect and a retry could run a third-party side effect twice. It fails fast
-instead and lets you decide.
+Unlike `useMutation`, the call never waits for the network, is never queued and
+is never retried: `client.action` has no offline queue and sends no idempotency
+key, so a paused call would fire minutes later on reconnect and a retry could run
+a third-party side effect twice. It fails fast instead and lets you decide.
 
 ```tsx
 const { call: runVerify, pending } = useAction(api.commands.run);

@@ -286,4 +286,75 @@ describe("useMutation", () => {
             client.close();
         }
     });
+
+    it("holds a write made offline before the client ever connected, then sends it once online", async () => {
+        expect.assertions(3);
+
+        const sockets: MockSocket[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ result: "sent" }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+        let outcome = "pending";
+
+        const Writer = (): ReactElement => {
+            const { mutate } = useMutation(makeRef("posts:create"));
+
+            return (
+                <button
+                    data-testid="write"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        mutate({ title: "cold" })
+                            .then((value) => {
+                                outcome = `resolved:${String(value)}`;
+
+                                return undefined;
+                            })
+                            .catch((error: unknown) => {
+                                outcome = `rejected:${String(error)}`;
+                            });
+                    }}
+                    type="button"
+                >
+                    write
+                </button>
+            );
+        };
+
+        render(
+            <LunoraProvider client={client}>
+                <Writer />
+            </LunoraProvider>,
+        );
+
+        try {
+            await act(async () => {
+                onlineManager.setOnline(false);
+                await Promise.resolve();
+            });
+
+            // No socket has ever opened, so the client cannot queue this write.
+            fireEvent.click(screen.getByTestId("write"));
+
+            await act(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 20);
+                });
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+
+            await act(async () => {
+                onlineManager.setOnline(true);
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 20);
+                });
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(outcome).toBe("resolved:sent");
+        } finally {
+            onlineManager.setOnline(true);
+            client.close();
+        }
+    });
 });
