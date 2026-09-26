@@ -41,28 +41,14 @@
  * path alias (which `jiti` does not read) throws, and {@link loadProjectConfig}
  * reports that rather than swallowing it.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { basename } from "node:path";
 
 import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
-/**
- * The config filenames probed at the project root, in order. TypeScript first
- * because that is what the templates ship and what the type-only `satisfies`
- * needs; the JS forms are accepted so a JS-authored project is not forced into
- * TypeScript for one file.
- *
- * The one exported truth: the dev server watches exactly these, and
- * {@link findProjectConfigFile} probes exactly these.
- *
- * `.cts` / `.cjs` are absent deliberately. Vite's default `resolve.extensions`
- * does not include them, so the specifier `@lunora/vite` emits for the `app`
- * hook would not resolve — and a config half of whose keys work is worse than
- * one the probe never finds.
- */
-const PROJECT_CONFIG_FILENAMES: ReadonlyArray<string> = ["lunora.config.ts", "lunora.config.mts", "lunora.config.js", "lunora.config.mjs"];
+import { findProjectConfigFile } from "./project-config-path";
 
 /**
  * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
@@ -104,13 +90,6 @@ interface LoadedProjectConfig {
      */
     error?: string;
 }
-
-/** The resolved config file, or `undefined` when the project ships none. */
-const findProjectConfigFile = (projectRoot: string): string | undefined =>
-    // `resolve`, not `join`: `jiti` cannot load a relative specifier, while the
-    // parser reads one fine — so a relative `projectRoot` made the two readers
-    // disagree about a config that was right there.
-    PROJECT_CONFIG_FILENAMES.map((name) => resolve(projectRoot, name)).find((candidate) => existsSync(candidate));
 
 /**
  * Memoized per path, keyed on mtime + size so an edit is picked up and a
@@ -322,4 +301,5 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 };
 
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals };
-export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals };
+export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
+export { loadProjectConfig, readProjectConfigLiterals };

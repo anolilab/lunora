@@ -6,16 +6,31 @@ import { diagnosticAt } from "../diagnostics";
 import type { AgentIR, SchemaIR } from "../ir";
 import { listSecurityScanFiles } from "./ast";
 
-/** Whether an options object literal names a `namespace` key (quoted or not) or hides keys behind a spread. */
+/** The key a property-name node spells, or `undefined` when it is computed from something other than a string literal. */
+const staticKey = (name: Node): string | undefined => {
+    if (Node.isComputedPropertyName(name)) {
+        const expression = name.getExpression();
+
+        return Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression) ? expression.getLiteralValue() : undefined;
+    }
+
+    return Node.isStringLiteral(name) ? name.getLiteralValue() : name.getText();
+};
+
+/**
+ * Whether an options object literal names a `namespace` key (quoted, or as a
+ * computed `["namespace"]`) or may hide one: a spread, or a computed key whose
+ * value is not a literal (`[key]`), both count.
+ */
 const mayDeclareNamespace = (options: ObjectLiteralExpression): boolean =>
     options.getProperties().some((property) => {
         if (Node.isSpreadAssignment(property)) {
             return true;
         }
 
-        const name = property.getNameNode();
+        const key = staticKey(property.getNameNode());
 
-        return (Node.isStringLiteral(name) ? name.getLiteralValue() : name.getText()) === "namespace";
+        return key === undefined || key === "namespace";
     });
 
 /**

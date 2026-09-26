@@ -90,6 +90,29 @@ describe("jurisdiction move of auth and voice", () => {
         }).not.toThrow();
     });
 
+    it("reads a computed `namespace` key, and fails toward DO-backed auth for one it cannot resolve", () => {
+        expect.assertions(3);
+
+        expect(entryWithAuth(`{ ["namespace"]: (env) => env.AUTH, options: () => ({}) }`)).toBeDefined();
+        expect(entryWithAuth(`{ [key]: (env) => env.AUTH, options: () => ({}) }`)).toBeDefined();
+        // A computed key that resolves to something else is not DO-backed auth.
+        expect(entryWithAuth(`{ ["d1"]: (env) => env.DB, options: () => ({}) }`)).toBeUndefined();
+    });
+
+    it("finds DO-backed auth declared only in the root lunora.config.ts", () => {
+        expect.assertions(1);
+
+        // `@lunora/vite` runs the config's `app` hook over the worker's builder,
+        // so `.auth(...)` there wires the deployed worker as well as one in the entry.
+        writeFileSync(join(root, "lunora.config.ts"), `export default { app: (app) => app.auth({ namespace: (env) => env.AUTH, options: () => ({}) }) };\n`);
+
+        expect(
+            findDoAuthDeclaration(new Project({ skipAddingFilesFromTsConfig: true }), join(root, "lunora"))
+                ?.getSourceFile()
+                .getBaseName(),
+        ).toBe("lunora.config.ts");
+    });
+
     it("finds DO-backed auth, and fails toward it when the options cannot be read", () => {
         expect.assertions(4);
 

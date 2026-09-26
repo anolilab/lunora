@@ -6,6 +6,7 @@ import type { Block, CallExpression, Expression, Identifier, ObjectLiteralExpres
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
+import { findProjectConfigFile } from "../project-config-path";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE: RegExp = /\.ts$/u;
@@ -172,7 +173,8 @@ interface ScannedSourceFile {
 
 /**
  * The file set the *security* discoverers scan: the `lunora/` tree plus the
- * worker entry (`src/server/**`, `src/index.ts`, `src/worker.ts`).
+ * worker entry (`src/server/**`, `src/index.ts`, `src/worker.ts`) and the root
+ * `lunora.config.*`, whose `app` hook configures the same worker.
  *
  * The worker-entry factories those lints inspect — `createInboundEmailHandler`,
  * `createPayment`, `createBrowser`, the CDC export sinks — are constructed in the
@@ -194,15 +196,22 @@ const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => 
     });
     const seen = new Set(files.map((file) => file.filePath));
 
-    for (const root of WORKER_ENTRY_ROOTS) {
-        for (const filePath of listEntrySourceFiles(join(projectRoot, root))) {
-            if (seen.has(filePath)) {
-                continue;
-            }
+    // The root `lunora.config.*` too: `@lunora/vite` imports it into the worker
+    // and runs its `app` hook over the `defineApp()` builder, so an `.auth(…)`,
+    // `.extend(…)` or factory call there configures the deployed worker exactly
+    // as one in the entry does.
+    const configFile = findProjectConfigFile(projectRoot);
 
-            seen.add(filePath);
-            files.push({ displayPath: lunoraRelativePath(projectRoot, filePath), filePath });
+    for (const filePath of [
+        ...WORKER_ENTRY_ROOTS.flatMap((root) => listEntrySourceFiles(join(projectRoot, root))),
+        ...(configFile === undefined ? [] : [configFile]),
+    ]) {
+        if (seen.has(filePath)) {
+            continue;
         }
+
+        seen.add(filePath);
+        files.push({ displayPath: lunoraRelativePath(projectRoot, filePath), filePath });
     }
 
     return files;
