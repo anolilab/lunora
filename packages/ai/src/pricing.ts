@@ -87,12 +87,17 @@ const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
  */
 const normalizeModelId = (modelId: string): string[] => {
     const trimmed = modelId.trim();
-    const slash = trimmed.lastIndexOf("/");
+    // A provider-prefixed Workers AI id (`workers-ai/@cf/meta/...`, the AI
+    // Gateway's unified form) keeps everything from its `@`, since the Workers AI
+    // id is itself slash-delimited.
+    const workersAi = trimmed.indexOf("/@");
+    const unprefixed = workersAi === -1 ? trimmed : trimmed.slice(workersAi + 1);
+    const slash = unprefixed.lastIndexOf("/");
 
     // A Workers AI id is itself slash-delimited (`@cf/baai/...`), so only strip
     // a prefix when the id does not start with `@` — otherwise `@cf/baai/bge-m3`
     // would be reduced to `bge-m3` and miss its own entry.
-    const base = slash !== -1 && !trimmed.startsWith("@") ? [trimmed, trimmed.slice(slash + 1)] : [trimmed];
+    const base = slash !== -1 && !unprefixed.startsWith("@") ? [unprefixed, unprefixed.slice(slash + 1)] : [unprefixed];
 
     return base.flatMap((candidate) => {
         const undated = DATED_MODEL_ID.exec(candidate)?.[1];

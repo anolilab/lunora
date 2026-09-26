@@ -204,9 +204,10 @@ const packAtoms = (atoms: ReadonlyArray<string>, options: PackOptions): string[]
  * Split a Markdown document into heading-delimited sections, each tagged with
  * the heading path above it.
  *
- * `trail[depth - 1]` is the innermost heading at that level, and a new heading
- * truncates every deeper level — which is what keeps the trail a real ancestor
- * path rather than a log of every heading seen. Fenced code blocks are tracked
+ * The trail holds strictly deeper headings from left to right, and a new heading
+ * drops every entry at its own level or deeper — which is what keeps the trail a
+ * real ancestor path rather than a log of every heading seen, even when a
+ * document skips levels. Fenced code blocks are tracked
  * so a `#` comment inside a shell or Python fence never opens a section.
  */
 const splitMarkdownSections = (text: string): MarkdownSection[] => {
@@ -245,7 +246,11 @@ const splitMarkdownSections = (text: string): MarkdownSection[] => {
         const depth = (heading[1] as string).length;
         const title = (heading[2] as string).trim();
 
-        trail = [...trail.slice(0, depth - 1), `${"#".repeat(depth)} ${title}`];
+        // Keep only the shallower headings. Slicing by `depth - 1` assumed one
+        // trail entry per level, so a document that skips levels (`#` then
+        // `###`) kept a `###` sibling as the ancestor of the next `###`. Each
+        // entry opens with its own `#` run, so its depth is where the space is.
+        trail = [...trail.filter((entry) => entry.indexOf(" ") < depth), `${"#".repeat(depth)} ${title}`];
         currentTrail = trail;
     }
 
