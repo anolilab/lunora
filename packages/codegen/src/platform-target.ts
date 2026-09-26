@@ -39,6 +39,7 @@
 
 import type { PlatformCapabilities } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
+import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
@@ -518,6 +519,29 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
     return gateAgainstMatrix(usage, matrix, target, signals);
 };
 
+/**
+ * The target's identity plus the feature keys its matrix rates `unsupported`,
+ * for the generated `studioFeatures()` payload — how a separately-hosted studio
+ * learns which host it is talking to and which pages that host cannot serve.
+ * `undefined` for an unregistered target: there is no matrix to report, and
+ * the studio then gates on the usage flags alone, exactly as
+ * `gatePlatformFeatures` leaves the surface un-gated.
+ */
+const studioPlatformFor = (target: string): StudioFeaturesResult["platform"] => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return undefined;
+    }
+
+    const unsupported = Object.entries(matrix.features)
+        .filter(([, capability]) => capability.level === "unsupported")
+        .map(([key]) => key)
+        .toSorted((a, b) => a.localeCompare(b));
+
+    return { id: matrix.id, name: matrix.name, unsupported };
+};
+
 export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };
 export {
     CAPABILITY_TO_FEATURE,
@@ -528,4 +552,5 @@ export {
     readProjectTarget,
     readTargetDiagnostics,
     resolveCodegenTarget,
+    studioPlatformFor,
 };

@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
-import type { StudioFeaturesResult } from "../lib/admin";
+import type { StudioFeatures, StudioFeaturesResult, StudioPlatform } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../lib/internal";
 
@@ -31,6 +31,24 @@ const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
     workflows: true,
 };
 
+/**
+ * Coerce the worker's `platform` report. Anything malformed reads as absent —
+ * which means "no capability gating", the same fail-open the flags take.
+ */
+const coercePlatform = (raw: unknown): StudioPlatform | undefined => {
+    if (raw === null || typeof raw !== "object") {
+        return undefined;
+    }
+
+    const { id, name, unsupported } = raw as Record<string, unknown>;
+
+    if (typeof id !== "string" || typeof name !== "string" || !Array.isArray(unsupported)) {
+        return undefined;
+    }
+
+    return { id, name, unsupported: unsupported.filter((key): key is string => typeof key === "string") };
+};
+
 /** Coerce an unknown wire payload into a {@link StudioFeaturesResult}, defaulting any missing flag to shown. */
 const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
     if (raw === null || typeof raw !== "object") {
@@ -49,6 +67,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
         mail: flag("mail"),
         notifications: flag("notifications"),
         payments: flag("payments"),
+        platform: coercePlatform(record["platform"]),
         queues: flag("queues"),
         scheduler: flag("scheduler"),
         storage: flag("storage"),
@@ -69,18 +88,23 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
  * hand-mirror its key set (the studio can't import `@lunora/do`). A
  * key-exhaustiveness drift guard in each package's tests fails the build if the
  * shapes ever diverge.
+ *
+ * `settled` turns true once the fetch has answered or failed. The usage flags
+ * can fail open meanwhile, but the host's capabilities cannot: until the worker
+ * has said which host it is, a capability-gated page must not mount its panel.
  */
-const useStudioFeatures = (): StudioFeaturesResult => {
+const useStudioFeatures = (): StudioFeatures => {
     const client = useLunora();
-    const [features, setFeatures] = useState<StudioFeaturesResult>(DEFAULT_STUDIO_FEATURES);
+    const [features, setFeatures] = useState<StudioFeatures>({ ...DEFAULT_STUDIO_FEATURES, settled: false });
 
     useEffect(() => {
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    setFeatures(coerceFeatures(await client.query(STUDIO_FEATURES, {}, callOptions(""))));
+                    setFeatures({ ...coerceFeatures(await client.query(STUDIO_FEATURES, {}, callOptions(""))), settled: true });
                 } catch {
-                    // Leave the conservative defaults (everything shown) in place if the endpoint is unavailable.
+                    // Conservative defaults (everything shown, no host known) if the endpoint is unavailable.
+                    setFeatures({ ...DEFAULT_STUDIO_FEATURES, settled: true });
                 }
             })(),
         );

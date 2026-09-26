@@ -5,7 +5,7 @@
  *
  * # Who reads it
  *
- * **`@lunora/codegen` is the only consumer.** `gateAgainstMatrix`
+ * **`@lunora/codegen` is the only gating consumer.** `gateAgainstMatrix`
  * (`packages/codegen/src/platform-target.ts`) intersects an app's detected
  * feature usage with the target's matrix and diagnoses exactly two states:
  * `unsupported` (`platform_unsupported_feature`) and a key missing from the
@@ -13,7 +13,10 @@
  * `native` and `emulated` are emitted identically, with no diagnostic between
  * them — that distinction exists for honest parity reporting, not for codegen.
  *
- * Nothing in `@lunora/studio` imports this package, and the per-feature table
+ * The generated worker also reports its target's levels to `@lunora/studio`
+ * (the `platform` field of `__lunora_admin__:studioFeatures`), which marks a
+ * page whose feature the target rates `unsupported` as unavailable. Studio
+ * still imports nothing from here — the worker tells it. The per-feature table
  * in `packages/platform-node/docs/index.mdx` is a hand-written copy held
  * verbatim by `pnpm run lint:node-capabilities-docs`: change a rating or a note
  * here first, then that table, or the check fails.
@@ -34,7 +37,8 @@
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
- * `objectStorageBackups`, `objectStorageCdcArchive`, `serverReactors`,
+ * `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
+ * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
  * `websocketHibernation` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
@@ -367,6 +371,20 @@ export interface PlatformCapabilities {
 
         /** Pipelines / streaming data. */
         pipelines?: Capability;
+
+        /**
+         * In-place point-in-time recovery of a shard — the `getPitrBookmark` /
+         * `pitrRestore` admin ops and the studio page that drives them. They
+         * need the host's own change log: a bookmark names a moment in it and a
+         * restore rewinds the shard's database to one. Nothing in `ShardHost`
+         * carries that, so a host without it answers `PITR_UNAVAILABLE`.
+         *
+         * Advisory for codegen by nature — an app declares nothing to gate on;
+         * the admin ops are always wired. Studio reads it to mark the page
+         * unavailable on a host that cannot serve it. The off-platform tier
+         * (`lunora backup`) is {@link PlatformCapabilities.features.objectStorageBackups}.
+         */
+        pointInTimeRecovery?: Capability;
         /** Queue-backed workpools. */
         queues?: Capability;
 
@@ -528,6 +546,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "R2 Data Catalog (Iceberg) written by pipelineLogSink and queried back over R2 SQL, which the admin route runs server-side because R2 SQL needs a Cloudflare API token that must never reach the browser",
         },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
+        pointInTimeRecovery: {
+            level: "native",
+            note: "SQLite-backed Durable Object bookmarks (getBookmarkForTime / onNextSessionRestoreBookmark) restore SQL and KV to any moment in the last 30 days. Absent under local wrangler dev, where the ops answer PITR_UNAVAILABLE",
+        },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
@@ -697,6 +719,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route is still registered here: it answers LOG_ARCHIVE_NOT_CONFIGURED (which the studio renders as a not-configured empty state) only while the logArchive table or the R2 SQL credentials are absent. Configure both and it stops failing closed — it builds an R2 SQL client and queries Cloudflare's API over the network, which is not this host serving the archive",
         },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
+        pointInTimeRecovery: {
+            level: "unsupported",
+            note: "better-sqlite3 keeps no change log to rewind, and createNodeShardState deliberately exposes no bookmark methods rather than a stub that would report a restore that never happened, so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. Recover from `lunora backup` snapshots instead (objectStorageBackups)",
+        },
         mail: {
             level: "unsupported",
             note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",

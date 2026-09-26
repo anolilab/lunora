@@ -2950,6 +2950,11 @@ interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+    platform?: {
+        id: string;
+        name: string;
+        unsupported: string[];
+    };
     queues: boolean;
     scheduler: boolean;
     storage: boolean;

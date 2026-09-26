@@ -117,6 +117,7 @@ import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
+import { resolveCodegenTarget } from "./platform-target";
 import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
@@ -861,6 +862,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        target: resolveCodegenTarget(options.projectRoot, options.target),
         vectorStoreSupported,
         workflowCount: workflows.length,
     });

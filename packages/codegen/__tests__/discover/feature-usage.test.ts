@@ -48,6 +48,9 @@ const NO_SIGNALS = {
     // no-platform-objection baseline every case below is written against.
     vectorStoreSupported: true,
     workflowCount: 0,
+    // No registered matrix, so no `platform` rides along; the platform arm is
+    // pinned end-to-end in platform-target.test.ts.
+    target: "unregistered",
 };
 
 describe("discover/feature-usage", () => {
@@ -372,6 +375,7 @@ describe("discover/feature-usage", () => {
                 queueCount: 0,
                 storageColumnCount: 2,
                 storageRuleCount: 0,
+                target: "unregistered",
                 vectorIndexCount: 3,
                 vectorStoreSupported: true,
                 workflowCount: 0,
