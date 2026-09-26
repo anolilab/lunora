@@ -187,7 +187,10 @@ stub (the same admin-RPC-over-shard path the dev mail catcher uses), calling the
 named mutation/action with the parsed message as its args. The RPC is marked a
 **trusted system dispatch** — the same marker the scheduler and cron paths set —
 so the target may be an `internalMutation` / `internalAction`. It needs
-`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default).
+`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default). When the
+schema declares `.jurisdiction(...)`, this RPC and the dev capture inbox go to the
+jurisdiction-pinned shard with no option passed; see
+[Data residency](/docs/concepts/data-residency#pinning-mail).
 
 Failures split by whether a redelivery could ever succeed. A **parse or verify**
 failure is permanent — the same bytes fail the same way — so the handler calls

@@ -7,6 +7,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { getAppJurisdiction } from "../../../../shared/app-jurisdiction";
+
 /** Default shard the runtime routes admin RPC (captured mail, inbound dispatch) through. */
 const DEFAULT_ROOT_SHARD = "__root__";
 
@@ -39,21 +41,37 @@ interface ShardNamespaceLike {
 
 /**
  * Return a jurisdiction-restricted view of `namespace`, or `namespace`
- * unchanged when no jurisdiction is configured. Fail-closed when the binding
- * lacks `.jurisdiction()` so a residency constraint is never silently dropped.
+ * unchanged when no jurisdiction applies. The jurisdiction is the explicit
+ * `jurisdiction` argument, else the one the app declared on its schema (the
+ * generated worker records it, see `shared/app-jurisdiction.ts`), so mail lands
+ * in the same pinned shards as the rest of the app without being told.
+ *
+ * Fail-closed: an explicit jurisdiction that contradicts the app's throws, and so
+ * does a binding without `.jurisdiction()`, so a residency constraint is never
+ * silently dropped.
  */
 const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ShardNamespaceLike => {
-    if (jurisdiction === undefined) {
+    const appJurisdiction = getAppJurisdiction();
+
+    if (jurisdiction !== undefined && appJurisdiction !== undefined && jurisdiction !== appJurisdiction) {
+        throw new TypeError(
+            `@lunora/mail: jurisdiction "${jurisdiction}" contradicts the app's declared jurisdiction "${appJurisdiction}" — drop the option; mail follows the schema's \`.jurisdiction()\``,
+        );
+    }
+
+    const effective = jurisdiction ?? appJurisdiction;
+
+    if (effective === undefined) {
         return namespace;
     }
 
     if (typeof namespace.jurisdiction !== "function") {
         throw new TypeError(
-            `@lunora/mail: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
+            `@lunora/mail: Durable Object namespace does not support jurisdiction("${effective}") — update @cloudflare/workers-types or remove the jurisdiction`,
         );
     }
 
-    return namespace.jurisdiction(jurisdiction);
+    return namespace.jurisdiction(effective);
 };
 
 /** Options for {@link postShardRpc}. */
@@ -62,8 +80,6 @@ interface PostShardRpcOptions {
     adminToken: string;
     /** The JSON-serialisable RPC envelope (`{ args, functionPath, shardKey? }`). */
     envelope: unknown;
-    /** Optional data-residency jurisdiction the shard is pinned to. */
-    jurisdiction?: DurableObjectJurisdiction;
     /** Diagnostic prefix for failure errors (e.g. the caller + target function). */
     label: string;
     /** Shard the RPC targets. */
@@ -77,12 +93,15 @@ interface PostShardRpcOptions {
  * inbound dispatcher (`handler.ts`) and the outbound dev capture sink
  * (`from-env.ts`) call through here so the two paths cannot drift.
  *
+ * `namespace` is already scoped by {@link applyJurisdiction}: the callers resolve
+ * the jurisdiction themselves, so a residency misconfiguration is a separate
+ * failure from a shard RPC that did not go through.
+ *
  * Throws a {@link LunoraError} on a non-2xx response or an error envelope
  * (labelled with `options.label`); returns the parsed JSON body otherwise.
  */
 const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpcOptions): Promise<unknown> => {
-    const scoped = applyJurisdiction(namespace, options.jurisdiction);
-    const stub = scoped.get(scoped.idFromName(options.shardKey));
+    const stub = namespace.get(namespace.idFromName(options.shardKey));
     const response = await stub.fetch("https://shard.internal/rpc", {
         body: JSON.stringify(options.envelope),
         headers: {

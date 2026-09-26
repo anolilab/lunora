@@ -1,3 +1,4 @@
+export { declareAppJurisdiction } from "../../../shared/app-jurisdiction";
 export type { BackupManifestEntry } from "./backup-layout";
 export {
     BACKUP_KEY_PREFIX,
