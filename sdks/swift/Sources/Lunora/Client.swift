@@ -178,6 +178,13 @@ public final class LunoraClient {
         /// inserts only, so merging one leaves every row that left the shape while
         /// the socket was down on screen for the life of the client.
         var resets: Set<String> = []
+
+        /// The `pokeStart`'s epoch and base checkpoint, and each shape's base —
+        /// its part's `baseCheckpoint`, else the `pokeStart`'s: the checkpoint the
+        /// server computed that shape's diff against.
+        var epoch: Any?
+        var baseCheckpoint: Any?
+        var bases: [String: Any] = [:]
     }
 
     private final class ShapeSubscription {
@@ -1038,7 +1045,10 @@ public final class LunoraClient {
                 if let pokeID = frame["pokeId"] as? String {
                     if pokes[pokeID] == nil { pokeOrder.append(pokeID) }
 
-                    pokes[pokeID] = PokeBuffer()
+                    pokes[pokeID] = PokeBuffer(
+                        epoch: LunoraClient.present(frame["epoch"]),
+                        baseCheckpoint: LunoraClient.present(frame["baseCheckpoint"])
+                    )
 
                     // Evict oldest-first at the cap; a poke that old is no
                     // longer going to see its `pokeEnd`.
@@ -1086,8 +1096,22 @@ public final class LunoraClient {
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
             // retention re-seed arrives with the epoch unchanged.
             if frame["reset"] as? Bool == true { pokes[pokeID]?.resets.insert(shapeID) }
+
+            if let base = LunoraClient.present(frame["baseCheckpoint"]) ?? pokes[pokeID]?.baseCheckpoint {
+                pokes[pokeID]?.bases[shapeID] = base
+            }
         }
     }
+
+    /// A frame field that is actually there: absent and JSON null are both unset.
+    static func present(_ value: Any?) -> Any? {
+        guard let value, !(value is NSNull) else { return nil }
+
+        return value
+    }
+
+    /// Whether two set wire values differ, compared by their JSON spelling.
+    static func differ(_ left: Any, _ right: Any) -> Bool { Wire.stableStringify(left) != Wire.stableStringify(right) }
 
     /// Applies a buffered poke, WHOLE or not at all per shape.
     ///
@@ -1096,8 +1120,15 @@ public final class LunoraClient {
     /// read loop on the bad row — the view half-applied or empty, and nothing
     /// reported. A shape with an undecodable row keeps its view, checkpoint and
     /// epoch exactly as they were (so the next resume asks for the same rows
-    /// again) and its `onError` hears `INVALID_FRAME`; every other shape in the
-    /// poke applies as usual.
+    /// again) and its `onError` hears `WIRE_DECODE_FAILED`; every other shape in
+    /// the poke applies as usual.
+    ///
+    /// A part that is not a reset is refused, too, when it was computed against
+    /// a view this client does not hold: its base checkpoint differs from the
+    /// shape's, or the poke's epoch from the shape's. Splicing it on would lose
+    /// the rows of a refused poke for good (the server believes it delivered
+    /// them), so the view is dropped, its checkpoint and epoch cleared, `onRows`
+    /// told `[]`, and a COLD `shape_subscribe` sent so the server re-seeds it.
     private func applyPoke(_ frame: [String: Any]) {
         typealias Delivery = (([Any]) -> Void, [Any])
         typealias Refusal = ((LunoraSubscriptionError) -> Void, String)
@@ -1106,8 +1137,8 @@ public final class LunoraClient {
         // released, with the row snapshot taken while still holding it — so a
         // callback sees one consistent poke even if the next one lands
         // mid-delivery.
-        let (deliveries, refusals) = withLock { () -> ([Delivery], [Refusal]) in
-            guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return ([], []) }
+        let (deliveries, refusals, reseeds, sender) = withLock { () -> ([Delivery], [Refusal], [[String: Any]], LunoraFrameSender?) in
+            guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return ([], [], [], nil) }
 
             // Drop it from the eviction order too, or that array grows a stale
             // entry per completed poke and stops tracking the map.
@@ -1115,6 +1146,7 @@ public final class LunoraClient {
 
             var deliveries: [Delivery] = []
             var refusals: [Refusal] = []
+            var reseeds: [[String: Any]] = []
 
             for (shapeID, operations) in buffer.parts {
                 guard let shape = shapes[shapeID] else { continue }
@@ -1143,6 +1175,23 @@ public final class LunoraClient {
                     continue
                 }
 
+                let epochForked = buffer.epoch.map { poke in shape.epoch.map { LunoraClient.differ(poke, $0) } ?? false } ?? false
+                let baseDiverged = buffer.bases[shapeID].map { base in shape.checkpoint.map { LunoraClient.differ(base, $0) } ?? false } ?? false
+
+                if !buffer.resets.contains(shapeID), epochForked || baseDiverged {
+                    shape.rows.removeAll()
+                    shape.order.removeAll()
+                    shape.checkpoint = nil
+                    shape.epoch = nil
+
+                    if let onRows = shape.onRows { deliveries.append((onRows, [])) }
+                    if let cold = try? LunoraClient.buildShapeSubscribeFrame(id: shapeID, name: shape.name, args: shape.args) {
+                        reseeds.append(cold)
+                    }
+
+                    continue
+                }
+
                 // A reset part is the shape's complete membership, so it is
                 // authoritative on its own: drop what we hold before applying it.
                 // `.global()` shapes re-seed in full on EVERY reconnect and an
@@ -1165,19 +1214,25 @@ public final class LunoraClient {
                     shape.rows[key] = value
                 }
 
-                if let checkpoint = frame["checkpoint"] { shape.checkpoint = checkpoint }
-                if let epoch = frame["epoch"] { shape.epoch = epoch }
+                if let checkpoint = LunoraClient.present(frame["checkpoint"]) { shape.checkpoint = checkpoint }
+                if let epoch = LunoraClient.present(frame["epoch"]) { shape.epoch = epoch }
 
                 if let onRows = shape.onRows {
                     deliveries.append((onRows, shape.order.compactMap { shape.rows[$0] }))
                 }
             }
 
-            return (deliveries, refusals)
+            return (deliveries, refusals, reseeds, send)
         }
 
         for (onError, reason) in refusals {
-            onError(LunoraSubscriptionError(code: "INVALID_FRAME", message: "poke row could not be decoded: \(reason)"))
+            onError(LunoraSubscriptionError(code: LunoraAPIError.wireDecodeFailed, message: "poke row could not be decoded: \(reason)"))
+        }
+
+        if let sender {
+            for cold in reseeds {
+                sender(cold)
+            }
         }
 
         for (onRows, rows) in deliveries {

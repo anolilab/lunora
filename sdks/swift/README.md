@@ -43,9 +43,14 @@ let messages = try client.query("messages:list", args: ["channel": "general"])
 _ = try client.mutation("messages:send", args: ["channel": "general", "text": "hi"])
 
 // Live subscription: attach your socket, then feed it frames.
-client.attachSocket { frame in try socket.send(frame) }
+client.attachSocket { frame in try socket.send(Wire.stableStringify(frame)) }
 let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
+
+The sender receives each outbound frame as a dictionary; serialize it with
+`Wire.stableStringify`, the transport's own writer, so string escaping (a lone
+surrogate as `\udXXX`) and number spelling match what the RPC bodies send.
+`JSONSerialization` refuses a lone surrogate and spells numbers differently.
 
 `handleFrame(raw)` is what you call with each inbound WebSocket message. It
 cannot throw: a frame that is not JSON, not an object, or not shaped like any
@@ -53,9 +58,12 @@ server frame is ignored (a non-integer `cursor` never replaces the tracked one),
 and a payload that does not decode reaches its own subscription's `onError` as
 `INVALID_FRAME`. A shape poke applies whole or not at all: one undecodable row
 leaves that shape's view, checkpoint and epoch untouched and reports
-`INVALID_FRAME` to it. `resendSubscriptions()` re-subscribes everything after a
-reconnect — queries and shape views alike — carrying each one's resume cursor or
-checkpoint.
+`WIRE_DECODE_FAILED` to it. A part that is not a reset and was computed against
+a view this client does not hold — its base checkpoint, or the poke's epoch,
+differs from the shape's — re-seeds instead: the view is emptied, its checkpoint
+and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
+`resendSubscriptions()` re-subscribes everything after a reconnect — queries and
+shape views alike — carrying each one's resume cursor or checkpoint.
 
 Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
 is `INTERNAL`, and a success whose `result` does not decode is
@@ -125,11 +133,15 @@ half and retried, so no write is dropped for the size of the batch it shared; a
 lone write still refused settles `PAYLOAD_TOO_LARGE`.
 
 One predicate classifies a failed replay, alone or batched: a coded envelope by
-its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE` and the rate-limit codes
-re-queue, every other code — a coded 5xx included — is terminal), an
-envelope-less reply by its status (re-queued, except a 413). A write the server
-committed whose result does not decode settles `committed` with a
-`WIRE_DECODE_FAILED` error and no value, and is never retried. A client with no
+its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, the rate-limit codes and the
+refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
+re-queue — a token refresh fixes those — and every other code, a coded 5xx
+included, is terminal), an envelope-less reply by its status (re-queued, except
+a 413). An envelope whose `data` does not decode keeps its code; the `data` is
+dropped. A write the server committed whose result the CLIENT cannot decode
+settles `committed` with a `WIRE_DECODE_FAILED` error and no value, and is never
+retried; a server that itself answers `WIRE_DECODE_FAILED` refused the write,
+and that settles `rejected`. A client with no
 poster re-queues its writes, alone or batched — a configuration gap, not a
 verdict.
 
@@ -168,8 +180,14 @@ eleven came back one ulp off). It writes RPC bodies with `Wire.stableStringify`,
 which spells every number and string as `JSON.stringify` does — including a lone
 UTF-16 surrogate, written `\udXXX`, which a bridged `NSString` (a truncated emoji)
 can carry and `JSONSerialization` refused. An integer literal off the wire past
-±(2^53−1) decodes to the double `JSON.parse` reads; a native `Int` that large is
-still refused on encode.
+±(2^53−1) decodes to the double `JSON.parse` reads; a native `Int` or `UInt64`
+that large is still refused on encode.
+
+Swift compares a lone surrogate as U+FFFD, so `"\ud800"` and `"\ud801"` are one
+`String` to it and two to JavaScript. `WireMap` keys and `WireSet` members are
+compared by UTF-16 unit and stay distinct; a `[String: Any]` cannot hold both, so
+a JSON object whose keys differ only that way is refused as invalid JSON (the
+frame is ignored, an RPC reply is `INTERNAL`) rather than silently merged.
 
 ### One thing to know about generated models
 

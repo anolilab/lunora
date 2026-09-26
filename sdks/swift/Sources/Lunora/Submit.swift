@@ -739,13 +739,19 @@ extension LunoraClient {
     /// Whether a failed replay may be retried rather than dropped.
     ///
     /// A raw error from the injected poster is the network, not the server: no
-    /// verdict was reached, so the write is still good.
+    /// verdict was reached, so the write is still good. A refused credential
+    /// (``LunoraOfflineCode/authRefused``) holds the write too.
+    ///
+    /// A committed-but-undecodable result never reaches here: it is told apart
+    /// by WHERE it arose (``rpcFull`` returns it beside the reply), not by its
+    /// code, so a server that answers `WIRE_DECODE_FAILED` has refused the write.
     public static func isTransient(_ error: Error) -> Bool {
         guard let api = error as? LunoraAPIError else { return true }
 
         return api.transient
             || LunoraOfflineCode.transient.contains(api.code)
             || LunoraOfflineCode.rateLimited.contains(api.code)
+            || LunoraOfflineCode.authRefused.contains(api.code)
     }
 
     /// How long a rate-limited replay asks to wait, if the envelope said.

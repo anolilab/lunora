@@ -38,6 +38,12 @@ public enum LunoraOfflineCode {
     /// `responseError.with-data`).
     public static let rateLimited: Set<String> = ["RATE_LIMITED", "TOO_MANY_REQUESTS"]
 
+    /// Codes that refuse the CREDENTIAL, not the write. A write queued offline
+    /// replays with the bearer the client held when it went offline, which has
+    /// very often expired by reconnect; settling it would destroy the user's own
+    /// durable write over a problem one token refresh fixes. So these HOLD it.
+    public static let authRefused: Set<String> = ["UNAUTHORIZED", "TOKEN_EXPIRED", "UNAUTHENTICATED"]
+
     /// The worker's answer to a body over its cap. Coded, so it arrives as a
     /// whole-batch envelope — which every other coded envelope is a verdict on
     /// every entry, and this one is not.

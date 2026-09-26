@@ -202,6 +202,9 @@ final class ConformanceTests: XCTestCase {
         XCTAssertNoThrow(try Wire.encode(-maximum))
         XCTAssertThrowsError(try Wire.encode(maximum + 1))
         XCTAssertThrowsError(try Wire.encode(-maximum - 1))
+        // Unsigned too, including past Int64.max, where no Int path could see it.
+        XCTAssertThrowsError(try Wire.encode(UInt64(maximum) + 1))
+        XCTAssertThrowsError(try Wire.encode(UInt64.max))
 
         // WireBigInt is the way across, and it keeps every digit.
         XCTAssertEqual(
@@ -304,6 +307,23 @@ final class ConformanceTests: XCTestCase {
         let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
         XCTAssertEqual(Wire.jsonString(truncated), #""\ud83d""#)
         XCTAssertEqual(Wire.jsonString("\u{1F600}"), "\"\u{1F600}\"")
+        // Keys and members differing only by a lone surrogate are distinct to
+        // JavaScript. A Map and a Set keep them apart; a `[String: Any]` cannot
+        // (Swift compares them as U+FFFD), so such an object is refused rather
+        // than silently merged.
+        let lone = #"["\ud800",1],["\ud801",2],["�",3]"#
+        let map = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","map",[\#(lone)]]"#)) as? WireMap
+        let set = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","set",["\ud800","\ud801","�"]]"#)) as? WireSet
+
+        XCTAssertEqual(map?.entries.count, 3, "map keys stay distinct")
+        XCTAssertEqual(set?.items.count, 3, "set members stay distinct")
+        XCTAssertThrowsError(try LunoraJSON.parse(#"{"\ud800":1,"\ud801":2}"#), "an object that cannot hold both keys is refused")
+        XCTAssertEqual(
+            (try? LunoraJSON.parse(#"{"a":1,"a":2}"#) as? [String: Any])?["a"] as? Int,
+            2,
+            "a true duplicate still takes the last value"
+        )
+
         // And the reader keeps one it is sent, so a relayed value round-trips.
         XCTAssertEqual(Wire.jsonString((try? LunoraJSON.parse(#""a\uD800b""#)) as? String ?? ""), #""a\ud800b""#)
     }
@@ -376,6 +396,10 @@ final class ConformanceTests: XCTestCase {
                 guard let apiError = error as? LunoraAPIError else { return XCTFail("expected LunoraAPIError") }
                 XCTAssertEqual(apiError.code, testCase["code"] as? String)
                 XCTAssertEqual(apiError.message, testCase["message"] as? String)
+
+                if testCase["dataDropped"] as? Bool == true {
+                    XCTAssertNil(apiError.data, "\(name): undecodable data is dropped, the coded error kept")
+                }
             }
         }
 
@@ -812,6 +836,48 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(canonical(resend["sinceCheckpoint"]), canonical(shape["undecodableRowResendCheckpoint"]), "checkpoint not advanced")
         XCTAssertEqual(resend["sinceEpoch"] as? String, "e1")
         XCTAssertEqual(canonical(probeShapeView(client, { delivered })), canonical(shape["expectedRows"]), "the view is untouched")
+
+        // The server believes it delivered the refused rows, so its next part is
+        // based on a checkpoint this view is not at: that must re-seed the shape,
+        // not splice onto the stale view.
+        resent.removeAll()
+        delivered.removeAll()
+
+        for entry in try XCTUnwrap(shape["gapPokeSequence"] as? [Any]) {
+            client.handleFrame(frameText(entry))
+        }
+
+        XCTAssertEqual(delivered.map { canonical($0) }, [canonical(shape["gapExpectedRows"])], "the callback is told []")
+
+        let cold = resent.filter { $0["type"] as? String == "shape_subscribe" }
+
+        XCTAssertEqual(cold.map { $0["id"] as? String }, ["shape_1"], "a cold shape_subscribe goes out at once")
+        XCTAssertNil(cold.first?["sinceCheckpoint"])
+        XCTAssertNil(cold.first?["sinceEpoch"])
+
+        resent.removeAll()
+        client.resendSubscriptions()
+
+        let later = try XCTUnwrap(resent.first { $0["type"] as? String == "shape_subscribe" })
+
+        XCTAssertNil(later["sinceCheckpoint"], "and a later resend is cold too")
+        XCTAssertNil(later["sinceEpoch"])
+        XCTAssertEqual(canonical(probeShapeView(client, { delivered })), canonical(shape["gapExpectedRows"]))
+
+        // The counterweight: a part based on the checkpoint the view IS at applies.
+        let contiguous = LunoraClient(url: "https://app.example")
+        var contiguousRows: [[Any]] = []
+        var contiguousSent: [[String: Any]] = []
+
+        contiguous.attachSocket { contiguousSent.append($0) }
+        contiguous.subscribeShape("roomMessages", args: ["room": "general"], onRows: { contiguousRows.append($0) })
+
+        for entry in try XCTUnwrap(shape["pokeSequence"] as? [Any]) + XCTUnwrap(shape["contiguousPokeSequence"] as? [Any]) {
+            contiguous.handleFrame(frameText(entry))
+        }
+
+        XCTAssertEqual(canonical(contiguousRows.last), canonical(shape["contiguousExpectedRows"]), "a contiguous poke applies")
+        XCTAssertEqual(contiguousSent.filter { $0["type"] as? String == "shape_subscribe" }.count, 1, "and re-seeds nothing")
     }
 
     /// An identity change FROM a set value evicts the previous session: cursors
