@@ -310,7 +310,11 @@ class LunoraClient:
     ) -> None:
         self.url = url
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
-        self.auth_token = auth_token
+        #: See :attr:`auth_token`. Set directly here: a first token flushes nothing.
+        self._auth_token = auth_token
+        #: Run when :attr:`auth_token` changes; ``connect_and_run`` registers one
+        #: that re-flushes its shard while the socket is up.
+        self._token_listeners: list[Callable[[], None]] = []
         self.ws_token = ws_token
         #: Minted PER INSTANCE when not given, from the same helper that mints
         #: mutation ids. It is not cosmetic: the shard namespaces an anonymous
@@ -413,6 +417,32 @@ class LunoraClient:
                     self._settled_listeners.remove(listener)
 
         return remove
+
+    @property
+    def auth_token(self) -> Optional[str]:
+        """The bearer token every RPC carries; the next call picks up a new one.
+
+        Setting a DIFFERENT token while :meth:`connect_and_run` is live also
+        re-flushes its shard. A queued write the old token was refused for
+        (``TOKEN_EXPIRED``, ``UNAUTHENTICATED``, ``UNAUTHORIZED``) is held for
+        exactly this, and nothing else would replay it: only a reconnect
+        flushes, and a healthy socket does not reconnect. Mirrors
+        ``setAuthToken`` in ``@lunora/client``. The flush runs on the loop, not
+        in this setter, and judges each write against :attr:`identity` as it is
+        then — so on an account switch set the new identity first, or in the
+        same step on the loop's thread. Outside ``connect_and_run`` the flush is
+        the caller's, as every other one is.
+        """
+
+        return self._auth_token
+
+    @auth_token.setter
+    def auth_token(self, value: Optional[str]) -> None:
+        with self._lock:
+            changed, self._auth_token = value != self._auth_token, value
+            listeners = list(self._token_listeners)
+        if changed:
+            _run_callbacks(listeners)
 
     @property
     def identity(self) -> Optional[str]:
@@ -1111,6 +1141,12 @@ class LunoraClient:
                     with contextlib.suppress(Exception):
                         self.handle_frame(frame)
 
+            # A new token re-flushes this shard (see `auth_token`). Scheduled on
+            # the loop, since the setter may run on any thread.
+            def refreshed() -> None:
+                with contextlib.suppress(RuntimeError):  # the loop is already closed
+                    loop.call_soon_threadsafe(lambda: loop.create_task(self.flush_offline_queue(shard_key)))
+
             self.attach_socket(send)
             send(build_connect_frame(self.client_id, context))
             self.resend_subscriptions()
@@ -1118,6 +1154,9 @@ class LunoraClient:
             writer = loop.create_task(write_outbound())
             reader = loop.create_task(read_inbound())
             closer = loop.create_task(closed.wait())
+
+            with self._lock:
+                self._token_listeners.append(refreshed)
 
             try:
                 # The socket is back, so the backlog replays now — among itself in
@@ -1141,6 +1180,8 @@ class LunoraClient:
                 for task in done:
                     task.result()
             finally:
+                with self._lock:
+                    self._token_listeners.remove(refreshed)
                 # Writes submitted after this point queue instead of failing, and
                 # the writer never outlives the socket it writes to.
                 self.detach_socket()
