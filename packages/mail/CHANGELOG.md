@@ -1,3 +1,10 @@
+## @lunora/mail [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.86...@lunora/mail@1.0.0-alpha.87) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
 ## @lunora/mail [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.85...@lunora/mail@1.0.0-alpha.86) (2026-09-24)
 
 
