@@ -1500,6 +1500,9 @@ public final class ConformanceTest {
 
         for (String printed : List.of(client.toString(), String.valueOf(client))) {
             check(!printed.contains(token), "the token leaked into " + printed);
+            check(
+                    printed.equals("Client(https://app.example)"),
+                    "the client prints its deployment only: " + printed);
         }
     }
 }

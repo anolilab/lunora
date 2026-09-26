@@ -368,6 +368,16 @@ public final class Client {
     }
 
     /**
+     * Names the deployment and nothing else. Written out rather than inherited so that keeping the
+     * bearer token out of a log line is a stated guarantee of this class, not an accident of {@code
+     * Object.toString()} that a future field-dumping override would silently undo.
+     */
+    @Override
+    public String toString() {
+        return "Client(" + baseUrl + ")";
+    }
+
+    /**
      * Registers the sender used for subscription frames. Call once the socket is open.
      *
      * <p>It also latches "has connected at least once", which is what the write queue gates on: a
