@@ -46,6 +46,14 @@
             "code": "TOO_MANY_REQUESTS",
             "message": "slow down",
             "dataWire": { "retryAfterMs": 3000 }
+        },
+        {
+            "$comment": "An envelope whose `data` the codec refuses is still the server's verdict: raise the coded error with the data DROPPED (`dataDropped`), never the codec's own exception and never a transport error.",
+            "name": "undecodable-data",
+            "response": { "error": { "code": "CONFLICT", "message": "stale", "data": ["$lunora.wire$", "bigint", "not-a-number"] } },
+            "code": "CONFLICT",
+            "message": "stale",
+            "dataDropped": true
         }
     ],
     "responseTransportError": [
