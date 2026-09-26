@@ -5,6 +5,7 @@ import { collectPages } from "../../../shared/collect-pages";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { onSessionChanged } from "../../../shared/session-change";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
@@ -1369,6 +1370,12 @@ class LunoraClient {
      */
     private identityAnsweredAt = 0;
 
+    /** Unregisters this client from the page's session-change signal (`shared/session-change.ts`); set in the constructor. */
+    private releaseSessionChangeListener: (() => void) | undefined;
+
+    /** Whether the one-time `IDENTITY_MISMATCH` configuration warning has been logged (see `noteIdentityMismatch`). */
+    private warnedIdentityDisagreement = false;
+
     /**
      * Whether anything resolves this client's identity at all.
      *
@@ -1642,6 +1649,19 @@ class LunoraClient {
                 });
             });
         }
+
+        // A cookie sign-in or sign-out happens in a request this client never
+        // sees. Whoever makes it (the better-auth plugin in
+        // `@lunora/auth/plugins/client`, `@lunora/auth-ui`) says so here, and
+        // this client asks who is signed in now. Browser only: a server-side
+        // client has no cookie of its own and would leak its registration.
+        if ("document" in globalThis) {
+            this.releaseSessionChangeListener = onSessionChanged(() => {
+                if (!this.closed && this.authToken === null) {
+                    this.getCurrentUser().catch(() => undefined);
+                }
+            });
+        }
     }
 
     // --- Auth helpers -------------------------------------------------------
@@ -1796,7 +1816,16 @@ class LunoraClient {
         // again. Gated on being connected so this stays a re-flush of an
         // already-live connection, never a reason to start replaying a queue
         // the client deliberately holds while offline.
-        if (this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
+        //
+        // Only when something the replay gate reads changed: the identity, the
+        // credential, or a subject re-confirmed. A re-assertion of the same
+        // subject changes no verdict — and re-flushing on it looped: a write
+        // the worker refuses (`IDENTITY_MISMATCH`) probes the session, whose
+        // unchanged answer landed here and replayed the write straight into
+        // the same refusal.
+        const verdictInputsChanged = newIdentity !== previousIdentity || tokenChanged || wasAwaitingReconfirm;
+
+        if (verdictInputsChanged && this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
             this.flushAllOfflineQueues();
         }
     }
@@ -2045,9 +2074,9 @@ class LunoraClient {
      * A cookie session fires it on every change the server reports — sign-out,
      * a sign-in after a known sign-out, a different user — whether the answer
      * came from {@link getCurrentUser} or from a socket's `identity` frame. Its
-     * sign-out changes nothing the client can observe on its own, so an app
-     * that signs out in place (no reload) should call {@link getCurrentUser}
-     * afterwards.
+     * sign-out changes nothing the client can observe on its own; in a browser
+     * the client also re-resolves whenever `@lunora/auth-ui` or the
+     * `lunoraSessionSync()` better-auth plugin reports a session change.
      *
      * For caches layered on top of the client. A subscriber only hears the
      * blank for queries it still subscribes to, so a cache that keeps values for
@@ -2135,11 +2164,14 @@ class LunoraClient {
                 // A response, and therefore an answer — see `identitySettled`.
                 this.identitySettled = true;
 
-                // 401/403 is the server saying "no session" — under a cookie
+                // 401 is the server saying "no session" — under a cookie
                 // session, a sign-out, adopted like a `200 null`. A bearer
-                // session ignores a null user inside `adoptResolvedSubject`,
-                // and any other status (a 5xx, a 404) is no verdict on anyone.
-                if (response.status === 401 || response.status === 403) {
+                // session ignores a null user inside `adoptResolvedSubject`.
+                // Nothing else is a verdict on anyone: a 403 on this route is
+                // as likely a WAF or bot challenge as the auth server, and
+                // adopting it would wipe the screen and the durable read cache
+                // of a user who is still signed in.
+                if (response.status === 401) {
                     // eslint-disable-next-line unicorn/no-null -- the resolved "no session" answer
                     this.adoptResolvedSubject(requestToken, null, requestGeneration);
                 }
@@ -4377,6 +4409,9 @@ class LunoraClient {
 
     public close(): void {
         this.closed = true;
+
+        this.releaseSessionChangeListener?.();
+        this.releaseSessionChangeListener = undefined;
 
         // Release multi-tab outbox leadership so another tab can take over.
         this.outboxLeaderRelease?.();
@@ -9046,14 +9081,15 @@ class LunoraClient {
      * its `identity` frame lands. Only the server sees the cookie the write is
      * about to ride, so it is the server that has to check.
      *
-     * Only under a cookie session this client resolves (no bearer token, and
-     * `getCurrentUser()` or the identity store in use): a bearer request states
-     * its credential explicitly and the gate already matched it, and an app that
-     * never resolves identity has no subject to name. A token-hash or missing
-     * stamp names no user either.
+     * Sent on every replay made without a bearer token, whatever resolved the
+     * stamp — a socket's `identity` frame labels the session in apps that never
+     * call `getCurrentUser()` too. An app without auth stamps `null` and its
+     * requests resolve to nobody, so the header always passes there. A bearer
+     * request states its credential explicitly and the gate already matched it;
+     * a token-hash or missing stamp names no user.
      */
     private replayExpectation(stamp: null | string | undefined): { expectSubject?: null | string } {
-        if (this.authToken !== null || !this.identityResolutionExpected) {
+        if (this.authToken !== null) {
             return {};
         }
 
@@ -9075,7 +9111,26 @@ class LunoraClient {
             return false;
         }
 
-        this.getCurrentUser().catch(() => undefined);
+        const before = this.identityFingerprint();
+
+        this.getCurrentUser()
+            .then(() => {
+                // The worker said the cookie is someone else's, and the probe
+                // says it is still us: the two resolve different ids for one
+                // session, and every replay will be refused until they agree.
+                if (!this.warnedIdentityDisagreement && this.identityFingerprint() === before) {
+                    this.warnedIdentityDisagreement = true;
+                    // eslint-disable-next-line no-console -- one-time configuration diagnostic
+                    console.warn(
+                        "[lunora] a replayed write was refused with IDENTITY_MISMATCH, but `/get-session` still names the same user. " +
+                            "The worker's `resolveIdentity` must return the same `userId` as the better-auth `user.id`, " +
+                            'and RPC requests must carry the session cookie (`credentials: "include"` on a cross-origin fetch).',
+                    );
+                }
+
+                return undefined;
+            })
+            .catch(() => undefined);
 
         return true;
     }
