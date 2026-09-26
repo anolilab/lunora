@@ -273,8 +273,48 @@ const URL_IN_TEXT = /\b[a-z][\d+.a-z-]{1,15}:\/\/[^\s"'<>()[\]{}]+/gi;
 /** A PEM private key, header through footer (or to the end of the text when the footer was cut off). */
 const PEM_PRIVATE_KEY = /-----BEGIN ([A-Z ]{0,32}PRIVATE KEY)-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g;
 
-/** Tokens recognisable by shape alone: an auth scheme and its credential, a JWT, an AWS access-key id. */
-const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}|\beyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*|\bAKIA[\dA-Z]{16}\b/g;
+/** An auth scheme and its credential. */
+const TOKEN_SHAPES = /\b(Basic|Bearer|Digest)\s+[\w+/=.~-]{4,}/g;
+
+/**
+ * A secret recognisable by its value alone, with no key name next to it — a
+ * token pasted into prose (`payment failed with sk_live_…`). Only formats with a
+ * vendor prefix that ordinary text, ids and hashes never start with: no rule
+ * matches on length or alphabet alone, since those turned trace ids, uuids and
+ * git shas into placeholders. Each alternative is a literal prefix after a word
+ * boundary and one character-class run, so a scan is linear in the input.
+ */
+const SECRET_VALUE_SHAPES = new RegExp(
+    [
+        // Stripe secret and restricted keys, webhook signing secrets.
+        String.raw`\b[rs]k_(?:live|test)_[\dA-Za-z]{10,}`,
+        String.raw`\bwhsec_[\d+/=A-Za-z]{20,}`,
+        // GitHub classic (personal, OAuth, user/server-to-server, refresh) and fine-grained tokens.
+        String.raw`\bgh[oprsu]_[\dA-Za-z]{30,}`,
+        String.raw`\bgithub_pat_\w{20,}`,
+        // GitLab personal access tokens.
+        String.raw`\bglpat-[\w-]{20,}`,
+        // Slack bot/user/app/refresh tokens and app-level tokens.
+        String.raw`\bxox[abprs]-[\dA-Za-z-]{10,}`,
+        String.raw`\bxapp-\d-[\dA-Za-z-]{10,}`,
+        // AWS access-key ids, long-lived and temporary.
+        String.raw`\b(?:AKIA|ASIA)[\dA-Z]{16}\b`,
+        // Google API keys.
+        String.raw`\bAIza[\w-]{35}(?![\w-])`,
+        // JWTs: three base64url segments, the header starting `eyJ`.
+        String.raw`\beyJ[\w-]{2,}\.[\w-]{2,}\.[\w-]*`,
+        // npm, Hugging Face, Shopify and DigitalOcean tokens.
+        String.raw`\bnpm_[\dA-Za-z]{36}\b`,
+        String.raw`\bhf_[\dA-Za-z]{30,}`,
+        String.raw`\bshp(?:at|ca|pa|ss)_[\dA-Fa-f]{32}\b`,
+        String.raw`\bdo[opr]_v1_[\da-f]{64}\b`,
+        // OpenAI project/service/admin keys and Anthropic keys.
+        String.raw`\bsk-(?:admin|ant|proj|svcacct)-[\w-]{20,}`,
+        // SendGrid API keys.
+        String.raw`\bSG\.[\w-]{22}\.[\w-]{43}(?![\w-])`,
+    ].join("|"),
+    "g",
+);
 
 /** CLI credential flags: curl's `-u <user>:<password>`, `--password <value>`. */
 const CLI_CREDENTIAL = /(\s|^)(-u|--user|--password|--pass|--token|--api-key)(\s+|=)[^\s"']+/g; // secret-scanner:allow -- the pattern that masks CLI credentials, not a secret
@@ -340,7 +380,8 @@ const maskAssignments = (text: string): string => {
 };
 
 /** Cheap pre-check: a string with none of these cannot hold anything the patterns mask. */
-const MAY_HOLD_CREDENTIAL = /[:=@]|basic|bearer|digest|eyJ|AKIA|-u\b|--/i;
+const MAY_HOLD_CREDENTIAL =
+    /[:=@]|basic|bearer|digest|-u\b|--|eyJ|AKIA|ASIA|AIza|[rs]k_(?:live|test)_|sk-|whsec_|gh[oprsu]_|github_pat_|glpat-|xox|xapp-|npm_|hf_|shp|do[opr]_v1_|SG\./i;
 
 interface Budget {
     remaining: number;
@@ -363,7 +404,8 @@ const maskString = (value: string, budget: Budget): string => {
         capped
             .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
             .replaceAll(URL_IN_TEXT, stripUrl)
-            .replaceAll(TOKEN_SHAPES, (_match, scheme: string | undefined) => (scheme === undefined ? REDACTED : `${scheme} ${REDACTED}`))
+            .replaceAll(TOKEN_SHAPES, `$1 ${REDACTED}`)
+            .replaceAll(SECRET_VALUE_SHAPES, REDACTED)
             .replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`),
     );
 };
@@ -462,7 +504,8 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
 
 /**
  * Mask credentials in `value` — by key name on objects and class instances (any
- * depth), and in strings by `name=value` / `name: value`, auth-scheme, JWT, PEM,
+ * depth), and in strings by `name=value` / `name: value`, auth-scheme, vendor
+ * token prefix ({@link SECRET_VALUE_SHAPES}: Stripe, GitHub, Slack, AWS, JWT, …), PEM,
  * CLI-flag and URL shape (query, fragment and userinfo dropped). Every string is
  * capped at {@link MAX_REDACTED_STRING_LENGTH}, and once
  * {@link MAX_REDACTED_TOTAL_LENGTH} characters of one value have been examined,
@@ -472,4 +515,4 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
  */
 const maskCredentials = (value: unknown): unknown => walk(value, new WeakSet(), 0, false, { remaining: MAX_REDACTED_TOTAL_LENGTH });
 
-export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH, MAX_REDACTED_TOTAL_LENGTH };
+export { classifyKey, maskCredentials, MAX_REDACTED_STRING_LENGTH, MAX_REDACTED_TOTAL_LENGTH, SECRET_VALUE_SHAPES };
