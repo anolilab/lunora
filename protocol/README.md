@@ -399,7 +399,11 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
   rather than settles: a write queued offline replays with the bearer it held
   when it went offline, often expired by reconnect, and a token refresh is what
-  lets it through. An envelope whose `data` does not decode is still that coded
+  lets it through. A client that flushes on its own when its socket connects
+  MUST also flush when a new token is set while connected: a healthy socket does
+  not reconnect, so nothing else would replay the held write. The replay reads
+  the token current when it is SENT, and still gates each write on who queued
+  it, so a new token never carries another user's write. An envelope whose `data` does not decode is still that coded
   error: the `data` is dropped and the code classifies it. And a server that
   answers `WIRE_DECODE_FAILED` refused the write — only a result the CLIENT could
   not decode marks one committed, so a client tells the two apart by where the

@@ -123,6 +123,8 @@ final class ConformanceTests: XCTestCase {
             case "subscription_stream_ends_on_close": try caseSubscriptionStreamEndsOnClose()
             case "identity_change_evicts_previous_session": try caseIdentityChangeEvictsPreviousSession()
             case "auth_token_redacted_when_printed": caseAuthTokenRedactedWhenPrinted()
+            case "offline_write_held_for_credential_replays_after_token_refresh":
+                try caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -308,16 +310,40 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(Wire.jsonString(truncated), #""\ud83d""#)
         XCTAssertEqual(Wire.jsonString("\u{1F600}"), "\"\u{1F600}\"")
         // Keys and members differing only by a lone surrogate are distinct to
-        // JavaScript. A Map and a Set keep them apart; a `[String: Any]` cannot
-        // (Swift compares them as U+FFFD), so such an object is refused rather
-        // than silently merged.
-        let lone = #"["\ud800",1],["\ud801",2],["�",3]"#
-        let map = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","map",[\#(lone)]]"#)) as? WireMap
-        let set = try? Wire.decode(LunoraJSON.parse(#"["$lunora.wire$","set",["\ud800","\ud801","�"]]"#)) as? WireSet
+        // JavaScript, and Swift compares them as U+FFFD. Each must survive a
+        // decode and re-encode with the reference's bytes and stable key (the
+        // expected strings are the reference's output: JSON.stringify(encodeWire(
+        // decodeWire(x))) and stableWireKey). An object keeps them apart as a
+        // `[WireKey: Any]`, since a `[String: Any]` cannot.
+        let lone: [(input: String, key: String)] = [
+            (#"{"\ud800":1,"\ud801":2,"�":3}"#, #"{"\ud800":1,"\ud801":2,"�":3}"#),
+            (#"["$lunora.wire$","map",[["\ud800",1],["\ud801",2],["�",3]]]"#, #"["$lunora.wire$","map",[["\ud800",1],["\ud801",2],["�",3]]]"#),
+            (#"["$lunora.wire$","set",["\ud800","\ud801","�"]]"#, #"["$lunora.wire$","set",["\ud800","\ud801","�"]]"#),
+        ]
 
-        XCTAssertEqual(map?.entries.count, 3, "map keys stay distinct")
-        XCTAssertEqual(set?.items.count, 3, "set members stay distinct")
-        XCTAssertThrowsError(try LunoraJSON.parse(#"{"\ud800":1,"\ud801":2}"#), "an object that cannot hold both keys is refused")
+        for (input, key) in lone {
+            let value = try? Wire.decode(LunoraJSON.parse(input))
+            let count = (value as? [WireKey: Any])?.count ?? (value as? WireMap)?.entries.count ?? (value as? WireSet)?.items.count
+
+            XCTAssertEqual(count, 3, "three distinct members: \(input)")
+            XCTAssertEqual(try? Wire.stableWireKey(value), key, "stable key of \(input)")
+            // Swift's writer IS its wire writer; here the reference's insertion
+            // order is also sorted order, so the bytes are the key's.
+            XCTAssertEqual(Wire.stableStringify(try? Wire.encode(value)), key, "wire bytes of \(input)")
+        }
+
+        // Nested, with a true duplicate (the last wins) beside a lone surrogate,
+        // and the key reached by code units.
+        let nested = try? Wire.decode(LunoraJSON.parse(#"{"z":{"\udc00":"a","\ud83d":"b","�":"c"},"a":[{"\ud800":1,"\ud800":2,"�":3}]}"#))
+        XCTAssertEqual(
+            try? Wire.stableWireKey(nested),
+            #"{"a":[{"\ud800":2,"�":3}],"z":{"\ud83d":"b","\udc00":"a","�":"c"}}"#
+        )
+        let inner = ((nested as? [String: Any])?["a"] as? [Any])?.first as? [WireKey: Any]
+        XCTAssertEqual(inner?[WireKey(utf16: [0xD800])] as? Int, 2)
+        XCTAssertEqual(inner?["\u{FFFD}"] as? Int, 3, "a literal names every key a literal can spell")
+        // An object whose keys Swift can tell apart stays a `[String: Any]`.
+        XCTAssertNotNil(try? LunoraJSON.parse(#"{"\ud800":1,"x":{"\ud801":2}}"#) as? [String: Any])
         XCTAssertEqual(
             (try? LunoraJSON.parse(#"{"a":1,"a":2}"#) as? [String: Any])?["a"] as? Int,
             2,

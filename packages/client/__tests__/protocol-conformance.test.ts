@@ -666,3 +666,74 @@ describe("ws-frames fixtures", () => {
         expect(rowSets.at(-1)).toStrictEqual(ws.shape.expectedRows);
     });
 });
+
+// --- Credential refresh -----------------------------------------------------
+
+interface CredentialRefreshFixture {
+    afterRefresh: { committed: string[]; queuedAfterFlush: string[]; rejected: string[] };
+    afterRefusal: { committed: string[]; queuedAfterFlush: string[]; rejected: string[] };
+    authorizationHeaders: string[];
+    freshToken: string;
+    identity: string;
+    queued: string[];
+    refusal: { body: unknown; status: number };
+    staleToken: string;
+}
+
+describe("credential-refresh fixture", () => {
+    it("holds a write refused for its credential and replays it when a fresh token is set", async () => {
+        expect.hasAssertions();
+
+        const spec = (readFixture("offline-optimistic.json") as { offlineQueue: { credentialRefresh: CredentialRefreshFixture } }).offlineQueue
+            .credentialRefresh;
+        const headers: string[] = [];
+        const client = new LunoraClient({
+            fetch: vi.fn<typeof fetch>(async (_input, init) => {
+                const authorization = ((init?.headers ?? {}) as Record<string, string>)["authorization"] ?? "";
+
+                headers.push(authorization);
+
+                return authorization === `Bearer ${spec.staleToken}`
+                    ? jsonResponse(spec.refusal.body, { status: spec.refusal.status })
+                    : jsonResponse({ result: null });
+            }),
+            offlineQueue: { queueBeforeFirstConnect: true },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+        const settled: string[] = [];
+        const settle = async (): Promise<void> => {
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- drains promise ticks in order
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 0);
+                });
+            }
+        };
+
+        client.onMutationSettled((event) => settled.push(event.status));
+        client.setAuthToken(spec.staleToken, spec.identity);
+
+        for (let index = 0; index < spec.queued.length; index += 1) {
+            client.mutation(fnRef("messages:send"), {}).catch(() => undefined);
+        }
+
+        client.subscribe(fnRef("messages:list"), {}, () => undefined);
+        latestSocket().open();
+        await settle();
+
+        expect(settled).toStrictEqual([...spec.afterRefusal.committed.map(() => "committed"), ...spec.afterRefusal.rejected.map(() => "rejected")]);
+        expect(client.pendingCount()).toBe(spec.afterRefusal.queuedAfterFlush.length);
+
+        // A refresh: the same user's subject asserted for the new token. No flush
+        // of the test's own — setting the token is what replays the held write.
+        client.setAuthToken(spec.freshToken, spec.identity);
+        await settle();
+
+        expect(settled).toStrictEqual(spec.afterRefresh.committed.map(() => "committed"));
+        expect(client.pendingCount()).toBe(spec.afterRefresh.queuedAfterFlush.length);
+        expect(headers).toStrictEqual(spec.authorizationHeaders);
+
+        client.close();
+    });
+});

@@ -22,6 +22,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import MAX_WS_FRAME_BYTES, LunoraClient
+from lunora.offline import OfflineQueue
+from lunora.submit import SubmitOptions
 
 # Generous: every wait below is satisfied in microseconds when the loop is
 # correct, and this only bounds how long a REGRESSION hangs the suite.
@@ -181,6 +183,39 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StopAsyncIteration):
             await asyncio.wait_for(values.__anext__(), TIMEOUT)
         self.assertFalse(client.online)
+
+    async def test_a_new_token_replays_a_write_held_for_its_credential(self):
+        """A write refused ``TOKEN_EXPIRED`` is held; the next token replays it.
+
+        This loop flushes when its socket connects, and a healthy socket never
+        connects again, so without a flush on the new token the held write
+        waited for a disconnect that might never come.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        headers = []
+
+        def post(_url, sent, _body):
+            headers.append(sent.get("authorization"))
+            if sent.get("authorization") == "Bearer stale":
+                return 401, {"error": {"code": "TOKEN_EXPIRED", "message": "token expired"}}
+            return 200, {"result": None}
+
+        client = LunoraClient("http://example.invalid", auth_token="stale", identity="user-a", http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: headers)
+        self.assertEqual(client.pending_mutation_count, 1, "the refused write is held")
+
+        client.auth_token = "fresh"
+        await _wait_for(lambda: client.pending_mutation_count == 0)
+        self.assertEqual(headers, ["Bearer stale", "Bearer fresh"])
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
 
     async def test_frames_past_the_library_default_size_are_accepted(self):
         """``websockets`` closes on any message over 1 MiB (1009) unless told otherwise.

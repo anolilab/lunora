@@ -142,6 +142,30 @@ public struct WireSet {
     public init(_ items: [Any]) { self.items = items }
 }
 
+/// A JSON object key compared by UTF-16 code unit, as JavaScript compares one.
+///
+/// Swift compares a lone surrogate as U+FFFD, so `"\ud800"`, `"\ud801"` and `"�"`
+/// are ONE `String` key and three JavaScript ones. An object whose keys differ
+/// only that way decodes to `[WireKey: Any]` rather than `[String: Any]`, keeping
+/// every member; every other object is still a `[String: Any]`. `encode`,
+/// `decode` and `stableStringify` accept both, so a value relayed through this
+/// client keeps its bytes and its stable key.
+///
+/// A string literal is a key (`object["id"]`); a key no literal can spell — a
+/// lone surrogate — is `WireKey(utf16: [0xD800])`.
+public struct WireKey: Hashable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
+    public let utf16: [UInt16]
+
+    public init(_ string: String) { utf16 = Wire.utf16Units(string) }
+    public init(utf16: [UInt16]) { self.utf16 = utf16 }
+    public init(stringLiteral value: String) { self.init(value) }
+
+    /// The key as a `String`. Backed by an `NSString`, which keeps a lone
+    /// surrogate the Swift views would repair.
+    public var string: String { NSString(characters: utf16, length: utf16.count) as String }
+    public var description: String { string }
+}
+
 /// A typed-array view that is NOT a plain `Uint8Array`, carrying its constructor
 /// name so the exact view type survives. Plain `Uint8Array` bytes use `Data` and
 /// the 2-element wire form.
@@ -241,6 +265,7 @@ extension Wire {
         if let string = value as? String { return string }
         if let array = value as? [Any] { return try encodeArray(array, depth: depth) }
         if let dictionary = value as? [String: Any] { return try encodeDictionary(dictionary, depth: depth) }
+        if let object = value as? [WireKey: Any] { return try encodeDictionary(object, depth: depth) }
 
         throw WireFormatError.unsupported(String(describing: type(of: value as Any)))
     }
@@ -270,8 +295,8 @@ extension Wire {
         return encoded
     }
 
-    private static func encodeDictionary(_ value: [String: Any], depth: Int) throws -> Any {
-        var result: [String: Any] = [:]
+    private static func encodeDictionary<Key: Hashable>(_ value: [Key: Any], depth: Int) throws -> Any {
+        var result: [Key: Any] = [:]
         for (key, field) in value {
             // Drop undefined fields, matching JSON.stringify, so a pure-JSON
             // object stays byte-identical across the codec.
@@ -305,11 +330,8 @@ extension Wire {
             return try array.map { try decode($0, depth: depth + 1) }
         }
 
-        if let dictionary = value as? [String: Any] {
-            var result: [String: Any] = [:]
-            for (key, item) in dictionary { result[key] = try decode(item, depth: depth + 1) }
-            return result
-        }
+        if let dictionary = value as? [String: Any] { return try decodeDictionary(dictionary, depth: depth) }
+        if let object = value as? [WireKey: Any] { return try decodeDictionary(object, depth: depth) }
 
         // A number off the wire is a float64 whatever its spelling, and
         // `JSON.stringify` writes every double in [2^53, 1e21) as an integer
@@ -325,6 +347,12 @@ extension Wire {
         }
 
         return value ?? NSNull()
+    }
+
+    private static func decodeDictionary<Key: Hashable>(_ value: [Key: Any], depth: Int) throws -> Any {
+        var result: [Key: Any] = [:]
+        for (key, item) in value { result[key] = try decode(item, depth: depth + 1) }
+        return result
     }
 
     private static func decodeTagged(_ value: [Any], depth: Int) throws -> Any {

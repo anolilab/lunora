@@ -427,6 +427,94 @@ func TestAnEnvelopeLess413SplitsTheBatchOrSettlesTheLoneWrite(t *testing.T) {
 	}
 }
 
+// TestAWriteHeldForItsCredentialReplaysUnderTheRefreshedToken pins that a
+// credential refusal holds the write rather than settling it, and that the
+// replay reads the bearer when it is SENT: the refreshed token, not the one the
+// write was queued under. Go never flushes on its own, so the app's second
+// flush after the refresh is the replay.
+func TestAWriteHeldForItsCredentialReplaysUnderTheRefreshedToken(t *testing.T) {
+	covers("offline_write_held_for_credential_replays_after_token_refresh")
+
+	scenario := fixtureScenario(t, "offlineQueue", "credentialRefresh")
+	identity, _ := scenario["identity"].(string)
+	staleToken, _ := scenario["staleToken"].(string)
+	freshToken, _ := scenario["freshToken"].(string)
+	refusal, _ := scenario["refusal"].(map[string]any)
+	refusalStatus, _ := refusal["status"].(float64)
+	refusalBody, _ := json.Marshal(refusal["body"])
+
+	var authorization string
+
+	poster := &replayPoster{answer: func(bool, []map[string]any) (int, string) {
+		if authorization == "Bearer "+staleToken {
+			return int(refusalStatus), string(refusalBody)
+		}
+
+		return 200, `{"result":null}`
+	}}
+
+	client, store, settled := replayClient(poster, nil)
+
+	var headers []string
+
+	client.Post = func(url string, sent map[string]string, body []byte) (int, []byte, error) {
+		authorization = sent["authorization"]
+		headers = append(headers, authorization)
+
+		return poster.post(url, sent, body)
+	}
+
+	client.SetIdentity(&identity)
+	client.AuthToken = staleToken
+
+	for _, id := range fixtureStrings(scenario["queued"]) {
+		client.OfflineQueue().Enqueue(&QueuedMutation{
+			Args:         map[string]any{},
+			FunctionPath: "messages:send",
+			ID:           id,
+			Identity:     IdentityOf(identity),
+		})
+	}
+
+	expect := func(phase string, report FlushReport) {
+		t.Helper()
+
+		block, _ := scenario[phase].(map[string]any)
+
+		if got, want := report.Committed, fixtureStrings(block["committed"]); len(got)+len(want) > 0 && !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s committed: got %v, want %v", phase, got, want)
+		}
+
+		if got, want := report.Rejected, fixtureStrings(block["rejected"]); len(got)+len(want) > 0 && !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s rejected: got %v, want %v (requeued %v)", phase, got, want, report.Requeued)
+		}
+
+		if got, want := queuedIDs(client.OfflineQueue().Items()), fixtureStrings(block["queuedAfterFlush"]); len(got)+len(want) > 0 && !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s queued after flush: got %v, want %v", phase, got, want)
+		}
+	}
+
+	expect("afterRefusal", client.FlushOfflineQueue(""))
+
+	if len(*settled) != 0 {
+		t.Fatalf("a credential refusal must not settle the write: %+v", *settled)
+	}
+
+	if len(store.removed) != 0 || len(store.records) != len(fixtureStrings(scenario["queued"])) {
+		t.Fatalf("a held write must stay persisted: removed %v, records %v", store.removed, store.records)
+	}
+
+	// A refresh: new token, same identity.
+	client.AuthToken = freshToken
+	client.SetIdentity(&identity)
+
+	expect("afterRefresh", client.FlushOfflineQueue(""))
+
+	if want := fixtureStrings(scenario["authorizationHeaders"]); !reflect.DeepEqual(headers, want) {
+		t.Fatalf("authorization headers: got %v, want %v", headers, want)
+	}
+}
+
 // shapeFixture is ws-frames.json's shape block.
 func shapeFixture(t *testing.T) map[string]any {
 	t.Helper()

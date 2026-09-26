@@ -60,8 +60,10 @@ typedef LunoraRpcOutcome = ({Object? result, int? commitCursor});
 /// The origin, the credentials and the one request shape everything else is
 /// built from.
 class LunoraTransport {
-  LunoraTransport({required String url, this.post, this.authToken, this.authSubject, String? clientId})
+  LunoraTransport({required String url, this.post, this.authToken, String? authSubject, String? clientId})
       : baseUrl = url,
+        _authSubject = authSubject,
+        _subjectToken = authToken,
         clientId = clientId ?? _randomId();
 
   final String baseUrl;
@@ -78,7 +80,36 @@ class LunoraTransport {
   /// digest of [authToken] otherwise — so refreshing a token without a subject
   /// looks like a different user and discards the queue. Leave it null to fall
   /// back to the token digest; a null token then means signed out.
-  String? authSubject;
+  ///
+  /// Setting it — to a new value or the same one — also states that it names
+  /// the holder of the CURRENT [authToken]. A subject carried across a token
+  /// change without that is unconfirmed ([subjectAwaitingReconfirm]): the new
+  /// token may be the same user's refresh or another user's sign-in, so queued
+  /// writes are held, neither sent nor dropped, until it is set again.
+  String? get authSubject => _authSubject;
+
+  set authSubject(String? value) {
+    _authSubject = value;
+    _subjectToken = authToken;
+  }
+
+  String? _authSubject;
+
+  /// The [authToken] [authSubject] was last set against.
+  String? _subjectToken;
+
+  /// Whether a set [authSubject] labels a token it was never set against — see
+  /// [authSubject]. Mirrors the reference client's `subjectAwaitingReconfirm`.
+  bool get subjectAwaitingReconfirm => _authSubject != null && _subjectToken != authToken;
+
+  /// Whether [stamped] is the digest of the CURRENT token: the write was queued
+  /// under this very credential before a subject named it. Only a digest stamp
+  /// qualifies, never a `subj:` label or the signed-out null.
+  bool isSameCredential(String? stamped) {
+    final token = authToken;
+
+    return stamped != null && !stamped.startsWith('subj:') && token != null && _hashToken(token) == stamped;
+  }
 
   /// Identifies THIS client to the server's idempotency bookkeeping.
   ///

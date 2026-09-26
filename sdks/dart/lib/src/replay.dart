@@ -171,17 +171,31 @@ class OfflineReplayer {
     // authenticated requests and there is no point between them where the
     // token could change without this loop seeing it. A mismatch is rejected
     // rather than silently dropped, so an awaiting caller gets a verdict.
+    //
+    // Three verdicts, as the reference's `replayIdentityVerdict` has them. A
+    // write is HELD — back on the queue, persisted, unsettled — while the
+    // identity cannot be told: a subject not yet confirmed for a new token (a
+    // refresh and an account switch look alike until it is), or nobody signed
+    // in. A different identity signed in is terminal.
     final identity = transport.identityFingerprint();
+    final unconfirmed = transport.subjectAwaitingReconfirm;
     final sendable = <QueuedMutation>[];
+    final held = <QueuedMutation>[];
 
     for (final item in drained) {
-      if (item.identityAllowsReplay(identity)) {
+      if (!item.identityStamped) {
+        sendable.add(item);
+      } else if (unconfirmed || (identity == null && item.identity != null)) {
+        held.add(item);
+      } else if (item.identityAllowsReplay(identity) || transport.isSameCredential(item.identity)) {
         sendable.add(item);
       } else {
         queue.unpersist(item.id);
         item.reject(const LunoraApiException(offlineIdentityChanged, 'offline mutation discarded: it was queued under a different identity'));
       }
     }
+
+    _returnOrAbandon(held);
 
     final encodable = _encodableOrSettleTerminal(sendable);
 

@@ -1865,3 +1865,79 @@ pub fn offline_flush_batch_splits_on_envelopeless_413() {
         assert_eq!(settled_codes(&settled, &rejected), vec![code.clone(); rejected.len()], "{name}");
     }
 }
+
+/// A write refused for its CREDENTIAL is held, and replays under the next token
+/// set for the same user: the header is read when the replay is SENT, never the
+/// token the write was queued under.
+pub fn offline_write_held_for_credential_replays_after_token_refresh() {
+    let case = queue_case("credentialRefresh");
+    let stale = format!("Bearer {}", case["staleToken"].as_str().expect("staleToken"));
+    let refusal_status = case["refusal"]["status"].as_u64().expect("status") as u16;
+    let refusal = serde_json::to_vec(&case["refusal"]["body"]).expect("body");
+    let headers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&headers);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, request_headers, _body| {
+            let authorization = request_headers.get("authorization").cloned().unwrap_or_default();
+
+            recorder.lock().expect("headers").push(authorization.clone());
+
+            if authorization == stale {
+                Ok((refusal_status, refusal.clone()))
+            } else {
+                Ok((200, br#"{"result":null}"#.to_vec()))
+            }
+        })),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.set_identity(case["identity"].as_str().map(str::to_string));
+    client.auth_token = case["staleToken"].as_str().map(str::to_string);
+    client.attach_socket(Box::new(|_frame| {}));
+    client.detach_socket();
+
+    let settled = record_settled(&mut client);
+    let queued = ids(&case["queued"]);
+
+    for id in &queued {
+        let mut options = SubmitOptions::new(FUNCTION, args());
+
+        options.mutation_id = Some(id.clone());
+
+        assert_eq!(client.submit(options).expect("queued").status, MutationStatus::Queued, "{id} queues offline");
+    }
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let refused = client.flush_offline_queue(None);
+    let after_refusal = &case["afterRefusal"];
+
+    assert_eq!(refused.committed, ids(&after_refusal["committed"]), "refused: nothing commits");
+    assert_eq!(refused.rejected, ids(&after_refusal["rejected"]), "refused: an expired token is not a verdict");
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&after_refusal["queuedAfterFlush"]),
+        "refused: the write is held"
+    );
+    assert!(settled.lock().expect("settled").is_empty(), "refused: nothing settles");
+    assert!(store.removed().is_empty(), "refused: the durable record is not removed");
+    assert_eq!(store.records(), queued.len(), "refused: the durable record stays");
+
+    // A refresh, not an account switch: the identity is unchanged. This port
+    // never flushes on its own, so the app flushes once more.
+    client.auth_token = case["freshToken"].as_str().map(str::to_string);
+
+    let replayed = client.flush_offline_queue(None);
+    let after_refresh = &case["afterRefresh"];
+
+    assert_eq!(replayed.committed, ids(&after_refresh["committed"]), "refreshed: it replays and commits");
+    assert_eq!(replayed.rejected, ids(&after_refresh["rejected"]), "refreshed");
+    assert_eq!(queued_ids(&client.offline_queue), ids(&after_refresh["queuedAfterFlush"]), "refreshed");
+    assert_eq!(
+        *headers.lock().expect("headers"),
+        ids(&case["authorizationHeaders"]),
+        "the token is read when the replay is sent"
+    );
+}
