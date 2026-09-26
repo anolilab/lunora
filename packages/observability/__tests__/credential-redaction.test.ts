@@ -312,6 +312,51 @@ describe.each(sinks)("%s redaction of class instances", (_sink, redact) => {
         });
     });
 
+    it("masks what a URL serializes to, not the URL object as-is", () => {
+        expect.assertions(1);
+
+        const url = new URL("https://user:pw-fixture@api.example.test/cb?token=fixture-token"); // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
+
+        expect(JSON.stringify(redact({ callback: url }))).not.toMatch(/pw-fixture|fixture-token|user:/);
+    });
+
+    it("masks the credentials a toJSON method returns", () => {
+        expect.assertions(1);
+
+        class Account {
+            private readonly user = "u1";
+
+            public toJSON(): Record<string, unknown> {
+                return { password: "pw-fixture", user: this.user }; // secret-scanner:allow -- a fabricated credential-shaped fixture exercising the redaction rule, not a secret
+            }
+        }
+
+        expect(redact({ account: new Account() })).toStrictEqual({ account: { password: MASKED, user: "u1" } });
+    });
+
+    it("survives a toJSON that throws or returns itself", () => {
+        expect.assertions(2);
+
+        class Throws {
+            public readonly apiKey = "k-1";
+
+            public toJSON(): never {
+                throw new Error(`cannot serialize ${this.apiKey}`);
+            }
+        }
+
+        class Self {
+            public readonly apiKey = "k-1";
+
+            public toJSON(): this {
+                return this;
+            }
+        }
+
+        expect(JSON.stringify(redact({ value: new Throws() }))).not.toContain("k-1");
+        expect(JSON.stringify(redact({ value: new Self() }))).not.toContain("k-1");
+    });
+
     it("keeps a cycle through class instances finite", () => {
         expect.assertions(1);
 

@@ -368,10 +368,9 @@ const maskString = (value: string, budget: Budget): string => {
     );
 };
 
-/** Built-ins whose own enumerable properties are not what they carry — walking them would turn a `Date` into `{}`. */
+/** Built-ins whose own enumerable properties are not what they carry, and which have no `toJSON` to say what they do. */
 const isOpaqueObject = (value: object): boolean =>
     value instanceof Error ||
-    value instanceof Date ||
     value instanceof RegExp ||
     value instanceof Map ||
     value instanceof Set ||
@@ -379,8 +378,34 @@ const isOpaqueObject = (value: object): boolean =>
     value instanceof WeakSet ||
     value instanceof Promise ||
     value instanceof ArrayBuffer ||
-    ArrayBuffer.isView(value) ||
-    typeof (value as { toJSON?: unknown }).toJSON === "function";
+    ArrayBuffer.isView(value);
+
+const NO_JSON = Symbol("no-json");
+
+/**
+ * What `JSON.stringify` would serialize `value` as, when it has a `toJSON` —
+ * a `URL` becomes its href string, a `Date` its ISO string, a custom class
+ * whatever it returns — so that result is what gets masked. Returning the
+ * object untouched let a `URL`'s userinfo and query, or a class's
+ * `toJSON(): { password }`, reach the log when the caller stringified it.
+ * A `toJSON` that throws or returns the object itself yields {@link NO_JSON},
+ * and the object is walked by its own properties instead.
+ */
+const jsonForm = (value: object): unknown => {
+    const { toJSON } = value as { toJSON?: unknown };
+
+    if (typeof toJSON !== "function") {
+        return NO_JSON;
+    }
+
+    try {
+        const json = (toJSON as () => unknown).call(value);
+
+        return json === value ? NO_JSON : json;
+    } catch {
+        return NO_JSON;
+    }
+};
 
 const MAX_DEPTH = 32;
 
@@ -395,6 +420,18 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
 
     if (seen.has(value) || depth >= MAX_DEPTH) {
         return REDACTED;
+    }
+
+    const json = Array.isArray(value) ? NO_JSON : jsonForm(value);
+
+    if (json !== NO_JSON) {
+        seen.add(value);
+
+        const masked = walk(json, seen, depth + 1, maskStrings, budget);
+
+        seen.delete(value);
+
+        return masked;
     }
 
     seen.add(value);
@@ -430,7 +467,8 @@ const walk = (value: unknown, seen: WeakSet<object>, depth: number, maskStrings:
  * capped at {@link MAX_REDACTED_STRING_LENGTH}, and once
  * {@link MAX_REDACTED_TOTAL_LENGTH} characters of one value have been examined,
  * later strings become a marker. Returns a copy; the input is never mutated.
- * `Error`s, `Date`s, collections and values with a `toJSON` are returned as-is.
+ * A value with a `toJSON` is replaced by its masked `toJSON()` result, which is
+ * what it would serialize as; `Error`s and collections are returned as-is.
  */
 const maskCredentials = (value: unknown): unknown => walk(value, new WeakSet(), 0, false, { remaining: MAX_REDACTED_TOTAL_LENGTH });
 
