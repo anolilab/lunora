@@ -1,3 +1,99 @@
+## @lunora/shard-engine [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.91...@lunora/shard-engine@1.0.0-alpha.92) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **studio:** DataBrowser and TableEditor take a canGenerateRows prop
+(default false); `editable` alone no longer shows "Generate rows".
+StudioFeaturesResult gains an optional `platform` field.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): hold capability-gated pages until the host is known
+
+The capability gate failed open while the studioFeatures payload was in
+flight. The default flags carry no host, so a direct link to /pitr on a Node
+worker mounted the lazy PITR panel and fired getPitrBookmark before the gate
+could apply. useStudioFeatures now reports `settled`, and a tab with a
+capability gate renders the route skeleton until the worker has answered (or
+failed, which still means no capability gating).
+
+The usage table and the capability table are now one TAB_GATES table in
+app/tab-gates.tsx. gateTab returns hidden / pending / unavailable(reason) / ok,
+and resolveNav applies it to the whole nav, which takes the inline loop out of
+the shell. The nav tooltips come from one merged description map.
+
+- Payload: `platform` is now `{ id, name, unsupported: string[] }`, the keys
+  the target's matrix rates unsupported. This drops the level coercion and the
+  mirrored level type. buildStudioFeatures takes the target and builds it.
+- Reasons read "Mail delivery is not supported on Node." from a per-capability
+  label, never a raw matrix key.
+- storageRules is no longer capability-gated: it shows codegen metadata and
+  asks the host for nothing.
+- The studio's capability keys are a typed union, pinned against both shipped
+  matrices by a test (@lunora/platform is a new devDependency).
+- The studio docs describe the capability gate next to the usage-flag gate.
+* **studio:** StudioFeaturesResult.platform is `{ id, name, unsupported }`
+instead of a per-feature level map.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): drop a superseded studio features answer
+
+A client swap re-runs the features effect, and the earlier fetch could still
+land afterwards and overwrite the newer host's capabilities. The effect now
+aborts its own run on cleanup and only applies an answer that is still current.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): drop the previous worker's features on a client swap
+
+The features hook kept the last client's answer until the new client's
+arrived, so tabs, routes and the command palette were gated on the wrong
+host in between. The stored answer is now keyed on the client that gave it,
+and a different client reads as unsettled at once.
+
+The PITR panel also disables preview, restore and undo once the host answers
+PITR_UNAVAILABLE (local Wrangler keeps no bookmarks), and stops polling for a
+bookmark it will never get, instead of leaving controls that can only fail.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(studio): assert the disabled PITR controls without a cast
+
+Read the disabled state through the attribute, so the test typechecks under
+the studio test tsconfig without an element cast.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): keep the PITR panel on the current host's answer
+
+A bookmark read started against the previous client could land after the
+new client's and overwrite the panel's bookmark and availability, re-enabling
+controls the current host refuses. The mount read now aborts when the client
+or shard changes and drops its answer.
+
+A restore that answers PITR_UNAVAILABLE now disables the controls too:
+restore support is checked on its own, so a host can serve bookmarks and
+still refuse to arm one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Features
+
+* **studio:** gate pages on the worker's host capabilities ([#851](https://github.com/anolilab/lunora/issues/851)) ([52b9e70](https://github.com/anolilab/lunora/commit/52b9e70969577c197d2d27f207a77f5d96924131))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/shard-engine [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.90...@lunora/shard-engine@1.0.0-alpha.91) (2026-09-26)
 
 
