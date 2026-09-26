@@ -1,44 +1,31 @@
+import type { PlatformCapabilities } from "@lunora/platform";
+import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
 import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { openCommandPalette } from "../../src/app/command-palette";
 import { Studio } from "../../src/app/studio";
+import type { CapabilityKey } from "../../src/app/tab-gates";
+import { TAB_GATES } from "../../src/app/tab-gates";
 import type { StudioPlatform } from "../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
 
-/** The slice of `NODE_CAPABILITIES` the gated tabs read — the worker sends the whole level map. */
-const NODE: StudioPlatform = {
-    features: {
-        agents: "unsupported",
-        analytics: "unsupported",
-        containers: "unsupported",
-        mail: "unsupported",
-        pointInTimeRecovery: "unsupported",
-        queues: "emulated",
-        vectorStore: "unsupported",
-        workflows: "emulated",
-    },
-    id: "node",
-    name: "Node",
+/** What codegen emits for each target: the keys its matrix rates `unsupported`. */
+const platformOf = (matrix: PlatformCapabilities): StudioPlatform => {
+    return {
+        id: matrix.id,
+        name: matrix.name,
+        unsupported: Object.entries(matrix.features)
+            .filter(([, capability]) => capability?.level === "unsupported")
+            .map(([key]) => key),
+    };
 };
 
-const CLOUDFLARE: StudioPlatform = {
-    features: {
-        agents: "emulated",
-        analytics: "native",
-        containers: "native",
-        mail: "emulated",
-        pointInTimeRecovery: "native",
-        queues: "native",
-        vectorStore: "native",
-        workflows: "native",
-    },
-    id: "cloudflare",
-    name: "Cloudflare",
-};
+const NODE = platformOf(NODE_CAPABILITIES);
+const CLOUDFLARE = platformOf(CLOUDFLARE_CAPABILITIES);
 
 const UNSUPPORTED_ON_NODE = ["pitr", "agents", "vectors", "containers", "analytics", "mail"] as const;
 
@@ -94,9 +81,36 @@ const settled = async (platform: StudioPlatform): Promise<void> => {
     });
 };
 
+// Compile-time half of the pin below: a studio-side key that is not a matrix key fails tsc here.
+const CAPABILITY_KEYS_ARE_MATRIX_KEYS: CapabilityKey extends keyof PlatformCapabilities["features"] ? true : never = true;
+
 describe("platform capability gate", () => {
     afterEach(() => {
         globalThis.history.pushState({}, "", "/");
+    });
+
+    it("gates only on capability keys both shipped matrices rate", () => {
+        expect.hasAssertions();
+        expect(CAPABILITY_KEYS_ARE_MATRIX_KEYS).toBe(true);
+
+        const capabilities = Object.values(TAB_GATES).flatMap((gate) => (gate?.capability === undefined ? [] : [gate.capability]));
+
+        expect(capabilities.length).toBeGreaterThan(0);
+
+        for (const capability of capabilities) {
+            expect(Object.keys(NODE_CAPABILITIES.features)).toContain(capability);
+            expect(Object.keys(CLOUDFLARE_CAPABILITIES.features)).toContain(capability);
+        }
+    });
+
+    it("words the reason for people, not as a matrix key", async () => {
+        expect.hasAssertions();
+
+        renderStudio(createClient(NODE));
+        await settled(NODE);
+
+        expect(screen.getByTestId("dash-tab-mail").getAttribute("title")).toBe("Mail delivery is not supported on Node.");
+        expect(screen.getByTestId("dash-tab-pitr").getAttribute("title")).toBe("Point-in-time recovery is not supported on Node.");
     });
 
     it("marks every tab a Node worker rates unsupported as unavailable, with the reason", async () => {
@@ -145,6 +159,44 @@ describe("platform capability gate", () => {
         expect(mock.query.mock.calls.some(([reference]) => (reference as { __lunoraRef?: string }).__lunoraRef === ADMIN_FUNCTIONS.getPitrBookmark)).toBe(
             false,
         );
+    });
+
+    it("mounts no capability-gated panel before the worker has said which host it is", async () => {
+        expect.hasAssertions();
+
+        globalThis.history.pushState({}, "", "/pitr");
+
+        let release: () => void = () => undefined;
+        const answered = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const mock = createMockClient({
+            query: async (reference): Promise<unknown> => {
+                if (reference === ADMIN_FUNCTIONS.studioFeatures) {
+                    await answered;
+
+                    return { platform: NODE };
+                }
+
+                return { columns: [], rows: [], total: 0 };
+            },
+        });
+        const pitrCalls = (): number =>
+            mock.query.mock.calls.filter(([reference]) => (reference as { __lunoraRef?: string }).__lunoraRef === ADMIN_FUNCTIONS.getPitrBookmark).length;
+
+        renderStudio(mock);
+        await screen.findByTestId("lunora-studio");
+        // Long enough for the lazy panel chunk to load and fire its first read, had it mounted.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 300);
+        });
+
+        expect(pitrCalls()).toBe(0);
+
+        release();
+
+        await expect(screen.findByTestId("dash-unsupported")).resolves.toBeDefined();
+        expect(pitrCalls()).toBe(0);
     });
 
     it("renders the PITR panel on a direct link to /pitr on Cloudflare", async () => {

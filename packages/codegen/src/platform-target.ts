@@ -37,7 +37,7 @@
  * which is why `project-config.test.ts` keeps the relaxed assertion.
  */
 
-import type { CapabilityLevel, PlatformCapabilities } from "@lunora/platform";
+import type { PlatformCapabilities } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
 import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
@@ -520,29 +520,26 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
 };
 
 /**
- * The target's capability LEVELS (notes dropped), for the generated
- * `studioFeatures()` payload — how a separately-hosted studio learns which host
- * it is talking to and which pages that host cannot serve. `undefined` for an
- * unregistered target: there is no matrix to report, and the studio then gates
- * on the usage flags alone, exactly as `gatePlatformFeatures` leaves the
- * surface un-gated.
+ * The target's identity plus the feature keys its matrix rates `unsupported`,
+ * for the generated `studioFeatures()` payload — how a separately-hosted studio
+ * learns which host it is talking to and which pages that host cannot serve.
+ * `undefined` for an unregistered target: there is no matrix to report, and
+ * the studio then gates on the usage flags alone, exactly as
+ * `gatePlatformFeatures` leaves the surface un-gated.
  */
-const studioPlatformFor = (target: string): NonNullable<StudioFeaturesResult["platform"]> | undefined => {
+const studioPlatformFor = (target: string): StudioFeaturesResult["platform"] => {
     const matrix = PLATFORM_MATRICES[target];
 
     if (matrix === undefined) {
         return undefined;
     }
 
-    const features: NonNullable<StudioFeaturesResult["platform"]>["features"] = {};
+    const unsupported = Object.entries(matrix.features)
+        .filter(([, capability]) => capability.level === "unsupported")
+        .map(([key]) => key)
+        .toSorted((a, b) => a.localeCompare(b));
 
-    for (const [key, capability] of Object.entries(matrix.features) as [PlatformFeatureKey, { level: CapabilityLevel } | undefined][]) {
-        if (capability !== undefined) {
-            features[key] = capability.level;
-        }
-    }
-
-    return { features, id: matrix.id, name: matrix.name };
+    return { id: matrix.id, name: matrix.name, unsupported };
 };
 
 export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };

@@ -99,6 +99,7 @@
         "@babel/preset-react": "catalog:build",
         "@lunora/mail": "1.0.0-alpha.89",
         "@lunora/notify": "1.0.0-alpha.66",
+        "@lunora/platform": "1.0.0-alpha.40",
         "@lunora/runtime": "1.0.0-alpha.151",
         "@lunora/shard-engine": "1.0.0-alpha.91",
         "@tailwindcss/cli": "catalog:vite",

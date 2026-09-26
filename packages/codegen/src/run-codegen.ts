@@ -117,7 +117,7 @@ import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
-import { resolveCodegenTarget, studioPlatformFor } from "./platform-target";
+import { resolveCodegenTarget } from "./platform-target";
 import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
@@ -848,9 +848,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // declaration alone — its endpoints 400 without a registry to serve, so
     // failing open there would fail open into an error. See
     // `buildStudioFeatures`' docblock.
-    //
-    // `platform` reports the target's capability levels alongside, so a studio
-    // hosted apart from this worker learns which host it is talking to.
     const studioFeatures = buildStudioFeatures(featureUsage, {
         containerCount: containers.length,
         cronCount: crons.length,
@@ -865,15 +862,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        target: resolveCodegenTarget(options.projectRoot, options.target),
         vectorStoreSupported,
         workflowCount: workflows.length,
     });
-
-    const studioPlatform = studioPlatformFor(resolveCodegenTarget(options.projectRoot, options.target));
-
-    if (studioPlatform !== undefined) {
-        studioFeatures.platform = studioPlatform;
-    }
 
     // Boundary between the discovery phase (all `discover*` passes + the inline
     // discovers `lintSchema` drives + the metadata discovers above) and the emit

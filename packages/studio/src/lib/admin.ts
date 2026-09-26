@@ -639,19 +639,22 @@ export interface StudioFeaturesResult {
     workflows: boolean;
 }
 
-/** Support level of one capability on the worker's host, mirroring `@lunora/platform`'s `CapabilityLevel`. */
-export type CapabilityLevel = "emulated" | "native" | "unsupported";
+/**
+ * The studio's view of {@link StudioFeaturesResult}: the payload, plus whether
+ * the fetch has settled yet. Client-side state, not part of the wire contract.
+ */
+export type StudioFeatures = StudioFeaturesResult & { readonly settled: boolean };
 
 /**
  * The deploy target a worker was generated for, hand-mirroring the `platform`
- * field of `@lunora/do`'s `StudioFeaturesResult`. `features` is keyed like
- * `@lunora/platform`'s `PlatformCapabilities["features"]` (`vectorStore`,
- * `pointInTimeRecovery`, …) — levels only, the notes stay in the matrix.
+ * field of `@lunora/do`'s `StudioFeaturesResult`. `unsupported` lists the
+ * `@lunora/platform` capability keys (`vectorStore`, `pointInTimeRecovery`, …)
+ * the target's matrix rates `unsupported`.
  */
 export interface StudioPlatform {
-    features: Partial<Record<string, CapabilityLevel>>;
     id: string;
     name: string;
+    unsupported: string[];
 }
 
 /**

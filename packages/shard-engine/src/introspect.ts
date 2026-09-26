@@ -1,5 +1,4 @@
 import { LunoraError } from "@lunora/errors";
-import type { CapabilityLevel, PlatformCapabilities } from "@lunora/platform";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
@@ -542,16 +541,16 @@ interface StudioFeaturesResult {
     payments: boolean;
 
     /**
-     * The deploy target this worker was generated for, with its capability
-     * levels from `@lunora/platform` (`features` is keyed like
-     * `PlatformCapabilities["features"]`). Studio can be hosted apart from the
-     * worker, so this is how it learns the host: it marks a page whose feature
-     * the target rates `unsupported` as unavailable, instead of rendering a
-     * panel whose admin ops cannot answer there. Absent when codegen had no
-     * matrix for the target (or from an un-generated `ShardDO`), in which case
-     * the studio gates on the usage flags alone.
+     * The deploy target this worker was generated for, and the
+     * `@lunora/platform` capability keys (`PlatformCapabilities["features"]`)
+     * its matrix rates `unsupported`. Studio can be hosted apart from the
+     * worker, so this is how it learns the host: it marks a page backed by one
+     * of these as unavailable, instead of rendering a panel whose admin ops
+     * cannot answer there. Absent when codegen had no matrix for the target (or
+     * from an un-generated `ShardDO`), in which case the studio gates on the
+     * usage flags alone.
      */
-    platform?: { features: Partial<Record<keyof PlatformCapabilities["features"], CapabilityLevel>>; id: string; name: string };
+    platform?: { id: string; name: string; unsupported: string[] };
     /** `@lunora/queue` / `ctx.queues` is used, the app declares queues, or it is a declared dependency. */
     queues: boolean;
     /** `@lunora/scheduler` / `ctx.scheduler` is used, the app declares crons, or it is a declared dependency. */

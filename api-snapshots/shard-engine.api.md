@@ -2951,9 +2951,9 @@ interface StudioFeaturesResult {
     notifications: boolean;
     payments: boolean;
     platform?: {
-        features: Partial<Record<keyof PlatformCapabilities["features"], CapabilityLevel>>;
         id: string;
         name: string;
+        unsupported: string[];
     };
     queues: boolean;
     scheduler: boolean;

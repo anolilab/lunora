@@ -639,24 +639,24 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(studioFeatures).toHaveProperty("kv", true);
     });
 
-    it("tells the studio which host the worker targets, with the matrix's levels", () => {
+    it("tells the studio which host the worker targets, and which features it cannot serve", () => {
         expect.assertions(4);
+
+        type Emitted = { platform: { id: string; unsupported: string[] } };
 
         // A studio hosted apart from the worker has no other way to learn it is
         // talking to a Node host, whose PITR ops can only answer PITR_UNAVAILABLE.
-        const node = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as { platform: { features: Record<string, string>; id: string } };
+        const node = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as Emitted;
 
         expect(node.platform.id).toBe("node");
-        expect(node.platform.features["pointInTimeRecovery"]).toBe("unsupported");
+        expect(node.platform.unsupported).toContain("pointInTimeRecovery");
 
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
 
-        const cloudflare = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as {
-            platform: { features: Record<string, string>; id: string };
-        };
+        const cloudflare = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as Emitted;
 
         expect(cloudflare.platform.id).toBe("cloudflare");
-        expect(cloudflare.platform.features["pointInTimeRecovery"]).toBe("native");
+        expect(cloudflare.platform.unsupported).toStrictEqual([]);
     });
 
     it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {

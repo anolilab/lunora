@@ -49,7 +49,6 @@ import type { SchedulePanelProps } from "../features/logs/schedule-panel";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
-import type { StudioFeaturesResult } from "../lib/admin";
 import { validateDataViewSearch, validateSchemaVersionSearch } from "../lib/data-view-params";
 import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
@@ -57,8 +56,9 @@ import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
 import { useNavLabels } from "./nav-labels";
 import type { NavGroup, NavGroupKey, StudioTab } from "./nav-types";
-import { UnsupportedPanel, unsupportedReason } from "./platform-gate";
 import StudioHeader from "./studio-header";
+import type { TabVerdict } from "./tab-gates";
+import { gateTab, resolveNav, UnsupportedPanel } from "./tab-gates";
 import useConsoleShortcut from "./use-console-shortcut";
 
 // Route-level lazy panels. Each becomes its own on-demand `chunk-*.js` under
@@ -406,46 +406,6 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "settings", tabs: ["settings"] },
 ];
 
-/**
- * Optional, package-backed tabs and the feature flag that gates each. A tab
- * listed here is hidden from the nav (and its panel made unreachable) when the
- * deployment doesn't wire up the backing package — so an app with no
- * `@lunora/payment` never shows the Payments page, the way auth panels gate on
- * capabilities. Tabs absent from this map are always shown (core surfaces). The
- * flags come from `useStudioFeatures` (the `__lunora_admin__:studioFeatures` RPC,
- * statically discovered by codegen). `storage` gates both the file browser and
- * the access-rules view; `scheduler` gates the scheduled-jobs view; `auth` gates
- * all five auth pages — including the audit trail, whose `getAuthAuditLog` RPC
- * answers `AUTH_AUDIT_NOT_CONFIGURED` without `@lunora/auth`'s reader wired.
- */
-const TAB_FEATURE: Partial<Record<StudioTab, Exclude<keyof StudioFeaturesResult, "platform">>> = {
-    analytics: "analytics",
-    authAudit: "auth",
-    authConfig: "auth",
-    authSessions: "auth",
-    containers: "containers",
-    files: "storage",
-    flags: "flags",
-    kv: "kv",
-    mail: "mail",
-    notifications: "notifications",
-    organizations: "auth",
-    payments: "payments",
-    queues: "queues",
-    schedule: "scheduler",
-    storageRules: "storage",
-    users: "auth",
-    vectors: "vectors",
-    workflows: "workflows",
-};
-
-/** True when a tab is shown for the given feature flags: always, unless its gating flag is off. */
-const isTabVisible = (tab: StudioTab, features: StudioFeaturesResult): boolean => {
-    const feature = TAB_FEATURE[tab];
-
-    return feature === undefined || features[feature];
-};
-
 const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
     <svg
         aria-hidden="true"
@@ -585,9 +545,10 @@ interface StudioSidebarProps {
     readonly groupLabel: Record<NavGroupKey, string>;
     readonly groups: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> }>;
     readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    /** Each page's tooltip: its description, or for an unavailable page, why. */
     readonly tabDescription: Record<StudioTab, string>;
     readonly tabLabel: Record<StudioTab, string>;
-    /** Why each page the worker's host cannot serve is unavailable; those pages render dimmed, with the reason as their tooltip. */
+    /** Pages the worker's host cannot serve; they render dimmed. */
     readonly unavailable: Partial<Record<StudioTab, string>>;
 }
 
@@ -641,7 +602,7 @@ const CollapsedGroupNav = ({
                     data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                     key={tab}
                     onClick={selectTab}
-                    title={unavailable[tab] ?? tabDescription[tab]}
+                    title={tabDescription[tab]}
                     type="button"
                 >
                     <TabIcon tab={tab} />
@@ -801,8 +762,8 @@ const StudioSidebar = ({
                                                   data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                                                   isActive={current === tab}
                                                   onClick={selectTab}
-                                                  title={unavailable[tab] ?? tabDescription[tab]}
-                                                  tooltip={unavailable[tab] ?? tabDescription[tab]}
+                                                  title={tabDescription[tab]}
+                                                  tooltip={tabDescription[tab]}
                                               >
                                                   <TabIcon tab={tab} />
                                                   <span>{tabLabel[tab]}</span>
@@ -845,6 +806,23 @@ const RoutePending = (): ReactElement => (
 );
 
 /**
+ * The routed panel, behind the tab's gate: a skeleton while a capability-gated
+ * page waits for the worker to say which host it is, the reason when the host
+ * cannot serve it, otherwise the panel itself.
+ */
+const GatedOutlet = ({ title, verdict }: { readonly title: string; readonly verdict: TabVerdict }): ReactElement => {
+    if (verdict.kind === "pending") {
+        return <RoutePending />;
+    }
+
+    if (verdict.kind === "unavailable") {
+        return <UnsupportedPanel reason={verdict.reason} title={title} />;
+    }
+
+    return <Outlet />;
+};
+
+/**
  * Persistent shell rendered by the router's root route: the grouped sidebar
  * ({@link StudioSidebar}) and the routed panel area (`<Outlet />`). The active
  * tab is derived from the URL, so deep links and the browser back/forward
@@ -875,42 +853,23 @@ const StudioLayoutShell = (): ReactElement => {
     const features = useStudioFeatures();
     const { groupLabel, tabDescription, tabLabel } = useNavLabels();
 
-    // The nav, command palette, and active-domain lookup all run off the filtered
-    // groups so a disabled feature's tab disappears from every entry point. A
-    // group whose every tab is gated off collapses out of the rail entirely.
-    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the nav groups — a fixed table of ~9 domains, walked once per render of the rail
-    const visibleGroups = NAV_GROUPS.map((group) => {
-        return { ...group, tabs: group.tabs.filter((tab) => isTabVisible(tab, features)) };
-    }).filter((group) => group.tabs.length > 0);
-
-    // The second gate: pages the worker's HOST cannot serve, because its deploy
-    // target rates the backing capability `unsupported`. Unlike a usage-gated
-    // page these stay in the nav — dimmed, with the reason as the tooltip — so
-    // the operator learns why rather than wondering where the page went. They
-    // leave the ⌘K palette, and their route renders the reason (below) instead
-    // of a panel whose admin ops cannot answer on this host.
-    const unavailable: Partial<Record<StudioTab, string>> = {};
-
-    for (const group of visibleGroups) {
-        for (const tab of group.tabs) {
-            const reason = unsupportedReason(tab, features.platform, t);
-
-            if (reason !== undefined) {
-                unavailable[tab] = reason;
-            }
-        }
-    }
-
-    const unavailableReason = unavailable[current];
+    // The nav, command palette, and active-domain lookup all run off the gated
+    // groups (see `TAB_GATES`): a page the app does not wire disappears from every
+    // entry point, and one the host cannot serve stays in the nav, dimmed, with
+    // its reason as the tooltip — but leaves the palette.
+    const { unavailable, visibleGroups } = resolveNav(NAV_GROUPS, features, t);
+    const navDescription = { ...tabDescription, ...unavailable };
+    const verdict = gateTab(current, features, t);
+    const hidden = verdict.kind === "hidden";
 
     // Landing on (or deep-linking to) a now-hidden tab bounces to Home, so a
     // disabled feature's panel is unreachable even by typing its URL — the same
     // backstop `NotFoundRedirect` gives unknown paths.
     useEffect(() => {
-        if (!isTabVisible(current, features)) {
+        if (hidden) {
             fireAndForget(navigate({ replace: true, to: "/home" }));
         }
-    }, [current, features, navigate]);
+    }, [hidden, navigate]);
 
     const selectTab = (event: React.MouseEvent<HTMLButtonElement>): void => {
         fireAndForget(navigate({ to: `/${event.currentTarget.dataset.tab ?? ""}` }));
@@ -967,7 +926,7 @@ const StudioLayoutShell = (): ReactElement => {
                 groupLabel={groupLabel}
                 groups={visibleGroups}
                 selectTab={selectTab}
-                tabDescription={tabDescription}
+                tabDescription={navDescription}
                 tabLabel={tabLabel}
                 unavailable={unavailable}
             />
@@ -1004,7 +963,7 @@ const StudioLayoutShell = (): ReactElement => {
                                 chunk streams in behind this Suspense fallback; Home (the index
                                 route) is eager and paints without suspending. */}
                             <Suspense fallback={<RoutePending />}>
-                                {unavailableReason === undefined ? <Outlet /> : <UnsupportedPanel reason={unavailableReason} title={tabLabel[current]} />}
+                                <GatedOutlet title={tabLabel[current]} verdict={verdict} />
                             </Suspense>
                         </ErrorBoundary>
                     </div>

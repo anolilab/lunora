@@ -1,5 +1,6 @@
 import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
+import { studioPlatformFor } from "../platform-target";
 import type { FeatureUsage } from "./feature-usage";
 
 /**
@@ -36,6 +37,15 @@ interface StudioFeatureSignals {
     storageColumnCount: number;
     /** Number of declared storage access rules. */
     storageRuleCount: number;
+
+    /**
+     * The resolved deploy target. Its capability matrix's `unsupported` keys ride
+     * along as `platform`, which is how a studio hosted apart from the worker
+     * learns which pages this host cannot serve. An unregistered target adds no
+     * `platform`, and the studio then gates on the flags alone.
+     */
+    target: string;
+
     /** Number of declared vector indexes. */
     vectorIndexCount: number;
 
@@ -93,7 +103,10 @@ interface StudioFeatureSignals {
  * — instead, so the page shows exactly when it can render.
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
+    const platform = studioPlatformFor(signals.target);
+
     return {
+        ...(platform === undefined ? {} : { platform }),
         analytics: usage.analytics || signals.dependencies.has("@lunora/bindings"),
         auth: signals.dependencies.has("@lunora/auth"),
         containers: usage.container || signals.containerCount > 0 || signals.dependencies.has("@lunora/container"),
