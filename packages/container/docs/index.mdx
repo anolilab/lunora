@@ -560,9 +560,10 @@ start uses it — an explicit `start()`, and the implicit restart a `fetch` or
 you `destroy()` the instance. That makes `start({ envVars: {} })` (or with only
 what the job needs) the way to run an untrusted or model-driven exec sandbox
 without the credentials the definition declares, and keep it that way across
-restarts. A `start({ envVars })` that differs from the env the container is
-already running with is rejected with `CONFLICT` rather than silently ignored —
-`stop()` the instance first. Pass every variable the container needs.
+restarts. The override cannot change while the container is running or still
+starting: a `start({ envVars })` that differs from its env is rejected with
+`CONFLICT` in either case, rather than silently ignored — `stop()` the instance
+(and let any start in flight finish) first. Pass every variable the container needs.
 
 Both `env` and `secrets` are **runtime** values, available when the container
 starts. For **build-time** values (`docker build --build-arg`, exposed to the

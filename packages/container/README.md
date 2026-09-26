@@ -127,7 +127,7 @@ export const worker = defineContainer({
 
 ### Secrets and Secrets Store
 
-`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`. A per-instance `start({ envVars })` replaces the env set wholesale (and skips Secrets Store resolution entirely), and is persisted for that instance: later starts, including implicit restarts, reuse it until `destroy()`. A differing `start({ envVars })` on a running container is rejected; `stop()` it first.
+`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`. A per-instance `start({ envVars })` replaces the env set wholesale (and skips Secrets Store resolution entirely), and is persisted for that instance: later starts, including implicit restarts, reuse it until `destroy()`. The override cannot change while the container is running or still starting: a differing `start({ envVars })` is rejected with `CONFLICT` in either case, so `stop()` it (and let any start in flight finish) first.
 
 ```ts
 export const worker = defineContainer({

@@ -85,9 +85,12 @@ const withoutSegmentParams = (segment: string): string => {
  * `;params` are dropped and case is folded counts — so a router mounted under a
  * prefix, or behind a proxy that decodes once more, is covered too.
  */
-const touchesReservedNamespace = (pathname: string): boolean =>
-    pathMatchesAnyDecoding(pathname, (path) =>
-        path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER), );
+const touchesReservedNamespace = (pathname: string): boolean => {
+    const hasReservedSegment = (path: string): boolean =>
+        path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER);
+
+    return pathMatchesAnyDecoding(pathname, hasReservedSegment);
+};
 
 /** The pathname a `containerFetch(requestOrUrl, …)` call targets, whichever overload was used. */
 const containerFetchPathname = (requestOrUrl: unknown): string => {

@@ -32,8 +32,10 @@ interface ContainerStartOptions {
      * container needs. It is persisted for the instance: every later start —
      * including the implicit restart a `fetch`/`exec` triggers after the
      * container slept, crashed or hit `hardTimeout` — uses it, until
-     * `destroy()`. A start whose `envVars` differ from those of the running
-     * container is rejected (`CONFLICT`); `stop()` it first. So
+     * `destroy()`. The override cannot change while the container is running
+     * or still starting: a start whose `envVars` differ is rejected with
+     * `CONFLICT` in either case, so `stop()` it (and let any start in flight
+     * finish) first. So
      * `start({ envVars: {} })` is a sandbox without the declared credentials,
      * for as long as the instance exists.
      */
