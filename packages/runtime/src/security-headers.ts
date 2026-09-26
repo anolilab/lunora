@@ -47,7 +47,12 @@ interface SecurityHeadersOptions {
 interface CorsOptions {
     /** Echo `Access-Control-Allow-Credentials: true`. Incompatible with a `*` allowlist. */
     allowCredentials?: boolean;
-    /** Request headers permitted on the actual request (preflight `Allow-Headers`). */
+
+    /**
+     * Extra request headers permitted on the actual request (preflight
+     * `Allow-Headers`). Always added to the headers `@lunora/client` sends on
+     * its own, which cannot be removed.
+     */
     allowedHeaders?: string[];
     /** Methods permitted cross-origin (preflight `Allow-Methods`). */
     allowedMethods?: string[];
@@ -323,7 +328,11 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
 
     return {
         allowCredentials,
-        allowedHeaders: input.allowedHeaders ?? DEFAULT_CORS_HEADERS,
+        // An app's list ADDS to the SDK's own headers rather than replacing
+        // them: each default is one `@lunora/client` sends unprompted, and a
+        // custom list written before one of them existed fails that request's
+        // preflight — which the client can only read as a network error.
+        allowedHeaders: [...new Set([...DEFAULT_CORS_HEADERS, ...(input.allowedHeaders ?? [])])],
         allowedMethods: input.allowedMethods ?? DEFAULT_CORS_METHODS,
         enabled: true,
         isAllowed,
