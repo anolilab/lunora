@@ -380,8 +380,14 @@ const maskAssignments = (text: string): string => {
 };
 
 /** Cheap pre-check: a string with none of these cannot hold anything the patterns mask. */
-const MAY_HOLD_CREDENTIAL =
-    /[:=@]|basic|bearer|digest|-u\b|--|eyJ|AKIA|ASIA|AIza|[rs]k_(?:live|test)_|sk-|whsec_|gh[oprsu]_|github_pat_|glpat-|xox|xapp-|npm_|hf_|shp|do[opr]_v1_|SG\./i;
+const MAY_HOLD_CREDENTIAL = /[:=@]|basic|bearer|digest|-u\b|--/i;
+
+/**
+ * Cheap pre-check for {@link SECRET_VALUE_SHAPES}: every prefix it matches. Kept
+ * apart from {@link MAY_HOLD_CREDENTIAL}, so a string that is only there for a
+ * `:` (a route, a URL, a timestamp) does not also pay for the vendor patterns.
+ */
+const MAY_HOLD_SECRET_VALUE = /eyJ|AKIA|ASIA|AIza|[rs]k_(?:live|test)_|sk-|whsec_|gh[oprsu]_|github_pat_|glpat-|xox|xapp-|npm_|hf_|shp|do[opr]_v1_|SG\./;
 
 interface Budget {
     remaining: number;
@@ -396,18 +402,18 @@ const maskString = (value: string, budget: Budget): string => {
 
     budget.remaining -= capped.length;
 
-    if (!MAY_HOLD_CREDENTIAL.test(capped)) {
+    const mayHoldSecretValue = MAY_HOLD_SECRET_VALUE.test(capped);
+
+    if (!mayHoldSecretValue && !MAY_HOLD_CREDENTIAL.test(capped)) {
         return capped;
     }
 
-    return maskAssignments(
-        capped
-            .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
-            .replaceAll(URL_IN_TEXT, stripUrl)
-            .replaceAll(TOKEN_SHAPES, `$1 ${REDACTED}`)
-            .replaceAll(SECRET_VALUE_SHAPES, REDACTED)
-            .replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`),
-    );
+    const masked = capped
+        .replaceAll(PEM_PRIVATE_KEY, `-----BEGIN $1-----${REDACTED}`)
+        .replaceAll(URL_IN_TEXT, stripUrl)
+        .replaceAll(TOKEN_SHAPES, `$1 ${REDACTED}`);
+
+    return maskAssignments((mayHoldSecretValue ? masked.replaceAll(SECRET_VALUE_SHAPES, REDACTED) : masked).replaceAll(CLI_CREDENTIAL, `$1$2$3${REDACTED}`));
 };
 
 /** Built-ins whose own enumerable properties are not what they carry, and which have no `toJSON` to say what they do. */
