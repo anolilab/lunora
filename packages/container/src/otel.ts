@@ -359,6 +359,11 @@ const encodeLogRecord = (log: ContainerLogInput, nowMs: number, parent: { parent
  * With no endpoint resolvable the returned exporter is disabled (`enabled ===
  * false`): `emitSpan`/`emitLog` no-op and `trace` still runs its work but records
  * nothing — so the same code runs unchanged locally and in the cloud.
+ *
+ * With a trace anchor (`traceparent`, the `request`'s header, or
+ * `LUNORA_TRACEPARENT`) every span hangs off it and every log is stamped with
+ * it. Without one each span starts its own trace — so in a long-running server,
+ * create the instance per request (`{ request }`), not once per process.
  * @param options Exporter options. Connection fields (`endpoint`, `token`,
  * `serviceName`, `traceparent`) always fall back to their `LUNORA_*` env var;
  * resource fields (`serviceVersion`, `deploymentEnvironment`) only do so under

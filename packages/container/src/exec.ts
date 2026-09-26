@@ -98,6 +98,70 @@ interface ContainerExecResult {
  */
 const CONTAINER_EXEC_PATH = "/__lunora/exec";
 
+/**
+ * In-worker routing mark `execViaFetch` stamps on its request. It never reaches
+ * the container Durable Object: the stub sender strips it and delivers a marked
+ * request through the DO's `lunoraExec` RPC instead of `fetch`, and every
+ * handle's `fetch` strips it from what the caller passed. The DO's HTTP entry
+ * points refuse `/__lunora/*` outright, so no header value — forged by a caller
+ * or forwarded from an inbound request — opens the exec route.
+ */
+const CONTAINER_EXEC_HEADER = "x-lunora-container-exec";
+
+/** Most percent-decoding rounds {@link pathMatchesAnyDecoding} applies before failing closed. */
+const MAX_PATH_DECODE_ROUNDS = 5;
+
+/**
+ * One decoding round. A malformed escape anywhere (`%ZZ`, a lone `%C3`) makes
+ * `decodeURIComponent` throw for the whole string, but a lenient router
+ * (Hono's `tryDecodeURI`, say) still decodes the valid escapes around it — so
+ * on failure each `%XX` is decoded on its own and the invalid ones are kept.
+ */
+const decodeOnce = (value: string): string => {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value.replaceAll(/%[\da-f]{2}/giu, (escape) => {
+            try {
+                return decodeURIComponent(escape);
+            } catch {
+                return escape;
+            }
+        });
+    }
+};
+
+/**
+ * Whether `pathname`, or any successive percent-decoding of it, satisfies
+ * `matches`.
+ *
+ * One round is what most routers apply, but a proxy that decodes before
+ * forwarding adds another, so `/%255F%255Flunora/exec` reaches a router as
+ * `/%5F%5Flunora/exec` and leaves it as `/__lunora/exec`. A guard that checks
+ * every form a chain of decoders could produce cannot be outrun by encoding
+ * the path one more time. A path still changing after
+ * {@link MAX_PATH_DECODE_ROUNDS} rounds counts as a match — fail closed.
+ */
+const pathMatchesAnyDecoding = (pathname: string, matches: (form: string) => boolean): boolean => {
+    let current = pathname;
+
+    for (let round = 0; round <= MAX_PATH_DECODE_ROUNDS; round += 1) {
+        if (matches(current)) {
+            return true;
+        }
+
+        const next = decodeOnce(current);
+
+        if (next === current) {
+            return false;
+        }
+
+        current = next;
+    }
+
+    return true;
+};
+
 /** How much of a failed exec response body is quoted back in the thrown error. */
 const EXEC_ERROR_BODY_LIMIT = 512;
 
@@ -210,7 +274,7 @@ const execViaFetch =
                     ...(options.env === undefined ? {} : { env: options.env }),
                     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
                 }),
-                headers: { "content-type": "application/json" },
+                headers: { "content-type": "application/json", [CONTAINER_EXEC_HEADER]: "1" },
                 method: "POST",
                 ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
             });
@@ -265,4 +329,4 @@ const execViaFetch =
     };
 
 export type { ContainerExecOptions, ContainerExecResult };
-export { CONTAINER_EXEC_PATH, execViaFetch };
+export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, execViaFetch, pathMatchesAnyDecoding };

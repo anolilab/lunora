@@ -34,6 +34,8 @@ const VIEWER: Caller = { claims: { role: "viewer", tenant: "zinc" }, userId: "us
 interface Observation {
     functionPath: string;
     identity: Record<string, unknown> | undefined;
+    /** What `buildCtx` would forward to an outbound container. */
+    traceparent: string | undefined;
     userId: string | undefined;
 }
 
@@ -57,7 +59,7 @@ class ScopeObservingShard extends ShardDO {
             await park;
         }
 
-        this.observed.push({ functionPath, identity: this.getCurrentIdentity(), userId: this.getCurrentUserId() });
+        this.observed.push({ functionPath, identity: this.getCurrentIdentity(), traceparent: this.getCurrentTraceparent(), userId: this.getCurrentUserId() });
 
         if (functionPath.endsWith(":boom")) {
             throw new Error("boom");
@@ -209,6 +211,52 @@ describe("shardDO per-request scope (caller claims)", () => {
             // Before the fix: the viewer's claims carried under the member's
             // userId — so RLS grants the member whatever role the viewer holds.
             expect(member?.identity).toStrictEqual(MEMBER.claims);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("forwards a gate-queued mutation's OWN trace to containers, not the one of whoever ran while it waited", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new ScopeObservingShard(makeSerializedState(database), {});
+
+            // None of these carries a traceparent, so each dispatch mints its own
+            // anchor — and that anchor is what goes to an outbound container.
+            const releaseAdmin = shard.park("messages:send");
+            const adminMutation = shard.fetch(rpcRequest("messages:send", "m-admin", ADMIN));
+
+            await tick();
+
+            const memberMutation = shard.fetch(rpcRequest("messages:update", "m-member", MEMBER));
+
+            await tick();
+
+            // The viewer's prologue overwrites the shared anchor while the
+            // member's mutation waits at the gate.
+            const releaseViewer = shard.park("messages:poll");
+            const viewerAction = shard.fetch(rpcRequest("messages:poll", "m-viewer", VIEWER));
+
+            await tick();
+
+            releaseAdmin();
+            await adminMutation;
+            await memberMutation;
+
+            releaseViewer();
+            await viewerAction;
+
+            const traceOf = (functionPath: string): string | undefined => shard.observed.find((entry) => entry.functionPath === functionPath)?.traceparent;
+
+            expect(traceOf("messages:update")).toMatch(/^00-[\da-f]{32}-[\da-f]{16}-01$/u);
+            // Before the fix: the member's container spans joined the viewer's trace.
+            expect(traceOf("messages:update")).not.toBe(traceOf("messages:poll"));
+            expect(new Set(shard.observed.map((entry) => entry.traceparent)).size).toBe(3);
         } finally {
             database.close();
         }
