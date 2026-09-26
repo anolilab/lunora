@@ -498,6 +498,7 @@ catalogs:
     # Meta-frameworks the `@lunora/astro` / `@lunora/nuxt` integrations build against.
     astro: 7.3.1
     "@nuxt/kit": ^4.5.2
+    diff: ^9.0.0
     html-to-image: ^1.11.13
     motion: ^13.2.0
     recharts: ^3.10.1

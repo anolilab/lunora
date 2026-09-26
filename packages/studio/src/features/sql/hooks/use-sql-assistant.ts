@@ -38,6 +38,18 @@ interface SqlAssistant {
     readonly pending: (task: AssistantTaskKey) => boolean;
     /** Why THAT task last produced nothing, cleared when it is retried. */
     readonly reason: (task: AssistantTaskKey) => GenerateSqlDegradedReason | undefined;
+
+    /**
+     * Rewrite an existing statement under an instruction ("add a limit and order
+     * by created_at"), returning the model's proposal for the operator to accept
+     * or reject.
+     *
+     * The same op as `generate` and the same read-only gate — a rewrite is
+     * a draft with a starting point, not a new trust boundary. Shares the `"sql"`
+     * task key, so the prompt bar and the inline editor cannot both be in flight
+     * with one spinner between them.
+     */
+    readonly rewrite: (instruction: string, sql: string) => Promise<string | undefined>;
     /** Translate a request into structured filter clauses for `table`. */
     readonly suggestFilter: (prompt: string, table: string) => Promise<FilterClause[] | undefined>;
     /** True once the app has reported it has no AI binding — hide every affordance. */
@@ -98,11 +110,12 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         }
     };
 
-    const generate = async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> => {
+    /** The one `aiGenerateSql` round-trip — draft, repair and rewrite differ only in what they send. */
+    const askForSql = async (args: { editSql?: string; failedError?: string; failedSql?: string; prompt: string }): Promise<string | undefined> => {
         begin("sql");
 
         try {
-            const { result } = (await client.query(AI_GENERATE_SQL, { failedError: failed?.error, failedSql: failed?.sql, prompt }, callOptions(shardKey))) as {
+            const { result } = (await client.query(AI_GENERATE_SQL, args, callOptions(shardKey))) as {
                 result: GenerateSqlResult;
             };
 
@@ -115,6 +128,11 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
             return undefined;
         }
     };
+
+    const generate = async (prompt: string, failed?: { error: string; sql: string }): Promise<string | undefined> =>
+        askForSql({ failedError: failed?.error, failedSql: failed?.sql, prompt });
+
+    const rewrite = async (instruction: string, sql: string): Promise<string | undefined> => askForSql({ editSql: sql, prompt: instruction });
 
     const suggestFilter = async (prompt: string, table: string): Promise<FilterClause[] | undefined> => {
         begin("filter");
@@ -152,7 +170,7 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
     const pending = (task: AssistantTaskKey): boolean => pendingByTask[task] === true;
     const reason = (task: AssistantTaskKey): GenerateSqlDegradedReason | undefined => reasonByTask[task];
 
-    return { generate, inferChart, pending, reason, suggestFilter, unavailable };
+    return { generate, inferChart, pending, reason, rewrite, suggestFilter, unavailable };
 };
 
 export { useSqlAssistant };
