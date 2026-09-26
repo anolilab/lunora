@@ -135,8 +135,10 @@ is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS`) re-queue; a reply with no envelope re-queues,
 except a `413`, which splits a batch and settles a lone write
 `PAYLOAD_TOO_LARGE`. A refused credential (`UNAUTHORIZED`, `TOKEN_EXPIRED`,
-`UNAUTHENTICATED`) HOLDS the write — queued and persisted, not settled — until
-the next flush after you set a fresh token. An envelope whose `data` does not
+`UNAUTHENTICATED`) HOLDS the write — queued and persisted, not settled — and
+setting a fresh token replays it: a token or subject change re-flushes every
+connected shard with writes queued, as the reference's `setAuthToken` does,
+because a socket that stays up never reconnects to flush them. An envelope whose `data` does not
 decode is still that coded error, with the `data` dropped. A write the server
 committed whose result does not decode is still committed: its overlay confirms,
 and it settles with `WIRE_DECODE_FAILED` (the same code a direct call throws)
@@ -182,7 +184,30 @@ Each follows from what this transport is rather than from taste, and
 It is persisted with every queued write and re-checked before that write replays,
 so a restart cannot push one user's queued writes as another. Leave it unset to
 fall back to a digest of `authToken`; a null token then means signed out, which
-is a real identity rather than "unstamped".
+is a real identity rather than "unstamped". Without a subject, a new token is a
+new identity, so a refresh rejects the queued writes `OFFLINE_IDENTITY_CHANGED`,
+as the reference client does; a subject is what keeps them.
+
+A subject names the holder of a TOKEN, so set it again whenever the token
+changes:
+
+```dart
+client
+  ..authToken = refreshed
+  ..authSubject = userId; // the same id for a refresh, the new user's for a switch
+```
+
+Until it is, the new token may be the same user's or someone else's, and queued
+writes are HELD — not sent, not dropped. The same subject then replays them
+under the new token; a different one rejects them unsent. A write queued under a
+token before any subject was set replays once a subject names that same token.
+Nobody signed in (no subject, no token) holds a stamped write as well, rather
+than rejecting it.
+
+**Behaviour change.** A token set with a subject in place used to keep the queue
+replaying under that subject straight away. Setting `authToken` alone now holds
+it until `authSubject` is set again, since a token alone cannot say whether it
+is a refresh or another user's sign-in.
 
 ## Wire types
 
