@@ -1,3 +1,129 @@
+## @lunora/codegen [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.220...@lunora/codegen@1.0.0-alpha.221) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an app declaring `.jurisdiction(...)` with voice agents or DO-backed auth now
+resolves those objects inside the jurisdiction. The same name maps to a different object per
+jurisdiction, so existing voice sessions and DO-backed auth data stay in the unrestricted
+objects and are not carried over.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): refuse pinning auth and voice until the move is acknowledged
+
+The previous commit pins voice sessions and DO-backed auth to the schema's
+jurisdiction. For an app that already declared `.jurisdiction()`, that
+pinning is a region move: a Durable Object name maps to a different id per
+jurisdiction, so every user, account, session and credential, and every
+voice transcript, resolves to a new, empty object. The upgrade changes
+nothing in the schema, so the drift gate never fired and the first deploy
+would silently lock every user out.
+
+- `.jurisdiction(j, { pinAuthAndVoice: true })` is the explicit
+  acknowledgement. Codegen reads it off the schema chain.
+- Without it, codegen refuses a project that has a voice-enabled agent or an
+  `.auth({ namespace })` call (DO-backed auth), with a diagnostic located at
+  the `.auth()` call when there is one. An `.auth(...)` whose options it
+  cannot read counts as DO-backed: the acknowledgement is a no-op for
+  D1-mode auth, while a miss would start the auth object out empty.
+- The generated worker pins DO-backed auth only when acknowledged; before
+  that it stays on the un-pinned object, where its data is.
+- The data-residency docs gain "Pinning auth and voice": what moves, that
+  `lunora export` does not read the auth object, and how to move its rows by
+  hand from the still-reachable un-pinned object. No copy path ships: the
+  auth tables are better-auth's own and a generic copier is not cheap to
+  get right; voice transcripts left in the old objects are stranded.
+
+Tests (fail without the change): runCodegen refuses voice, then DO-backed
+auth located at src/index.ts, and accepts both once acknowledged; the
+generated DO-auth wiring is not pinned until acknowledged. Plus the
+acknowledgement parse and the `.auth()` detection (quoted `namespace`,
+spread, non-literal options, D1 mode).
+* **runtime:** a project declaring `.jurisdiction(...)` together with a
+voice-enabled agent or DO-backed auth fails codegen until the schema says
+`.jurisdiction("…", { pinAuthAndVoice: true })`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(errors): register the JURISDICTION_MOVE codegen error code
+
+The codegen check that refuses an unacknowledged move of voice sessions
+and DO-backed auth into a jurisdiction mints `JURISDICTION_MOVE`, which was
+not an `ERROR_CATALOG` key, so the repo-wide catalog-registration test
+failed. Registered as 422 "Unacknowledged jurisdiction move"; build-time
+only, never on the RPC wire, so not `internal`. Also Prettier-formats the
+jurisdiction-move test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(errors): add JURISDICTION_MOVE to the error reference
+
+Registering `JURISDICTION_MOVE` left the generated error reference
+(`apps/docs/src/content/docs/errors.mdx`) one code short, which failed
+`Lint (generated files)` and both `error-reference.test.ts` checks.
+
+The catalog entry gains a hint: what triggers the error (a jurisdiction
+plus voice or DO-backed auth), that pinning starts those objects empty,
+and the `{ pinAuthAndVoice: true }` acknowledgement, linking the
+data-residency section. The page is regenerated from it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): close two ways around the jurisdiction-move check
+
+The check that refuses to pin voice sessions / DO-backed auth without
+`{ pinAuthAndVoice: true }` could be skipped twice over:
+
+- A computed key: `.auth({ ["namespace"]: … })` read as not naming
+  `namespace`. A string-literal computed key now resolves to its value, and
+  any other computed key (`[key]`) counts as possibly `namespace` — the same
+  fail-closed call a spread already gets.
+- `lunora.config.*`: `@lunora/vite` imports the root config into the worker
+  and runs its `app` hook over the `defineApp()` builder, so an
+  `.auth({ namespace })` there wires the deployed worker, but the security
+  scan only covered `lunora/`, `src/server/**`, `src/index.ts` and
+  `src/worker.ts`. `listSecurityScanFiles` now adds the project config file.
+
+That scan also feeds the auth-config lints, the config-call and export-sink
+lints, and the worker-entry cron discovery; each looks for calls that the
+`app` hook can make just as well as the entry can (`.auth()`, `.extend()`,
+the worker-entry factories), so the wider file set is right for them too.
+
+The config filename list and `findProjectConfigFile` move to a leaf module,
+`project-config-path.ts`, so discovery can use them without importing
+`project-config-file` (which imports discovery helpers);
+`project-config-file` re-exports both.
+
+Tests (fail without the change): a computed `["namespace"]` key and a
+computed `[key]` are found while `["d1"]` is not; auth declared only in the
+root `lunora.config.ts` is found.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **runtime:** pin voice-session and DO-backed auth objects to the jurisdiction ([#834](https://github.com/anolilab/lunora/issues/834)) ([abc781f](https://github.com/anolilab/lunora/commit/abc781f7c9cb9071a511e7e9f77905d088184d5f))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.160
+* **@lunora/agent:** upgraded to 1.0.0-alpha.141
+* **@lunora/container:** upgraded to 1.0.0-alpha.58
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/queue:** upgraded to 1.0.0-alpha.70
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.88
+* **@lunora/values:** upgraded to 1.0.0-alpha.53
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.64
+* **@lunora/do:** upgraded to 1.0.0-alpha.168
+* **@lunora/server:** upgraded to 1.0.0-alpha.149
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.88
+
 ## @lunora/codegen [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.219...@lunora/codegen@1.0.0-alpha.220) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES
