@@ -54,5 +54,44 @@
         { "name": "error-is-null", "status": 502, "response": { "error": null }, "code": "INTERNAL" },
         { "name": "error-is-an-array", "status": 502, "response": { "error": ["bad gateway"] }, "code": "INTERNAL" },
         { "name": "error-is-a-number", "status": 500, "response": { "error": 7 }, "code": "INTERNAL" }
-    ]
+    ],
+    "unreadableSuccessBody": [
+        {
+            "name": "null-body",
+            "status": 200,
+            "rawBody": "null",
+            "code": "INTERNAL"
+        },
+        {
+            "name": "array-body",
+            "status": 200,
+            "rawBody": "[]",
+            "code": "INTERNAL"
+        },
+        {
+            "name": "string-body",
+            "status": 200,
+            "rawBody": "\"ok\"",
+            "code": "INTERNAL"
+        },
+        {
+            "name": "number-body",
+            "status": 200,
+            "rawBody": "7",
+            "code": "INTERNAL"
+        },
+        {
+            "name": "html-body",
+            "status": 200,
+            "rawBody": "<html><body>ok</body></html>",
+            "code": "INTERNAL"
+        },
+        {
+            "name": "html-502",
+            "status": 502,
+            "rawBody": "<html><body>502 Bad Gateway</body></html>",
+            "code": "INTERNAL"
+        }
+    ],
+    "$commentUnreadableSuccessBody": "`unreadableSuccessBody` cases are responses the RPC call cannot read a result OR an error envelope out of: a body that is not JSON, or JSON that is not an object. Each must fail with the SDK's OWN error type carrying `code` — never a language exception (a null dereference, a cast failure, a JSON parse error) escaping past every handler the caller wrote for this SDK's errors. `rawBody` is the literal response body. An empty object `{}` is NOT one of these: it is how a function returning nothing is answered, and decodes to the port's null/undefined result."
 }

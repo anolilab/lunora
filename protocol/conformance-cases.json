@@ -35,6 +35,14 @@
         "every client keeps chunking at the old one, taking the coded 400 that",
         "README 4.3 defines as terminal — durable writes discarded, not retried.",
         "",
+        "The ten names after it pin behaviour eight ports each got some of wrong on",
+        "their own: one replay-failure predicate for the single-call and batch paths,",
+        "a 413 split whatever the reply's shape, a committed-but-undecodable result",
+        "settled rather than retried or lost, a poke applied whole or not at all, a",
+        "frame handler that cannot be made to raise, an RPC that fails with the SDK's",
+        "own error type, streams that end on close, a session evicted on an identity",
+        "change, and a bearer token that never reaches a printed value.",
+        "",
         "A name here is required of EVERY port, so it may only assert behaviour",
         "every port has. Where one legitimately differs the difference belongs in",
         "the capability matrix, not here."
@@ -81,6 +89,16 @@
         "optimistic_cursorless_frame_preserves_cursor",
         "offline_queue_hydrate_overflow_settles_discarded",
         "offline_flush_unencodable_write_settles_terminal",
-        "batch_entry_cap_matches_protocol"
+        "batch_entry_cap_matches_protocol",
+        "offline_flush_empty_shard_key_routes_to_default",
+        "offline_flush_undecodable_result_settles_committed",
+        "offline_flush_classifies_single_and_batch_alike",
+        "offline_flush_batch_splits_on_envelopeless_413",
+        "shape_poke_with_undecodable_row_is_refused_whole",
+        "malformed_frames_are_ignored_without_raising",
+        "rpc_unreadable_success_body_raises_sdk_error",
+        "subscription_stream_ends_on_close",
+        "identity_change_evicts_previous_session",
+        "auth_token_redacted_when_printed"
     ]
 }
