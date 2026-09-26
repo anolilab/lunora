@@ -426,6 +426,17 @@ Object? decodeWire(Object? value, [int depth = 0]) {
     return result;
   }
 
+  // A number off the wire is a float64 whatever its spelling, and
+  // `JSON.stringify` writes every double in [2^53, 1e21) as an INTEGER literal,
+  // which `jsonDecode` types as an `int`. Left an `int`, it was refused on the
+  // way back out by [_encodeInt]'s range guard — so a server frame carrying
+  // 1700000000000000000 could be neither re-encoded nor keyed. It is the
+  // nearest double, which is what `JSON.parse` reads (9007199254740993 is
+  // 9007199254740992). An `int` a caller constructs is still refused on encode.
+  if (value is int && (value > wireMaxExactInteger || value < -wireMaxExactInteger)) {
+    return value.toDouble();
+  }
+
   return value;
 }
 

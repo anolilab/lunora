@@ -35,32 +35,18 @@ final class ConformanceTests: XCTestCase {
         throw FixturesUnreachable()
     }
 
+    /// Loaded through the TRANSPORT's reader, not `JSONSerialization`: a case
+    /// like `number-decode-correctly-rounded` otherwise tests the harness's
+    /// parser rather than the one the port reads frames and bodies with.
     func fixture(_ name: String) throws -> [String: Any] {
         let url = try fixturesDirectory().appendingPathComponent(name)
         let data = try Data(contentsOf: url)
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try XCTUnwrap(LunoraJSON.parse(data) as? [String: Any])
     }
 
     /// Re-serialises so two structures compare as text with a canonical key
     /// order, independent of the order the fixture file happens to use.
     func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
-
-    /// Renders a value the way `Client.swift` puts it on the socket, with
-    /// `JSONSerialization`. Separate from `canonical`, which is free to
-    /// normalise: `stableStringify` spells every number the ECMAScript way, so
-    /// `1.0` and `1` compare EQUAL through it — the divergence a round-trip case
-    /// exists to catch. Dart's dates went out as `1700000000000.0` for exactly
-    /// that reason, on a green suite. Keys are sorted because a Swift dictionary
-    /// carries no order of its own; both sides go through the same writer, so
-    /// only the SPELLING of a value can differ.
-    func wireText(_ value: Any?) throws -> String {
-        let data = try JSONSerialization.data(
-            withJSONObject: value ?? NSNull(),
-            options: [.fragmentsAllowed, .sortedKeys]
-        )
-
-        return try XCTUnwrap(String(data: data, encoding: .utf8))
-    }
 
     // MARK: - Manifest coverage
 
@@ -75,7 +61,7 @@ final class ConformanceTests: XCTestCase {
     /// cannot be silently detached from its manifest name.
     func testConformanceManifestIsCovered() throws {
         let url = try fixturesDirectory().deletingLastPathComponent().appendingPathComponent("conformance-cases.json")
-        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let manifest = try XCTUnwrap(LunoraJSON.parse(try Data(contentsOf: url)) as? [String: Any])
         let required = try XCTUnwrap(manifest["required"] as? [String])
 
         XCTAssertFalse(required.isEmpty, "the manifest must list at least one required case")
@@ -147,11 +133,9 @@ final class ConformanceTests: XCTestCase {
             // [tag] array is escaped on the way out, an `undefined` object field
             // is dropped — and carry the expected re-encoding.
             let expected = testCase["reencoded"] ?? encoded
+            // `canonical` IS the transport's body writer (`Client.swift` posts
+            // `Wire.stableStringify`), so this compares the bytes it sends.
             XCTAssertEqual(canonical(roundTripped), canonical(expected), "round-trip mismatch for \(name)")
-            // And again as the BYTES the transport sends: a round-trip
-            // assertion measured on a string the transport never sends cannot
-            // see the divergence it exists to catch.
-            XCTAssertEqual(try wireText(roundTripped), try wireText(expected), "wire-text mismatch for \(name)")
         }
     }
 
@@ -302,6 +286,50 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(Wire.jsonString("a<b>&c"), "\"a<b>&c\"")
         XCTAssertEqual(Wire.jsonString("\u{2028}\u{2029}"), "\"\u{2028}\u{2029}\"")
         XCTAssertEqual(Wire.jsonString("tab\there"), "\"tab\\there\"")
+
+        // A LONE surrogate is written `\udXXX`, lowercase, as JSON.stringify
+        // writes it; a well-formed pair is written raw. The truncated emoji is
+        // the realistic source: a bridged NSString keeps the unit even though
+        // Swift's own views repair it to U+FFFD.
+        let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
+        XCTAssertEqual(Wire.jsonString(truncated), #""\ud83d""#)
+        XCTAssertEqual(Wire.jsonString("\u{1F600}"), "\"\u{1F600}\"")
+        // And the reader keeps one it is sent, so a relayed value round-trips.
+        XCTAssertEqual(Wire.jsonString((try? LunoraJSON.parse(#""a\uD800b""#)) as? String ?? ""), #""a\ud800b""#)
+    }
+
+    /// A write carrying a lone surrogate reaches the wire the way JSON.stringify
+    /// writes it, alone and queued.
+    ///
+    /// `JSONSerialization` refused the string ("failed to convert to UTF8"), the
+    /// direct call threw a raw `NSError`, and the offline flush classified that
+    /// as transport — so the write, and every write queued behind it, was
+    /// re-queued on every flush, forever.
+    func testALoneSurrogateReachesTheWire() throws {
+        let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
+        var bodies: [String] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                bodies.append(String(decoding: body, as: UTF8.self))
+
+                return (200, echoBatchSlots(body, result: "\"ok\""))
+            }
+        )
+
+        client.attachSocket { _ in }
+        _ = try client.mutation("messages:send", args: ["text": truncated])
+
+        XCTAssertEqual(bodies, [#"{"args":{"text":"\ud83d"},"functionPath":"messages:send"}"#])
+
+        client.detachSocket()
+        try client.submit(LunoraSubmitOptions(functionPath: "messages:send", args: ["text": truncated], mutationID: "poison"))
+        try client.submit(LunoraSubmitOptions(functionPath: "messages:send", args: ["text": "fine"], mutationID: "innocent"))
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ["poison", "innocent"], "nothing is parked behind the surrogate")
+        XCTAssertEqual(client.pendingMutationCount, 0)
     }
 
     // MARK: - RPC

@@ -121,6 +121,10 @@ rather than being flattened into a `Map<String, Any?>`:
 `Undefined`, `NaN` and the infinities are their own objects, distinct from
 `Null`.
 
+Strings are written exactly as `JSON.stringify` writes them, including a lone
+UTF-16 surrogate, which goes out as a lowercase `\udXXX` escape rather than the
+`?` a UTF-8 encoder would substitute — on the wire and in the stable key alike.
+
 ### One thing to know about generated models
 
 The Kotlin models are **not** rendered by quicktype, unlike most targets:

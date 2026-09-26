@@ -339,6 +339,17 @@ private fun stringEscapingMatchesJsonStringify() {
     check(Key.jsonString("a<b>&c") == "\"a<b>&c\"", "angle brackets and ampersand stay raw")
     check(Key.jsonString("  ") == "\"  \"", "line separators stay raw")
     check(Key.jsonString("tab\there") == "\"tab\\there\"", "control characters are escaped")
+
+    // A lone surrogate is escaped the way JSON.stringify writes it — in the wire
+    // BYTES and in the key — rather than reaching the UTF-8 encoder, which
+    // substitutes `?`. A well-formed pair stays raw.
+    val lone = WireValue.Obj(listOf("s" to WireValue.Text("a\uD800b"), "t" to WireValue.Text("\uDC00"), "u" to WireValue.Text("x\uD83D")))
+    val wireBytes = String(Json.write(Wire.encode(lone)).toByteArray(Charsets.UTF_8), Charsets.UTF_8)
+
+    check(wireBytes == "{\"s\":\"a\\ud800b\",\"t\":\"\\udc00\",\"u\":\"x\\ud83d\"}", "lone surrogates on the wire: $wireBytes")
+    check(Key.stableWireKey(lone) == wireBytes, "and in the stable key: ${Key.stableWireKey(lone)}")
+    check(Key.stableWireKey(WireValue.Text("a\uD800b")) != Key.stableWireKey(WireValue.Text("a?b")), "a lone surrogate does not key as '?'")
+    check(Key.jsonString("a\uD83D\uDE00b") == "\"a\uD83D\uDE00b\"", "a well-formed pair is written as-is")
 }
 
 private fun rpcRequestBodies() {

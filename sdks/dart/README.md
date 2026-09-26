@@ -158,6 +158,12 @@ plain values map to JSON directly:
 
 `decodeWire` returns these same wrappers so values round-trip exactly.
 
+A number off the wire is a float64, whatever its spelling: `JSON.stringify`
+writes a double in [2^53, 1e21) as an integer literal, which `jsonDecode` types
+as an `int`, so `decodeWire` turns an `int` past ±(2^53−1) into the `double`
+`JSON.parse` would have read. An `int` you construct past that range is still
+refused by `encodeWire` — wrap it in a `BigInt`.
+
 ### Two things to know about generated models
 
 Dart's quicktype output needed two repairs, both pinned in

@@ -126,6 +126,10 @@ explicitly; plain values map to JSON directly:
 
 `Wire.decode` returns these same records so values round-trip exactly.
 
+Strings are written exactly as `JSON.stringify` writes them, on the wire and in
+the stable key alike: a lone UTF-16 surrogate goes out as a lowercase `\udXXX`
+escape, never the `?` the JDK's UTF-8 encoder would substitute for it.
+
 ### One thing to know about generated models
 
 The Java models are **not** rendered by quicktype, unlike most targets:

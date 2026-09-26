@@ -10,6 +10,9 @@ extension Wire {
     /// only in key insertion order collapse to one key — which is the point:
     /// this de-duplicates subscriptions, and it is compared verbatim against a
     /// key produced by the reference TypeScript client.
+    ///
+    /// It is also the transport's JSON WRITER for RPC and batch bodies: it cannot
+    /// fail, and it spells numbers and strings exactly as `JSON.stringify` does.
     public static func stableStringify(_ value: Any?) -> String {
         switch value {
         case nil, is NSNull: return "null"
@@ -48,8 +51,8 @@ extension Wire {
     }
 
     private static func lessUTF16(_ a: String, _ b: String) -> Bool {
-        var left = a.utf16.makeIterator()
-        var right = b.utf16.makeIterator()
+        var left = utf16Units(a).makeIterator()
+        var right = utf16Units(b).makeIterator()
         while true {
             switch (left.next(), right.next()) {
             case (let l?, let r?):
@@ -72,107 +75,99 @@ extension Wire {
     }
 
     /// Renders a double exactly as `String(v)` does in JavaScript, which is what
-    /// `JSON.stringify` emits for a finite number.
+    /// `JSON.stringify` emits for a finite number (ECMA-262 Number::toString).
     ///
-    /// Swift's default description writes "1e-05" and always keeps a ".0" on
-    /// integral values; ECMAScript writes "0.00001", drops the decimal, stays
-    /// positional up to 1e21, switches below 1e-7, and never pads the exponent.
-    /// A key is compared verbatim, so the spellings must match.
+    /// Swift's `description` already finds the SHORTEST digit string that reads
+    /// back as the same double; only its layout differs ("1e-05", "1.0",
+    /// "1e+16"). So the digits `d1…dk` and the exponent `n` (value = 0.d1…dk ×
+    /// 10^n) are taken from it and laid out the ECMAScript way. A fixed-precision
+    /// search spelled three adjacent doubles near -6e-6 identically, so a
+    /// subscription keyed on one received another's frames.
     static func formatDouble(_ value: Double) -> String {
         if value.isNaN || value.isInfinite { return "null" }
-        if value == value.rounded(.towardZero), abs(value) < 1e21 {
-            return integral(value)
-        }
+        if value == 0 { return value.sign == .minus ? "-0" : "0" }
 
-        let magnitude = abs(value)
-        if magnitude >= 1e-6, magnitude < 1e21 { return positional(value) }
-        return exponential(value)
-    }
-
-    /// Positional spelling of an integral double, ECMAScript-style: the
-    /// SHORTEST digit string that reads back as the same double, zero-padded out
-    /// to the decimal point. `String(2**60)` is "1152921504606847000", not the
-    /// exact expansion "1152921504606846976" that `%.0f` prints.
-    private static func integral(_ value: Double) -> String {
-        for precision in 0...17 {
-            let candidate = String(format: "%.\(precision)e", value)
-            guard Double(candidate) == value else { continue }
-
-            let parts = candidate.split(separator: "e", maxSplits: 1)
-
-            guard parts.count == 2, let exponent = Int(parts[1]) else { break }
-
-            let sign = parts[0].hasPrefix("-") ? "-" : ""
-            let digits = parts[0].filter { $0.isNumber }
-
-            return sign + digits.padding(toLength: max(exponent + 1, digits.count), withPad: "0", startingAt: 0)
-        }
-
-        return String(format: "%.0f", value)
-    }
-
-    /// Positional rendering at the shortest precision that still parses back to
-    /// the same double — ECMAScript's "shortest round-trip" rule.
-    private static func positional(_ value: Double) -> String {
-        for precision in 0...20 {
-            let candidate = String(format: "%.\(precision)f", value)
-            if Double(candidate) == value { return trimTrailingZeros(candidate) }
-        }
-        return trimTrailingZeros(String(format: "%.20f", value))
-    }
-
-    private static func exponential(_ value: Double) -> String {
-        for precision in 0...17 {
-            let candidate = String(format: "%.\(precision)e", value)
-            if Double(candidate) == value { return normaliseExponent(candidate) }
-        }
-        return normaliseExponent(String(format: "%.17e", value))
-    }
-
-    /// "1.000000e-07" -> "1e-7": drop trailing mantissa zeros and the exponent's
-    /// zero padding, neither of which ECMAScript emits.
-    private static func normaliseExponent(_ text: String) -> String {
+        let sign = value < 0 ? "-" : ""
+        let text = abs(value).description
         let parts = text.split(separator: "e", maxSplits: 1)
-        guard parts.count == 2 else { return text }
+        let mantissa = parts[0].split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let whole = String(mantissa[0])
+        var digits = whole + (mantissa.count > 1 ? String(mantissa[1]) : "")
+        var n = whole.count + (parts.count > 1 ? Int(parts[1]) ?? 0 : 0)
 
-        let mantissa = trimTrailingZeros(String(parts[0]))
-        var exponent = String(parts[1])
-        let sign = exponent.hasPrefix("-") ? "-" : "+"
-        if exponent.hasPrefix("-") || exponent.hasPrefix("+") { exponent.removeFirst() }
-        while exponent.count > 1, exponent.hasPrefix("0") { exponent.removeFirst() }
-        return "\(mantissa)e\(sign)\(exponent)"
+        while digits.hasPrefix("0") {
+            digits.removeFirst()
+            n -= 1
+        }
+
+        while digits.hasSuffix("0") { digits.removeLast() }
+
+        let k = digits.count
+
+        if k <= n, n <= 21 { return sign + digits + String(repeating: "0", count: n - k) }
+        if 0 < n, n <= 21 { return sign + digits.prefix(n) + "." + digits.dropFirst(n) }
+        if -6 < n, n <= 0 { return sign + "0." + String(repeating: "0", count: -n) + digits }
+
+        let exponent = n - 1
+        let fraction = k > 1 ? "." + digits.dropFirst() : ""
+
+        return sign + digits.prefix(1) + fraction + "e" + (exponent >= 0 ? "+" : "-") + String(abs(exponent))
     }
 
-    private static func trimTrailingZeros(_ text: String) -> String {
-        guard text.contains(".") else { return text }
-        var trimmed = text
-        while trimmed.hasSuffix("0") { trimmed.removeLast() }
-        if trimmed.hasSuffix(".") { trimmed.removeLast() }
-        return trimmed
+    /// A string's UTF-16 code units as its backing `NSString` holds them.
+    ///
+    /// Not `value.utf16`: a Swift view repairs a lone surrogate to U+FFFD, while
+    /// the bridged `NSString` a truncation like `(s as NSString).substring(to:)`
+    /// returns still holds it — and that unit is what `JSON.stringify` writes and
+    /// what JavaScript sorts by.
+    static func utf16Units(_ value: String) -> [UInt16] {
+        let string = value as NSString
+        var units = [UInt16](repeating: 0, count: string.length)
+
+        string.getCharacters(&units, range: NSRange(location: 0, length: string.length))
+
+        return units
     }
 
-    /// Quotes a string the way `JSON.stringify` does. Foundation escapes the
-    /// same set and leaves `<`, `>`, `&`, U+2028 and U+2029 raw, so no
-    /// adjustment is needed here — unlike the Go port.
+    /// Quotes a string the way `JSON.stringify` does: `"`, `\\`, the control
+    /// characters, and a LONE surrogate as `\udXXX` (lowercase hex). `<`, `>`,
+    /// `&`, U+2028 and U+2029 stay raw.
+    ///
+    /// This is also the transport's string writer, so it must never fail: a lone
+    /// surrogate made `JSONSerialization` throw, and the offline queue re-queued
+    /// that write — and every one behind it — on every flush, forever.
     static func jsonString(_ value: String) -> String {
+        let units = utf16Units(value)
         var quoted = "\""
-        for scalar in value.unicodeScalars {
-            switch scalar {
-            case "\"": quoted += "\\\""
-            case "\\": quoted += "\\\\"
-            case "\n": quoted += "\\n"
-            case "\r": quoted += "\\r"
-            case "\t": quoted += "\\t"
-            case "\u{08}": quoted += "\\b"
-            case "\u{0C}": quoted += "\\f"
+        var index = 0
+
+        while index < units.count {
+            let unit = units[index]
+            index += 1
+
+            switch unit {
+            case 0x22: quoted += "\\\""
+            case 0x5C: quoted += "\\\\"
+            case 0x0A: quoted += "\\n"
+            case 0x0D: quoted += "\\r"
+            case 0x09: quoted += "\\t"
+            case 0x08: quoted += "\\b"
+            case 0x0C: quoted += "\\f"
+            case 0xD800...0xDBFF where index < units.count && (0xDC00...0xDFFF).contains(units[index]):
+                let low = units[index]
+                index += 1
+                quoted.unicodeScalars.append(Unicode.Scalar(0x10000 + (UInt32(unit - 0xD800) << 10) + UInt32(low - 0xDC00))!)
+            case 0xD800...0xDFFF:
+                quoted += String(format: "\\u%04x", unit)
             default:
-                if scalar.value < 0x20 {
-                    quoted += String(format: "\\u%04x", scalar.value)
+                if unit < 0x20 {
+                    quoted += String(format: "\\u%04x", unit)
                 } else {
-                    quoted.unicodeScalars.append(scalar)
+                    quoted.unicodeScalars.append(Unicode.Scalar(unit)!)
                 }
             }
         }
+
         return quoted + "\""
     }
 }

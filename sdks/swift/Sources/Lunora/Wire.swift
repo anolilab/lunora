@@ -175,6 +175,7 @@ public enum WireFormatError: Error, CustomStringConvertible {
     case unsupported(String)
     case malformed(String)
     case outOfExactRange(String)
+    case invalidJSON(Int)
 
     public var description: String {
         switch self {
@@ -188,6 +189,8 @@ public enum WireFormatError: Error, CustomStringConvertible {
             return "wire-codec: malformed \(tag) tag"
         case .outOfExactRange(let value):
             return "wire-codec: integer \(value) exceeds the exact Double range — wrap it in WireBigInt so it crosses the wire as a bigint tag"
+        case .invalidJSON(let offset):
+            return "wire-codec: invalid JSON at byte \(offset)"
         }
     }
 }
@@ -306,6 +309,19 @@ extension Wire {
             var result: [String: Any] = [:]
             for (key, item) in dictionary { result[key] = try decode(item, depth: depth + 1) }
             return result
+        }
+
+        // A number off the wire is a float64 whatever its spelling, and
+        // `JSON.stringify` writes every double in [2^53, 1e21) as an integer
+        // literal. A reader that types it as an integer handed ``encode`` a value
+        // it must refuse, so a frame carrying one could not be re-encoded or
+        // keyed. Yield the double `JSON.parse` does (9007199254740993 reads as
+        // 9007199254740992). A NATIVE integer that large is still refused by
+        // ``encode`` — only the decode side is a float64.
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), isIntegral(number),
+            abs(number.doubleValue) > maxExactInteger
+        {
+            return NSNumber(value: number.doubleValue)
         }
 
         return value ?? NSNull()

@@ -171,6 +171,15 @@ guaranteeing `encode(decode(x)) == x` (the conformance contract, modulo the two
 shapes in §2.3 that are not fixed points of it). Plain ints/floats/dicts/lists
 map to JSON numbers/objects/arrays.
 
+A JSON number off the wire is a float64 whatever its spelling. `JSON.stringify`
+writes every double in `[2^53, 1e21)` as an INTEGER literal, so a port whose
+JSON parser types integer literals as native integers must decode one outside
+`±(2^53 − 1)` to the nearest double, as `JSON.parse` does
+(`9007199254740993` → `9007199254740992`). Refusing it — the range guard below
+applies to integers the caller CONSTRUCTS — made a server value impossible to
+re-encode or key. `number-integer-literal-past-exact-range` in
+`fixtures/stable-wire-key.json` pins it.
+
 Golden cases: [`fixtures/wire-codec.json`](./fixtures/wire-codec.json).
 
 ### 2.3 Conformance fixture schema (`reencoded`, `rejected[]`)
@@ -228,6 +237,19 @@ whose value model narrows an integral float to an integer drops the sign before
 the key is spelled and must keep it here; `negative-zero` in the fixture below
 is what catches that. (Every other spelling divergence — `1e+21`, `1e-7`,
 non-finite tokens — is `String(v)`'s, which the key follows exactly.)
+
+`String(v)` spells the SHORTEST digit string that reads back as the same double
+(ECMA-262 Number::toString), laid out positionally for exponents in `[-6, 21)`.
+A port must take those digits from a shortest-round-trip formatter (Python
+`repr`, Ruby `Float#to_s`, Dart `double.toString`, Swift `description`, the JDK's
+`Double.toString` from JDK 19) and reposition the point itself — never print a
+fixed number of places and trim: 20 places spelled three adjacent doubles near
+`-6.07e-6` identically, so one subscription received another's frames and
+optimistic overlays. The key also spells the DECODED double, so a JSON parser
+that is not correctly rounded (Darwin's `JSONSerialization`, `serde_json`
+without `float_roundtrip`) splits it just the same. `number-adjacent-double-*`,
+`number-positional-shortest-digits` and `number-decode-correctly-rounded` below
+pin all three.
 
 Code-unit order, not code-point order: the reference implementation is
 `Object.keys(record).sort()`, whose default comparator compares UTF-16 code

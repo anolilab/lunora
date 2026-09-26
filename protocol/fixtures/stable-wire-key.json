@@ -28,7 +28,40 @@
             "key": "{\"a\":-0,\"b\":0}"
         },
         { "name": "nested-empty-containers", "args": { "a": {}, "b": [] }, "key": "{\"a\":{},\"b\":[]}" },
-        { "name": "number-exponent-forms", "args": { "a": 1e21, "b": 1e-7, "c": 1.5, "d": -2 }, "key": "{\"a\":1e+21,\"b\":1e-7,\"c\":1.5,\"d\":-2}" }
+        { "name": "number-exponent-forms", "args": { "a": 1e21, "b": 1e-7, "c": 1.5, "d": -2 }, "key": "{\"a\":1e+21,\"b\":1e-7,\"c\":1.5,\"d\":-2}" },
+        {
+            "$comment": "Three ADJACENT doubles (one ulp apart). Each keys distinctly, exactly as String(v) spells it. A port that capped positional output at a fixed number of places spelled all three `-0.00000607387560669604`, so a subscription for one received the frames and optimistic overlays of another.",
+            "name": "number-adjacent-double-a",
+            "args": { "x": -0.000006073875606696037 },
+            "key": "{\"x\":-0.000006073875606696037}"
+        },
+        { "name": "number-adjacent-double-b", "args": { "x": -0.000006073875606696036 }, "key": "{\"x\":-0.000006073875606696036}" },
+        { "name": "number-adjacent-double-c", "args": { "x": -0.000006073875606696035 }, "key": "{\"x\":-0.000006073875606696035}" },
+        {
+            "$comment": "Positional spelling of values in [1e-7, 1e-4): ECMAScript keeps positional notation down to 1e-6 and prints the SHORTEST round-trip digit string, which here needs more than 20 decimal places.",
+            "name": "number-positional-shortest-digits",
+            "args": {
+                "n": [
+                    -0.000005398357037331775, -0.000004581439300991395, -0.000007479035767534118, -0.000023111215479239113, -0.0000017831576920856996,
+                    -0.000009538524804244627, 0.000008923045154390348, 0.000002882335397487146, 0.000015185973641513973, 0.0000012956900172794383, 0.000001,
+                    0.0000012345678901234567, 1e-7, 1.2e-7
+                ]
+            },
+            "key": "{\"n\":[-0.000005398357037331775,-0.000004581439300991395,-0.000007479035767534118,-0.000023111215479239113,-0.0000017831576920856996,-0.000009538524804244627,0.000008923045154390348,0.000002882335397487146,0.000015185973641513973,0.0000012956900172794383,0.000001,0.0000012345678901234567,1e-7,1.2e-7]}"
+        },
+        {
+            "$comment": "Decimal literals a parser that is not correctly rounded reads one ulp off. The key spells the DECODED double's shortest digits, so a mis-rounded parse shows up as different digits here even when the key formatter is right.",
+            "name": "number-decode-correctly-rounded",
+            "args": {
+                "n": [
+                    -1.0063725663392093e82, -0.9671460081055501, 9.241516992974401e110, 9.063806568047546e-11, -3.8017925100238707e197, -6.102589136900771e-10,
+                    -3.652336815595322e125, 973590096694571.5, -0.021733632782708345, -0.0008307574654731717, -0.00045445627916365086, -0.006160718108693786,
+                    0.0032583534326633035, -0.00046508078215070893, 0.00009951294295247749, 5e-324, 2.2250738585072014e-308, 1.7976931348623157e308,
+                    9.999999999999999e20, 123456789.12345679
+                ]
+            },
+            "key": "{\"n\":[-1.0063725663392093e+82,-0.9671460081055501,9.241516992974401e+110,9.063806568047546e-11,-3.8017925100238707e+197,-6.102589136900771e-10,-3.652336815595322e+125,973590096694571.5,-0.021733632782708345,-0.0008307574654731717,-0.00045445627916365086,-0.006160718108693786,0.0032583534326633035,-0.00046508078215070893,0.00009951294295247749,5e-324,2.2250738585072014e-308,1.7976931348623157e+308,999999999999999900000,123456789.12345679]}"
+        }
     ],
     "typed": [
         { "name": "bigint-arg", "wireArgs": { "n": ["$lunora.wire$", "bigint", "7"] }, "key": "{\"n\":[\"$lunora.wire$\",\"bigint\",\"7\"]}" },
@@ -80,6 +113,17 @@
             "name": "url-arg",
             "wireArgs": { "u": ["$lunora.wire$", "url", "https://example.com/x"] },
             "key": "{\"u\":[\"$lunora.wire$\",\"url\",\"https://example.com/x\"]}"
+        },
+        {
+            "$comment": "A number off the wire is a float64 whatever its spelling. JSON.stringify writes every double in [2^53, 1e21) as an INTEGER literal, and a parser that types those as native integers must still decode them as the double JSON.parse reads (9007199254740993 is 9007199254740992) and key them the reference's way, not refuse them. Constructing such an integer natively is still refused: see exact_integer_range_enforced.",
+            "name": "number-integer-literal-past-exact-range",
+            "wireArgs": {
+                "n": [
+                    1700000000000000000, 100000000000000000000, 1152921504606847000, 9007199254740993, -9007199254740993, -332443551621519100000,
+                    4497057306508656600, 356880838467014200000, -94136815007046430000
+                ]
+            },
+            "key": "{\"n\":[1700000000000000000,100000000000000000000,1152921504606847000,9007199254740992,-9007199254740992,-332443551621519100000,4497057306508656600,356880838467014200000,-94136815007046430000]}"
         }
     ]
 }
