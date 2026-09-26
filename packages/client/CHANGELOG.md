@@ -1,3 +1,21 @@
+## @lunora/client [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.145...@lunora/client@1.0.0-alpha.146) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **sdk-python:** identity_allows_replay is replaced by
+replay_identity_verdict(stamped, current, token), token_digest and token_stamp.
+Without an identity, a token refresh rejects writes queued under the old token
+(set identity to keep them) and evicts every subscription's resume state, and a
+record persisted by an earlier build with a None stamp is rejected once a token
+is held.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **sdk-python:** stamp an unset identity with the token digest ([#852](https://github.com/anolilab/lunora/issues/852)) ([63706ff](https://github.com/anolilab/lunora/commit/63706ff9adb725b3b42d1dda97b22657c617ae7d))
+
 ## @lunora/client [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.144...@lunora/client@1.0.0-alpha.145) (2026-09-26)
 
 
