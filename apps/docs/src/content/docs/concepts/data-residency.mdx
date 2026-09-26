@@ -108,8 +108,19 @@ the admin bearer like every other `__lunora_admin__:*` op:
   un-pinned auth object into the pinned one: better-auth's tables for whatever
   plugins you run, the auth audit log, the rate limiter, and any table a plugin
   adds later. A table the pinned object lacks is created from the un-pinned
-  object's own definition.
+  object's own definition, with its indexes. `user` goes first, then `account`
+  and `session`, so sign-in works again as early as possible; the audit log and
+  the rate limiter go last.
 - `__lunora_admin__:purgeUnpinnedAuth` drops every table in the un-pinned object.
+
+The copy takes a **snapshot**: each row as the un-pinned object held it when the
+copy read it. The pinned object records every row it copied, and every later copy
+call and the purge compare a fingerprint of the un-pinned object against that
+record. That check is the only thing that reconciles an update or delete made on
+the un-pinned object after its rows were read: when it finds one, the next copy
+re-scans the changed table and applies it — a changed row is updated and a
+deleted row is deleted in the pinned object, as long as the pinned object still
+holds the copied version.
 
 Do this in a short maintenance window. Once the acknowledgement is deployed,
 sign-ins land in the pinned object, which is empty until the copy runs.
@@ -128,8 +139,9 @@ export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndV
 lunora codegen && lunora deploy
 ```
 
-From here the un-pinned object receives no more writes, so the copy cannot miss
-one.
+From here this deployment writes auth only to the pinned object. The un-pinned
+object can still take writes from an older version during a gradual rollout, or
+after a rollback; the fingerprint check above is what catches those.
 
 </Step>
 
@@ -148,23 +160,34 @@ The answer lists every table with its counts:
 {
     "done": true,
     "tables": [
-        { "table": "user", "sourceRows": 1840, "copied": 1840, "skipped": 0, "targetRows": 1840 },
-        { "table": "session", "sourceRows": 2311, "copied": 2311, "skipped": 0, "targetRows": 2311 }
+        { "table": "user", "sourceRows": 1840, "copied": 1840, "updated": 0, "deleted": 0, "unchanged": 0, "conflicts": 0, "targetRows": 1840 },
+        { "table": "account", "sourceRows": 1840, "copied": 1840, "updated": 0, "deleted": 0, "unchanged": 0, "conflicts": 0, "targetRows": 1840 }
     ]
 }
 ```
 
-It is safe to run again. The pinned object records how far each table got, so a
-run that stopped part-way (a dropped connection, a timeout) resumes where it
-stopped, and a run after a finished copy writes nothing. One call copies a bounded
-number of pages; a large auth object answers `done: false`, and you call it again
-until it answers `done: true`.
+It is safe to run again. A run that stopped part-way (a dropped connection, a
+timeout) resumes where the pinned object got to, and a run after a finished copy
+changes nothing unless the un-pinned object changed. One call copies at most 16
+pages of 100 rows, which keeps it under the 50-subrequest limit of a Workers Free
+plan; a larger auth object answers `done: false`, and you call it again until it
+answers `done: true`. `done: true` means every table matches the un-pinned
+object's fingerprint.
 
-It **refuses** a pinned object that already has users and holds no earlier copy
-(`AUTH_MOVE_TARGET_NOT_EMPTY`): someone signed up between the deploy and the copy,
-and copying would merge two user bases. `--args '{"force":true}'` copies anyway.
-A row whose id or unique key (an email, say) already exists in the pinned object
-is kept as it is and counted under `skipped`.
+Two refusals protect the pinned object's own data, and both are checked on every
+call, not only the first:
+
+- `AUTH_MOVE_TARGET_NOT_EMPTY`: the pinned object holds users the copy did not
+  write, because someone signed up there between the deploy and the copy.
+  Copying would merge two user bases.
+- `AUTH_MOVE_CONFLICT`: a copied row collides with a row the pinned object holds
+  on its own: the same email as a user who signed up there, or a row both objects
+  changed. Nothing from that page is written. Plugin state the pinned object
+  created on its own collides the same way, for example a SCIM connection binding
+  created by a provisioning request after the deploy.
+
+`--args '{"force":true}'` copies anyway: the pinned object's rows are kept as they
+are, and each collision is counted under `conflicts`.
 
 </Step>
 
@@ -172,8 +195,9 @@ is kept as it is and counted under `skipped`.
 
 #### Verify
 
-Check that `targetRows` matches `sourceRows` for every table, and sign in as a
-known user. `skipped` is `0` unless you forced the copy.
+Check that `done` is `true`, that `targetRows` matches `sourceRows` for every
+table, and sign in as a known user. `conflicts` is `0` unless you forced the copy;
+a forced copy that reports conflicts left those source rows out.
 
 </Step>
 
@@ -189,9 +213,11 @@ LUNORA_ADMIN_TOKEN=… lunora run __lunora_admin__:purgeUnpinnedAuth \
 **Do not skip this.** Until you purge, the users, password hashes and sessions you
 pinned to keep in the jurisdiction are still stored outside it. The copy never
 deletes them on its own: a copy you have not verified is not a reason to lose the
-only other one. The purge refuses (`AUTH_MOVE_INCOMPLETE`) until a copy has
-finished for every table the un-pinned object holds, and again if any of them
-gained a row after that copy; run the copy again, then purge.
+only other one. The purge refuses with `AUTH_MOVE_INCOMPLETE` until a copy has
+finished for every table the un-pinned object holds. It refuses with
+`AUTH_MOVE_SOURCE_CHANGED` if any of them changed after it was copied, whether by
+an insert, an update or a delete. It checks this inside the transaction that
+drops the tables. Run the copy again to carry the change, then purge.
 
 </Step>
 
