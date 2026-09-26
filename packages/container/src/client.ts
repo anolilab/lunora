@@ -28,9 +28,14 @@ interface ContainerStartOptions {
 
     /**
      * Per-instance environment. REPLACES the definition's `env`, `secrets` and
-     * `secretsStore` for this start (Secrets Store resolution is skipped), so
-     * pass every variable the container needs. This is also how to start an
-     * untrusted sandbox without the declared credentials: `start({ envVars: {} })`.
+     * `secretsStore` (the Secrets Store is not read), so pass every variable the
+     * container needs. It is persisted for the instance: every later start —
+     * including the implicit restart a `fetch`/`exec` triggers after the
+     * container slept, crashed or hit `hardTimeout` — uses it, until
+     * `destroy()`. A start whose `envVars` differ from those of the running
+     * container is rejected (`CONFLICT`); `stop()` it first. So
+     * `start({ envVars: {} })` is a sandbox without the declared credentials,
+     * for as long as the instance exists.
      */
     envVars?: Record<string, string>;
     /** Metadata labels attached for metrics/observability. */

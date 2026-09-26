@@ -253,8 +253,8 @@ interface ContainerConfig {
      * binding. A name already used by `env`/`secrets` is rejected at authoring
      * time; a missing binding or unreadable value fails the start. Applies
      * to the default start (the `ctx.containers` proxy path and a bare
-     * `start()`); a per-instance `start({ envVars })` replaces the env set
-     * wholesale, as it does for `env`/`secrets`. (Upstream
+     * `start()`); a persisted per-instance `start({ envVars })` replaces the env
+     * set wholesale, as it does for `env`/`secrets`. (Upstream
      * cloudflare/containers#96.)
      */
     secretsStore?: Readonly<Record<string, string>>;

@@ -21,6 +21,10 @@ interface FakeContextOverrides {
 
 /** Minimal fake of the pieces `@cloudflare/containers` reads off the DO ctx. */
 const fakeDurableObjectContext = (overrides: FakeContextOverrides = {}): Record<string, unknown> => {
+    // Keyed like the real storage, so the env override and the hard-timeout
+    // generation cannot read each other's values.
+    const stored = new Map<string, unknown>(overrides.storedGeneration === undefined ? [] : [["__lunoraHardTimeoutGeneration", overrides.storedGeneration]]);
+
     return {
         // The base ctor schedules alarms inside an un-awaited
         // `blockConcurrencyWhile(...)` critical section that touches the full
@@ -31,15 +35,18 @@ const fakeDurableObjectContext = (overrides: FakeContextOverrides = {}): Record<
         blockConcurrencyWhile: async () => {},
         container: overrides.container ?? { running: false },
         storage: {
+            delete: async (key: string) => stored.delete(key),
             deleteAlarm: async () => {},
-            get: async () => overrides.storedGeneration,
+            get: async (key: string) => stored.get(key),
             getAlarm: async () => null,
             kv: {
                 delete: () => {},
                 get: () => undefined,
                 put: () => {},
             },
-            put: async () => {},
+            put: async (key: string, value: unknown) => {
+                stored.set(key, value);
+            },
             setAlarm: async () => {},
             sql: {
                 // The base class iterates exec() results, so return an (empty)
@@ -119,7 +126,7 @@ describe(LunoraContainer, () => {
 });
 
 /** Cast onto the private Secrets Store resolver + `envVars` the start path reads. */
-type SecretsStoreProbe = { envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<void> };
+type SecretsStoreProbe = { applyStartEnv: () => Promise<void>; envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<Record<string, string>> };
 
 /** The status of a pending response, without reading a member off an `await`. */
 const statusOf = async (pending: Promise<Response>): Promise<number> => pending.then((response) => response.status);
@@ -238,7 +245,7 @@ describe("lunoraContainer secretsStore resolution", () => {
 
         const instance = new LunoraContainer(fakeDurableObjectContext() as never, env, definition, "transcoder") as unknown as SecretsStoreProbe;
 
-        await instance.resolveSecretsStoreEnv();
+        await instance.applyStartEnv();
 
         expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
     });
@@ -256,8 +263,8 @@ describe("lunoraContainer secretsStore resolution", () => {
             "transcoder",
         ) as unknown as SecretsStoreProbe;
 
-        await instance.resolveSecretsStoreEnv();
-        await instance.resolveSecretsStoreEnv();
+        await instance.applyStartEnv();
+        await instance.applyStartEnv();
 
         expect(get).toHaveBeenCalledTimes(1);
         expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
@@ -279,10 +286,10 @@ describe("lunoraContainer secretsStore resolution", () => {
             "transcoder",
         ) as unknown as SecretsStoreProbe;
 
-        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow("secrets store unavailable");
+        await expect(instance.applyStartEnv()).rejects.toThrow("secrets store unavailable");
 
         // The second attempt must re-run resolution (not replay the rejection).
-        await instance.resolveSecretsStoreEnv();
+        await instance.applyStartEnv();
 
         expect(get).toHaveBeenCalledTimes(2);
         expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
@@ -313,7 +320,7 @@ describe("lunoraContainer secretsStore resolution", () => {
         const definition = defineContainer({ env: { LOG_LEVEL: "info" }, image: "./app" });
         const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as SecretsStoreProbe;
 
-        await instance.resolveSecretsStoreEnv();
+        await instance.applyStartEnv();
 
         expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info" });
     });
@@ -373,6 +380,102 @@ describe("lunoraContainer start({ envVars }) replaces the declared env", () => {
         expect(baseStart.mock.calls[0]![0]).toStrictEqual({ envVars: { TENANT: "t1" } });
 
         baseStart.mockRestore();
+    });
+});
+
+describe("lunoraContainer start({ envVars }) override persists", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const sandboxDefinition = defineContainer({
+        env: { LOG_LEVEL: "info" },
+        image: "./app",
+        secrets: ["DATABASE_URL"],
+        secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+    });
+    const workerEnv = { DATABASE_URL: "postgres://secret", STRIPE_SECRET: { get: async () => "sk_live_123" } };
+    const basePrototype = (instance: object): { destroy: () => Promise<void>; start: () => Promise<void>; startAndWaitForPorts: () => Promise<void> } =>
+        Object.getPrototypeOf(Object.getPrototypeOf(instance)) as {
+            destroy: () => Promise<void>;
+            start: () => Promise<void>;
+            startAndWaitForPorts: () => Promise<void>;
+        };
+
+    type StartProbe = {
+        envVars: Record<string, string>;
+        start: (options?: { envVars?: Record<string, string> }) => Promise<void>;
+        startAndWaitForPorts: () => Promise<void>;
+    };
+
+    it("restarts with the override after the container stopped, even on a fresh DO instance", async () => {
+        expect.assertions(2);
+
+        // The restart path: after `sleepAfter`, a crash or `hardTimeout`, the
+        // next exec/fetch starts the container through `startAndWaitForPorts`.
+        // It used to boot with the declared env and the Secrets Store values,
+        // handing a "credential-free" sandbox its credentials back.
+        const context = fakeDurableObjectContext();
+        const first = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        vi.spyOn(basePrototype(first), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(first), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await first.start({ envVars: { TENANT: "t1" } });
+
+        expect(first.envVars).toStrictEqual({ TENANT: "t1" });
+
+        // The DO was evicted while the container slept; a new instance over the
+        // same storage takes the implicit restart.
+        const second = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        await second.startAndWaitForPorts();
+
+        expect(second.envVars).toStrictEqual({ TENANT: "t1" });
+    });
+
+    it("rejects a start({ envVars }) on a running instance whose env differs, rather than reporting it applied", async () => {
+        expect.assertions(2);
+
+        // Upstream returns early on a running container, so the old env stays.
+        const context = fakeDurableObjectContext({ container: { monitor: async () => new Promise<never>(() => {}), running: true } });
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+        const baseStart = vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+
+        await expect(instance.start({ envVars: {} })).rejects.toThrow(/already running with a different env/u);
+        expect(baseStart).not.toHaveBeenCalled();
+    });
+
+    it("accepts a repeat start({ envVars }) with the same env on a running instance", async () => {
+        expect.assertions(1);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ envVars: { TENANT: "t1" } });
+        (context as { container: { running: boolean } }).container.running = true;
+
+        await expect(instance.start({ envVars: { TENANT: "t1" } })).resolves.toBeUndefined();
+    });
+
+    it("destroy() drops the override, so the next start uses the declared env again", async () => {
+        expect.assertions(1);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe & {
+            destroy: () => Promise<void>;
+        };
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "destroy").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await instance.start({ envVars: {} });
+        await instance.destroy();
+        await instance.startAndWaitForPorts();
+
+        expect(instance.envVars).toStrictEqual({ DATABASE_URL: "postgres://secret", LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
     });
 });
 

@@ -44,6 +44,26 @@ const READINESS_TIMEOUT_MS = 30_000;
  */
 const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
 
+/**
+ * Durable-storage key holding a per-instance `start({ envVars })` override.
+ * Persisted so it outlives the run it was given for: every later start of the
+ * instance — an explicit `start()`, or the implicit one a `fetch`/`exec`
+ * triggers after a sleep, crash or `hardTimeout` — boots with it rather than
+ * falling back to the declared env and secrets. Cleared by `destroy()`.
+ */
+const ENV_OVERRIDE_KEY = "__lunoraEnvOverride";
+
+/** Whether two env maps hold the same variables with the same values. */
+const sameEnv = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
+    if (a === undefined || b === undefined) {
+        return a === b;
+    }
+
+    const keys = Object.keys(a);
+
+    return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+};
+
 /** Lower-cased marker of Lunora's reserved container namespace (`/__lunora/*`). */
 const RESERVED_PATH_MARKER = "__lunora";
 
@@ -116,8 +136,15 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private readonly lunoraReadyOn: ReadonlyArray<ContainerReadinessCheck>;
     /** Map of container env-var name → Worker Secrets Store binding name (from the `secretsStore` config). */
     private readonly lunoraSecretsStore?: Readonly<Record<string, string>>;
-    /** Memoised Secrets Store resolution: run once, then merged into `envVars` before the first start. */
-    private lunoraSecretsStoreResolved?: Promise<void>;
+    /** The definition's `env` + `secrets`, as resolved at construction — the env a start uses absent an override. */
+    private readonly lunoraDeclaredEnv: Record<string, string>;
+
+    /** The persisted `start({ envVars })` override, once loaded. See {@link ENV_OVERRIDE_KEY}. */
+    private lunoraEnvOverride?: Record<string, string>;
+    /** Whether the override field reflects storage (read once per DO instance, then kept in step). */
+    private lunoraEnvOverrideLoaded = false;
+    /** Memoised Secrets Store resolution: the resolved `name → value` map, fetched once. */
+    private lunoraSecretsStoreResolved?: Promise<Record<string, string>>;
 
     /**
      * Count of runs observed to have ENDED, bumped by the `onStop` hook. Read
@@ -133,12 +160,16 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         exportName?: string,
         jurisdiction?: DurableObjectJurisdiction,
     ) {
+        const declaredEnv = resolveContainerEnvVariables(definition, env as Record<string, unknown>, exportName);
+
         super(context, env, {
             defaultPort: definition.defaultPort,
             entrypoint: definition.entrypoint ? [...definition.entrypoint] : undefined,
-            envVars: resolveContainerEnvVariables(definition, env as Record<string, unknown>, exportName),
+            envVars: declaredEnv,
             sleepAfter: definition.sleepAfter,
         });
+
+        this.lunoraDeclaredEnv = { ...declaredEnv };
 
         if (definition.enableInternet !== undefined) {
             this.enableInternet = definition.enableInternet;
@@ -253,7 +284,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // Resolve BEFORE the snapshot: this is a real Secrets Store RPC on its
         // first call, and a container that exits inside it used to leave the
         // snapshot claiming the run was still up. See {@link beginStart}.
-        await this.resolveSecretsStoreEnv();
+        await this.applyStartEnv();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -264,21 +295,29 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Explicit start (`ctx.containers.<name>.get(id).start()`). Resolves the
-     * `secretsStore` bindings into `envVars` first, mirroring
-     * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
-     * env set wholesale (base behavior), so the injected values only apply to a
-     * bare `start()` — same as the static `env`/`secrets`. When the caller
-     * supplies its own `envVars` we skip resolution entirely: those values would
-     * be discarded anyway, so a missing/unreadable binding shouldn't fail a start
-     * that never uses them.
+     * Explicit start (`ctx.containers.<name>.get(id).start()`).
+     *
+     * A per-instance `start({ envVars })` REPLACES the declared env (`env`,
+     * `secrets`, `secretsStore` — the Secrets Store is not even read) and is
+     * PERSISTED: every later start of this instance, explicit or implicit (a
+     * `fetch`/`exec` after the container slept, crashed or hit `hardTimeout`),
+     * boots with the same variables until `destroy()`. That is what makes
+     * `start({ envVars: {} })` a credential-free sandbox rather than one that
+     * gets its credentials back on the next restart.
+     *
+     * A start with `envVars` that differ from what the instance is running (or
+     * starting) with is REJECTED rather than silently joined: the base would
+     * return early on a live container, reporting a start whose env never took
+     * effect. `stop()` it first, or `destroy()` it to drop the override.
      */
     public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
         const [options] = args;
 
-        if (options?.envVars === undefined) {
-            await this.resolveSecretsStoreEnv();
+        if (options?.envVars !== undefined) {
+            await this.persistEnvOverride({ ...options.envVars });
         }
+
+        await this.applyStartEnv();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -286,6 +325,16 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         await super.start(...args);
 
         await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
+    }
+
+    /**
+     * Stop the container and forget this instance's `start({ envVars })`
+     * override, so the next start uses the declared env again.
+     */
+    public override async destroy(): Promise<void> {
+        await super.destroy();
+        await this.ctx.storage.delete(ENV_OVERRIDE_KEY);
+        this.lunoraEnvOverride = undefined;
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -576,11 +625,11 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * `secrets` resolution takes for a missing Worker secret. No-op without
      * `secretsStore`.
      */
-    private async resolveSecretsStoreEnv(): Promise<void> {
+    private async resolveSecretsStoreEnv(): Promise<Record<string, string>> {
         const secretsStore = this.lunoraSecretsStore;
 
         if (secretsStore === undefined) {
-            return;
+            return {};
         }
 
         this.lunoraSecretsStoreResolved ??= (async () => {
@@ -609,7 +658,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
                 resolved[envName] = value;
             }
 
-            this.envVars = { ...this.envVars, ...resolved };
+            return resolved;
         })().catch((error: unknown) => {
             // A transient Secrets Store failure (`store.get()` is a remote call)
             // must fail only *this* start — not poison the instance forever.
@@ -620,7 +669,49 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             throw error;
         });
 
-        await this.lunoraSecretsStoreResolved;
+        return this.lunoraSecretsStoreResolved;
+    }
+
+    /** The persisted `start({ envVars })` override, read from storage once per instance lifetime. */
+    private async readEnvOverride(): Promise<Record<string, string> | undefined> {
+        if (!this.lunoraEnvOverrideLoaded) {
+            this.lunoraEnvOverride = await this.ctx.storage.get<Record<string, string>>(ENV_OVERRIDE_KEY);
+            this.lunoraEnvOverrideLoaded = true;
+        }
+
+        return this.lunoraEnvOverride;
+    }
+
+    /**
+     * Record a `start({ envVars })` override, refusing one that differs from
+     * the env a running (or starting) container already has — see {@link start}.
+     */
+    private async persistEnvOverride(override: Record<string, string>): Promise<void> {
+        const current = await this.readEnvOverride();
+        // `startInFlight` is the base's coalescing marker: a start joined there
+        // would run with the env it was launched with, not this one.
+        const busy = this.ctx.container?.running === true || (this as unknown as { startInFlight?: unknown }).startInFlight !== undefined;
+
+        if (busy && !sameEnv(current, override)) {
+            throw new LunoraError(
+                "CONFLICT",
+                `container "${this.lunoraName}": start({ envVars }) on an instance that is already running with a different env — the running container keeps its own. stop() it first (or destroy() it to also drop the override), then start again.`,
+            );
+        }
+
+        await this.ctx.storage.put(ENV_OVERRIDE_KEY, override);
+        this.lunoraEnvOverride = override;
+    }
+
+    /**
+     * Set `envVars` for the start about to happen: the persisted override when
+     * there is one (the Secrets Store is not read), else the declared env plus
+     * the resolved Secrets Store values.
+     */
+    private async applyStartEnv(): Promise<void> {
+        const override = await this.readEnvOverride();
+
+        this.envVars = override === undefined ? { ...this.lunoraDeclaredEnv, ...(await this.resolveSecretsStoreEnv()) } : { ...override };
     }
 
     /**
