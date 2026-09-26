@@ -116,6 +116,20 @@ const signedInAsA = async (sockets: MockSocket[]): Promise<{ client: LunoraClien
     return { client, screen: view.container };
 };
 
+/** What SSR rendered for user A. */
+const PRELOADED_FOR_A: Preloaded<{ text: string }[]> = {
+    __lunoraPreloaded: true,
+    args: {},
+    functionPath: "messages:mine",
+    value: [{ text: "A-secret" }],
+};
+
+const PreloadedView = (): ReactElement => {
+    const rows = usePreloadedQuery(PRELOADED_FOR_A) as { text: string }[] | undefined;
+
+    return <div>{rows === undefined ? "(none)" : rows.map((row) => row.text).join(",")}</div>;
+};
+
 describe("useQuery across an identity change", () => {
     afterEach(() => {
         renders.length = 0;
@@ -253,24 +267,12 @@ describe("useQuery across an identity change", () => {
 
         const sockets: MockSocket[] = [];
         const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
-        const preloaded: Preloaded<{ text: string }[]> = {
-            __lunoraPreloaded: true,
-            args: {},
-            functionPath: "messages:mine",
-            value: [{ text: "A-secret" }],
-        };
 
         client.setAuthToken("jwt-A", "user-A");
 
-        const Preloaded = (): ReactElement => {
-            const rows = usePreloadedQuery(preloaded) as { text: string }[] | undefined;
-
-            return <div>{rows === undefined ? "(none)" : rows.map((row) => row.text).join(",")}</div>;
-        };
-
         const view = render(
             <LunoraProvider client={client}>
-                <Preloaded />
+                <PreloadedView />
             </LunoraProvider>,
         );
 
@@ -282,6 +284,33 @@ describe("useQuery across an identity change", () => {
         });
 
         expect(view.container.textContent).toBe("(none)");
+
+        client.close();
+    });
+
+    it("does not show user A's preloaded value to a component that remounts after user B signs in", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+
+        client.setAuthToken("jwt-A", "user-A");
+
+        const Shell = ({ show }: { show: boolean }): ReactElement => <LunoraProvider client={client}>{show ? <PreloadedView /> : <div />}</LunoraProvider>;
+        const view = render(<Shell show />);
+
+        expect(view.container.textContent).toBe("A-secret");
+
+        view.rerender(<Shell show={false} />);
+
+        await act(async () => {
+            client.setAuthToken("jwt-B", "user-B");
+            await settle();
+        });
+
+        view.rerender(<Shell show />);
+
+        expect(view.container.textContent).not.toContain("A-secret");
 
         client.close();
     });

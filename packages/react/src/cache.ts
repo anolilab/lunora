@@ -100,8 +100,14 @@ class LunoraSubscriptionRegistry {
     /** Open snapshot samples per key — the lifetime bound on the push counter. */
     private readonly samples = new Map<string, number>();
 
-    /** Query clients already cleared on an identity change (see `clearOnIdentityChange`). */
-    private readonly identityWatched = new WeakSet<QueryClient>();
+    /** How many identities the client has retired since this registry started listening. */
+    private epoch = 0;
+
+    /** Query clients cleared on each identity change (see `clearOnIdentityChange`). */
+    private readonly identityWatched = new Set<QueryClient>();
+
+    /** Whether the single `onIdentityChange` listener is registered. */
+    private listening = false;
 
     public constructor(private readonly client: LunoraClient) {}
 
@@ -202,20 +208,55 @@ class LunoraSubscriptionRegistry {
      * so their observers stay attached.
      */
     public clearOnIdentityChange(queryClient: QueryClient): void {
-        if (this.identityWatched.has(queryClient)) {
+        this.listenForIdentityChange();
+        this.identityWatched.add(queryClient);
+    }
+
+    /**
+     * How many identities the client has retired since this registry started
+     * listening (see `listenForIdentityChange`). A preloaded value is
+     * only good while this is `0`: it was rendered for whoever was signed in
+     * when the page loaded.
+     */
+    public readonly identityEpoch = (): number => this.epoch;
+
+    /**
+     * `useSyncExternalStore` subscribe for `identityEpoch`: registers the
+     * counting listener first, so the epoch has moved by the time `onChange` runs.
+     */
+    public readonly subscribeIdentityEpoch = (onChange: () => void): Unsubscribe => {
+        this.listenForIdentityChange();
+
+        return this.client.onIdentityChange(onChange);
+    };
+
+    /**
+     * Register the one `onIdentityChange` listener that counts epochs and clears
+     * every watched `QueryClient`. Idempotent. Call it before registering any
+     * listener that reads {@link identityEpoch}: listeners fire in insertion
+     * order, so this one must run first.
+     */
+    public listenForIdentityChange(): void {
+        if (this.listening) {
             return;
         }
 
-        this.identityWatched.add(queryClient);
+        this.listening = true;
 
         this.client.onIdentityChange(() => {
-            const cache = queryClient.getQueryCache();
+            this.epoch += 1;
 
-            for (const query of cache.findAll({ queryKey: ["lunora"] })) {
-                if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
-                    cache.remove(query);
-                } else {
+            for (const queryClient of this.identityWatched) {
+                const cache = queryClient.getQueryCache();
+
+                for (const query of cache.findAll({ queryKey: ["lunora"] })) {
+                    // Blanked either way: an observer's `placeholderData` can
+                    // still hold a removed query, and must find nothing in it.
                     blankQuery(query);
+
+                    if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
+                        cache.remove(query);
+                    }
                 }
             }
         });

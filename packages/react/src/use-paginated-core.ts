@@ -4,7 +4,7 @@ import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } 
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
-import { useQueryClient } from "@tanstack/react-query";
+import { CancelledError, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
@@ -237,59 +237,73 @@ const usePaginatedCore = function <T>(
             // below removing the entry when the page is detached — the recycle
             // then finds nothing to read. The attach only fires once per
             // newly-desired page, so this stays a single fetch per page.
-            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
-            const initialFetch = queryClient.fetchQuery({
-                // Pin the page for as long as this hook holds it. Unlike every
-                // other hook here, the paginated path has NO TanStack observer
-                // (`fetchQuery` + `getQueryData`, never `useQuery`), and
-                // query-core collects a query whenever
-                // `!observers.length && fetchStatus === "idle"` —
-                // `addObserver -> clearGcTimeout()` is precisely why `useQuery`
-                // is immune and this is not. Left on the provider's 5-minute
-                // default, every page range that saw no server row change was
-                // evicted while still mounted: `pageResults` read `undefined`,
-                // `derivePaginationStatus` fell back to `LoadingFirstPage`, and
-                // `loadMore` became a permanent no-op — none of which the hook
-                // could even notice, since its cache subscriber filters for
-                // `"updated"` and eviction emits `"removed"`. Pinning makes this
-                // hook the owner of the entry's whole lifecycle, so the release
-                // closure below removes it on detach rather than leaking it.
-                gcTime: Number.POSITIVE_INFINITY,
-                queryFn: async () => {
-                    const sample = registry.openSnapshotSample(entry.key);
-                    const snapshot = await (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
-                        desired.fn,
-                        entry.args,
-                        {
+            const fetchPage = (): void => {
+                // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
+                const initialFetch = queryClient.fetchQuery({
+                    // Pin the page for as long as this hook holds it. Unlike every
+                    // other hook here, the paginated path has NO TanStack observer
+                    // (`fetchQuery` + `getQueryData`, never `useQuery`), and
+                    // query-core collects a query whenever
+                    // `!observers.length && fetchStatus === "idle"` —
+                    // `addObserver -> clearGcTimeout()` is precisely why `useQuery`
+                    // is immune and this is not. Left on the provider's 5-minute
+                    // default, every page range that saw no server row change was
+                    // evicted while still mounted: `pageResults` read `undefined`,
+                    // `derivePaginationStatus` fell back to `LoadingFirstPage`, and
+                    // `loadMore` became a permanent no-op — none of which the hook
+                    // could even notice, since its cache subscriber filters for
+                    // `"updated"` and eviction emits `"removed"`. Pinning makes this
+                    // hook the owner of the entry's whole lifecycle, so the release
+                    // closure below removes it on detach rather than leaking it.
+                    gcTime: Number.POSITIVE_INFINITY,
+                    queryFn: async () => {
+                        const sample = registry.openSnapshotSample(entry.key);
+                        const snapshot = await (
+                            client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>
+                        )(desired.fn, entry.args, {
                             shardKey: desired.shardKey,
-                        },
-                    );
+                        });
 
-                    // Same race `useQuery` carries: TanStack applies a resolved
-                    // fetch unconditionally, so a page frame pushed while this
-                    // snapshot was in flight would be reverted to the older
-                    // rows. The push is strictly newer; yield to it.
-                    if (registry.closeSnapshotSample(sample)) {
-                        return snapshot;
+                        // Same race `useQuery` carries: TanStack applies a resolved
+                        // fetch unconditionally, so a page frame pushed while this
+                        // snapshot was in flight would be reverted to the older
+                        // rows. The push is strictly newer; yield to it.
+                        if (registry.closeSnapshotSample(sample)) {
+                            return snapshot;
+                        }
+
+                        return queryClient.getQueryData(entry.key) ?? snapshot;
+                    },
+                    queryKey: entry.key,
+                    staleTime: 0,
+                });
+
+                // A page whose FIRST fetch rejects has no live subscription frame
+                // coming to correct it — route the rejection into the same channel
+                // the pushed subscription errors use, or the feed hangs on this page
+                // forever.
+                initialFetch.catch((error_: unknown) => {
+                    // A cancelled fetch did not fail: a user switch cancels snapshots
+                    // requested under the retired credential (see `blankQuery`). Ask
+                    // again under the new one while the page is still held; a detach
+                    // cancels too, and then nobody wants it.
+                    if (error_ instanceof CancelledError) {
+                        if (registry.hasConsumers(entry.key)) {
+                            fetchPage();
+                        }
+
+                        return;
                     }
 
-                    return queryClient.getQueryData(entry.key) ?? snapshot;
-                },
-                queryKey: entry.key,
-                staleTime: 0,
-            });
+                    failPage(
+                        hash,
+                        entry.key,
+                        error_ instanceof Error ? { code: (error_ as { code?: string }).code, message: error_.message } : { message: String(error_) },
+                    );
+                });
+            };
 
-            // A page whose FIRST fetch rejects has no live subscription frame
-            // coming to correct it — route the rejection into the same channel
-            // the pushed subscription errors use, or the feed hangs on this page
-            // forever.
-            initialFetch.catch((error_: unknown) => {
-                failPage(
-                    hash,
-                    entry.key,
-                    error_ instanceof Error ? { code: (error_ as { code?: string }).code, message: error_.message } : { message: String(error_) },
-                );
-            });
+            fetchPage();
 
             const detach = registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey, {
                 onError: (pageError) => {
