@@ -1,3 +1,109 @@
+## @lunora/codegen [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.225...@lunora/codegen@1.0.0-alpha.226) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **sdks:** an object whose keys differ only by a lone surrogate decodes to
+[WireKey: Any] instead of being refused, so a cast to [String: Any] yields nil
+for it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(protocol): replay a held write after a token refresh in every port
+
+Adds offlineQueue.credentialRefresh and the required case
+offline_write_held_for_credential_replays_after_token_refresh: a write refused
+TOKEN_EXPIRED is held (queued, persisted, unsettled), and once a fresh token is
+set for the same identity it replays under that token. The authorization header
+of every request is asserted, so a port that sent the token captured at queue
+time fails.
+
+The reference and dart flush on their own when the token changes, so their cases
+set the token and nothing else. The other ports never flush on their own, so
+their cases flush again after setting it, as an app does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-dart): re-flush held writes when a new token is set
+
+A write refused UNAUTHORIZED, TOKEN_EXPIRED or UNAUTHENTICATED is held, but only
+setConnected(true) and hydrate() started a flush. A socket that stays up never
+reconnects, so the held write waited for a disconnect that might not come. A
+change to authToken or authSubject now flushes every connected shard with writes
+queued, in a microtask, as the reference's setAuthToken does.
+
+The replay gate now has the reference's three verdicts. A subject carried across
+a token change is unconfirmed until authSubject is set again: the new token may
+be the same user's refresh or another user's sign-in, so the write is held, not
+sent under it. Setting the same subject replays it; another subject rejects it
+unsent. A write stamped with the token's digest replays once a subject names
+that same token, and a stamped write is held rather than rejected while nobody
+is signed in. Without a subject a new token is a new identity, and the write is
+rejected OFFLINE_IDENTITY_CHANGED, as the reference rejects it.
+* **sdks:** with authSubject set, setting authToken alone now holds queued
+writes until authSubject is set again for the new token.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-python): re-flush on a new token while connect_and_run is live
+
+connect_and_run flushes the offline queue when its socket connects, and nothing
+else does while it stays up. A write refused for its credential is held for a
+fresh token, so setting one left it queued until the next reconnect. auth_token
+is now a property: setting a different token while the loop is live schedules a
+flush of its shard on the loop. Each write is still judged against identity when
+the flush runs, so an account switch sets identity first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(sdks): record who replays a held write after a token refresh
+
+protocol/README.md 4.3 states that a client which flushes on connect also
+flushes when a new token is set while connected. The capability matrix gains a
+row for it with the per-port mapping, and the lone-surrogate notes record that
+swift now keeps object keys apart by code unit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-python): run one flush per shard and gate the token re-flush
+
+A token set while the refused request was still in flight started a second
+flush beside the running one. The running flush still held the write it had
+drained, so the second found an empty queue, and the first then put the write
+back with nothing left to replay it until the next reconnect.
+flush_offline_queue now runs one pass per shard at a time: a call made while one
+runs returns an empty report and makes the running flush pass over the queue
+again when it finishes.
+
+With identity left None every write is stamped None and matches any token, so
+the re-flush on a token change sent one user's held write with the next user's
+credential. A token change now re-flushes only when an identity is set, and
+never when the token is cleared to None.
+
+The flush task a token change starts is held until it finishes, and a failure
+in it is logged to the "lunora" logger instead of being dropped with the task.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(sdk-dart): report writes a flush holds for an unconfirmed identity
+
+A flush that holds writes because a new token's subject is not yet confirmed,
+or because nobody is signed in, left them queued with nothing reported, so a
+queue stalled that way was hard to find. OfflineQueue.onHeld is now called with
+the writes each such flush held.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **sdks:** keep lone-surrogate keys in swift, replay held writes on a new token ([#850](https://github.com/anolilab/lunora/issues/850)) ([ca75c8c](https://github.com/anolilab/lunora/commit/ca75c8cd0b60cafaa08ec7a41251fa962c454c71))
+
 ## @lunora/codegen [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.224...@lunora/codegen@1.0.0-alpha.225) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES
