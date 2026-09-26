@@ -123,6 +123,8 @@ final class ConformanceTests: XCTestCase {
             case "subscription_stream_ends_on_close": try caseSubscriptionStreamEndsOnClose()
             case "identity_change_evicts_previous_session": try caseIdentityChangeEvictsPreviousSession()
             case "auth_token_redacted_when_printed": caseAuthTokenRedactedWhenPrinted()
+            case "offline_write_held_for_credential_replays_after_token_refresh":
+                try caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }

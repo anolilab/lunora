@@ -1503,6 +1503,59 @@ extension ConformanceTests {
         }
     }
 
+    /// A write refused for its CREDENTIAL is held, and replays under the next
+    /// token set for the same identity. This port's flushes are always the
+    /// app's call, so the case flushes again after the refresh, as an app does.
+    func caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh() throws {
+        let block = try scenario("offlineQueue", "credentialRefresh")
+        let identity = try XCTUnwrap(block["identity"] as? String)
+        let stale = "Bearer " + (try XCTUnwrap(block["staleToken"] as? String))
+        let refusal = try XCTUnwrap(block["refusal"] as? [String: Any])
+        let refused = Data(Wire.stableStringify(refusal["body"]).utf8)
+        let status = try XCTUnwrap((refusal["status"] as? NSNumber)?.intValue)
+        let store = MemoryPersistence()
+        var headers: [String?] = []
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, sent, _ in
+                headers.append(sent["authorization"])
+
+                return sent["authorization"] == stale ? (status, refused) : (200, Data(#"{"result":null}"#.utf8))
+            },
+            authToken: block["staleToken"] as? String
+        )
+
+        client.identity = identity
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+
+        for id in ids(block["queued"]) {
+            let write = entry(try XCTUnwrap(id))
+
+            write.identity = .stamp(identity)
+            client.offlineQueue.enqueue(write)
+        }
+
+        let afterRefusal = try XCTUnwrap(block["afterRefusal"] as? [String: Any])
+        var report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ids(afterRefusal["committed"]).compactMap { $0 })
+        XCTAssertEqual(report.rejected, ids(afterRefusal["rejected"]).compactMap { $0 })
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(afterRefusal["queuedAfterFlush"]), "the refused write is held")
+        XCTAssertTrue(settled.isEmpty && store.removed.isEmpty, "held: unsettled and still persisted")
+
+        let afterRefresh = try XCTUnwrap(block["afterRefresh"] as? [String: Any])
+
+        client.authToken = block["freshToken"] as? String
+        report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ids(afterRefresh["committed"]).compactMap { $0 })
+        XCTAssertEqual(report.rejected, ids(afterRefresh["rejected"]).compactMap { $0 })
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(afterRefresh["queuedAfterFlush"]))
+        XCTAssertEqual(headers, ids(block["authorizationHeaders"]), "the replay carries the token current when it is sent")
+    }
+
     /// A client with no poster has a configuration gap, not a verdict on the
     /// write: a lone write and a batch both stay durably queued, and the report
     /// says so. The lone one used to be REJECTED while a batch was re-queued.

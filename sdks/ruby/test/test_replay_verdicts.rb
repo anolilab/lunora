@@ -179,6 +179,46 @@ class TestReplayVerdicts < Minitest::Test
     end
   end
 
+  # The bearer is read when the replay is SENT: a write refused for its expired
+  # token is held, and replays under the refreshed one for the same user.
+  def test_a_write_held_for_its_credential_replays_after_a_token_refresh
+    ConformanceManifest.covers("offline_write_held_for_credential_replays_after_token_refresh")
+    case_data = queue_case("credentialRefresh")
+    stale = "Bearer #{case_data["staleToken"]}"
+    refusal = case_data["refusal"]
+    headers_sent = []
+
+    client, store, settled = flushing_client(lambda { |_url, headers, _body|
+      headers_sent << headers["authorization"]
+      headers["authorization"] == stale ? [refusal["status"], refusal["body"]] : [200, { "result" => nil }]
+    })
+    client.identity = case_data["identity"]
+    client.auth_token = case_data["staleToken"]
+    case_data["queued"].each do |id|
+      client.offline_queue.enqueue(
+        Lunora::QueuedMutation.new(args: {}, confirms: [], function_path: "messages:send", id: id,
+                                   identity: case_data["identity"])
+      )
+    end
+
+    assert_flush_outcome(client, case_data["afterRefusal"], "afterRefusal")
+    assert_empty settled
+    assert_empty store.removed
+
+    client.auth_token = case_data["freshToken"]
+
+    assert_flush_outcome(client, case_data["afterRefresh"], "afterRefresh")
+    assert_equal case_data["authorizationHeaders"], headers_sent
+  end
+
+  def assert_flush_outcome(client, expected, label)
+    report = client.flush_offline_queue
+
+    assert_equal expected["committed"], report.committed, label
+    assert_equal expected["rejected"], report.rejected, label
+    assert_equal expected["queuedAfterFlush"], ids(client.offline_queue.items), label
+  end
+
   def test_an_envelope_less_413_splits_a_batch_and_settles_a_lone_write
     ConformanceManifest.covers("offline_flush_batch_splits_on_envelopeless_413")
     fixture_data = queue_case("envelopelessPayloadTooLarge")
