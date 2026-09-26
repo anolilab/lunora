@@ -181,6 +181,9 @@ const DEFAULT_CORS_HEADERS = [
     "X-D1-Bookmark",
     "X-Lunora-Client-Id",
     "X-Lunora-Client-Seq",
+    // Sent on replayed offline writes under a cookie session; see
+    // `assertExpectedSubject` in `create-worker.ts`.
+    "X-Lunora-Expect-Subject",
     "X-Lunora-Min-Seq",
     "X-Lunora-Mutation-Id",
     // The REST surface's documented header form of `?shardKey=` (`rest-routes.ts`

@@ -11,7 +11,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
-import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeExpectedSubjectHeader, encodeIdentityHeader, encodeUserIdHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
@@ -1783,6 +1783,37 @@ const assertNotReservedRelationPath = (functionPath: string): void => {
  * and comparing to `true` means a broken gate can only ever deny.
  */
 const grants = async (verdict: unknown): Promise<boolean> => (await verdict) === true;
+
+/**
+ * Refuse a replayed write whose request resolves to a different user than the
+ * one that queued it.
+ *
+ * A cookie-session client replays its offline queue on whatever cookie the
+ * browser holds at reconnect, and nothing tells it that the user signed out or
+ * that someone else signed in meanwhile. It therefore names the subject each
+ * replay was queued under ({@link EXPECT_SUBJECT_HEADER}, `null` for "signed
+ * out"), and this is the check that makes the name binding: it runs after
+ * identity resolution and before dispatch, so a mismatched write never reaches
+ * a shard. A request without the header is unaffected.
+ */
+const assertExpectedSubject = (request: Request, identity: ResolvedIdentity | null): void => {
+    const raw = request.headers.get(EXPECT_SUBJECT_HEADER);
+
+    if (raw === null) {
+        return;
+    }
+
+    const expected = decodeExpectedSubjectHeader(raw);
+
+    if (expected === undefined) {
+        throw new LunoraError(`malformed ${EXPECT_SUBJECT_HEADER} header`, { code: "BAD_REQUEST", status: 400 });
+    }
+
+    // eslint-disable-next-line unicorn/no-null -- `null` is the header's "signed out" value
+    if (expected.subject !== (identity?.userId ?? null)) {
+        throw new LunoraError("the session changed since this write was queued", { code: "IDENTITY_MISMATCH", status: 409 });
+    }
+};
 
 /**
  * Read the optional caller identity a server-initiated dispatch may forward on
@@ -4607,6 +4638,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // honour auth, sessions, and D1 read-your-writes consistency.
         const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
 
+        assertExpectedSubject(request, identity);
+
         await authorizeRpcEnvelope(envelope, identity);
 
         // x402 paid-procedure gate. A `.x402({ price })`-tagged function is
@@ -4730,6 +4763,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
         // resolver would let contract-violating claims through to the shard verbatim.
         const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+
+        // One identity per batch, so one expectation covers every entry.
+        assertExpectedSubject(request, identity);
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);

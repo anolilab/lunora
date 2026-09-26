@@ -206,13 +206,39 @@ const dropExpiredCredentialSocket = (ws: ExpirableSocket): void => {
     }
 };
 
+/**
+ * Request header a replayed offline write carries to name the user it was
+ * queued by. The worker refuses the write with `IDENTITY_MISMATCH` when the
+ * request resolves to anyone else, so a write queued under one cookie session
+ * can never commit under the next one's cookie. `null` means "queued while
+ * signed out".
+ */
+const EXPECT_SUBJECT_HEADER = "x-lunora-expect-subject";
+
+/** Encode the subject for {@link EXPECT_SUBJECT_HEADER}: base64url JSON, so `null` and any id are unambiguous and ASCII. */
+const encodeExpectedSubjectHeader = (subject: null | string): string => encodeIdentityHeader({ subject });
+
+/**
+ * Decode an {@link EXPECT_SUBJECT_HEADER} value. `undefined` for anything that
+ * is not an object whose `subject` is a string or `null` — the caller refuses
+ * such a request rather than guessing.
+ */
+const decodeExpectedSubjectHeader = (raw: string): { subject: null | string } | undefined => {
+    const subject = decodeIdentityHeader(raw)?.subject;
+
+    return subject === null || typeof subject === "string" ? { subject } : undefined;
+};
+
 export {
+    decodeExpectedSubjectHeader,
     decodeIdentityExpiryHeader,
     decodeIdentityHeader,
     decodeUserIdHeader,
     dropExpiredCredentialSocket,
+    encodeExpectedSubjectHeader,
     encodeIdentityHeader,
     encodeUserIdHeader,
+    EXPECT_SUBJECT_HEADER,
     isByteStringSafe,
     isIdentityExpired,
 };
