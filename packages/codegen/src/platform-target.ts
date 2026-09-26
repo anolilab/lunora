@@ -37,8 +37,9 @@
  * which is why `project-config.test.ts` keeps the relaxed assertion.
  */
 
-import type { PlatformCapabilities } from "@lunora/platform";
+import type { CapabilityLevel, PlatformCapabilities } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
+import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
@@ -518,6 +519,32 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
     return gateAgainstMatrix(usage, matrix, target, signals);
 };
 
+/**
+ * The target's capability LEVELS (notes dropped), for the generated
+ * `studioFeatures()` payload — how a separately-hosted studio learns which host
+ * it is talking to and which pages that host cannot serve. `undefined` for an
+ * unregistered target: there is no matrix to report, and the studio then gates
+ * on the usage flags alone, exactly as `gatePlatformFeatures` leaves the
+ * surface un-gated.
+ */
+const studioPlatformFor = (target: string): NonNullable<StudioFeaturesResult["platform"]> | undefined => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return undefined;
+    }
+
+    const features: NonNullable<StudioFeaturesResult["platform"]>["features"] = {};
+
+    for (const [key, capability] of Object.entries(matrix.features) as [PlatformFeatureKey, { level: CapabilityLevel } | undefined][]) {
+        if (capability !== undefined) {
+            features[key] = capability.level;
+        }
+    }
+
+    return { features, id: matrix.id, name: matrix.name };
+};
+
 export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };
 export {
     CAPABILITY_TO_FEATURE,
@@ -528,4 +555,5 @@ export {
     readProjectTarget,
     readTargetDiagnostics,
     resolveCodegenTarget,
+    studioPlatformFor,
 };

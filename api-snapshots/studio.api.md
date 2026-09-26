@@ -286,13 +286,14 @@ const DEFAULT_LOCALE = "en";
 ### `DataBrowser` (const)
 
 ```ts
-const DataBrowser: ({ editable, globalTableNames, initialFilters, initialOrderBy, initialPins, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
+const DataBrowser: ({ canGenerateRows, editable, globalTableNames, initialFilters, initialOrderBy, initialPins, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
 ```
 
 ### `DataBrowserProps` (interface)
 
 ```ts
 interface DataBrowserProps {
+    readonly canGenerateRows?: boolean;
     readonly editable?: boolean;
     readonly globalTableNames?: ReadonlySet<string>;
     readonly initialFilters?: FilterClause[];
@@ -1111,13 +1112,14 @@ type TFunction = (id: MessageId, values?: Record<string, unknown>) => string;
 ### `TableEditor` (const)
 
 ```ts
-const TableEditor: ({ editable, initialShardKey }: TableEditorProps) => ReactElement;
+const TableEditor: ({ canGenerateRows, editable, initialShardKey }: TableEditorProps) => ReactElement;
 ```
 
 ### `TableEditorProps` (interface)
 
 ```ts
 interface TableEditorProps {
+    readonly canGenerateRows?: boolean;
     readonly editable?: boolean;
     readonly initialShardKey?: string;
 }
@@ -1588,6 +1590,7 @@ const MESSAGE_IDS: readonly [
     "Live — changes stream in automatically",
     "Live unavailable",
     "Live unavailable: {liveError}",
+    "Not available on {platform}: its capability matrix rates {feature} unsupported.",
     "Live: on",
     "Load",
     "Load more",

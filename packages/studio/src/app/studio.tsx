@@ -57,6 +57,7 @@ import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
 import { useNavLabels } from "./nav-labels";
 import type { NavGroup, NavGroupKey, StudioTab } from "./nav-types";
+import { UnsupportedPanel, unsupportedReason } from "./platform-gate";
 import StudioHeader from "./studio-header";
 import useConsoleShortcut from "./use-console-shortcut";
 
@@ -417,7 +418,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  * all five auth pages — including the audit trail, whose `getAuthAuditLog` RPC
  * answers `AUTH_AUDIT_NOT_CONFIGURED` without `@lunora/auth`'s reader wired.
  */
-const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
+const TAB_FEATURE: Partial<Record<StudioTab, Exclude<keyof StudioFeaturesResult, "platform">>> = {
     analytics: "analytics",
     authAudit: "auth",
     authConfig: "auth",
@@ -586,7 +587,12 @@ interface StudioSidebarProps {
     readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
     readonly tabDescription: Record<StudioTab, string>;
     readonly tabLabel: Record<StudioTab, string>;
+    /** Why each page the worker's host cannot serve is unavailable; those pages render dimmed, with the reason as their tooltip. */
+    readonly unavailable: Partial<Record<StudioTab, string>>;
 }
+
+/** Dims a nav entry whose page the host cannot serve. It stays clickable: its route explains why. */
+const UNAVAILABLE_TAB = "opacity-50";
 
 /**
  * One domain in the **collapsed** icon rail: a single icon that opens a hover
@@ -601,6 +607,7 @@ const CollapsedGroupNav = ({
     selectTab,
     tabDescription,
     tabLabel,
+    unavailable,
 }: {
     readonly current: StudioTab;
     readonly group: { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
@@ -608,6 +615,7 @@ const CollapsedGroupNav = ({
     readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
     readonly tabDescription: Record<StudioTab, string>;
     readonly tabLabel: Record<StudioTab, string>;
+    readonly unavailable: Partial<Record<StudioTab, string>>;
 }): ReactElement => (
     <Popover>
         <PopoverTrigger
@@ -624,12 +632,16 @@ const CollapsedGroupNav = ({
             {group.tabs.map((tab) => (
                 <button
                     aria-current={current === tab ? "page" : undefined}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100"
+                    className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100",
+                        unavailable[tab] !== undefined && UNAVAILABLE_TAB,
+                    )}
                     data-tab={tab}
                     data-testid={`dash-tab-${tab}`}
+                    data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                     key={tab}
                     onClick={selectTab}
-                    title={tabDescription[tab]}
+                    title={unavailable[tab] ?? tabDescription[tab]}
                     type="button"
                 >
                     <TabIcon tab={tab} />
@@ -723,7 +735,17 @@ const SidebarFooterProfile = ({
  * from the narrow icon rail. Rendered inside `<SidebarProvider>` so it can call
  * {@link useSidebar}.
  */
-const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectTab, tabDescription, tabLabel }: StudioSidebarProps): ReactElement => {
+const StudioSidebar = ({
+    chrome,
+    connected,
+    current,
+    groupLabel,
+    groups,
+    selectTab,
+    tabDescription,
+    tabLabel,
+    unavailable,
+}: StudioSidebarProps): ReactElement => {
     const t = useT();
     const { state } = useSidebar();
     const collapsed = state === "collapsed";
@@ -759,6 +781,7 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
                               selectTab={selectTab}
                               tabDescription={tabDescription}
                               tabLabel={tabLabel}
+                              unavailable={unavailable}
                           />
                       ))
                     : groups.map((group) => (
@@ -769,13 +792,17 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
                                       {group.tabs.map((tab) => (
                                           <SidebarMenuItem key={tab}>
                                               <SidebarMenuButton
-                                                  className="data-active:text-foreground dark:data-active:text-royal-amethyst data-active:shadow-[inset_2px_0_0_0_var(--royal-amethyst)]"
+                                                  className={cn(
+                                                      "data-active:text-foreground dark:data-active:text-royal-amethyst data-active:shadow-[inset_2px_0_0_0_var(--royal-amethyst)]",
+                                                      unavailable[tab] !== undefined && UNAVAILABLE_TAB,
+                                                  )}
                                                   data-tab={tab}
                                                   data-testid={`dash-tab-${tab}`}
+                                                  data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                                                   isActive={current === tab}
                                                   onClick={selectTab}
-                                                  title={tabDescription[tab]}
-                                                  tooltip={tabDescription[tab]}
+                                                  title={unavailable[tab] ?? tabDescription[tab]}
+                                                  tooltip={unavailable[tab] ?? tabDescription[tab]}
                                               >
                                                   <TabIcon tab={tab} />
                                                   <span>{tabLabel[tab]}</span>
@@ -856,6 +883,26 @@ const StudioLayoutShell = (): ReactElement => {
         return { ...group, tabs: group.tabs.filter((tab) => isTabVisible(tab, features)) };
     }).filter((group) => group.tabs.length > 0);
 
+    // The second gate: pages the worker's HOST cannot serve, because its deploy
+    // target rates the backing capability `unsupported`. Unlike a usage-gated
+    // page these stay in the nav — dimmed, with the reason as the tooltip — so
+    // the operator learns why rather than wondering where the page went. They
+    // leave the ⌘K palette, and their route renders the reason (below) instead
+    // of a panel whose admin ops cannot answer on this host.
+    const unavailable: Partial<Record<StudioTab, string>> = {};
+
+    for (const group of visibleGroups) {
+        for (const tab of group.tabs) {
+            const reason = unsupportedReason(tab, features.platform, t);
+
+            if (reason !== undefined) {
+                unavailable[tab] = reason;
+            }
+        }
+    }
+
+    const unavailableReason = unavailable[current];
+
     // Landing on (or deep-linking to) a now-hidden tab bounces to Home, so a
     // disabled feature's panel is unreachable even by typing its URL — the same
     // backstop `NotFoundRedirect` gives unknown paths.
@@ -884,9 +931,11 @@ const StudioLayoutShell = (): ReactElement => {
 
     // Every navigable destination, in sidebar order, for the ⌘K command palette.
     const commandItems = visibleGroups.flatMap((group) =>
-        group.tabs.map((tab) => {
-            return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
-        }),
+        group.tabs
+            .filter((tab) => unavailable[tab] === undefined)
+            .map((tab) => {
+                return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
+            }),
     );
 
     /*
@@ -908,7 +957,7 @@ const StudioLayoutShell = (): ReactElement => {
     const connected = chrome !== null && chrome.token !== "";
 
     return (
-        <SidebarProvider className="min-h-0 flex-1" data-testid="lunora-studio">
+        <SidebarProvider className="min-h-0 flex-1" data-platform={features.platform?.id} data-testid="lunora-studio">
             <CommandPalette items={paletteItems} />
 
             <StudioSidebar
@@ -920,6 +969,7 @@ const StudioLayoutShell = (): ReactElement => {
                 selectTab={selectTab}
                 tabDescription={tabDescription}
                 tabLabel={tabLabel}
+                unavailable={unavailable}
             />
 
             <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
@@ -954,7 +1004,7 @@ const StudioLayoutShell = (): ReactElement => {
                                 chunk streams in behind this Suspense fallback; Home (the index
                                 route) is eager and paints without suspending. */}
                             <Suspense fallback={<RoutePending />}>
-                                <Outlet />
+                                {unavailableReason === undefined ? <Outlet /> : <UnsupportedPanel reason={unavailableReason} title={tabLabel[current]} />}
                             </Suspense>
                         </ErrorBoundary>
                     </div>
@@ -1049,7 +1099,11 @@ const buildRouter = ({
         authSessions: <AuthSessionsPanel />,
         containers: <ContainersPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
-        data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
+        // "Generate rows" runs on the dev host's `/__lunora/seed` route, which only
+        // the filesystem-backed dev hosts mount — the same hosts, and the only ones,
+        // that set `schemaEditable`. `dataEditable` alone would offer it on any
+        // deploy that enables row edits, where the request can only 404.
+        data: <TableEditor canGenerateRows={dataEditable && schemaEditable} editable={dataEditable} initialShardKey={initialShardKey} />,
         deploymentHealth: <DeploymentHealthPanel />,
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,

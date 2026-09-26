@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
-import type { StudioFeaturesResult } from "../lib/admin";
+import type { CapabilityLevel, StudioFeaturesResult, StudioPlatform } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../lib/internal";
 
@@ -31,6 +31,35 @@ const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
     workflows: true,
 };
 
+const CAPABILITY_LEVELS: ReadonlySet<string> = new Set<CapabilityLevel>(["emulated", "native", "unsupported"]);
+
+/**
+ * Coerce the worker's `platform` report. Anything malformed reads as absent —
+ * which means "no capability gating", the same fail-open the flags take — and an
+ * unknown level string is dropped rather than guessed at.
+ */
+const coercePlatform = (raw: unknown): StudioPlatform | undefined => {
+    if (raw === null || typeof raw !== "object") {
+        return undefined;
+    }
+
+    const { features, id, name } = raw as Record<string, unknown>;
+
+    if (typeof id !== "string" || typeof name !== "string" || features === null || typeof features !== "object") {
+        return undefined;
+    }
+
+    const levels: StudioPlatform["features"] = {};
+
+    for (const [key, level] of Object.entries(features)) {
+        if (typeof level === "string" && CAPABILITY_LEVELS.has(level)) {
+            levels[key] = level as CapabilityLevel;
+        }
+    }
+
+    return { features: levels, id, name };
+};
+
 /** Coerce an unknown wire payload into a {@link StudioFeaturesResult}, defaulting any missing flag to shown. */
 const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
     if (raw === null || typeof raw !== "object") {
@@ -49,6 +78,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
         mail: flag("mail"),
         notifications: flag("notifications"),
         payments: flag("payments"),
+        platform: coercePlatform(record["platform"]),
         queues: flag("queues"),
         scheduler: flag("scheduler"),
         storage: flag("storage"),

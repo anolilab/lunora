@@ -2950,6 +2950,11 @@ interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+    platform?: {
+        features: Partial<Record<keyof PlatformCapabilities["features"], CapabilityLevel>>;
+        id: string;
+        name: string;
+    };
     queues: boolean;
     scheduler: boolean;
     storage: boolean;

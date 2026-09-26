@@ -630,11 +630,28 @@ export interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+    /** The worker's deploy target and its capability levels; absent from a worker that predates it or has no matrix. */
+    platform?: StudioPlatform;
     queues: boolean;
     scheduler: boolean;
     storage: boolean;
     vectors: boolean;
     workflows: boolean;
+}
+
+/** Support level of one capability on the worker's host, mirroring `@lunora/platform`'s `CapabilityLevel`. */
+export type CapabilityLevel = "emulated" | "native" | "unsupported";
+
+/**
+ * The deploy target a worker was generated for, hand-mirroring the `platform`
+ * field of `@lunora/do`'s `StudioFeaturesResult`. `features` is keyed like
+ * `@lunora/platform`'s `PlatformCapabilities["features"]` (`vectorStore`,
+ * `pointInTimeRecovery`, …) — levels only, the notes stay in the matrix.
+ */
+export interface StudioPlatform {
+    features: Partial<Record<string, CapabilityLevel>>;
+    id: string;
+    name: string;
 }
 
 /**

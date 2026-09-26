@@ -254,6 +254,7 @@ const MESSAGE_IDS = [
     "Live — changes stream in automatically",
     "Live unavailable",
     "Live unavailable: {liveError}",
+    "Not available on {platform}: its capability matrix rates {feature} unsupported.",
     "Live: on",
     "Load",
     "Load more",

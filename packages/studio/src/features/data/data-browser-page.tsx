@@ -82,7 +82,8 @@ const DataBrowserViewControls = ({
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
-    onGenerateRows: () => void;
+    /** Open the generate-rows dialog; omitted where the host serves no seed endpoint. */
+    onGenerateRows?: () => void;
     onShowJson: () => void;
     onShowTable: () => void;
     onToggleMask: () => void;
@@ -127,7 +128,7 @@ const DataBrowserViewControls = ({
                         Add row
                     </button>
                 )}
-                {editable && (
+                {editable && onGenerateRows !== undefined && (
                     <button className={CONTROL_TOGGLE_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
                         {t("Generate rows")}
                     </button>
@@ -253,7 +254,8 @@ const DataBrowserPage = ({
     readonly onInspect: (row: TableRow | null) => void;
     /** Open the bulk-patch dialog. Host-owned like `onOpenGenerateRows` — the dialog renders alongside the browser, not inside the page. */
     readonly onOpenBulkPatch: () => void;
-    readonly onOpenGenerateRows: () => void;
+    /** Omitted where the host serves no seed endpoint, which hides the button. */
+    readonly onOpenGenerateRows?: () => void;
 
     /**
      * Delete one row by id. Passed explicitly rather than read off `browser`
