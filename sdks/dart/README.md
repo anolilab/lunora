@@ -202,7 +202,8 @@ writes are HELD — not sent, not dropped. The same subject then replays them
 under the new token; a different one rejects them unsent. A write queued under a
 token before any subject was set replays once a subject names that same token.
 Nobody signed in (no subject, no token) holds a stamped write as well, rather
-than rejecting it.
+than rejecting it. `OfflineQueue(onHeld: ...)` is told the writes each such flush held, so a
+queue waiting on a subject can be found.
 
 **Behaviour change.** A token set with a subject in place used to keep the queue
 replaying under that subject straight away. Setting `authToken` alone now holds

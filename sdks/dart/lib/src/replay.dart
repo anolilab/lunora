@@ -197,6 +197,10 @@ class OfflineReplayer {
 
     _returnOrAbandon(held);
 
+    if (held.isNotEmpty && !isClosed()) {
+      queue.onHeld?.call(List<QueuedMutation>.unmodifiable(held));
+    }
+
     final encodable = _encodableOrSettleTerminal(sendable);
 
     if (encodable.isEmpty) {

@@ -245,6 +245,35 @@ Future<void> caseTokenChangeGatesHeldWrites() async {
   equals(canonical(namedSettled), canonical(<String>['committed']), 'and committed, not rejected as another identity');
 }
 
+/// A write held because the new token's subject is unconfirmed is reported
+/// through `OfflineQueue.onHeld`, so a queue stalled that way can be found.
+Future<void> caseHeldWritesAreReported() async {
+  final heldIds = <List<String>>[];
+  final client = LunoraClient(
+    url: 'https://app.example',
+    authToken: 'stale',
+    authSubject: 'user-a',
+    offlineQueue: OfflineQueue(onHeld: (held) => heldIds.add(<String>[for (final item in held) item.id])),
+    post: (url, headers, body) async => const LunoraHttpResponse(200, '{"result":null}'),
+  )
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  unawaited(client.mutation('messages:send', args: const <String, Object?>{}, mutationId: 'h1').then((_) {}, onError: (_) {}));
+  client
+    ..authToken = 'fresh'
+    ..setConnected(true);
+
+  for (var index = 0; index < 3; index += 1) {
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  check(heldIds.isNotEmpty, 'the held write is reported');
+  equals(canonical(heldIds.expand((ids) => ids).toSet().toList()), canonical(<String>['h1']), 'every report names the held write');
+  equals(client.pendingWrites, 1, 'and stays queued');
+}
+
 /// An EMPTY shard key is the default shard on BOTH replay paths: no body the
 /// flush sends — a single call or a batch entry — may carry a `shardKey` at all.
 Future<void> caseEmptyShardKeyRoutesToDefault() async {
