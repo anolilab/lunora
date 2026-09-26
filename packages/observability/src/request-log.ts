@@ -40,6 +40,7 @@ import type { SqlExec } from "@lunora/shard-engine";
 import type { Rules } from "@visulima/redact";
 import { createRedactor, credentialRules, standardRules } from "@visulima/redact";
 
+import { maskCredentials } from "../../../shared/credential-redaction";
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
@@ -230,67 +231,24 @@ interface ReadIssuesOptions {
     userId?: string;
 }
 
+const redactValue = createRedactor(standardRules);
+
 /**
- * Key-name fragments that mark a credential. `standardRules` matches only a
- * handful of EXACT key names (`password`, `token`, `apiKey`, `secret`, …), so the
- * everyday spellings of the same secret — `accessToken`, `refreshToken`,
- * `clientSecret`, `privateKey`, `api_key`, `cookie`, `newPassword`,
- * `stripeSecretKey` — went through in the clear. Each fragment matches as a
- * case-insensitive substring of the key.
+ * `credentialRules` minus its bare value-shape rules — 32 / 40 alphanumeric
+ * characters (`apikey`, `awskey`) and base58 / hex wallet addresses (`crypto`).
+ * Those match by length alone, so on a span they turn a 32-hex trace id, an
+ * undashed uuid or a git sha into `<APIKEY>` / `<AWSKEY>`: the ids a trace is
+ * read by. Credential KEYS are caught by `maskCredentials` instead.
  */
-const CREDENTIAL_KEY_FRAGMENTS = [
-    "password",
-    "passwd",
-    "passphrase",
-    "secret",
-    "token",
-    "apikey",
-    "api_key",
-    "api-key",
-    "cookie",
-    "privatekey",
-    "private_key",
-    "private-key",
-    "credential",
-    "authorization",
-] as const;
+const SPAN_CREDENTIAL_RULES: Rules = credentialRules.filter((rule) => typeof rule !== "object" || !["apikey", "awskey", "crypto"].includes(rule.key));
+
+const redactSecretValue = createRedactor(SPAN_CREDENTIAL_RULES);
 
 /**
- * Masks what a credential key holds. A number, boolean or `null` is kept: no
- * credential is one, and `tokenCount` / `maxTokens` / `inputTokens` are the usage
- * figures an AI app most needs to read. Everything else is masked — objects too,
- * because the walk does not descend into a value a rule already matched, so
- * returning `{ credentials: { apiKey } }` untouched would leak the nested key.
- */
-const maskCredential = (value: unknown): unknown => (typeof value === "number" || typeof value === "boolean" || value === null ? value : "<REDACTED>");
-
-/**
- * `name=value` inside a plain string (a message, a URL query, a form body): the
- * value is masked, the name kept. Anchored on the fragment rather than a leading
- * `[\w-]*`, so `new_password=…` still matches (from `password`) without the
- * quadratic backtracking a leading run costs on a long dashed value.
- */
-const CREDENTIAL_ASSIGNMENT = /(?:password|passwd|secret|token|api[-_]?key|private[-_]?key|credential|cookie)[\w-]*=[^\s&;,"']+/gi;
-
-const LUNORA_CREDENTIAL_RULES: Rules = [
-    ...CREDENTIAL_KEY_FRAGMENTS.map((fragment) => {
-        return { key: `*${fragment}*`, replacement: maskCredential };
-    }),
-    {
-        key: "credential_assignment",
-        pattern: CREDENTIAL_ASSIGNMENT,
-        replacement: (match: unknown) => `${String(match).slice(0, String(match).indexOf("="))}=<REDACTED>`,
-    },
-];
-
-const redactValue = createRedactor([...standardRules, ...LUNORA_CREDENTIAL_RULES]);
-
-const redactSecretValue = createRedactor([...credentialRules, ...LUNORA_CREDENTIAL_RULES]);
-
-/**
- * Mask credentials only — the key and `name=value` rules above plus
- * `@visulima/redact`'s `credentialRules` (bearer / JWT / provider-key shapes) —
- * leaving PII alone. For span attributes: {@link redactArgs}' PII rules key on
+ * Mask credentials only, leaving PII alone: `maskCredentials` (credential key
+ * names, `name=value` pairs, `Basic …`, URL query / fragment / userinfo) plus
+ * {@link SPAN_CREDENTIAL_RULES} (bearer, JWT, Slack, AWS access-key id). For
+ * span, event, link and metric attributes: {@link redactArgs}' PII rules key on
  * names like `id`, `url` and `date` and mask uuids, so they would erase the very
  * `order.id` / `url` attributes a trace is read by, while a secret in a span is
  * what must never reach a third-party collector. `captureRaw` as in
@@ -301,31 +259,31 @@ const redactSecrets = (value: unknown, captureRaw = false): unknown => {
         return value;
     }
 
-    return redactSecretValue(value);
+    return redactSecretValue(maskCredentials(value));
 };
 
 /**
- * Redact the secrets / PII out of a value before it reaches the durable log or a
- * Logpush event: `@visulima/redact`'s `standardRules` plus the credential rules
- * above. `null` / `undefined` pass through unchanged.
+ * Redact the secrets / PII out of a value before it reaches the durable log, a
+ * Logpush event, a function-metrics row or a span's error message:
+ * `maskCredentials`, then `@visulima/redact`'s `standardRules`. `null` /
+ * `undefined` pass through unchanged.
  *
- * On a KEYED object (`args`, `identity`), a key containing one of
- * {@link CREDENTIAL_KEY_FRAGMENTS} (`accessToken`, `client_secret`, `X-Api-Key`,
- * `sessionCookie`) has its value masked unless that value is a number, boolean
- * or `null`, so `tokenCount` stays readable.
+ * On a KEYED object (`args`, `identity`), a key that names a credential
+ * (`accessToken`, `client_secret`, `X-Api-Key`, `sessionId`, `otp`, `pin`,
+ * `DATABASE_URL`) has its value masked, numbers included; a key that measures
+ * credentials (`maxTokens`, `tokenUsage`) keeps its numbers. See
+ * `shared/credential-redaction.ts` for how keys are judged.
  *
- * On a PLAIN STRING (`errorMessage`, a URL), a `name=value` assignment whose name
- * contains one of those fragments (`token=abc`, `password=hunter2`, `?api_key=…`)
- * has its value masked, as do `standardRules`' value patterns — emails, long
- * digit runs / structured numeric IDs, `Bearer <token>`, JWTs.
+ * On a STRING (`errorMessage`, a URL, a log line), every URL loses its query,
+ * fragment and userinfo; `name=value`, `name: value` and `"name":"value"` pairs
+ * with a credential name are masked; `Basic …` is masked; and `standardRules`'
+ * value patterns (emails, long digit runs, `Bearer …`, JWTs) apply. Strings are
+ * capped at 4 KiB first so one oversized arg cannot hold the Durable Object in
+ * regex work.
  *
  * Still NOT caught: a bare credential in prose with no name attached
  * (`failed with sk_live_…`). This is a credential-and-PII net, not proof that no
- * secret can reach the log — a handler that echoes an unnamed raw secret into a
- * message still leaks it. {@link appendRequestLogEntry} and
- * {@link emitRequestLogEvent} run `errorMessage` through here as well, since a
- * validation error echoes the offending value and a constraint error quotes the
- * conflicting row.
+ * secret can reach the log.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
  * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
@@ -338,7 +296,7 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
         return value;
     }
 
-    return redactValue(value);
+    return redactValue(maskCredentials(value));
 };
 
 /**

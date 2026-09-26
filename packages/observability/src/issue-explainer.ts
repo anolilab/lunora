@@ -70,12 +70,20 @@ const UNTRUSTED_FENCE = "-----BEGIN UNTRUSTED ERROR REPORT-----";
 
 /**
  * The marker as a model reads it, not as `===` does: a model treats
- * `-----begin untrusted error report-----` or a re-spaced copy as the same
- * boundary, so matching only the exact casing left those free to close the block.
- * The words are what make it a marker, so they are what gets replaced; the dashes
+ * `-----begin untrusted error report-----`, `BEGIN_UNTRUSTED_ERROR_REPORT` or a
+ * copy with zero-width characters between the letters as the same boundary. So
+ * the letters of the marker's words are matched with up to four non-alphanumeric
+ * characters between any two, case-insensitively, after {@link normalizeForFence}
+ * has folded fullwidth forms and dropped zero-width / format characters. The
+ * words are what make it a marker, so they are what gets replaced; the dashes
  * left around `[fence]` carry no meaning on their own.
  */
-const UNTRUSTED_FENCE_LOOKALIKE = /BEGIN\s+UNTRUSTED\s+ERROR\s+REPORT/gi;
+// Each letter of the marker's words, with up to four separators between any two
+// (`\B` is every position between two letters).
+const UNTRUSTED_FENCE_LOOKALIKE = new RegExp("BEGINUNTRUSTEDERRORREPORT".replaceAll(/\B/g, String.raw`[^\dA-Z]{0,4}`), "gi");
+
+/** NFKC folds fullwidth and other compatibility forms to ASCII; `\p{Cf}` is every zero-width / format character. */
+const normalizeForFence = (value: string): string => value.normalize("NFKC").replaceAll(/\p{Cf}/gu, "");
 
 /**
  * Deadline for one explainer inference. `binding.run` is awaited on a
@@ -92,7 +100,7 @@ const EXPLAIN_ISSUE_TIMEOUT_MS = 10_000;
  * marker is still a real error the operator needs explained, and refusing it
  * would turn a cosmetic collision into a denied explanation.
  */
-const fenceSafe = (value: string): string => value.replaceAll(UNTRUSTED_FENCE_LOOKALIKE, "[fence]");
+const fenceSafe = (value: string): string => normalizeForFence(value).replaceAll(UNTRUSTED_FENCE_LOOKALIKE, "[fence]");
 
 /**
  * Structural projection of the Workers `AI` binding's `run` method — declared

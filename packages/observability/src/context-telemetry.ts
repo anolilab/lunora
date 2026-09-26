@@ -150,9 +150,6 @@ const redactUrl = (raw: string): string => {
     }
 };
 
-/** An absolute http(s) URL embedded in free text, up to the first whitespace or quote/bracket delimiter. */
-const URL_IN_TEXT = /https?:\/\/[^\s"'<>()[\]{}]+/gi;
-
 /** Host of a URL, or the raw string when it will not parse. Used for low-cardinality span names. */
 const safeHost = (raw: string): string => {
     try {
@@ -423,7 +420,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(attributes);
+            const normalized = redactSecrets(boundedAttributes(attributes), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -436,7 +433,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(link.attributes);
+            const normalized = redactSecrets(boundedAttributes(link.attributes), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -830,15 +827,11 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             return response;
         } catch (error_) {
             // A `fetch` failure message routinely embeds the full request URL,
-            // query string included, and this is the span pipeline — the one sink
-            // with third-party fan-out. `redactArgs` alone only masks a query
-            // parameter whose NAME looks like a credential, so a `sig=` or
-            // `X-Amz-Signature=` would survive: every URL in the message gets the
-            // same `redactUrl` treatment as `url.full` below first.
+            // query string included; `redactArgs` drops every URL's query,
+            // fragment and userinfo, the same as `redactUrl` does for `url.full`.
             const rawMessage = error_ instanceof Error ? error_.message : String(error_);
-            const message = captureRaw ? rawMessage : rawMessage.replaceAll(URL_IN_TEXT, (url) => redactUrl(url));
 
-            error = { message: redactArgs(message, captureRaw) as string, type: toErrorType(error_) };
+            error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
 
             throw error_;
         } finally {
@@ -893,7 +886,8 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
             return;
         }
 
-        const normalized = normalizeLogFields(attributes);
+        // Credentials masked like span attributes: metric attributes ship to the same collector.
+        const normalized = redactSecrets(normalizeLogFields(attributes)) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.
         try {

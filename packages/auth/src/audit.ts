@@ -13,8 +13,10 @@
  * plan calls for. First, retention is configurable and NOT capped at 1000:
  * compliance use wants a long (often unbounded) trail, so it is an explicit
  * option and omitting it keeps every row. Second, the free-form `detail` payload
- * is scrubbed with `@visulima/redact` before it is persisted, so a token or
- * password that leaks into an event's context never reaches the durable table.
+ * is scrubbed before it is persisted — credential keys and `name=value` pairs
+ * by `shared/credential-redaction` (the same masking the request log uses), then
+ * `@visulima/redact`'s standard and PII rules — so a token or password that
+ * leaks into an event's context never reaches the durable table.
  *
  * Persistence rides the same {@link SqlExecutor} seam better-auth's store uses
  * (`./sql-store`), so it lands in the same D1 database as the auth tables — no
@@ -23,6 +25,7 @@
 
 import { piiRules, redact, standardRules } from "@visulima/redact";
 
+import { maskCredentials } from "../../../shared/credential-redaction";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -250,7 +253,7 @@ const appendAuthAuditEntry = async (
     let detail: Record<string, unknown> | undefined;
 
     if (entry.detail !== undefined) {
-        detail = options.redactDetail === false ? entry.detail : redact(entry.detail, AUDIT_REDACT_RULES);
+        detail = options.redactDetail === false ? entry.detail : redact(maskCredentials(entry.detail) as Record<string, unknown>, AUDIT_REDACT_RULES);
     }
 
     await executor.run(
