@@ -13,7 +13,7 @@ import { readCapped } from "../../../shared/read-capped";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { containerBindingName } from "./define-container";
 import type { ContainerExecOptions, ContainerExecResult } from "./exec";
-import { CONTAINER_EXEC_HEADER, decodedPathForms, execViaFetch } from "./exec";
+import { CONTAINER_EXEC_HEADER, execViaFetch, pathMatchesAnyDecoding } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
 
@@ -370,7 +370,7 @@ const assertPathNotReserved = (input: Request | string, label: string): void => 
         return;
     }
 
-    if (decodedPathForms(url.pathname).some((form) => firstSegment(form) === RESERVED_PATH_SEGMENT)) {
+    if (pathMatchesAnyDecoding(url.pathname, (form) => firstSegment(form) === RESERVED_PATH_SEGMENT)) {
         throw new LunoraError(
             "BAD_REQUEST",
             `${label}: \`/${RESERVED_PATH_SEGMENT}/*\` is reserved for Lunora's own container routes and cannot be reached with \`fetch\`. ` +

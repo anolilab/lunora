@@ -170,6 +170,7 @@ describe("lunoraContainer reserved routes", () => {
                 "/api/__lunora/exec",
                 "/__lunora%2Fexec",
                 "/%255F%255Flunora/exec",
+                "/%5F%5Flunora/exec/%ZZ",
             ].map((path) => new Request(`https://container${path}`, { method: "POST" })),
             // The old in-band mark, in the value exec used and in wrong ones: none opens the route.
             ...["1", "0", "true"].map(

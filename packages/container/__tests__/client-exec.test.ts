@@ -470,6 +470,22 @@ describe("containerHandle.exec", () => {
         expect(requests).toHaveLength(0);
     });
 
+    it("refuses a reserved path hidden behind a malformed escape, and one that never stops decoding", async () => {
+        expect.assertions(3);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        // `decodeURIComponent` throws on `%ZZ` for the whole path, but a lenient
+        // router decodes the valid escapes around it and routes to exec.
+        await expect(handle.fetch("/%5F%5Flunora/exec/%ZZ", { method: "POST" })).rejects.toThrow(/reserved/u);
+        // Still changing after the round cap: refused rather than assumed safe.
+        await expect(handle.fetch(`/${"%25".repeat(1)}${"25".repeat(8)}5F`, { method: "POST" })).rejects.toThrow(/reserved/u);
+
+        expect(requests).toHaveLength(0);
+    });
+
     it("rejects a maxOutputBytes that is not a cap, before running anything", async () => {
         expect.assertions(4);
 

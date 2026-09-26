@@ -801,8 +801,9 @@ type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" 
  *
  * It stays a hand-written LIST rather than "snapshot every `currentRequest*`
  * field", because membership is a judgement, not a category: `currentRequestTrace`
- * is threaded by value as `dispatchTrace` and has its own claim/release
- * lifecycle, `currentResponseBookmark` is PRODUCED by the dispatch (the restore
+ * is ALSO threaded by value as `dispatchTrace` (it is here too only because the
+ * outbound-container traceparent reads the shared field),
+ * `currentResponseBookmark` is PRODUCED by the dispatch (the restore
  * clears it on purpose), and `mutationBookkeeping` is written DURING the handler
  * — re-pinning the captured `undefined` at the tail would wipe the handshake the
  * post-dispatch bookkeeping reads next. A mechanism that cannot forget a field
@@ -853,6 +854,15 @@ interface RequestScope {
     sampleErrors: boolean | undefined;
 
     system: boolean;
+
+    /**
+     * The dispatch's own trace anchor, minted when the request carried no
+     * `traceparent`. `getCurrentTraceparent` falls back to it for outbound
+     * container calls, so it travels with `traceparent` for the same reason:
+     * a queued mutation admitted after a sibling's prologue would otherwise
+     * forward the sibling's trace.
+     */
+    trace: { rootSpanId: string; traceId: string } | undefined;
 
     /**
      * The inbound W3C `traceparent`, which `buildCtx` hands to
@@ -3500,10 +3510,11 @@ abstract class ShardDO {
      * rather than each starting a disconnected one. `undefined` only outside a
      * dispatch.
      *
-     * Known limit: both fields are shared per-instance state, read when the ctx
-     * is built. An RPC dispatch that begins while an alarm is in flight
-     * overwrites `currentRequestTrace`, so a ctx the alarm builds after that
-     * point forwards the RPC's trace (and vice versa) — the same trade
+     * Both fields are re-pinned with the rest of the request scope, so a
+     * gate-queued mutation forwards its own trace. Known limit: an RPC dispatch
+     * that begins while an ALARM is in flight still overwrites
+     * `currentRequestTrace`, so a ctx the alarm builds after that point
+     * forwards the RPC's trace (and vice versa) — the same trade
      * `withTriggerTrace` documents for inner spans. Fixing it means passing the
      * dispatch's anchor into `buildCtx` by value.
      */
@@ -7490,6 +7501,7 @@ abstract class ShardDO {
             mutatorClass: this.currentMutatorClass,
             sampleErrors: this.currentRequestSampleErrors,
             system: this.currentRequestSystem,
+            trace: this.currentRequestTrace,
             traceparent: this.currentRequestTraceparent,
             userId: this.currentRequestUserId,
         };
@@ -7515,6 +7527,7 @@ abstract class ShardDO {
         this.currentMutatorClass = scope.mutatorClass;
         this.currentRequestSampleErrors = scope.sampleErrors;
         this.currentRequestSystem = scope.system;
+        this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
     }

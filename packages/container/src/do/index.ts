@@ -12,7 +12,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
-import { CONTAINER_EXEC_PATH, decodedPathForms } from "../exec";
+import { CONTAINER_EXEC_PATH, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
@@ -86,9 +86,8 @@ const withoutSegmentParams = (segment: string): string => {
  * prefix, or behind a proxy that decodes once more, is covered too.
  */
 const touchesReservedNamespace = (pathname: string): boolean =>
-    decodedPathForms(pathname).some((path) =>
-        path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER),
-    );
+    pathMatchesAnyDecoding(pathname, (path) =>
+        path.split(PATH_SEPARATORS).some((segment) => withoutSegmentParams(segment).toLowerCase() === RESERVED_PATH_MARKER), );
 
 /** The pathname a `containerFetch(requestOrUrl, …)` call targets, whichever overload was used. */
 const containerFetchPathname = (requestOrUrl: unknown): string => {
