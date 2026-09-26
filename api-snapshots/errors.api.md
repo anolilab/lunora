@@ -196,6 +196,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
     };
+    readonly JURISDICTION_MOVE: {
+        readonly status: 422;
+        readonly title: "Unacknowledged jurisdiction move";
+    };
     readonly SCHEMA_SNAPSHOT_PARSE: {
         readonly status: 500;
         readonly title: "Schema snapshot parse error";

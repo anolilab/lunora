@@ -150,6 +150,8 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `.jurisdiction()` would move voice sessions / DO-backed auth to new, empty objects without `{ pinAuthAndVoice: true }`. */
+    JURISDICTION_MOVE: { status: 422, title: "Unacknowledged jurisdiction move" },
     /** Build-time-only — never crosses the RPC wire, so deliberately not `internal`. */
     SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
     /** Runtime-reachable (env.ts): message enumerates failing env key names — redact on the wire. */

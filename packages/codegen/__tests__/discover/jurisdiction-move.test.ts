@@ -61,17 +61,17 @@ describe("jurisdiction move of auth and voice", () => {
 
         const declaration = entryWithAuth(`{ namespace: (env) => env.AUTH, options: () => ({}) }`);
 
-        expect(() => { assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [], declaration); }).toThrow(
-            /DO-backed auth[\s\S]*NEW, EMPTY objects[\s\S]*pinAuthAndVoice: true[\s\S]*src\/index\.ts:2/u,
-        );
+        expect(() => {
+            assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [], declaration);
+        }).toThrow(/DO-backed auth[\s\S]*NEW, EMPTY objects[\s\S]*pinAuthAndVoice: true[\s\S]*src\/index\.ts:2/u);
     });
 
     it("refuses voice sessions under an unacknowledged jurisdiction", () => {
         expect.assertions(1);
 
-        expect(() => { assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [voiceAgent], undefined); }).toThrow(
-            /voice sessions of agent\(s\) "support"/u,
-        );
+        expect(() => {
+            assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [voiceAgent], undefined);
+        }).toThrow(/voice sessions of agent\(s\) "support"/u);
     });
 
     it("accepts both once acknowledged, and projects that have neither", () => {
@@ -79,9 +79,15 @@ describe("jurisdiction move of auth and voice", () => {
 
         const declaration = entryWithAuth(`{ namespace: (env) => env.AUTH, options: () => ({}) }`);
 
-        expect(() => { assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu", { pinAuthAndVoice: true })`), [voiceAgent], declaration); }).not.toThrow();
-        expect(() => { assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [], undefined); }).not.toThrow();
-        expect(() => { assertJurisdictionMoveAcknowledged(schemaWith(""), [voiceAgent], declaration); }).not.toThrow();
+        expect(() => {
+            assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu", { pinAuthAndVoice: true })`), [voiceAgent], declaration);
+        }).not.toThrow();
+        expect(() => {
+            assertJurisdictionMoveAcknowledged(schemaWith(`.jurisdiction("eu")`), [], undefined);
+        }).not.toThrow();
+        expect(() => {
+            assertJurisdictionMoveAcknowledged(schemaWith(""), [voiceAgent], declaration);
+        }).not.toThrow();
     });
 
     it("finds DO-backed auth, and fails toward it when the options cannot be read", () => {
