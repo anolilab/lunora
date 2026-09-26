@@ -1,6 +1,6 @@
 {
     "name": "@lunora/vite",
-    "version": "1.0.0-alpha.255",
+    "version": "1.0.0-alpha.256",
     "description": "The Lunora Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin",
     "keywords": [
         "cloudflare",
@@ -60,9 +60,9 @@
     },
     "dependencies": {
         "@cloudflare/vite-plugin": "catalog:vite",
-        "@lunora/codegen": "1.0.0-alpha.220",
-        "@lunora/config": "1.0.0-alpha.257",
-        "@lunora/errors": "1.0.0-alpha.41",
+        "@lunora/codegen": "1.0.0-alpha.221",
+        "@lunora/config": "1.0.0-alpha.258",
+        "@lunora/errors": "1.0.0-alpha.42",
         "@visulima/vite-overlay": "catalog:vite"
     },
     "devDependencies": {
