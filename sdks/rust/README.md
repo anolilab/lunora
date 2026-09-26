@@ -142,6 +142,14 @@ than being flattened into `serde_json::Value`:
 `undefined`, `NaN` and the infinities are their own variants, distinct from
 `Null`.
 
+A number off the wire is the double `JSON.parse` reads: the crate enables
+`serde_json`'s `float_roundtrip`, whose parser is correctly rounded (the default
+one reads about one double in six one ulp off), and an integer literal past 2^53
+decodes to the nearest `Number`, never a `BigInt`. The stable key spells it as
+`String(v)` does — shortest round-trip digits, an exact tie broken to the even
+digit. Only `from_json`, the MODEL side, keeps an over-range integer's digits as a
+`BigInt`.
+
 ## Tests
 
 The suite drives the SDK against the **shared** golden fixtures in

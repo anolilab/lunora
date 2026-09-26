@@ -324,6 +324,12 @@ fn format_number_matches_ecmascript() {
         (1.152_921_504_606_847e18, "1152921504606847000"),
         // Negative zero keeps its sign in a key.
         (-0.0, "-0"),
+        // Exactly halfway between two shortest candidates (…719.25, …467.625):
+        // ECMAScript takes the EVEN digit, where Rust's shortest formatter
+        // rounds the tie up and spelled these …719.3 and …467.63.
+        (-1_447_690_133_445_719.2, "-1447690133445719.2"),
+        (180_078_061_673_467.62, "180078061673467.62"),
+        (-132_405_809_496.453_12, "-132405809496.45312"),
     ] {
         assert_eq!(stable_stringify(&json!(value)), want, "formatting {value}");
     }
