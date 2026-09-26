@@ -1,3 +1,18 @@
+## @lunora/d1 [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.141...@lunora/d1@1.0.0-alpha.142) (2026-09-26)
+
+### Bug Fixes
+
+* **studio:** bigint filter data loss, cross-shard commits, and panel defects ([#844](https://github.com/anolilab/lunora/issues/844)) ([41585c7](https://github.com/anolilab/lunora/commit/41585c7142c20932f2aefbb0fbc84fc52f7e7db8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.91
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.144
+* **@lunora/do:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/d1 [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.140...@lunora/d1@1.0.0-alpha.141) (2026-09-26)
 
 
