@@ -214,13 +214,13 @@ describe("lunoraSessionSync", () => {
         expect(plugin.id).toBe("lunora-session-sync");
     });
 
-    it("notifyLunoraSessionChange reaches every registered listener", () => {
+    it("notifyLunoraSessionChange reaches every registered listener", async () => {
         expect.assertions(1);
 
         const heard: number[] = [];
         const releases = [onSessionChanged(() => heard.push(1)), onSessionChanged(() => heard.push(2))];
 
-        notifyLunoraSessionChange();
+        await notifyLunoraSessionChange();
 
         for (const release of releases) {
             release();
