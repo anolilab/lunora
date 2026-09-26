@@ -65,6 +65,13 @@ const MARKER_TABLE = "__lunora_auth_move__";
 /** Every source row the target has applied: its key and the digest of its values as copied. */
 const COPIED_TABLE = "__lunora_auth_move_rows__";
 
+/**
+ * Written to the source by a purge. Once purged, the object serves again with empty
+ * tables (after a rollback, say), and a copy from it would read "every row deleted"
+ * and sweep the pinned copies away: every source-side step refuses instead.
+ */
+const PURGED_TABLE = "__lunora_auth_purged__";
+
 /** Rows per page. */
 const PAGE_ROWS = 100;
 
@@ -82,7 +89,8 @@ const MAX_BOUND_PARAMETERS = 100;
 const DIGEST_MODULUS = 2n ** 64n;
 
 /** Internal and reserved tables: SQLite's own, Cloudflare's `_cf_*`, and the move's own. */
-const isReservedTable = (name: string): boolean => name.startsWith("sqlite_") || name.startsWith("_cf_") || name === MARKER_TABLE || name === COPIED_TABLE;
+const isReservedTable = (name: string): boolean =>
+    name.startsWith("sqlite_") || name.startsWith("_cf_") || name === MARKER_TABLE || name === COPIED_TABLE || name === PURGED_TABLE;
 
 type Row = Record<string, unknown>;
 
@@ -616,10 +624,26 @@ const purgeSource = async (storage: DoStorageLike, expected: Record<string, stri
         for (const table of dropped) {
             run(storage, `DROP TABLE ${quoteIdentifier(table)}`);
         }
+
+        run(storage, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(PURGED_TABLE)} (at INTEGER NOT NULL)`);
+        run(storage, `INSERT INTO ${quoteIdentifier(PURGED_TABLE)} (at) VALUES (?)`, Date.now());
     });
 
     return { dropped };
 };
+
+/** Source: refuse every step once this object has been purged. */
+const assertNotPurged = (storage: DoStorageLike): void => {
+    if (columnNames(storage, PURGED_TABLE).length > 0) {
+        throw new LunoraError(
+            "AUTH_MOVE_SOURCE_PURGED",
+            "the un-pinned auth object was purged after its tables were copied; anything in it now is new, and copying it would delete the pinned object's users",
+        );
+    }
+};
+
+/** The ops served by the un-pinned object. */
+const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "purge"]);
 
 /**
  * Target: markers and the copy order, plus — only when asked, since it reads every
@@ -675,6 +699,10 @@ const safeCause = (error: unknown): string => {
 };
 
 const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext): Promise<unknown> => {
+    if (SOURCE_OPS.has(String(body["op"]))) {
+        assertNotPurged(storage);
+    }
+
     switch (body["op"]) {
         case "begin": {
             context.prepare();

@@ -152,7 +152,7 @@ class LunoraAuthDO {
      * is swallowed. The executor is a stateless pair of closures over `storage`,
      * so sharing it is free.
      */
-    readonly #auditExecutor: SqlExecutor;
+    #auditExecutor: SqlExecutor;
 
     readonly #options: AuthDoOptions;
 
@@ -374,6 +374,9 @@ class LunoraAuthDO {
                 onPurge: () => {
                     this.#schemaApplied = false;
                     this.#auth = undefined;
+                    // A fresh executor, so the audit table's single-flight "already created"
+                    // cache (keyed on the executor) does not outlive the table.
+                    this.#auditExecutor = doExecutor(this.#storage);
                 },
                 order: () => this.#moveOrder,
                 prepare: () => {

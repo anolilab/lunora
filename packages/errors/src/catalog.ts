@@ -414,6 +414,11 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Un-pinned auth object changed since the copy",
     },
+    AUTH_MOVE_SOURCE_PURGED: {
+        hint: "The un-pinned auth object was already purged. Its tables may exist again (a rollback served requests there), but they hold only rows written since, so the copy refuses rather than read them as deletions and remove the pinned object's users. Nothing is left to copy.",
+        status: 409,
+        title: "Un-pinned auth object already purged",
+    },
     AUTH_MOVE_INCOMPLETE: {
         // eslint-disable-next-line no-secrets/no-secrets -- an admin op name, not a credential
         hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.",

@@ -476,6 +476,11 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Un-pinned auth object changed since the copy";
     };
+    readonly AUTH_MOVE_SOURCE_PURGED: {
+        readonly hint: "The un-pinned auth object was already purged. Its tables may exist again (a rollback served requests there), but they hold only rows written since, so the copy refuses rather than read them as deletions and remove the pinned object's users. Nothing is left to copy.";
+        readonly status: 409;
+        readonly title: "Un-pinned auth object already purged";
+    };
     readonly AUTH_MOVE_INCOMPLETE: {
         readonly hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.";
         readonly status: 409;

@@ -222,6 +222,11 @@ finished for every table the un-pinned object holds. It refuses with
 an insert, an update or a delete. It checks this inside the transaction that
 drops the tables. Run the copy again to carry the change, then purge.
 
+A purge is final for that object. If it serves requests again afterwards (a
+rollback to a build without the pin), it re-creates its tables empty; the copy and
+the purge then refuse with `AUTH_MOVE_SOURCE_PURGED` rather than read the empty
+tables as deletions and remove users from the pinned object.
+
 </Step>
 
 </Steps>

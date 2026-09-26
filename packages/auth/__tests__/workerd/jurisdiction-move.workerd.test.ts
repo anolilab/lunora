@@ -533,6 +533,30 @@ describe("auth jurisdiction move in workerd", () => {
         expect(status).toBeLessThan(500);
     });
 
+    it("refuses to copy from an un-pinned object that was purged and then served again", async () => {
+        expect.assertions(4);
+
+        await seedSource("move-after-purge");
+
+        const move = moveFor("move-after-purge");
+
+        await copyAll(move);
+        await move.purge();
+
+        // A rollback serves the un-pinned object again: it re-creates its tables, empty,
+        // and takes one sign-up.
+        await warm("move-after-purge");
+        await sql("move-after-purge", (storage) => {
+            insertUser(storage, "late", "late@example.test");
+        });
+
+        await expect(move.copy()).rejects.toMatchObject({ code: "AUTH_MOVE_SOURCE_PURGED", status: 409 });
+        await expect(move.purge()).rejects.toMatchObject({ code: "AUTH_MOVE_SOURCE_PURGED" });
+        // The pinned object keeps every copied user.
+        await expect(count("eu:move-after-purge", "user")).resolves.toBe(USERS);
+        await expect(count("eu:move-after-purge", "account")).resolves.toBe(ACCOUNTS);
+    });
+
     it("creates the source's indexes on a table the pinned object already has", async () => {
         expect.assertions(1);
 
