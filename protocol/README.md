@@ -252,6 +252,19 @@ Headers:
 - `x-lunora-mutation-id: <id>` — idempotency key for a mutation replay (optional).
 - `x-lunora-client-id` / `x-lunora-client-seq` — custom-mutator push path (optional).
 - `x-d1-bookmark: <bookmark>` — D1 read-your-writes (optional).
+- `x-lunora-expect-subject: <base64url(JSON {"subject": "<userId>" | null})>` —
+  the user a replayed offline write was queued by (optional; also accepted on
+  §4.3's batch request, where it covers every entry). The worker resolves the
+  request's identity as usual and, when it is a different user — or `null`
+  (anonymous) where a user is named, or the reverse — refuses the request with
+  `409` and `{ "error": { "code": "IDENTITY_MISMATCH" } }` before any shard sees
+  it. A malformed value is refused with `400 BAD_REQUEST`. The reference client
+  sends it only on a replay made under a cookie session, where the credential
+  rides implicitly and can change hands (a sign-out, another user's sign-in)
+  without the client seeing it; a bearer request states its credential and has
+  no need. A client receiving `IDENTITY_MISMATCH` should re-resolve who is signed
+  in and settle the write against that answer — it is not a verdict on the write
+  itself. Omitting the header keeps the previous behaviour.
 
 Body:
 
@@ -524,6 +537,18 @@ Run `pageDeltaFrames` only once you announce the token.
 | `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
 | `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
 | `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
+| `identity` | `{ type, subject: <string \| null> }`                           | the user this socket is authenticated as (`null` = anonymous)              |
+
+`identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
+one. `subject` is the resolved user id the socket was upgraded under, or `null`
+for an anonymous socket — never absent. It exists for a client whose credential
+it cannot see: under a browser cookie session nothing on the client changes when
+the user signs out or someone else signs in, and a socket keeps the identity it
+was upgraded with for its whole life. The reference client adopts it as its
+identity when the socket carried the cookie alone (no `?token=`, no bearer held),
+and retires every live query on a change between two known identities. A client
+that states its own credential — every `sdks/*` port — MAY ignore the frame, and
+all eight do: an unknown `type` is already a no-op in each of them.
 
 A `complete` naming a live SUBSCRIPTION is a cancellation, NOT a de-registration:
 a client MUST report it to that subscription's error listener (the reference and
