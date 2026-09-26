@@ -148,6 +148,18 @@ describe("pitrPanel", () => {
         expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
     });
 
+    it("treats epoch-ms past the Date range as not a time instead of crashing", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({ query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "8640000000000001" } });
+
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
+    });
+
     it("names the shard and the target in the restore confirmation", async () => {
         expect.assertions(3);
 

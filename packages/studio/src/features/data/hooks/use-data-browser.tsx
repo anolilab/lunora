@@ -592,6 +592,7 @@ const useDataBrowser = ({
         clearFacets();
         stagedEdits.clear();
         setEditingCell(null);
+        setEditing(null);
         setOffset(0);
         // Every bulk-op banner describes the view being left behind — "500 rows
         // written." over a different table reads as if it just happened — and a
@@ -916,6 +917,8 @@ const useDataBrowser = ({
         setShardKey(value);
         stagedEdits.clear();
         setEditingCell(null);
+        // The JSON row editor too: its save writes the draft by id to the CURRENT shard.
+        setEditing(null);
         setOffset(0);
         bulkResume.current = null;
     };

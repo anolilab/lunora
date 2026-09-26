@@ -116,11 +116,11 @@ const approvalVariant = (status: string): "destructive" | "success" | "warning" 
     }
 };
 
-/** Says so when the timeline was cut: a full page means older messages exist that the read (which skips the count) did not return. */
-const MessagesTruncatedNotice = ({ shown }: { readonly shown: number }): ReactElement | null => {
+/** Says so when the timeline was cut: the read asks for one row past the cap, so getting it back means older messages exist. */
+const MessagesTruncatedNotice = ({ fetched }: { readonly fetched: number }): ReactElement | null => {
     const t = useT();
 
-    return shown < MESSAGE_LIMIT ? null : (
+    return fetched <= MESSAGE_LIMIT ? null : (
         <p className="text-xs text-muted-foreground" data-testid="agents-messages-truncated">
             {t("Showing the latest {count} messages; older ones are not shown.", { count: MESSAGE_LIMIT })}
         </p>
@@ -165,7 +165,8 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
 
     const messagesArgs: Record<string, unknown> = {
         filters: [{ column: "threadKey", operator: "eq", value: selectedKey ?? "" }],
-        limit: MESSAGE_LIMIT,
+        // One past the cap: an extra row is how the timeline knows older messages exist.
+        limit: MESSAGE_LIMIT + 1,
         offset: 0,
         // Newest first, reversed below for display: an ascending read capped at
         // MESSAGE_LIMIT shows the OLDEST messages and hides the ones just written.
@@ -196,7 +197,8 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
     const threads = Array.isArray(threadsPage?.rows) ? threadsPage.rows : [];
     const queuedRuns = Array.isArray(queuePage?.rows) ? queuePage.rows : [];
     const queueDepth = (threadKey: string): number => queuedRuns.filter((row) => readString(row, "threadKey") === threadKey).length;
-    const messages = Array.isArray(messagesPage?.rows) ? messagesPage.rows.toReversed() : [];
+    const newestMessages = Array.isArray(messagesPage?.rows) ? messagesPage.rows : [];
+    const messages = newestMessages.slice(0, MESSAGE_LIMIT).toReversed();
 
     const selectedThread = threads.find((row) => readString(row, "key") === selectedKey);
 
@@ -316,7 +318,7 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
                                 </Button>
                             </div>
 
-                            <MessagesTruncatedNotice shown={messages.length} />
+                            <MessagesTruncatedNotice fetched={newestMessages.length} />
 
                             {messages.length === 0 ? (
                                 <p className="text-xs text-muted-foreground">{t("This thread has no messages yet.")}</p>

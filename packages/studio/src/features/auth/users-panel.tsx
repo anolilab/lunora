@@ -57,13 +57,20 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const usersQuery = useClientQuery(
         ["lunora-auth-users", trimmedSearch, trimmedRole, pageSize, offset],
         () =>
-            client.listAuthUsers({
-                filterField: trimmedRole === "" ? undefined : "role",
-                filterValue: trimmedRole === "" ? undefined : trimmedRole,
-                limit: pageSize,
-                offset,
-                search: trimmedSearch === "" ? undefined : trimmedSearch,
-            }),
+            client
+                .listAuthUsers({
+                    filterField: trimmedRole === "" ? undefined : "role",
+                    filterValue: trimmedRole === "" ? undefined : trimmedRole,
+                    limit: pageSize,
+                    offset,
+                    search: trimmedSearch === "" ? undefined : trimmedSearch,
+                })
+                .then((page) => {
+                    // Tagged with the offset it was read at: `keepPreviousData` shows this
+                    // page while the next one loads, and the pager must describe (and page
+                    // from) the rows on screen, not the offset already requested.
+                    return { ...page, offset };
+                }),
         { keepPreviousData: true },
     );
     const users = usersQuery.data?.rows ?? null;
@@ -210,7 +217,14 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
             )}
 
             {users !== null && (
-                <AuthPager count={users.length} offset={offset} onOffsetChange={setOffset} pageSize={pageSize} prefix="us" total={usersQuery.data?.total} />
+                <AuthPager
+                    count={users.length}
+                    offset={usersQuery.data?.offset ?? 0}
+                    onOffsetChange={setOffset}
+                    pageSize={pageSize}
+                    prefix="us"
+                    total={usersQuery.data?.total}
+                />
             )}
 
             {selectedUser !== null && (

@@ -107,5 +107,12 @@ describe("organizationDetail members paging", () => {
         await waitFor(() => {
             expect(mock.listAuthOrgMembers).toHaveBeenLastCalledWith({ limit: 200, offset: 0, organizationId: "org_2" });
         });
+
+        // Going back to the first organization opens its first page too, not the page left behind.
+        rerender(renderDetail(mock));
+
+        await waitFor(() => {
+            expect(mock.listAuthOrgMembers).toHaveBeenLastCalledWith({ limit: 200, offset: 0, organizationId: "org_1" });
+        });
     });
 });

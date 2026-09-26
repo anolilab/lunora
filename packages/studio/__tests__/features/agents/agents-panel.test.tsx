@@ -72,4 +72,21 @@ describe("agentsPanel — timeline of a long thread", () => {
 
         expect(screen.queryByTestId("agents-messages-truncated")).toBeNull();
     });
+
+    it("shows no notice for a thread of exactly the cap", async () => {
+        expect.hasAssertions();
+
+        render(
+            <LunoraProvider client={clientWith(messagesOf(250)).asClient}>
+                <AgentsPanel />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("agents-thread-open-t1"));
+        await waitFor(() => {
+            expect(shownSeqs()).toHaveLength(250);
+        });
+
+        expect([shownSeqs()[0], screen.queryByTestId("agents-messages-truncated")]).toStrictEqual([0, null]);
+    });
 });

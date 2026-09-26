@@ -25,6 +25,10 @@ const AuthPager = ({ count, offset, onOffsetChange, pageSize, prefix, total }: A
         return null;
     }
 
+    // A delete elsewhere can shrink `total` below the page on screen; Previous
+    // then lands on the last page that still has rows rather than an empty one.
+    const lastPageOffset = Math.max(0, Math.floor((total - 1) / pageSize) * pageSize);
+
     return (
         <GridPagination
             hasNext={offset + count < total}
@@ -33,10 +37,10 @@ const AuthPager = ({ count, offset, onOffsetChange, pageSize, prefix, total }: A
                 onOffsetChange(offset + pageSize);
             }}
             onPrevious={() => {
-                onOffsetChange(Math.max(0, offset - pageSize));
+                onOffsetChange(Math.max(0, Math.min(offset - pageSize, lastPageOffset)));
             }}
             prefix={prefix}
-            rangeEnd={offset + count}
+            rangeEnd={count === 0 ? 0 : offset + count}
             rangeStart={count === 0 ? 0 : offset + 1}
             total={total}
         />
@@ -44,12 +48,17 @@ const AuthPager = ({ count, offset, onOffsetChange, pageSize, prefix, total }: A
 };
 
 /**
- * A page offset that belongs to `owner` (an organization id, say): when the
- * owner changes, the offset reads as 0 again without an effect, so a new owner
- * never opens on the previous one's page.
+ * A page offset that belongs to `owner` (an organization id, say): an owner
+ * change resets the stored offset during render (React's adjust-state-on-prop
+ * pattern, no effect), so every newly selected owner — including one picked
+ * before — opens on its first page.
  */
 const useOwnedOffset = (owner: string): [number, (offset: number) => void] => {
     const [page, setPage] = useState({ offset: 0, owner });
+
+    if (page.owner !== owner) {
+        setPage({ offset: 0, owner });
+    }
 
     return [
         page.owner === owner ? page.offset : 0,

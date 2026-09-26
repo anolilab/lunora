@@ -37,7 +37,10 @@ const parsePitrTime = (text: string): undefined | { epochMs: number; iso: string
     const trimmed = text.trim();
     const epochMs = EPOCH_MS_RE.test(trimmed) ? Number(trimmed) : Date.parse(trimmed);
 
-    return Number.isFinite(epochMs) ? { epochMs, iso: new Date(epochMs).toISOString() } : undefined;
+    const date = new Date(epochMs);
+
+    // `Date`'s own range, not `isFinite`: past ±8.64e15 ms `toISOString` throws.
+    return Number.isNaN(date.getTime()) ? undefined : { epochMs, iso: date.toISOString() };
 };
 
 /** What the typed time resolves to, in UTC — shown before a preview or restore so an offset-less time can't silently mean a different instant. */
@@ -54,7 +57,7 @@ const ResolvedTimeHint = ({ text }: { readonly text: string }): ReactElement | n
         <p className="font-mono text-xs text-muted-foreground" data-testid="pitr-time-resolved">
             {resolved === undefined
                 ? t("Not a time — use epoch-ms or ISO 8601.")
-                : t("Resolves to {instant} (a time without an offset is read in this browser's time zone)", { instant: resolved.iso })}
+                : t("Resolves to {instant} (a date-time without an offset is read in this browser's time zone; a bare date is UTC)", { instant: resolved.iso })}
         </p>
     );
 };

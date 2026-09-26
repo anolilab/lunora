@@ -137,7 +137,7 @@ describe("usersPanel", () => {
 
         const ban = screen.getByTestId<HTMLButtonElement>("ud-ban");
 
-        for (const days of ["", "0", "0.5", "-1"]) {
+        for (const days of ["", "0", "0.5", "-1", "9".repeat(400)]) {
             fireEvent.change(screen.getByTestId("ud-ban-days"), { target: { value: days } });
 
             expect(ban.disabled).toBe(true);

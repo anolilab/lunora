@@ -809,7 +809,7 @@ const MESSAGE_IDS = [
     "Restore",
     "Time (ISO or epoch-ms, last 30 days)",
     "Not a time — use epoch-ms or ISO 8601.",
-    "Resolves to {instant} (a time without an offset is read in this browser's time zone)",
+    "Resolves to {instant} (a date-time without an offset is read in this browser's time zone; a bare date is UTC)",
     "Preview",
     "Bookmark for that time",
     "Or an explicit bookmark (wins over time)",

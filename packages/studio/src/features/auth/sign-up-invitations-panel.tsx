@@ -49,13 +49,15 @@ const IssuedInvitation = ({
     readonly signUpPage: string;
 }): ReactElement => {
     const t = useT();
-    const [copied, setCopied] = useState(false);
+    // The link that was copied, not a flag: an edit to the page while a copy is
+    // in flight must not leave "Copied" showing for a link that was never copied.
+    const [copiedLink, setCopiedLink] = useState<null | string>(null);
     const link = invitationLink(signUpPage, issued);
 
     const onCopyLink = (): void => {
         // Mirrors `apply-index-button.tsx`: a studio served over a LAN IP is not a
         // secure context, so `navigator.clipboard` is undefined there, and even
-        // where it exists the write can be denied. `copied` is therefore only set
+        // where it exists the write can be denied. `copiedLink` is therefore only set
         // in the success branch — the link stays selectable in the field either
         // way, and claiming a copy that did not happen is how an operator loses a
         // token they cannot get back.
@@ -68,7 +70,7 @@ const IssuedInvitation = ({
 
         fireAndForget(
             clipboard.writeText(link).then((): boolean => {
-                setCopied(true);
+                setCopiedLink(link);
 
                 return true;
             }),
@@ -85,14 +87,13 @@ const IssuedInvitation = ({
                     data-testid="sign-up-invitation-page"
                     onChange={(event) => {
                         onSignUpPageChange(event.target.value);
-                        setCopied(false);
                     }}
                     value={signUpPage}
                 />
                 <div className="flex gap-2">
                     <Input data-testid="sign-up-invitation-link" readOnly value={link ?? ""} />
                     <Button data-testid="sign-up-invitation-copy" onClick={onCopyLink} type="button">
-                        {copied ? t("Copied") : t("Copy")}
+                        {copiedLink !== null && copiedLink === link ? t("Copied") : t("Copy")}
                     </Button>
                 </div>
             </CardContent>

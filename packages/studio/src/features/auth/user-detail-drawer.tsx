@@ -49,7 +49,9 @@ const BanForm = ({ busy, onBan }: { readonly busy: boolean; readonly onBan: (ban
     const [days, setDays] = useState<string>("");
     const [permanent, setPermanent] = useState<boolean>(false);
 
-    const wholeDays = WHOLE_DAYS_RE.test(days.trim()) ? Number(days.trim()) : undefined;
+    // Capped at a safe expiry: a long digit string becomes `Infinity`, which JSON
+    // sends as `null` — and a null expiry is a PERMANENT ban.
+    const wholeDays = WHOLE_DAYS_RE.test(days.trim()) && Number.isSafeInteger(Number(days.trim()) * 86_400) ? Number(days.trim()) : undefined;
     const canBan = permanent || wholeDays !== undefined;
 
     const onSubmit = (): void => {

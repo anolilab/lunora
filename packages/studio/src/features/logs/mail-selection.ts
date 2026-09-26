@@ -38,7 +38,7 @@ const recipientText = (value: string | string[] | undefined): string => {
 };
 
 /** The `href` of the first `<a>` pointing at an `http(s)` URL — the link a reader would click, not a `<link>` stylesheet in `<head>`. */
-const ANCHOR_HREF = /<a\s[^>]*?href\s*=\s*["'](https?:\/\/[^"'\s]+)["']/iu;
+const ANCHOR_HREF = /<a\s(?:[^>]*?\s)?href\s*=\s*["'](https?:\/\/[^"'\s]+)["']/iu;
 
 /** Ampersand entity (named + numeric decimal/hex forms) an HTML renderer escapes `&` to — the same set `@lunora/mail` decodes. */
 const AMPERSAND_ENTITY = /&(?:amp|#0*38|#x0*26);/giu;
