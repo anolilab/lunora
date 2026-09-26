@@ -1,6 +1,8 @@
+import type { BetterAuthClientPlugin } from "better-auth/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { createLunoraAuthClient, lunoraAuthPlugins } from "../src/auth-client-plugins";
+import { onSessionChanged } from "../../../shared/session-change";
+import { createLunoraAuthClient, lunoraAuthPlugins, lunoraSessionSync, notifyLunoraSessionChange } from "../src/auth-client-plugins";
 
 // Deterministic plugin identity for the order assertion — better-auth's real
 // plugin `id`s are internal and drift between versions, so each factory is
@@ -114,7 +116,8 @@ describe("createLunoraAuthClient", () => {
         const options = createAuthClient.mock.calls[0]?.[0] as { plugins: unknown[] };
 
         expect(createAuthClient).toHaveBeenCalledTimes(1);
-        expect(options.plugins).toHaveLength(2);
+        // The two toggled plugins, behind `lunoraSessionSync`, which is always first.
+        expect(options.plugins.map((plugin) => (plugin as { id: string }).id)).toStrictEqual(["lunora-session-sync", "organization", "twoFactor"]);
     });
 
     it("appends extraPlugins after the standard set", () => {
@@ -167,5 +170,62 @@ describe("createLunoraAuthClient", () => {
         const client = { marker: true };
 
         expect(createLunoraAuthClient(() => client)).toBe(client);
+    });
+});
+
+describe("lunoraSessionSync", () => {
+    type Hook = (context: { request: { method?: string } }) => void;
+
+    const onSuccessOf = (): Hook => {
+        const plugin = lunoraSessionSync() as unknown as { fetchPlugins: { hooks: { onSuccess: Hook } }[] };
+        const hook = plugin.fetchPlugins[0]?.hooks.onSuccess;
+
+        if (hook === undefined) {
+            throw new Error("lunoraSessionSync installs no onSuccess hook");
+        }
+
+        return hook;
+    };
+
+    it("tells every Lunora client after an auth request that can change the session", () => {
+        expect.assertions(1);
+
+        const heard: string[] = [];
+        const release = onSessionChanged(() => heard.push("changed"));
+        const onSuccess = onSuccessOf();
+
+        onSuccess({ request: { method: "POST" } });
+        onSuccess({ request: { method: "post" } });
+        // A read — `/get-session` itself — changes nothing and must not loop.
+        onSuccess({ request: { method: "GET" } });
+        onSuccess({ request: {} });
+
+        release();
+
+        expect(heard).toStrictEqual(["changed", "changed"]);
+    });
+
+    it("is a better-auth client plugin", () => {
+        expect.assertions(1);
+
+        // Compile-time: the narrow return type still fits `createAuthClient`.
+        const plugin: BetterAuthClientPlugin = lunoraSessionSync();
+
+        expect(plugin.id).toBe("lunora-session-sync");
+    });
+
+    it("notifyLunoraSessionChange reaches every registered listener", async () => {
+        expect.assertions(1);
+
+        const heard: number[] = [];
+        const releases = [onSessionChanged(() => heard.push(1)), onSessionChanged(() => heard.push(2))];
+
+        await notifyLunoraSessionChange();
+
+        for (const release of releases) {
+            release();
+        }
+
+        expect(heard).toStrictEqual([1, 2]);
     });
 });

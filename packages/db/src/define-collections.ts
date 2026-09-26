@@ -355,6 +355,9 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                                 // option entirely would sample the current cursor instead.
                                 // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                                 replayBaseline: meta.baselineSeq ?? null,
+                                // Under a cookie session the worker refuses the write
+                                // if the cookie now belongs to someone else.
+                                replayIdentity: meta.identity,
                                 shardKey: meta.shardKey,
                             }),
                         );
@@ -401,6 +404,9 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                     // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
                     // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                     replayBaseline: meta.baselineSeq ?? null,
+                    // Under a cookie session the worker refuses the write if the
+                    // cookie now belongs to someone else.
+                    replayIdentity: meta.identity,
                     shardKey: meta.shardKey,
                 }),
             );

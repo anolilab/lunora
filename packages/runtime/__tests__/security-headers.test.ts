@@ -309,6 +309,29 @@ describe("handleCorsPreflight", () => {
         expect(allowHeaders.toLowerCase()).not.toContain("x-evil");
     });
 
+    it("keeps the headers the SDK sends on its own when an app supplies its own allowedHeaders", () => {
+        expect.hasAssertions();
+
+        // A list written before a header existed must not block the SDK: the
+        // preflight failure reads as a network error, and a replayed offline
+        // write is retried as transient forever.
+        const custom = resolveSecurity({ cors: { allowedHeaders: ["Content-Type", "X-App-Trace"], allowedOrigins: ["https://app.example.com"] } });
+
+        const response = handleCorsPreflight(
+            httpsRequest({
+                headers: {
+                    "access-control-request-headers": "x-lunora-expect-subject, x-lunora-mutation-id, x-app-trace",
+                    "access-control-request-method": "POST",
+                    origin: "https://app.example.com",
+                },
+                method: "OPTIONS",
+            }),
+            custom,
+        );
+
+        expect((response?.headers.get("access-control-allow-headers") ?? "").toLowerCase()).toBe("x-lunora-expect-subject, x-lunora-mutation-id, x-app-trace");
+    });
+
     it("exposes the response headers the SDK reads back", () => {
         expect.hasAssertions();
 

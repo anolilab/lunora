@@ -208,7 +208,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: null, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: "room-7" },
         );
 
         await vi.waitFor(() => {
@@ -238,7 +238,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: 10, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: 10, replayIdentity: "user-a", shardKey: "room-7" },
         );
     });
 
@@ -346,6 +346,46 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         );
     });
 
+    // The worker refuses a cookie-session replay whose cookie now belongs to
+    // someone else. That is not a verdict on the write: the next attempt's
+    // identity guard settles it against who is signed in by then.
+    it("holds a write the worker refused with IDENTITY_MISMATCH, then drops it once another user is known", { timeout: 10_000 }, async () => {
+        const mismatch = Object.assign(new Error("the session changed since this write was queued"), { code: "IDENTITY_MISMATCH" });
+        const onWriteRejected = vi.fn<(event: { code?: string }) => void>();
+        const { client, mutation, signIn } = makeClient({
+            mutation: async () => {
+                // The client learns who holds the cookie from the refusal.
+                signIn("user-b");
+
+                throw mismatch;
+            },
+        });
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite());
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+        await vi.waitFor(
+            () => {
+                expect(onWriteRejected).toHaveBeenCalledTimes(1);
+            },
+            { interval: 100, timeout: 8000 },
+        );
+
+        expect(database.pendingCount()).toBe(0);
+        // Sent once, naming the user who queued it; the retry never went out.
+        expect(mutation).toHaveBeenCalledTimes(1);
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayIdentity: "user-a" });
+        // Dropped by the identity guard, not by the refusal itself.
+        expect(onWriteRejected.mock.calls.map(([event]) => event.code)).toStrictEqual([undefined]);
+    });
+
     it("retries a transient (code-less) failure until the write lands", { timeout: 10_000 }, async () => {
         let attempts = 0;
         const { client, mutation } = makeClient({
@@ -380,8 +420,8 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // Both attempts replayed under the SAME idempotency key — and the same
         // pinned baseline, so a retry that lands minutes later is still judged
         // against what the write's author could see.
-        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
-        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, shardKey: undefined });
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: undefined });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: undefined });
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);

@@ -94,7 +94,12 @@ describe(createSignInController, () => {
 
         expect(controller.getState().status).toBe("success");
         expect(nav.replace).toHaveBeenCalledWith("/app");
-        expect(onSessionChange).toHaveBeenCalledTimes(1);
+
+        // Runs once the Lunora clients have re-resolved the session, so not in the same tick.
+        await vi.waitFor(() => {
+            expect(onSessionChange).toHaveBeenCalledTimes(1);
+        });
+
         expect(client.signIn.email as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(expect.objectContaining({ email: "a@b.co", password: "secret1234" }));
     });
 
@@ -259,7 +264,11 @@ describe(createTwoFactorVerifyController, () => {
 
         expect(client.twoFactor.verifyTotp as ReturnType<typeof vi.fn>).toHaveBeenCalled();
         expect(nav.replace).toHaveBeenCalledWith("/app");
-        expect(onSessionChange).toHaveBeenCalledTimes(1);
+
+        // Runs once the Lunora clients have re-resolved the session, so not in the same tick.
+        await vi.waitFor(() => {
+            expect(onSessionChange).toHaveBeenCalledTimes(1);
+        });
     });
 
     it("uses the OTP endpoint when method is otp", async () => {
@@ -301,7 +310,11 @@ describe(createEmailOtpController, () => {
 
         expect(client.signIn.emailOtp as ReturnType<typeof vi.fn>).toHaveBeenCalledWith({ email: "a@b.co", otp: "123456" });
         expect(nav.replace).toHaveBeenCalledWith("/app");
-        expect(onSessionChange).toHaveBeenCalledTimes(1);
+
+        // Runs once the Lunora clients have re-resolved the session, so not in the same tick.
+        await vi.waitFor(() => {
+            expect(onSessionChange).toHaveBeenCalledTimes(1);
+        });
     });
 
     it("can go back to the request step", async () => {

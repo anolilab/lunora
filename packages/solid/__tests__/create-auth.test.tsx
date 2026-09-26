@@ -46,6 +46,7 @@ const createAuthFakeClient = (userResolves = true) => {
         // The identity store declares itself on attach; this double has no
         // gates to arm, so the method only has to exist.
         expectIdentityResolution: () => undefined,
+        onIdentityChange: () => () => undefined,
         getAuthToken,
         getCurrentUser,
         onAuthTokenChange,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { onSessionChanged } from "../../../../shared/session-change";
 import type { AuthClient, AuthResponse, AuthSession, ControllerContext } from "../../src/core";
 import {
     createChangeEmailController,
@@ -265,7 +266,8 @@ describe("createSessionsController", () => {
 
 describe("signOut", () => {
     it("signs out, signals the change, and redirects", async () => {
-        expect.assertions(3);
+        // Not a fixed count: `vi.waitFor` re-runs its assertion until it passes.
+        expect.hasAssertions();
 
         const client = stubClient();
         const { context, nav, onSessionChange } = makeContext(client);
@@ -273,7 +275,78 @@ describe("signOut", () => {
         await signOut(context);
 
         expect(client.signOut as ReturnType<typeof vi.fn>).toHaveBeenCalled();
-        expect(onSessionChange).toHaveBeenCalledTimes(1);
+
+        // Runs once the Lunora clients have re-resolved the session, so not in the same tick.
+        await vi.waitFor(() => {
+            expect(onSessionChange).toHaveBeenCalledTimes(1);
+        });
+
         expect(nav.replace).toHaveBeenCalledWith("/bye");
+    });
+
+    it("runs the app's handler only after the Lunora clients have re-resolved the session", async () => {
+        // Not a fixed count: `vi.waitFor` re-runs its assertion until it passes.
+        expect.hasAssertions();
+
+        // A Lunora client whose `/get-session` answers a tick later, as a real
+        // one does: the identity moves to "user-b" only when it lands.
+        let identity = "user-a";
+        const release = onSessionChanged(
+            async () =>
+                new Promise<void>((resolve) => {
+                    setTimeout(() => {
+                        identity = "user-b";
+                        resolve();
+                    }, 20);
+                }),
+        );
+        const seen: string[] = [];
+        const context = resolveContext({
+            authClient: stubClient(),
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            onSessionChange: () => seen.push(identity),
+            redirects: { afterSignOut: "/bye", signIn: "/sign-in" },
+        });
+
+        await signOut(context);
+
+        // Not yet: the probe is still in flight.
+        expect(seen).toStrictEqual([]);
+
+        await vi.waitFor(() => {
+            expect(seen).toStrictEqual(["user-b"]);
+        });
+        release();
+    });
+
+    it("runs the app's handler anyway when a Lunora probe never answers", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const release = onSessionChanged(async () => new Promise<never>(() => {}));
+        const onSessionChange = vi.fn();
+
+        await signOut(resolveContext({ authClient: stubClient(), nav: { navigate: vi.fn(), replace: vi.fn() }, onSessionChange }));
+        await vi.advanceTimersByTimeAsync(5000);
+
+        expect(onSessionChange).toHaveBeenCalledTimes(1);
+
+        release();
+        vi.useRealTimers();
+    });
+
+    it("tells the Lunora clients even when the app registers no handler", async () => {
+        expect.assertions(1);
+
+        let heard = 0;
+        const release = onSessionChanged(() => {
+            heard += 1;
+        });
+
+        await signOut(resolveContext({ authClient: stubClient(), nav: { navigate: vi.fn(), replace: vi.fn() } }));
+        release();
+
+        expect(heard).toBe(1);
     });
 });

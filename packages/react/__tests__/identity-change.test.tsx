@@ -315,3 +315,115 @@ describe("useQuery across an identity change", () => {
         client.close();
     });
 });
+
+describe("useQuery across a cookie-session sign-out", () => {
+    afterEach(() => {
+        renders.length = 0;
+    });
+
+    /**
+     * A cookie session holds no token: signing out changes nothing the client
+     * can see. Only the server knows, and it says so through `/get-session` and
+     * through the `identity` frame every socket opens with.
+     */
+    const cookieServer = (state: { user: null | string }): typeof fetch =>
+        vi.fn<typeof fetch>(async (input: unknown) => {
+            if (String(input).includes("get-session")) {
+                return Response.json(state.user === null ? {} : { user: { id: state.user } });
+            }
+
+            return Response.json({ result: [] });
+        });
+
+    const signedInWithCookie = async (sockets: MockSocket[], state: { user: null | string }): Promise<{ client: LunoraClient; screen: HTMLElement }> => {
+        const client = new LunoraClient({
+            fetch: cookieServer(state),
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        await act(async () => {
+            await client.getCurrentUser();
+        });
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <View />
+            </LunoraProvider>,
+        );
+
+        await serve(sockets, ROWS["Bearer jwt-A"]);
+
+        return { client, screen: view.container };
+    };
+
+    it("takes user A's rows off screen when the session resolves to nobody", async () => {
+        expect.assertions(3);
+
+        const sockets: MockSocket[] = [];
+        const state: { user: null | string } = { user: "user-A" };
+        const { client, screen } = await signedInWithCookie(sockets, state);
+
+        expect(screen.textContent).toBe("A-secret");
+
+        state.user = null;
+
+        await act(async () => {
+            await client.getCurrentUser();
+            await settle();
+        });
+
+        expect(client.currentIdentity()).toBeNull();
+        expect(screen.textContent).toBe("(none)");
+
+        client.close();
+    });
+
+    it("keeps the SSR-preloaded value when the first answer after page load names the same user", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({
+            fetch: cookieServer({ user: "user-A" }),
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(sockets),
+        });
+        const view = render(
+            <LunoraProvider client={client}>
+                <PreloadedView />
+            </LunoraProvider>,
+        );
+
+        expect(view.container.textContent).toBe("A-secret");
+
+        await act(async () => {
+            await client.getCurrentUser();
+            await settle();
+        });
+
+        expect(view.container.textContent).toBe("A-secret");
+
+        client.close();
+    });
+
+    it("takes user A's rows off screen when the socket's `identity` frame names nobody", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const state: { user: null | string } = { user: "user-A" };
+        const { client, screen } = await signedInWithCookie(sockets, state);
+
+        expect(screen.textContent).toBe("A-secret");
+
+        await act(async () => {
+            sockets.at(-1)?.receive({ subject: null, type: "identity" });
+            await settle();
+        });
+
+        expect(screen.textContent).toBe("(none)");
+
+        client.close();
+    });
+});

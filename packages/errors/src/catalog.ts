@@ -147,6 +147,16 @@ export const ERROR_CATALOG = {
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+    /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
+    IDENTITY_MISMATCH: {
+        hint: [
+            "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
+            "",
+            "`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.",
+        ],
+        status: 409,
+        title: "Session changed since the write was queued",
+    },
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
