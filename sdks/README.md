@@ -79,15 +79,15 @@ self-import would dangle in every generated SDK.
 
 Six of eight: nothing.
 
-| Language     | Install                                                            |
-| ------------ | ------------------------------------------------------------------ |
-| python       | nothing — stdlib only                                              |
-| go           | nothing — stdlib only                                              |
-| java, kotlin | nothing — JDK only                                                 |
-| swift        | nothing — Foundation only                                          |
-| dart         | nothing — `dart:convert` / `dart:typed_data` only                  |
-| rust         | `serde` (derive) + `serde_json`, declared in the emitted manifests |
-| ruby         | `dry-struct` + `dry-types`, and only when models are emitted       |
+| Language     | Install                                                                                |
+| ------------ | -------------------------------------------------------------------------------------- |
+| python       | nothing — stdlib only                                                                  |
+| go           | nothing — stdlib only                                                                  |
+| java, kotlin | nothing — JDK only                                                                     |
+| swift        | nothing — Foundation only                                                              |
+| dart         | nothing — `dart:convert` / `dart:typed_data` only                                      |
+| rust         | `serde` (derive) + `serde_json` (`float_roundtrip`), declared in the emitted manifests |
+| ruby         | `dry-struct` + `dry-types`, and only when models are emitted                           |
 
 The two that are not empty are quicktype's, not the transports': the Ruby backend
 renders `Dry::Struct` types with no renderer option to avoid them, and Rust models
@@ -790,15 +790,15 @@ difference it exists to measure. Every suite therefore repeats the assertion
 through `wireText`, defined beside `canonical` as the serializer that port's own
 transport puts on the socket:
 
-| Language     | `wireText`                                                     |
-| ------------ | -------------------------------------------------------------- |
-| python       | `json.dumps`                                                   |
-| go           | `json.Marshal` (`canonical` is defined in terms of it there)   |
-| ruby         | `JSON.generate`                                                |
-| rust         | `serde_json::to_string`                                        |
-| swift        | `JSONSerialization` (`.sortedKeys`, since a dict has no order) |
-| java, kotlin | `Json.write`                                                   |
-| dart         | `jsonEncode`                                                   |
+| Language     | `wireText`                                                   |
+| ------------ | ------------------------------------------------------------ |
+| python       | `json.dumps`                                                 |
+| go           | `json.Marshal` (`canonical` is defined in terms of it there) |
+| ruby         | `JSON.generate`                                              |
+| rust         | `serde_json::to_string`                                      |
+| swift        | `Wire.stableStringify` (the transport's own writer)          |
+| java, kotlin | `Json.write`                                                 |
+| dart         | `jsonEncode`                                                 |
 
 Dart's dates went out as `1700000000000.0` under a green suite before that line
 existed. What it compares is the port against ITS OWN parse of the fixture, so it
@@ -814,8 +814,11 @@ removing dart's turns 17 cases red, all 17 on the wire-text line and none on
 java's `Json.write` number spelling turns nothing red, because java's parser maps
 every JSON number to `Double`, so both sides of the comparison move together; the
 same holds for kotlin, and go is a third case again — `canonical` is defined in
-terms of `wireText` there, so the two lines are one assertion. The line stays in
-all eight anyway: it is the shape a ninth port copies, and a change to any of
+terms of `wireText` there, so the two lines are one assertion. Swift is now the
+same as go from the other direction: its transport posts `Wire.stableStringify`
+itself (Darwin's `JSONSerialization` refused a lone surrogate and swallowed the
+error), so `canonical` IS the wire text and the suite asserts once. The line stays
+in the other seven: it is the shape a ninth port copies, and a change to any of
 those parsers or writers makes it live.
 
 **What the `covers()` form actually proves is narrower than it looks.** In the
@@ -943,19 +946,21 @@ Every row below is either pinned by a named case or listed under
 
 **Stable key (`stableStringify ∘ encodeWire`)**
 
-| Reference behaviour                                    | Pinned by                                                                                                                    |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| keys sorted at every depth, UTF-16 code UNIT order     | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
-| an empty-string key sorts first                        | `empty-string-key`                                                                                                           |
-| arrays keep order; nested objects still sort           | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
-| `null` field kept, `undefined` field dropped           | `null-field-kept`, `undefined-object-field-arg`                                                                              |
-| `undefined` in an array keys as its tag, not as `null` | `undefined-in-array-arg`                                                                                                     |
-| string escaping matches `JSON.stringify`               | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
-| number spelling matches `String(v)`                    | `number-exponent-forms`, `format_number_matches_ecmascript`                                                                  |
-| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`; meeting TimeClip in `date-arg-negative-fraction-epoch`, `date-arg-negative-zero-epoch`                      |
-| empty containers                                       | `empty`, `nested-empty-containers`                                                                                           |
-| wire-typed args tokenise rather than throwing          | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
-| the `(functionPath, args, shardKey)` composition       | `empty_shard_key_is_omitted`                                                                                                 |
+| Reference behaviour                                       | Pinned by                                                                                                                    |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| keys sorted at every depth, UTF-16 code UNIT order        | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
+| an empty-string key sorts first                           | `empty-string-key`                                                                                                           |
+| arrays keep order; nested objects still sort              | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
+| `null` field kept, `undefined` field dropped              | `null-field-kept`, `undefined-object-field-arg`                                                                              |
+| `undefined` in an array keys as its tag, not as `null`    | `undefined-in-array-arg`                                                                                                     |
+| string escaping matches `JSON.stringify`                  | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
+| number spelling matches `String(v)`                       | `number-exponent-forms`, `number-adjacent-double-*`, `number-positional-shortest-digits`, `format_number_matches_ecmascript` |
+| a decimal literal decodes to the correctly rounded double | `number-decode-correctly-rounded`                                                                                            |
+| an integer literal off the wire is a float64, not refused | `number-integer-literal-past-exact-range`                                                                                    |
+| a negative zero keys as `-0`, distinct from `0`           | `negative-zero`; meeting TimeClip in `date-arg-negative-fraction-epoch`, `date-arg-negative-zero-epoch`                      |
+| empty containers                                          | `empty`, `nested-empty-containers`                                                                                           |
+| wire-typed args tokenise rather than throwing             | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
+| the `(functionPath, args, shardKey)` composition          | `empty_shard_key_is_omitted`                                                                                                 |
 
 **RPC and frames**
 
@@ -980,7 +985,11 @@ Every row below is either pinned by a named case or listed under
 Four rows above resolve to "no case, on purpose". Each is measured, not
 assumed:
 
-- **How a port's transport SPELLS a number in `(2^53, 1e21)`.** `wireText`
+- **How a port's transport SPELLS a number in `(2^53, 1e21)`.** (Its VALUE is
+  pinned: an integer literal there, which is how `JSON.stringify` writes every
+  such double, decodes to the double `JSON.parse` reads — never to a native
+  integer the encode-side range guard then refuses. That is
+  `number-integer-literal-past-exact-range`, below.) `wireText`
   compares a port against its own parse of the fixture, not against the
   reference's bytes, and a fixture cannot carry those bytes: an exact-text
   assertion would also pin whitespace and key order, which no port's default
@@ -1004,7 +1013,14 @@ assumed:
   stable-key case down with it), and go's `encoding/json` silently substitutes
   U+FFFD before the port's key encoder ever sees it. Two of eight cannot express
   it, and the same two refuse the value on a real wire, so it is unreachable
-  there rather than mishandled.
+  there rather than mishandled. Rust's `String` cannot hold one either. The five
+  whose strings can — python, swift (a bridged `NSString`), java, kotlin and
+  dart — escape it as `JSON.stringify` does, lowercase, in the key AND on the
+  wire, each pinned port-locally in `string_escaping_matches_json_stringify`.
+  Java and Kotlin used to hand it to the JDK's UTF-8 encoder, which replaced it
+  with `?`, so `"a\ud800b"` keyed and travelled as `"a?b"`; Swift's
+  `JSONSerialization` refused the whole body, and a `try?` swallowed that, so the
+  queued write never replayed and blocked every write behind it.
 - **`Error` own props carrying `__proto__`.** The decode side handles it (an own
   data property, never the setter), but the ENCODE side's Error branch writes
   `properties[key] = …` with no such guard, so the prop lands on the props
