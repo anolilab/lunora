@@ -2462,6 +2462,12 @@ const d1Probe: (name: string, database: {
 }) => HealthProbe;
 ```
 
+### `declareAppJurisdiction` (const)
+
+```ts
+const declareAppJurisdiction: (jurisdiction: AppJurisdiction) => void;
+```
+
 ### `decorateResponse` (const)
 
 ```ts
@@ -2680,6 +2686,12 @@ const withFrameworkWorker: (host: FrameworkHostHandler, optionsInput: FrameworkW
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AppJurisdiction` (type)
+
+```ts
+type AppJurisdiction = "eu" | "fedramp" | "us";
+```
 
 ### `ApplyCdcFanOutRequest` (interface)
 

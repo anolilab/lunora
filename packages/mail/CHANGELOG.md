@@ -1,3 +1,34 @@
+## @lunora/mail [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.89...@lunora/mail@1.0.0-alpha.90) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **mail:** in an app declaring `.jurisdiction(...)`, `@lunora/mail` now resolves the
+pinned shard with no option passed, and an explicit mail `jurisdiction` that differs from
+the schema's throws.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(mail): fail a captured send on a jurisdiction misconfiguration
+
+The capture sink resolved the jurisdiction inside its best-effort catch, so an
+explicit `jurisdiction` contradicting the schema's, or a binding that cannot be
+pinned, was logged and answered `{ id: "uncaptured" }`: a success-shaped result
+for mail nobody recorded. Both callers now scope the namespace with
+`applyJurisdiction` themselves and hand `postShardRpc` the scoped view; the
+capture sink does it before the catch, so that error reaches the sender while a
+failed RPC stays best-effort.
+
+Test (fails without the change): a contradicting jurisdiction rejects the
+captured send and makes no RPC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **mail:** pin mail's shard RPC to the schema's jurisdiction ([#848](https://github.com/anolilab/lunora/issues/848)) ([0191eee](https://github.com/anolilab/lunora/commit/0191eeeb7b504cb234bf01880929e9572966b71b))
+
 ## @lunora/mail [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.88...@lunora/mail@1.0.0-alpha.89) (2026-09-26)
 
 

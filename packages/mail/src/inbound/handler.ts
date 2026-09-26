@@ -39,7 +39,7 @@ import { LunoraError } from "@lunora/errors";
 import { toBase64 } from "../../../../shared/base64";
 import type { InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
-import { DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
+import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
 /**
  * Structural projection of Cloudflare's `ForwardableEmailMessage` (verified
@@ -335,9 +335,11 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     functionPath: string;
 
     /**
-     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Pass the
-     * same value as the worker's `jurisdiction` so inbound mail routes to the
-     * jurisdiction-pinned shard. Omit for the un-pinned global namespace.
+     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Defaults
+     * to the jurisdiction the schema declares (`.jurisdiction("eu")`), so a
+     * generated app needs nothing here; set it only for a hand-written worker, to
+     * the same value as its `jurisdiction`. A value that contradicts the schema's
+     * throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
 
@@ -419,10 +421,9 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         // The shared helper owns the URL, headers, `response.ok` check, and error
         // envelope check; a throw here reaches the handler's dispatch-failure
         // path (custom `onError` for observability, then `retain` or a bounce).
-        await postShardRpc(options.shard, {
+        await postShardRpc(applyJurisdiction(options.shard, options.jurisdiction), {
             adminToken,
             envelope,
-            jurisdiction: options.jurisdiction,
             label: `@lunora/mail/inbound: dispatch to \`${options.functionPath}\``,
             shardKey,
         });
