@@ -1,3 +1,4 @@
+import { useLunora } from "@lunora/react";
 import type { CSSProperties, ReactElement } from "react";
 
 import { authClient } from "./auth-client.js";
@@ -19,6 +20,7 @@ const HEADER_STYLE: CSSProperties = {
 
 export const App = (): ReactElement => {
     const session = authClient.useSession();
+    const client = useLunora();
 
     if (session.isPending) {
         return <p style={LOADING_STYLE}>Loading…</p>;
@@ -61,7 +63,13 @@ export const App = (): ReactElement => {
                 </span>
                 <button
                     onClick={() => {
-                        void authClient.signOut();
+                        // A cookie sign-out changes nothing the Lunora client can
+                        // see; asking it who is signed in now is what retires the
+                        // previous user's live queries and cached rows.
+                        void (async () => {
+                            await authClient.signOut();
+                            await client.getCurrentUser();
+                        })();
                     }}
                     type="button"
                 >

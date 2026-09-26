@@ -403,6 +403,14 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
     try {
         await mutate();
     } catch (error) {
+        // The worker found another user's cookie on the replay. Not a verdict on
+        // the write: the client is re-resolving who is signed in, and the next
+        // attempt's identity guard settles it against that answer — dropped for
+        // another user, held for nobody, sent for the same one.
+        if ((error as { code?: unknown }).code === "IDENTITY_MISMATCH") {
+            throw error;
+        }
+
         if (typeof (error as { code?: unknown }).code === "string") {
             const nonRetriable = new NonRetriableError(error instanceof Error ? error.message : String(error));
 

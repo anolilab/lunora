@@ -222,6 +222,35 @@ the rest. Outside React, the underlying primitives are
 `client.setAuthToken(token)` / `getAuthToken()` / `onAuthTokenChange(fn)` on the
 `LunoraClient`.
 
+### Cookie sessions: tell the client when the session changes
+
+With a cookie session (better-auth's default, and what `@lunora/auth-ui` uses)
+the client holds no token, so signing out or signing in as someone else changes
+nothing it can see. It learns who is signed in from the server: from
+`client.getCurrentUser()`, and from the `identity` frame every socket sends when
+it connects. Any change it hears about — a sign-out, a sign-in after a sign-out,
+a different user — retires the previous session: every live query is blanked,
+the sockets reconnect on the new cookie, and `@lunora/react` clears its query
+cache.
+
+A sign-out or sign-in that happens **in place**, without a reload, has to be
+reported, because no socket reconnects on its own:
+
+```tsx
+<button
+    onClick={async () => {
+        await authClient.signOut();
+        await client.getCurrentUser(); // the client now knows it is nobody
+    }}
+>
+    Sign out
+</button>
+```
+
+Do the same after a cookie sign-in (with `@lunora/auth-ui`, in `onSessionChange`).
+Offline writes are safe either way: a replayed write names the user who queued it,
+and the worker refuses it when the cookie now belongs to someone else.
+
 ## Feeding row-level security
 
 `ctx.auth` is also the input to authorization. An ad-hoc `if (!ctx.auth.userId)`

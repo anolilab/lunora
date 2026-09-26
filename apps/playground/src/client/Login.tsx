@@ -1,3 +1,5 @@
+import { useLunora } from "@lunora/react";
+import type { LunoraClient } from "lunorash/client";
 import type { CSSProperties, ReactElement } from "react";
 import { useState } from "react";
 
@@ -5,6 +7,35 @@ import { authClient } from "./auth-client.js";
 
 /** Hoisted so the literal isn't reallocated (and re-flagged) per render. */
 const FORM_STYLE: CSSProperties = { display: "grid", gap: 12, margin: "4rem auto", maxWidth: 320 };
+
+/**
+ * Sign in or up, then tell the Lunora client: the new cookie is invisible to
+ * it, and asking who is signed in now is what replaces the signed-out session.
+ * Kept outside the component so its `try` stays out of the React Compiler's way.
+ * @returns the error to show, or `null` on success.
+ */
+const submitCredentials = async (
+    client: LunoraClient,
+    mode: "signin" | "signup",
+    fields: { email: string; name: string; password: string },
+): Promise<string | null> => {
+    try {
+        const result =
+            mode === "signin"
+                ? await authClient.signIn.email({ email: fields.email, password: fields.password })
+                : await authClient.signUp.email({ email: fields.email, name: fields.name || fields.email, password: fields.password });
+
+        if (result.error) {
+            return result.error.message ?? `${mode} failed`;
+        }
+
+        await client.getCurrentUser();
+
+        return null;
+    } catch (error: unknown) {
+        return error instanceof Error ? error.message : "unknown error";
+    }
+};
 
 /**
  * Email/password sign-in + sign-up. Posts at the `/api/auth/*` routes
@@ -15,6 +46,7 @@ const FORM_STYLE: CSSProperties = { display: "grid", gap: 12, margin: "4rem auto
  * authenticated view on the next render once the cookie lands.
  */
 export const Login = (): ReactElement => {
+    const client = useLunora();
     const [mode, setMode] = useState<"signin" | "signup">("signin");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -33,20 +65,8 @@ export const Login = (): ReactElement => {
                 setPending(true);
 
                 void (async () => {
-                    try {
-                        const result =
-                            mode === "signin"
-                                ? await authClient.signIn.email({ email, password })
-                                : await authClient.signUp.email({ email, name: name || email, password });
-
-                        if (result.error) {
-                            setError(result.error.message ?? `${mode} failed`);
-                        }
-                    } catch (error_: unknown) {
-                        setError(error_ instanceof Error ? error_.message : "unknown error");
-                    } finally {
-                        setPending(false);
-                    }
+                    setError(await submitCredentials(client, mode, { email, name, password }));
+                    setPending(false);
                 })();
             }}
             style={FORM_STYLE}

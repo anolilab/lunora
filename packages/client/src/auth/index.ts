@@ -121,6 +121,10 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
     // whose first `/get-session` missed stayed signed out for the life of the
     // page, `identityFingerprint()` null with it.
     let answered = false;
+    // The identity a cookie session changed to that this store last probed
+    // `/get-session` for, until a probe agrees with it — see the
+    // `onIdentityChange` listener below.
+    let askedFor: string | undefined;
 
     const notify = (): void => {
         for (const listener of listeners) {
@@ -140,7 +144,7 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
         }
     };
 
-    const refresh = (): void => {
+    const refresh = (ask = false): void => {
         generation += 1;
         const current = generation;
 
@@ -150,7 +154,7 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
         // because a cookie session (better-auth's default) holds no token here
         // and would otherwise be reported signed out for the whole session,
         // leaving `identityFingerprint()` null for every user of the app.
-        if (client.getAuthToken() === null && answered) {
+        if (!ask && client.getAuthToken() === null && answered) {
             // eslint-disable-next-line unicorn/no-null -- signed-out sentinel
             setState("unauthenticated", null);
 
@@ -171,6 +175,12 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
                     // to short-circuit a later resolve.
                     answered = true;
                     setState(next === null ? "unauthenticated" : "authenticated", next);
+
+                    // It agreed with the identity it was asked about, so the
+                    // next change to that subject may ask again.
+                    if (next !== null && askedFor === `subj:${next.id}`) {
+                        askedFor = undefined;
+                    }
                 }
 
                 return undefined;
@@ -198,7 +208,35 @@ const createIdentityStore = (client: LunoraClient): IdentityStore => {
 
     // Refetch identity whenever the token changes (sign-in / sign-out / rotate).
     // Registered once for the store's lifetime, independent of UI framework subscribers.
-    client.onAuthTokenChange(refresh);
+    client.onAuthTokenChange(() => {
+        refresh();
+    });
+
+    // ...and when the client retires a cookie session on the server's word. No
+    // token changes on a cookie sign-out or sign-in; the client learns of it
+    // from a socket's `identity` frame or a probe the app ran, and the gate
+    // would otherwise keep reporting the user whose rows were just cleared.
+    //
+    // Nobody signed in needs no round trip. A user does: only `/get-session`
+    // returns the record. That probe is asked once per subject until it agrees
+    // — should it answer differently from the socket (a resolver that names a
+    // user `/get-session` does not know), each answer would retire the other's
+    // session, and asking again would keep the two taking turns forever.
+    client.onIdentityChange(() => {
+        if (!started || client.getAuthToken() !== null) {
+            return;
+        }
+
+        const identity = client.currentIdentity();
+
+        if (identity === null) {
+            // eslint-disable-next-line unicorn/no-null -- signed-out sentinel
+            setState("unauthenticated", null);
+        } else if (identity !== askedFor) {
+            askedFor = identity;
+            refresh(true);
+        }
+    });
 
     // Recover from `unreachable` when the live socket comes back — nothing else
     // would, and the status would otherwise stay stale for the whole session.

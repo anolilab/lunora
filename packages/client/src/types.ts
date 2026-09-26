@@ -904,6 +904,17 @@ export interface ServerWhisperMessage {
 }
 
 /**
+ * The user the shard authenticated this socket as, sent in reply to every
+ * `connect` frame. `subject` is the resolved user id, or `null` when the socket
+ * is anonymous. A cookie-session client reads it to learn who it is — a
+ * sign-out or another user's sign-in changes nothing else it can see.
+ */
+export interface ServerIdentityMessage {
+    subject: null | string;
+    type: "identity";
+}
+
+/**
  * One row-level change in a shape's replication stream — the wire form of the
  * DO's `__cdc_log` `CdcChange`. `insert`/`update` carry the post-image in
  * `value` (projected to the shape's `columns`); `delete` omits it, identifying
@@ -993,6 +1004,7 @@ export type ServerMessage =
     | ServerCompleteMessage
     | ServerDataMessage
     | ServerErrorMessage
+    | ServerIdentityMessage
     | ServerPokeEndMessage
     | ServerPokePartMessage
     | ServerPokeStartMessage

@@ -849,6 +849,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
+    replayIdentity?: null | string;
     shardKey?: string;
 }
 ```
@@ -1213,7 +1214,7 @@ interface SchedulerStatus {
 ### `ServerMessage` (type)
 
 ```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
+type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
 ```
 
 ### `ServerPokeEndMessage` (interface)
@@ -2410,6 +2411,15 @@ interface ServerErrorMessage {
     id?: string;
     message?: string;
     type: "error";
+}
+```
+
+### `ServerIdentityMessage` (interface)
+
+```ts
+interface ServerIdentityMessage {
+    subject: null | string;
+    type: "identity";
 }
 ```
 

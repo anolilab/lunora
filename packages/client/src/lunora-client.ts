@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { collectPages } from "../../../shared/collect-pages";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
@@ -91,6 +92,7 @@ import type {
     SchedulerStatus,
     ServerDataMessage,
     ServerErrorMessage,
+    ServerIdentityMessage,
     ServerMessage,
     ServerPokeEndMessage,
     ServerPokePartMessage,
@@ -340,6 +342,14 @@ type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polli
 /** Whether writes reach the origin: over the socket, or over HTTP while polling. */
 const isLiveStatus = (status: ConnectionStatus): boolean => status === "connected" || status === "polling";
 
+/**
+ * Whether an identity change leaves a session behind that must be retired: a
+ * previous identity, or a cookie session the server had answered "nobody" for
+ * that a user is now signing in on (see `LunoraClient.setAuthToken`).
+ */
+const leavesSessionBehind = (previousIdentity: string | null, wasKnownNobody: boolean, token: string | null): boolean =>
+    previousIdentity !== null || (wasKnownNobody && token === null);
+
 /** One shard's socket + watermark state in a {@link LunoraClient.debug} snapshot. */
 interface ClientDebugShard {
     /**
@@ -511,6 +521,17 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * Omit for normal calls.
      */
     replayBaseline?: null | number;
+
+    /**
+     * The identity stamp a durable write was queued under
+     * ({@link import("./types").OutboxMutation.identity}), handed back by the
+     * sink's replay. Under a cookie session the request then names that user,
+     * and the worker refuses it with `IDENTITY_MISMATCH` when the cookie now
+     * belongs to someone else — the check {@link LunoraClient.replayIdentityVerdict}
+     * cannot make, because the client cannot see the cookie. Omit for normal
+     * calls.
+     */
+    replayIdentity?: null | string;
     shardKey?: string;
 }
 
@@ -551,6 +572,15 @@ interface ShardConnection {
      * the cache's identity gate able to reject it.
      */
     identity?: string | null;
+
+    /**
+     * The {@link LunoraClient.identityQuestions} id this connection's CURRENT
+     * socket was upgraded under, when the cookie was its only credential (no
+     * bearer token held, no `?token=`). `undefined` otherwise: the `identity`
+     * frame such a socket gets answers for the token, not for the cookie session
+     * this client's identity tracks, and is ignored.
+     */
+    identityQuestion?: number;
 
     /**
      * Wall-clock time (`Date.now()`) of the most recently received frame on
@@ -613,8 +643,9 @@ interface ShardConnection {
      * when it fires. Cleared on disconnect/close.
      *
      * `open` is not proof — the upgrade is accepted before the credential is
-     * read. The first inbound frame is not proof either for every client: the
-     * server sends no ack for the `connect` envelope, and the keepalive pong is
+     * read. The first inbound frame is not proof either for every client: a
+     * server older than the `identity` reply sends nothing back for the
+     * `connect` envelope, and the keepalive pong is
      * a plain string answered by the runtime without waking the DO, so a client
      * with no active subscription may receive no JSON frame at all.
      *
@@ -1322,6 +1353,23 @@ class LunoraClient {
     private sessionProbeGeneration = 0;
 
     /**
+     * Monotonic id of every question this client asks the server about who it
+     * is: each `/get-session` probe, and each cookie-authenticated socket upgrade
+     * (answered by the `identity` frame the shard sends on `connect`). Probes
+     * take their `sessionProbeGeneration` from it, so both kinds of
+     * answer share one order.
+     */
+    private identityQuestions = 0;
+
+    /**
+     * The `identityQuestions` id of the newest answer adopted so far. A
+     * cookie-session answer older than it describes an older cookie — a socket
+     * upgraded before a probe that has since answered — and may not move the
+     * identity back. See `adoptCookieSubject`.
+     */
+    private identityAnsweredAt = 0;
+
+    /**
      * Whether anything resolves this client's identity at all.
      *
      * The gates need to tell an app with NO AUTH — whose `null` fingerprint is
@@ -1640,19 +1688,13 @@ class LunoraClient {
         // subject is the first-resolve case and equally safe.
         const subjectWasConfirmed = this.authSubject === undefined || this.subjectToken === this.authToken;
         const wasAwaitingReconfirm = this.subjectAwaitingReconfirm();
+        // A cookie session the server has answered "nobody" for — see
+        // `adoptCookieSubject`. Distinct from a subject not known YET
+        // (`undefined`): leaving "nobody" for a user is a change of session.
+        const wasKnownNobody = this.isKnownNobody();
 
         this.authToken = token;
-        // Sticky: only an explicit value (incl. `null` = sign-out) changes the
-        // subject; omitting it keeps the established one. Clearing the token is
-        // the exception — see the docblock.
-        if (subject !== undefined) {
-            this.authSubject = subject;
-            this.subjectToken = token;
-        } else if (token === null) {
-            this.authSubject = undefined;
-            // eslint-disable-next-line unicorn/no-null -- mirrors `authToken`'s cleared value so `subjectToken === authToken` holds
-            this.subjectToken = null;
-        }
+        this.applySubject(token, subject);
 
         const newIdentity = this.identityFingerprint();
 
@@ -1670,7 +1712,11 @@ class LunoraClient {
         // belong to that subject, and the read cache it stamped may be handed
         // over. Queued writes are NOT relabelled: a `null` stamp is evidence of
         // nobody, and the replay gate settles those on its own terms.
-        const subjectFirstNamed = !tokenChanged && token === null && previousIdentity === null && subjectWasConfirmed;
+        //
+        // Only out of NOT KNOWN: a session the server already said is nobody's
+        // was that — its socket and rows are anonymous, and a user signing in
+        // on it is a new session, not the same one getting a name.
+        const subjectFirstNamed = !tokenChanged && token === null && previousIdentity === null && subjectWasConfirmed && !wasKnownNobody;
 
         if (newIdentity !== previousIdentity) {
             if (sameCredential) {
@@ -1721,7 +1767,12 @@ class LunoraClient {
                 // sign-in from signed-out has no other user's session to retire,
                 // and bouncing every socket there would cost a reconnect on the
                 // most common auth transition there is.
-                if (previousIdentity !== null) {
+                //
+                // Except under a cookie session the server said was nobody's:
+                // its socket is authenticated by the cookie as it was at the
+                // upgrade — anonymous — and keeps serving that, never the user
+                // who signed in since, until it is replaced.
+                if (leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
                     this.evictPreviousIdentitySession();
                 }
             }
@@ -1986,9 +2037,17 @@ class LunoraClient {
     /**
      * Subscribe to a user switch or sign-out: fired after {@link setAuthToken}
      * retires the previous identity's session, i.e. every live subscription has
-     * just been blanked to `undefined` and its socket closed. Not fired when an
-     * identity is first established from signed-out (nothing is retired), nor
-     * when a subject is attached to the same credential.
+     * just been blanked to `undefined` and its socket closed. Not fired when a
+     * bearer identity is first established from signed-out (nothing is
+     * retired), nor when a subject is attached to the same credential, nor on
+     * a cookie session's first answer after page load.
+     *
+     * A cookie session fires it on every change the server reports — sign-out,
+     * a sign-in after a known sign-out, a different user — whether the answer
+     * came from {@link getCurrentUser} or from a socket's `identity` frame. Its
+     * sign-out changes nothing the client can observe on its own, so an app
+     * that signs out in place (no reload) should call {@link getCurrentUser}
+     * afterwards.
      *
      * For caches layered on top of the client. A subscriber only hears the
      * blank for queries it still subscribes to, so a cache that keeps values for
@@ -2023,6 +2082,10 @@ class LunoraClient {
      * knows the answer — leaving it to each adapter is what left the sticky-subject
      * contract unreached in every shipped one, so a routine JWT refresh read as a
      * user switch and discarded the user's own queued writes and read cache.
+     *
+     * Under a cookie session (no token held) the answer is adopted whatever it
+     * is, "no session" included, and a change from the identity already known
+     * retires the previous session — see {@link onIdentityChange}.
      */
     public async getCurrentUser(): Promise<User | null> {
         // Asking IS the declaration that this client resolves an identity — see
@@ -2053,7 +2116,8 @@ class LunoraClient {
         // `finally` so a rejection (offline) reopens the gates too: an endpoint
         // that cannot be reached is never going to name anyone.
         this.sessionProbesInFlight += 1;
-        this.sessionProbeGeneration += 1;
+        this.identityQuestions += 1;
+        this.sessionProbeGeneration = this.identityQuestions;
 
         const requestGeneration = this.sessionProbeGeneration;
 
@@ -4968,6 +5032,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
+                ...this.replayExpectation(options.replayIdentity),
                 mutationId,
                 onCommitCursor: (cursor) => {
                     commitCursor = cursor;
@@ -4992,6 +5057,10 @@ class LunoraClient {
             if (polling && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
                 return enqueue();
             }
+
+            // A durable replay the worker refused for another user's cookie:
+            // learn who that is, so the sink's next attempt is gated on it.
+            this.noteIdentityMismatch(error);
 
             // LIFO rollback: see the offline-queue reject path above.
             rollbackOptimistic(optimisticRollbacks);
@@ -6011,10 +6080,17 @@ class LunoraClient {
      * instead of running twice.
      */
     private rpcRequestHeaders(
-        flags: { attachBookmark?: boolean; baselineSeq?: number; clientId?: string; clientSeq?: number; mutationId?: string },
+        flags: { attachBookmark?: boolean; baselineSeq?: number; clientId?: string; clientSeq?: number; expectSubject?: null | string; mutationId?: string },
         shardKey?: string,
     ): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
+
+        // A replayed write names the user it was queued by, and the worker
+        // refuses it if the cookie now belongs to someone else. See
+        // `replayExpectation`.
+        if (flags.expectSubject !== undefined) {
+            headers[EXPECT_SUBJECT_HEADER] = encodeExpectedSubjectHeader(flags.expectSubject);
+        }
 
         // Read-your-writes across region-local read replicas: the cursor this
         // client's last write to this shard committed at. A worker with
@@ -6085,6 +6161,8 @@ class LunoraClient {
             captureBookmark?: boolean;
             clientId?: string;
             clientSeq?: number;
+            /** The user a replayed write was queued by; see `replayExpectation`. */
+            expectSubject?: null | string;
             mutationId?: string;
             /** Invoked on a successful response with the server's echoed commit CDC cursor (if any) — gates per-call optimistic-layer drops. */
             onCommitCursor?: (commitCursor: number | undefined) => void;
@@ -6271,7 +6349,8 @@ class LunoraClient {
      * once per socket open, so the server's `onConnect` hooks fire symmetrically
      * with `onDisconnect` (which the DO dispatches unconditionally at close for
      * every lifecycle-aware socket). The DO no-ops cheaply when no `onConnect`
-     * hooks are registered, so the single frame costs nothing in the common case.
+     * hooks are registered, and answers with the socket's `identity` frame
+     * (see `handleIdentityFrame`).
      *
      * The shard's registered context (or the client-wide default) rides along
      * when one is set — the DO records it on the attachment for replay to
@@ -6581,6 +6660,14 @@ class LunoraClient {
         // and it can't change for the life of the socket.
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         conn.identity = this.identityFingerprint();
+
+        if (token === undefined && this.authToken === null) {
+            this.identityQuestions += 1;
+            conn.identityQuestion = this.identityQuestions;
+        } else {
+            conn.identityQuestion = undefined;
+        }
+
         // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
         conn.retired = false;
         /* eslint-enable no-param-reassign */
@@ -7178,6 +7265,11 @@ class LunoraClient {
             }
             case "error": {
                 this.handleErrorMessage(message);
+
+                break;
+            }
+            case "identity": {
+                this.handleIdentityFrame(message, shardKey);
 
                 break;
             }
@@ -8047,24 +8139,134 @@ class LunoraClient {
      * Key the offline-queue identity on the resolved user id rather than the
      * token bytes, so the NEXT token refresh keeps the same identity.
      *
-     * Only a resolved user labels anything. A 401, a network failure or an
-     * empty session resolves `null` for reasons that say nothing about who is
-     * signed in, and a token that rotated mid-flight belongs to a session this
-     * answer predates — both leave the established label alone rather than
-     * clearing it (which would look like an identity change and drop the queue).
+     * Under a bearer token only a resolved user labels anything. A 401 or an
+     * empty session resolves `null` for reasons that say nothing about who holds
+     * the token, so the established label is left alone rather than cleared
+     * (which would look like an identity change and drop the queue). A token
+     * that rotated mid-flight belongs to a session this answer predates and is
+     * ignored for the same reason.
      *
-     * A superseded probe is the same case, and the one the token check cannot
-     * see: on a cookie app both `requestToken`s are `null`, so a slow answer
-     * from an OLDER probe passed that check and overwrote the subject a newer
-     * one had already established. `requestGeneration` is the question's id —
-     * it must still be the current one at the moment of the write.
+     * Under a cookie session (no token) the answer is the identity, `null`
+     * included: nothing on the client changes when the user signs out, so "the
+     * server found no session" is the only sign-out this client will ever see.
+     * See {@link adoptCookieSubject}.
+     *
+     * A superseded probe is ignored too, and the token check cannot see it: on a
+     * cookie app both `requestToken`s are `null`, so a slow answer from an OLDER
+     * probe passed that check and overwrote the subject a newer one had already
+     * established. `requestGeneration` is the question's id — it must still be
+     * the current one at the moment of the write.
      */
     private adoptResolvedSubject(requestToken: string | null, user: User | null, requestGeneration: number): void {
-        if (this.closed || user === null || this.authToken !== requestToken || requestGeneration !== this.sessionProbeGeneration) {
+        if (this.closed || this.authToken !== requestToken || requestGeneration !== this.sessionProbeGeneration) {
             return;
         }
 
-        this.setAuthToken(requestToken, user.id);
+        if (requestToken === null) {
+            // eslint-disable-next-line unicorn/no-null -- `null` is the resolved "no session" subject
+            this.adoptCookieSubject(user?.id ?? null, requestGeneration);
+
+            return;
+        }
+
+        if (user !== null) {
+            this.setAuthToken(requestToken, user.id);
+        }
+    }
+
+    /**
+     * Adopt the user a cookie session resolved to — `null` for nobody — as this
+     * client's identity, from either source the server answers through: a
+     * `/get-session` probe, or a socket's `identity` frame.
+     *
+     * Three states, told apart by `authSubject`: `undefined` is not known yet
+     * (every page load until the first answer), `null` is known to be nobody,
+     * and a string is that user. {@link setAuthToken} retires the previous
+     * session on every change between two KNOWN states — `A → nobody`,
+     * `nobody → B`, `A → B` — and on none out of `undefined`, so the first
+     * answer after a page load never evicts what the page is already showing
+     * for the session it was loaded under.
+     *
+     * `question` orders the answers: one older than the answer in force
+     * describes an older cookie and is dropped. Returns whether it was adopted.
+     */
+    private adoptCookieSubject(subject: null | string, question: number): boolean {
+        if (this.closed || this.authToken !== null || question < this.identityAnsweredAt) {
+            return false;
+        }
+
+        this.identityAnsweredAt = question;
+        this.identitySettled = true;
+        // eslint-disable-next-line unicorn/no-null -- a cookie session holds no token
+        this.setAuthToken(null, subject);
+
+        return true;
+    }
+
+    /**
+     * A cookie socket's `identity` frame: the user the shard authenticated this
+     * socket as, sent in reply to every `connect`.
+     *
+     * Adopted like a probe's answer when it is the newest one
+     * ({@link adoptCookieSubject}). An OLDER one that disagrees with the
+     * identity in force means this socket was upgraded on a cookie that has
+     * since changed hands, and is still delivering that user's rows: the
+     * session it belongs to is retired, which replaces the socket.
+     *
+     * Ignored for a socket that authenticated with a token rather than the
+     * cookie (see `ShardConnection.identityQuestion`) — its answer is about that
+     * token, not about the cookie session this client's identity tracks.
+     */
+    private handleIdentityFrame(message: ServerIdentityMessage, shardKey: string | undefined): void {
+        const question = this.getConnection(shardKey)?.identityQuestion;
+        const { subject } = message;
+
+        if (question === undefined || (subject !== null && typeof subject !== "string") || this.adoptCookieSubject(subject, question)) {
+            return;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- `null` is the fingerprint of nobody
+        if (!this.closed && this.authToken === null && (subject === null ? null : `subj:${subject}`) !== this.identityFingerprint()) {
+            this.evictPreviousIdentitySession();
+        }
+    }
+
+    /**
+     * The subject half of {@link setAuthToken}.
+     *
+     * Sticky: only an explicit value (incl. `null` = signed out) changes the
+     * subject; omitting it keeps the established one. Two exceptions, both about
+     * a subject that must not outlive the credential it described:
+     *
+     * - Clearing the token clears a user subject — see `setAuthToken`'s
+     * docblock. A `null` one stays: a cookie session known to be nobody's is
+     * still nobody's.
+     * - A token arriving on a session known to be nobody's drops the `null`,
+     * so the identity falls back to the token itself rather than staying
+     * "nobody" while a credential is held.
+     */
+    private applySubject(token: string | null, subject: string | null | undefined): void {
+        if (subject !== undefined) {
+            this.authSubject = subject;
+            this.subjectToken = token;
+
+            return;
+        }
+
+        if ((token === null && this.authSubject !== null) || (token !== null && this.authSubject === null)) {
+            this.authSubject = undefined;
+            // eslint-disable-next-line unicorn/no-null -- mirrors `authToken`'s cleared value so `subjectToken === authToken` holds
+            this.subjectToken = null;
+        }
+    }
+
+    /**
+     * A cookie session the server has answered "nobody" for — see
+     * {@link adoptCookieSubject}. Distinct from a subject not known YET
+     * (`undefined`).
+     */
+    private isKnownNobody(): boolean {
+        return this.authSubject === null && this.authToken === null;
     }
 
     /**
@@ -8803,6 +9005,14 @@ class LunoraClient {
      * answer.
      */
     private shouldRequeueReplayFailure(error: unknown): boolean {
+        // The worker found a different user on the cookie than the one the
+        // write was queued by. Not a verdict on the write: ask who is signed in
+        // now, and let the replay gate settle it against the answer — terminal
+        // for another user, held for nobody, sent again for the same one.
+        if (this.noteIdentityMismatch(error)) {
+            return true;
+        }
+
         if (isAuthReplayFailure(error)) {
             const refusedCredential = this.hashToken(this.authToken ?? "");
 
@@ -8815,6 +9025,50 @@ class LunoraClient {
         }
 
         return isTransientReplayFailure(error);
+    }
+
+    /**
+     * The `expectSubject` a replayed write carries: the user its identity stamp
+     * names, so the worker refuses it when the request resolves to anyone else.
+     *
+     * The replay gate compares the stamp with what this client believes, and
+     * under a cookie session that belief can be stale — a sign-out and another
+     * user's sign-in change no token, and the socket's `open` flush runs before
+     * its `identity` frame lands. Only the server sees the cookie the write is
+     * about to ride, so it is the server that has to check.
+     *
+     * Only under a cookie session this client resolves (no bearer token, and
+     * `getCurrentUser()` or the identity store in use): a bearer request states
+     * its credential explicitly and the gate already matched it, and an app that
+     * never resolves identity has no subject to name. A token-hash or missing
+     * stamp names no user either.
+     */
+    private replayExpectation(stamp: null | string | undefined): { expectSubject?: null | string } {
+        if (this.authToken !== null || !this.identityResolutionExpected) {
+            return {};
+        }
+
+        if (stamp === null) {
+            // eslint-disable-next-line unicorn/no-null -- queued while signed out
+            return { expectSubject: null };
+        }
+
+        return stamp?.startsWith("subj:") === true ? { expectSubject: stamp.slice("subj:".length) } : {};
+    }
+
+    /**
+     * Whether `failure` is the worker's `IDENTITY_MISMATCH` refusal, and if so,
+     * ask who is signed in now: the answer is what re-runs the replay gate
+     * ({@link setAuthToken}), and nothing else would on a cookie session.
+     */
+    private noteIdentityMismatch(failure: unknown): boolean {
+        if ((failure as { code?: unknown } | undefined)?.code !== "IDENTITY_MISMATCH") {
+            return false;
+        }
+
+        this.getCurrentUser().catch(() => undefined);
+
+        return true;
     }
 
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
@@ -8857,6 +9111,7 @@ class LunoraClient {
                     // The id that queued the write, not the live session's — see the
                     // `clientId` stamp in `enqueueOfflineMutation`.
                     clientId: item.clientId ?? this.clientId,
+                    ...this.replayExpectation(item.identity),
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {
                         commitCursor = cursor;
@@ -8949,7 +9204,14 @@ class LunoraClient {
                 // all of them. Writes go to the owner regardless, so omitting it
                 // costs nothing — the per-entry cursors are recorded on the way
                 // back out (`settleReplaySuccess`).
-                headers: this.rpcRequestHeaders({ attachBookmark: true }),
+                //
+                // One request, one identity: every write in the chunk passed the
+                // replay gate against the same one, so the first stamped write
+                // speaks for all of them (an unstamped legacy write has none).
+                headers: this.rpcRequestHeaders({
+                    attachBookmark: true,
+                    ...this.replayExpectation(items.find((item) => item.identity !== undefined)?.identity),
+                }),
                 method: "POST",
             });
         } catch {

@@ -241,7 +241,7 @@ describe(defineCollections, () => {
             messagesSend,
             { channelId: "c1", id, text: "hi" },
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
-            { mutationId: expect.any(String), replayBaseline: null, shardKey: undefined },
+            { mutationId: expect.any(String), replayBaseline: null, replayIdentity: null, shardKey: undefined },
         );
     });
 
