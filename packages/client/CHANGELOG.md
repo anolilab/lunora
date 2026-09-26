@@ -1,3 +1,471 @@
+## @lunora/client [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.141...@lunora/client@1.0.0-alpha.142) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **sdks:** `Client.identity` is no longer a public field; set it with
+`Client::set_identity` and read it with `Client::identity`. `parse_rpc_response`
+no longer marks a coded 5xx transient, and fails a 2xx non-object body.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-swift): settle replays alike and never raise out of frames
+
+A coded envelope on a 5xx was marked transient on both replay paths, so a function's INTERNAL
+or CONFLICT verdict re-queued forever. A coded envelope is now classified by its code alone,
+on the single-call and batch paths alike; only an envelope-less reply is classified by status.
+
+An envelope-less 413 (an edge's HTML refusal) re-queued a batch whole into the identical
+refusal on every flush. Any 413 now splits a batch, and a lone write still refused settles
+PAYLOAD_TOO_LARGE. An RPC body that is not JSON or not an object (a 502 page, a 200 null or
+[]) raised the reader's error, or returned a nil result for a write that never committed; it
+is now LunoraAPIError INTERNAL, transient for the replay.
+
+A write the server committed whose result does not decode was retried forever on the lone
+path and settled with a silent null in a batch. Both now settle committed, overlay confirmed
+against the echoed cursor, with a WIRE_DECODE_FAILED error and no value; the result is decoded
+before the durable record is removed, and a direct mutation() throws the same coded error.
+
+With no HTTP poster a lone queued write was rejected while a batch was re-queued. A missing
+poster is a configuration gap, so both are re-queued and the flush report says so.
+
+handleFrame no longer throws. A poke carrying an undecodable row cleared a reset shape's view
+and then threw out of the read loop; every row is now decoded before the view is touched, and
+a refused shape keeps its view, checkpoint and epoch and hears INVALID_FRAME. A string cursor
+on a resume or settled frame replaced the tracked one and was resent as sinceSeq "9"; only an
+integer cursor is kept.
+
+close() now finishes every live stream(), which otherwise hung its for-await loop. Changing
+identity from one set value to another evicts the previous session: cursors and epochs are
+dropped and shape views emptied, their onRows told []. dump(client) printed the bearer token;
+a custom mirror now shows it as <redacted>.
+* **sdks:** LunoraClient.handleFrame(_:) is no longer throwing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-java): harden replay, frame handling and sessions
+
+Replay:
+- One predicate classifies a replay failure on both paths. A coded envelope is
+  classified by its code alone, so a coded 5xx is now terminal on the single-call
+  path as it already was on the batch path; an envelope-less reply is classified
+  by its status.
+- A 413 is PAYLOAD_TOO_LARGE whatever its body. A batch refused by an edge's HTML
+  413 is halved and retried instead of re-queued whole forever, and a lone write
+  still refused settles terminally with that code.
+- A write the server committed whose result does not decode settles COMMITTED
+  with an ApiException coded WIRE_DECODE_FAILED, its overlay confirmed against
+  the echoed cursor. Batch slots are decoded inside a guard before the durable
+  record is removed, so one bad slot no longer throws out of the loop after
+  deleting its record and stranding every later slot. A direct call raises the
+  same coded error instead of the codec's exception.
+- A flush interrupted by an unexpected exception re-queues, in order, every
+  drained write it had not yet settled.
+
+Frames and RPC:
+- handleFrame ignores JSON that is not an object; the frame `null` threw a
+  NullPointerException onto the socket reader thread. A cursor that is not an
+  integer (or an epoch that is not a string) no longer replaces the tracked one,
+  and a pokeStart without a string id opens no buffer.
+- A poke is applied to each shape whole or not at all: rows are decoded before
+  the view is touched, and on a failure the view, checkpoint and epoch stay put
+  and the shape's onError receives INVALID_FRAME. The bad row used to be skipped
+  and the checkpoint advanced past it, so no resume would ever resend it.
+- An RPC response whose body is not a JSON object raises ApiException coded
+  INTERNAL rather than a parse, cast or null-pointer exception.
+
+Session:
+- identity is now set through identity(String) (read with identity()); the
+  public field is gone. Changing it from a set value to a different one drops
+  every subscription's resume cursor and epoch and empties every shape view,
+  telling its onRows []. Callers assigning client.identity must call the setter.
+- close() ends every open stream, so a consumer blocked in its loop returns.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-kotlin): settle replays alike and harden the frame path
+
+Offline replay:
+- One predicate for both paths. A coded error envelope is classified by its code
+  alone; the single-call path also marked any coded 5xx transient from the HTTP
+  status, so the same `INTERNAL` verdict re-queued a write flushed alone and
+  rejected it in a batch. Only a reply with no envelope is classified by status.
+- A 413 is PAYLOAD_TOO_LARGE whatever its body. The batch path read no status,
+  so an edge's HTML 413 re-queued the chunk whole and every later flush sent the
+  identical body into the identical refusal. It now splits on any 413, and a
+  lone write still refused settles terminally with that code.
+- A committed write whose result does not decode settles COMMITTED with a
+  WIRE_DECODE_FAILED error and no value. The batch path removed the durable
+  record and then decoded, so the codec exception escaped the demux: the
+  committed write never settled and every later slot was lost with it. The
+  single path rejected it. The outcome is now decided first, then the record
+  removed, then the write settled; a bad slot never aborts the loop.
+- A finally guard around the replay loop requeues, in order at the front, every
+  drained write that was neither settled nor requeued when an unexpected
+  exception (an Error from a consumer callback) left the loop.
+
+RPC: a body that is not a JSON object (an HTML error page, a 200 `null` or `[]`)
+threw the parser's IllegalArgumentException or a cast's exception out of
+query/mutation/action. It now throws ApiException INTERNAL (PAYLOAD_TOO_LARGE for
+a 413), transport-shaped for the replay. An undecodable success result throws
+ApiException WIRE_DECODE_FAILED; the overlay of a committed submit is confirmed
+first.
+
+Frames:
+- A poke decodes every row of a shape before touching its view. A bad row after
+  a reset cleared the view, threw out of handleFrame and left it empty; the
+  shape now keeps its view, checkpoint and epoch and its onError receives
+  INVALID_FRAME, while other shapes in the poke still apply.
+- A cursor that is not an integer no longer replaces the tracked one (a resume
+  frame carrying "9" made the next resubscribe ask for sinceSeq "9"), and poke
+  frames need a string pokeId/shapeId instead of keying by "null" or "7.0".
+
+Session:
+- Client.close() ends every open stream; a loop over one blocked forever.
+- Changing `identity` from a set value to a different one evicts the previous
+  session: query and shape resume cursors and epochs are dropped and every shape
+  view is emptied, its callback told `[]`. `identity` is no longer a constructor
+  `var`; it is a constructor parameter feeding a property with a setter.
+
+Ten conformance cases cover these plus the empty-shard-key replay and the
+printed auth token, which already held for this port.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-dart): settle replays whole and never crash a flush
+
+A batch slot whose committed result the codec refused threw out of the slot
+loop after its record was un-persisted. flush() runs unawaited from
+setConnected and hydrate, so the throw was an unhandled async error that
+terminated the process, and every later slot stayed drained and unsettled. On
+the single-call path the same result was re-queued and retried forever. A
+committed write with an undecodable result now settles committed (overlay
+confirmed on its commit cursor, record removed after the decode decides the
+outcome) carrying WIRE_DECODE_FAILED, which a direct call throws too. The
+replay pass is guarded: an unexpected failure puts every drained write not yet
+settled back on the queue, in order, and nothing escapes the flush.
+
+One reply predicate serves the direct call, the lone replay, the whole-batch
+reply and each slot. A coded envelope is judged by its code whatever the HTTP
+status, so a coded 5xx is terminal on both paths instead of re-queued; a 413
+without an envelope is PAYLOAD_TOO_LARGE, so a batch splits on a proxy's HTML
+413 and a lone write refused that way settles terminally instead of re-queueing
+forever. A body that is not a JSON object raises LunoraApiException coded
+INTERNAL instead of a FormatException or a silent null result. An envelope's
+data that does not decode no longer throws away the verdict.
+
+Batch entries no longer send "shardKey": "" for an empty shard key, which routed
+a write to a different Durable Object than the single-call path did.
+
+A poke decodes every row of a shape before touching its view: a refused row
+leaves the view, checkpoint and epoch as they were and reaches the shape's error
+callback as INVALID_FRAME instead of escaping handleFrame with the view cleared.
+A non-integer cursor or non-string epoch no longer replaces the resume
+watermark. close() ends every open watch() stream. Changing the identity from a
+set one drops every resume cursor and epoch and empties every shape view,
+telling its callbacks [].
+
+LunoraTransport.parseRpcResponse and LunoraClient.parseRpcResponse now take the
+parsed body as Object? (null for a body that is not JSON).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(sdks): record the replay, frame and session rules all ports share
+
+protocol/README.md now states that a coded envelope is classified by its code
+whatever the status, that any 413 splits a batch, that a committed result which
+does not decode settles committed, that a 2xx body which is not an object is a
+transport error, that a malformed frame never raises out of the handler, that a
+poke with an undecodable row is refused whole, and that a server frame can be as
+large as the platform's 32 MiB message limit. The sdks README updates the
+replay-classification row it contradicted and records the identity eviction,
+callback isolation, the python socket limits and the new conformance rows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): keep a committed write's effects when its result is unreadable
+
+A write whose result did not decode had still committed, but three paths treated
+the decode error like any failure. The direct `mutation()` rolled its optimistic
+layers back, and so did a queued write's awaiter after the replay had already
+confirmed them, so the predicted value reverted to the pre-write one until the
+next frame. `callMutator` threw before recording the watermark the shard had
+just acknowledged, so the next mutator could derive a stale seq and have its
+write swallowed as a replay. All three now keep what the commit established and
+then report the decode error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(protocol): pin auth holds, undecodable error data and poke gaps
+
+replayClassification gains three refused credentials (held, not settled), an
+envelope whose `data` does not decode (classified by its code), and a coded
+WIRE_DECODE_FAILED from the server (a refusal, unlike a result the client failed
+to decode). rpc.json gains the same undecodable `data` on the direct path. The
+undecodable-row poke now reports WIRE_DECODE_FAILED, the reference's code, and is
+followed by a poke whose baseCheckpoint no longer matches the view, which must
+re-seed the shape; a contiguous poke must still apply.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): drop an error's undecodable data instead of throwing
+
+reconstructError wire-decoded an envelope's `data` unguarded, so a coded error
+whose `data` the codec refused surfaced as the codec's own codeless exception.
+A replay read that as a transport failure and re-sent the write on every
+reconnect, and inside a batch demux it abandoned every later slot. The data is
+now dropped and the error keeps its code. The message of an undecodable result
+also no longer claims every call committed: queries and actions raise it too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(sdks): record credential holds, poke gaps and undecodable error data
+
+protocol/README.md now states that a refused credential holds a replayed write,
+that an undecodable error `data` is dropped and the code still classifies, that
+a server-sent WIRE_DECODE_FAILED is a refusal, and that every port re-seeds a
+shape whose poke base no longer matches its view (the outstanding note saying
+none did is gone). The sdks README row no longer implies the ports already had
+the reference's whole rule.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-dart): hold refused credentials and re-seed gapped pokes
+
+A replay refused with UNAUTHORIZED, TOKEN_EXPIRED or UNAUTHENTICATED settled the
+write terminally. A write queued offline replays with the bearer the client held
+when it went offline, which has often expired by reconnect, so the user's own
+durable write was destroyed over a problem one token refresh fixes. These codes
+now hold the write on the single-call path, batch slots and whole-batch replies
+alike.
+
+A poke was spliced onto a shape's view whatever checkpoint its diff was computed
+against. After a refused reseed the server believes it delivered those rows, so
+its next part was based on a later checkpoint and its row landed on the stale
+view while the checkpoint advanced past rows the view never held. A part that is
+not a reset and whose base checkpoint differs from the view's, or whose poke
+epoch differs from the view's, now empties the view, clears its checkpoint and
+epoch, tells its callbacks [], skips the ops and re-subscribes the shape cold on
+the attached socket. A row the codec refuses in a poke is reported as
+WIRE_DECODE_FAILED.
+
+The README notes that batch replays by an earlier version sent "shardKey": ""
+and landed in a Durable Object named "", which is not migrated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-python): re-seed diverged pokes and hold refused credentials
+
+A poke refused for an undecodable row left the view at its old checkpoint,
+and the server's next poke, computed against the checkpoint it believed it had
+delivered, was spliced on anyway: rows the refused reseed removed survived and
+its new rows were lost for good. pokeEnd now compares each shape part's base
+checkpoint (the part's, else its pokeStart's) and epoch with the view's; on a
+mismatch that is not a reset it empties the view, clears checkpoint and epoch,
+tells the callbacks [], skips the ops and sends a cold shape_subscribe. A
+refused row now reports WIRE_DECODE_FAILED to the shape's error callbacks.
+
+A replay refused with UNAUTHORIZED, TOKEN_EXPIRED or UNAUTHENTICATED settled
+the write rejected, destroying a durable write over an expired bearer. These
+codes now hold the write in the queue on the single-call and batch paths.
+
+A stream() generator that was never iterated left its close hook registered
+for the life of the client; the hook is now registered on first iteration. An
+object key holding a lone surrogate raised UnicodeEncodeError while sorting
+the stable key; it now sorts by its UTF-16 code unit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-ruby): hold auth refusals and re-seed gapped pokes
+
+Replay:
+- UNAUTHORIZED, TOKEN_EXPIRED and UNAUTHENTICATED now re-queue on the single-call path, batch
+  slots and whole-batch replies. A write queued offline replays with the bearer held when it went
+  offline, which has often expired by reconnect; settling it destroyed the user's durable write
+  over a problem one token refresh fixes.
+- An error envelope whose data the codec refuses is still that coded error, raised with data nil.
+  The codec error escaped instead: the single path re-queued the write at the head of the queue
+  forever and the batch path raised out of the flush.
+- A committed write whose result the client cannot decode is recognised by where the failure
+  arose (Lunora::ResultDecodeError from the client's own result decode), not by the code string.
+  A server answering WIRE_DECODE_FAILED in an envelope was settled committed; it is a refusal.
+
+Shapes:
+- A poke part whose base checkpoint (its own or the pokeStart's) differs from the view's
+  checkpoint, or whose epoch differs from the view's, and that is not a reset, now drops the view,
+  clears its checkpoint and epoch, tells the callback [], skips the ops and sends a cold
+  shape_subscribe. The ops were spliced onto the stale view, so rows from a refused poke were
+  lost for good.
+- A poke refused for an undecodable row reports WIRE_DECODE_FAILED instead of INVALID_FRAME.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-go): re-seed gapped shapes and hold refused credentials
+
+A refused poke left the view at its old checkpoint while the server believed the rows were
+delivered, and the next poke's diff was spliced onto that stale view. applyPoke now compares each
+part's baseCheckpoint (else its pokeStart's) and the pokeStart's epoch with the view's own; on a
+mismatch that is not a reset it empties the view, clears its checkpoint and epoch, tells its
+callback [], skips the ops and sends a cold shape_subscribe. The refused-row error code is now
+WIRE_DECODE_FAILED.
+
+UNAUTHORIZED, TOKEN_EXPIRED and UNAUTHENTICATED now hold a replayed write (re-queued) on the
+single-call path, batch slots and whole-batch replies: a write queued offline replays with the
+bearer it was queued under, and settling it over an expired token destroyed it.
+
+An error envelope whose data does not decode escaped as a bare codec error, which a replay then
+treated as a transport failure and re-sent forever. The data is now dropped and the envelope
+classified by its code.
+
+A committed-but-undecodable result was recognised by comparing the WIRE_DECODE_FAILED code, so
+the same code sent by a server (a refusal) settled the write committed. APIError now carries an
+unexported marker set only by the client's own result decode.
+
+A flush recorded a settled write in its report only after the settle callbacks ran, so a panic in
+OnCommit let the flush guard re-queue a write that had committed and been un-persisted. Every
+settle now records the write first.
+
+Behaviour changes: the refused-poke error code changes from INVALID_FRAME to WIRE_DECODE_FAILED,
+and the three credential codes no longer settle a replayed write rejected.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-java): re-seed gapped pokes and hold auth-refused replays
+
+- A poke part whose base checkpoint (its own, else its pokeStart's) is not the checkpoint the
+  shape view is at, or whose epoch differs from the view's, is no longer spliced on. Unless it is
+  a reset, the view is emptied and its onRows told [], its checkpoint and epoch are cleared, and
+  a cold shape_subscribe goes out at once. Without it the poke after a refused one applied on top
+  of a view that never held the refused rows, losing them for good.
+- A shape poke refused for an undecodable row now reports WIRE_DECODE_FAILED; data-frame decode
+  errors keep INVALID_FRAME.
+- UNAUTHORIZED, TOKEN_EXPIRED and UNAUTHENTICATED re-queue a replayed write on the single-call
+  path, batch slots and whole-batch replies alike: they refuse the credential, not the write,
+  and a token refresh fixes them.
+- An error envelope whose data the codec refuses is still that coded error with the data dropped,
+  on the direct call and on every replay path; the codec exception no longer escapes.
+
+A server-sent WIRE_DECODE_FAILED envelope stays a refusal: only the client's own result decode
+raises the committed-but-undecodable error, which is a distinct exception type.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-rust): re-seed a shape on a poke gap and hold auth refusals
+
+A poke refused for an undecodable row left the view at its old checkpoint, but
+the server believes it delivered those rows: the next poke, based on the newer
+checkpoint, was spliced onto the stale view, losing the refused rows for good.
+Each shape's part now carries its base checkpoint (its own, else the
+pokeStart's), and a non-reset part whose base or epoch no longer matches the
+view empties the view, clears its checkpoint and epoch, tells on_rows [], skips
+the ops and sends a cold shape_subscribe at once. The refused-row poke now
+reports WIRE_DECODE_FAILED on the shape's error callback.
+
+A replay refused with UNAUTHORIZED, TOKEN_EXPIRED or UNAUTHENTICATED settled the
+write terminally, destroying a durable write over an expired token; those codes
+now hold the write on the single-call path, batch slots and whole-batch replies.
+
+An error envelope whose `data` the codec refused became an uncoded codec error:
+a direct call raised it instead of the coded error, and a replay classified the
+write by it rather than by its code. The undecodable data is now dropped and the
+envelope keeps its code.
+
+An online submit whose committed write returned an undecodable result failed
+with a codec error after confirming the overlay. It now returns the committed
+outcome with a Null value and the coded WIRE_DECODE_FAILED on the new
+MutationOutcome::error, as the replay's settled event reports it.
+* **sdks:** MutationOutcome gains a public `error` field, and the shape
+error code for a refused poke row is WIRE_DECODE_FAILED instead of INVALID_FRAME.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-swift): re-seed diverged pokes and hold refused credentials
+
+A shape poke whose part was computed against a checkpoint the view is not at was spliced onto
+the stale view. After a refused poke the server believes it delivered those rows, so the next
+part lost them for good. Each shape's base (the part's baseCheckpoint, else the pokeStart's) and
+the poke's epoch are now compared with the shape's: on a mismatch that is not a reset the view
+is emptied, its checkpoint and epoch cleared, onRows told [], and a cold shape_subscribe sent.
+A refused poke now reports WIRE_DECODE_FAILED to the shape.
+
+UNAUTHORIZED, TOKEN_EXPIRED and UNAUTHENTICATED settled a queued write terminally, destroying it
+over a credential one refresh fixes. They now hold the write on the single-call and batch paths.
+
+A WireMap key or WireSet member was compared by its interpolated String, which repairs a lone
+surrogate to U+FFFD, so "\ud800", "\ud801" and "�" collapsed into one. They are compared
+by UTF-16 unit now. A [String: Any] cannot hold object keys that differ only that way, so the
+reader refuses such an object instead of silently merging its members.
+
+The README tells hosts to serialize outbound frames with Wire.stableStringify.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-kotlin): re-seed a gapped shape and hold refused credentials
+
+A poke part is now checked against the checkpoint the view is actually at. Its
+base is the part's `baseCheckpoint`, else the pokeStart's; when the view has a
+checkpoint that differs from it, or the poke's epoch differs from the view's, and
+the part is not a reset, the shape drops its rows, checkpoint and epoch, tells
+onRows `[]`, skips the ops and sends a cold shape_subscribe through the attached
+socket. Without it a poke refused for an undecodable row was silently overtaken:
+the next poke, based on a checkpoint the view never reached, spliced its rows onto
+the stale view and the refused rows never came again. A view with no checkpoint
+yet is not a gap.
+
+A shape refusing a poke for an undecodable row now reports WIRE_DECODE_FAILED,
+the code a frame that cannot be decoded carries elsewhere; data-frame decode
+errors are unchanged.
+
+A replay refused with UNAUTHORIZED, TOKEN_EXPIRED or UNAUTHENTICATED holds the
+write, on the single-call path, batch slots and whole-batch replies alike. A write
+queued offline replays with the bearer held when it went offline, which has often
+expired by reconnect; settling it destroyed the user's durable write over a
+problem one token refresh fixes.
+
+An error envelope whose `data` the codec refuses is still that coded error, with
+the data dropped. The single-call parser let the codec exception escape instead,
+so a coded verdict read as a codec failure and a coded SHARD_UNAVAILABLE was
+rejected rather than re-queued. One helper now builds the error for every
+envelope a call, a batch slot or a whole batch carries.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(sdk-java): print a client as its deployment only
+
+Client inherited Object.toString(), so keeping the bearer token out of a printed
+client held only by accident: a field-dumping override added later would leak
+it with nothing failing. toString() now names the deployment URL and nothing
+else, and the redaction case pins the exact output.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* style(sdk-python): import unittest.mock one way in the replay tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **sdks:** one replay predicate, safe frames and session eviction ([#847](https://github.com/anolilab/lunora/issues/847)) ([e7f22ee](https://github.com/anolilab/lunora/commit/e7f22eef938926a644cd69bacab8820beb27a7d3)), closes [Float#to_s](https://github.com/anolilab/Float/issues/to_s) [#v](https://github.com/anolilab/lunora/issues/v)
+
 ## @lunora/client [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.140...@lunora/client@1.0.0-alpha.141) (2026-09-26)
 
 
