@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+import { validateEvent, WebhookVerificationError } from "@polar-sh/sdk/webhooks";
 import { describe, expect, it } from "vitest";
 
 import { money } from "../../src/money";
@@ -8,8 +9,27 @@ import { createPolarAdapter } from "../../src/providers/polar";
 
 const SECRET = "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"; // gitleaks:allow -- test fixture signing key, not a real secret
 
-const sign = (id: string, timestamp: string, body: string): string =>
-    `v1,${createHmac("sha256", Buffer.from(SECRET, "base64")).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
+/**
+ * Sign a delivery the way Polar does. `@polar-sh/sdk`'s `validateEvent` base64-ENCODES the secret
+ * and hands it to the Standard Webhooks verifier, which base64-decodes it straight back — so the
+ * HMAC key is the secret's UTF-8 bytes, not its base64 decoding. The "Polar's own SDK accepts
+ * this fixture" test below pins that, so the fixture cannot drift back to the wrong key.
+ */
+const signWith = (secret: string, id: string, timestamp: string, body: string): string =>
+    `v1,${createHmac("sha256", Buffer.from(secret, "utf8")).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
+
+const sign = (id: string, timestamp: string, body: string): string => signWith(SECRET, id, timestamp, body);
+
+/** Whether Polar's SDK accepts the SIGNATURE (a toy body may still fail its schema parse afterwards). */
+const polarSdkAcceptsSignature = (body: string, headers: Record<string, string>, secret: string): boolean => {
+    try {
+        validateEvent(body, headers, secret);
+    } catch (error) {
+        return !(error instanceof WebhookVerificationError);
+    }
+
+    return true;
+};
 
 const headersFor = (id: string, timestamp: string, signature: string) => {
     return {
@@ -184,6 +204,42 @@ describe("polar adapter", () => {
         expect(action.referenceId).toBe("user_1");
         expect(action.amount?.minorUnits).toBe(2500n);
         expect(action.eventId).toBe("msg_1");
+    });
+
+    it("accepts a delivery Polar's own SDK verifies, for both secret formats", async () => {
+        expect.assertions(4);
+
+        // A dashboard-generated secret carries the `polar_whs_` prefix and is not base64 at all.
+        for (const secret of [SECRET, "polar_whs_3kL9xQ2mV7pR4tY8wZ1nB6cD5fG0hJ"]) {
+            const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: secret });
+            const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" }, type: "subscription.revoked" });
+            const timestamp = String(Math.floor(Date.now() / 1000));
+            const signature = signWith(secret, "msg_sdk", timestamp, payload);
+
+            expect(polarSdkAcceptsSignature(payload, { "webhook-id": "msg_sdk", "webhook-signature": signature, "webhook-timestamp": timestamp }, secret)).toBe(
+                true,
+            );
+            // eslint-disable-next-line no-await-in-loop -- two independent cases, kept sequential for readable failures
+            await expect(adapter.parseWebhook({ headers: headersFor("msg_sdk", timestamp, signature), payload })).resolves.toMatchObject({
+                type: "subscription.canceled",
+            });
+        }
+    });
+
+    it("rejects a delivery signed with the base64-decoded secret, as Polar's SDK does", async () => {
+        expect.assertions(2);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { id: "sub_1", status: "canceled" }, type: "subscription.revoked" });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const wrongKey = `v1,${createHmac("sha256", Buffer.from(SECRET, "base64")).update(`msg_b64.${timestamp}.${payload}`).digest("base64")}`;
+
+        expect(polarSdkAcceptsSignature(payload, { "webhook-id": "msg_b64", "webhook-signature": wrongKey, "webhook-timestamp": timestamp }, SECRET)).toBe(
+            false,
+        );
+        await expect(adapter.parseWebhook({ headers: headersFor("msg_b64", timestamp, wrongKey), payload })).rejects.toMatchObject({
+            code: "WEBHOOK_SIGNATURE_INVALID",
+        });
     });
 
     it("maps subscription.revoked to a cancellation", async () => {

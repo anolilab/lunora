@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
@@ -43,5 +45,46 @@ describe("webhook verification", () => {
                 webhookTimestamp: String(timestamp),
             }),
         ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    });
+
+    const signed = (key: Buffer): string =>
+        `v1,${createHmac("sha256", key)
+            .update(`msg_1.${String(timestamp)}.${payload}`)
+            .digest("base64")}`;
+    const verify = async (secret: string, webhookSignature: string, keyEncoding?: "base64" | "utf8"): Promise<void> =>
+        verifyStandardWebhook({
+            ...(keyEncoding === undefined ? {} : { keyEncoding }),
+            now,
+            payload,
+            secret,
+            webhookId: "msg_1",
+            webhookSignature,
+            webhookTimestamp: String(timestamp),
+        });
+
+    it("keys a utf8 secret by its bytes verbatim, prefix included", async () => {
+        expect.assertions(2);
+
+        const polarFormat = "polar_whs_3kL9xQ2mV7pR4tY8wZ1nB6cD5fG0hJ"; // gitleaks:allow -- test fixture signing key, not a real secret
+
+        await expect(verify(polarFormat, signed(Buffer.from(polarFormat, "utf8")), "utf8")).resolves.toBeUndefined();
+        // The prefix is part of the key: signing without it must not verify.
+        await expect(verify(polarFormat, signed(Buffer.from(polarFormat.slice("polar_whs_".length), "utf8")), "utf8")).rejects.toMatchObject({
+            code: "WEBHOOK_SIGNATURE_INVALID",
+        });
+    });
+
+    it("keeps the base64 default for whsec_ secrets", async () => {
+        expect.assertions(1);
+
+        const key = Buffer.from("a-standard-webhooks-key");
+
+        await expect(verify(`whsec_${key.toString("base64")}`, signed(key))).resolves.toBeUndefined();
+    });
+
+    it("reports a non-base64 secret as a configuration error, not a bad delivery", async () => {
+        expect.assertions(1);
+
+        await expect(verify("polar_whs_not-base64!", "v1,sig")).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     });
 });

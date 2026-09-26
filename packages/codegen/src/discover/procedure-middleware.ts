@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { calleeName } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -133,7 +133,7 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
         return { usesCaptcha: false, usesRateLimit: false };
     }
 
-    return { usesCaptcha: Boolean(argument.getProperty("captcha")), usesRateLimit: Boolean(argument.getProperty("rateLimit")) };
+    return { usesCaptcha: Boolean(findObjectProperty(argument, "captcha")), usesRateLimit: Boolean(findObjectProperty(argument, "rateLimit")) };
 };
 
 /**
@@ -342,7 +342,7 @@ const isUnboundedAiGeneration = (call: CallExpression): boolean => {
         return false;
     }
 
-    return !argument.getProperty("maxOutputTokens");
+    return !findObjectProperty(argument, "maxOutputTokens");
 };
 
 /** `ctx.*` members that emit a structured observability event. */
@@ -665,7 +665,7 @@ const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
     }
 
     if (Node.isObjectLiteralExpression(firstArgument)) {
-        const handlerProperty = firstArgument.getProperty("handler");
+        const handlerProperty = findObjectProperty(firstArgument, "handler");
 
         if (!handlerProperty) {
             return undefined;

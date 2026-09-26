@@ -54,21 +54,55 @@ Each of these shipped on the alpha channel as a `BREAKING CHANGE` (or a
 deliberate surface cut) on the road to 1.0. If your app started on an early
 alpha, work through them in order.
 
+### `@lunora/ratelimit`: `shards` option removed
+
+`RateLimitConfig.shards` split a limit into N sub-buckets that each held
+`rate / shards`, and routed every key to exactly one of them, so a limit
+enforced `rate / shards` rather than `rate` (a `rate: 10_000, shards: 16` limit
+admitted 625 per period). Every sub-bucket lived in the same store, so the split
+relieved no contention either.
+
+**Migration:** delete `shards` from every limit config. The limit then enforces
+the `rate` it declares, which is what `useRateLimit` already predicted. If you
+tuned `rate` upward to compensate for the split, set it back to the real limit —
+a `rate` raised 16× for a 16-way split now admits 16× the traffic. A config that
+still carries `shards` throws at `new RateLimiter(...)`, so a missed one fails
+at startup instead of silently enforcing a different limit.
+
+**Stored state does not carry over.** A sharded limit stored each key's state
+under `<name>:<key>#<shard>`; the unsharded limit reads `<name>:<key>`. After the
+upgrade:
+
+- every previously sharded key starts fresh, so a caller at its limit gets a new
+  budget once, and any `tokenBudget` debt recorded against it is forgiven;
+- the old `#<shard>` rows are never read again, and `reset()` does not remove
+  them. With `createMemoryStore` they vanish on the next restart; with
+  `createSqlStore` / `createDbStore` they stay until you delete them, for
+  example every key ending in `#` followed by digits in the limiter's table.
+
+```ts
+// Before
+ingest: { kind: "token bucket", period: 1_000, rate: 10_000, shards: 16 },
+
+// After
+ingest: { kind: "token bucket", period: 1_000, rate: 10_000 },
+```
+
 ### `@lunora/ratelimit`: `random` option removed
 
-The deprecated `RateLimiterOptions.random` shard-selection hook is gone. Shard
-selection has been a deterministic hash of the storage key since the option
-was deprecated, so the hook was already unused.
+The deprecated `RateLimiterOptions.random` shard-selection hook is gone. It was
+already unused when it was removed, and `shards` itself is now gone too (see
+above).
 
 **Migration:** remove any `random` property from `new RateLimiter({ ... })`
 calls. No behavioral replacement is needed.
 
 ```ts
 // Before
-const limiter = new RateLimiter({ limits, random: Math.random, shards: 8 });
+const limiter = new RateLimiter({ config, random: Math.random });
 
 // After
-const limiter = new RateLimiter({ limits, shards: 8 });
+const limiter = new RateLimiter({ config });
 ```
 
 ### `@lunora/runtime`: `authIntrospector` removed

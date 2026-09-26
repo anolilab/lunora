@@ -1,7 +1,7 @@
 import type { Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, unwrapExpression } from "./ast";
+import { listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -66,10 +66,10 @@ const declaresDurable = (node: Node | undefined): boolean =>
     Node.isObjectLiteralExpression(node) &&
     node.getProperties().some((property) => {
         if (Node.isShorthandPropertyAssignment(property)) {
-            return property.getName() === "durable";
+            return propertyKeyName(property) === "durable";
         }
 
-        if (!Node.isPropertyAssignment(property) || property.getName() !== "durable") {
+        if (!Node.isPropertyAssignment(property) || propertyKeyName(property) !== "durable") {
             return false;
         }
 

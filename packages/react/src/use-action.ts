@@ -54,9 +54,11 @@ interface ActionHook<F extends FunctionReference> {
  * stick, and the action would silently fire minutes later on reconnect. `retry`
  * is pinned to `0` — not inherited from an app-supplied QueryClient — because
  * `client.action` sends no idempotency key, so a retry after a 502 on an action
- * that already ran server-side would run it a second time. A mutation may pause
- * and retry safely; it carries a `mutationId` and an offline queue. An action
- * carries neither.
+ * that already ran server-side would run it a second time. `useMutation` pins
+ * both the same way, for a different reason: `client.mutation` queues an
+ * offline write itself, and a paused call would never reach that queue (it
+ * waits for the network itself only when the client cannot queue). An action
+ * has no queue at all, so offline it fails fast.
  *
  * **What it deliberately does not carry.** There is no `optimistic` /
  * `optimisticUpdate` and no `withOptimisticUpdate`, which `useMutation` has. An

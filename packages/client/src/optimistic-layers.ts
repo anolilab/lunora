@@ -31,6 +31,18 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  */
 
 /**
+ * How many optimistic writes have been acknowledged with a commit cursor in this
+ * process. Only its order matters: a poll samples it before sending, and any
+ * layer acknowledged at or below the sample is already in the snapshot the poll
+ * returns. Module-wide rather than per client because an order shared by every
+ * client is still an order.
+ */
+let acknowledgements = 0;
+
+/** The latest acknowledgement, sampled by a poll before it sends. */
+export const acknowledgementMark = (): number => acknowledgements;
+
+/**
  * Fold the authoritative `base` value through an ordered list of optimistic
  * layers, returning the displayed value. A layer whose transform throws is
  * skipped (its mutation surfaces the error on settle) rather than aborting the
@@ -151,6 +163,8 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
             }
 
             layer.commitCursor = commitCursor;
+            acknowledgements += 1;
+            layer.acknowledgedAt = acknowledgements;
 
             // A confirming (or later) frame already advanced past the commit cursor,
             // so the write is already in `serverBase` — drop the overlay now.
@@ -191,4 +205,20 @@ export const dropConfirmedLayers = (state: SubscriptionState, cursor: number | u
     state.optimisticLayers = state.optimisticLayers.filter((layer) => layer.commitCursor === undefined || layer.commitCursor > cursor);
 
     return state.optimisticLayers.length !== before;
+};
+
+/**
+ * On a polled snapshot, drop every layer whose write was acknowledged at or
+ * before `mark`, the acknowledgement sampled before the poll was sent. A poll
+ * carries no cursor for {@link dropConfirmedLayers} to compare, but a snapshot
+ * read after the RPC resolved includes the write. A layer acknowledged after the
+ * send is kept: the snapshot may predate its commit.
+ */
+export const dropAcknowledgedLayers = (state: SubscriptionState, mark: number): void => {
+    if (state.optimisticLayers.length === 0) {
+        return;
+    }
+
+    // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
+    state.optimisticLayers = state.optimisticLayers.filter((layer) => layer.acknowledgedAt === undefined || layer.acknowledgedAt > mark);
 };

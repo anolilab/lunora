@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { MigrationIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Decide whether a callee identifier refers to `@lunora/server`'s
@@ -39,7 +39,7 @@ const isDefineMigration = (identifier: Identifier): boolean => {
 
 /** Read a static string-literal property off the `defineMigration({...})` argument, or undefined. */
 const stringProperty = (object: ObjectLiteralExpression, name: string): string | undefined => {
-    const property = object.getProperty(name);
+    const property = findObjectProperty(object, name);
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return undefined;

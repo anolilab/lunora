@@ -182,8 +182,20 @@ const literalToType = (value: string | undefined): string => {
     return value;
 };
 
-/** Map a {@link ValidatorIR} kind to its TS type. */
-const validatorToType = (validator: ValidatorIR): string => {
+/**
+ * Map a {@link ValidatorIR} to its TS type.
+ *
+ * `.nullable()` is recorded on the column meta rather than as a kind, and it
+ * admits `null` at runtime (a nullable column reads back as SQL NULL). So every
+ * type rendered from the IR — `Doc_*`, `Insert_*`, procedure args, drizzle
+ * `$type<…>` — widens here, or `doc.note.length` typechecks against a `null`.
+ */
+const validatorToType = (validator: ValidatorIR): string =>
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: kindToType re-enters validatorToType for nested validators
+    validator.column?.notNull === false ? `${kindToType(validator)} | null` : kindToType(validator);
+
+/** The TS type of a {@link ValidatorIR}'s kind, before {@link validatorToType}'s `.nullable()` widening. */
+const kindToType = (validator: ValidatorIR): string => {
     const scalar = SCALAR_TYPE_BY_KIND[validator.kind];
 
     if (scalar !== undefined) {
@@ -3788,7 +3800,10 @@ const emitContainerFragments = (
         // outbound container fetches: `getCurrentTraceparent()` so the
         // container's spans join the trace, and `getCurrentSampleErrors()` so it
         // exports on the verdict the worker settled rather than on its own
-        // environment. Both are `undefined` outside a propagated dispatch.
+        // environment. The traceparent is the inbound one or, when the dispatch
+        // carried none (an alarm, a non-Lunora caller), the shard's own minted
+        // anchor, so it is `undefined` only outside a dispatch. The sample-errors
+        // verdict is `undefined` whenever none was propagated (read as keep).
         build: `
             const containers = createContainerContext(env, LUNORA_CONTAINERS, ${jurisdiction ? JSON.stringify(jurisdiction) : "undefined"}, this.getCurrentTraceparent(), this.getCurrentSampleErrors());
 `,
@@ -3961,7 +3976,10 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
 
     const imports = pushQueues.map((queue) => queue.exportName).join(", ");
     const entries = pushQueues
-        .map((queue) => `    ${JSON.stringify(queue.name)}: { definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`)
+        .map(
+            (queue) =>
+                `    ${JSON.stringify(queue.name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
+        )
         .join("\n");
 
     return `${GENERATED_HEADER}/**
@@ -3974,7 +3992,7 @@ import type { QueueRegistry } from "@lunora/queue";
 
 import { ${imports} } from "../queues.js";
 
-/** Stable wrangler queue name → { definition, exportName } for batch routing. */
+/** Stable wrangler queue name → { binding, definition, exportName } for batch routing. */
 export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {
 ${entries}
 };
@@ -6584,7 +6602,9 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
         expression += `.references((): AnySQLiteColumn => ${fkTable}._id)`;
     }
 
-    if (column.notNull) {
+    // `.nullable()` is recorded on the column meta rather than as its own kind,
+    // so the kind-based mapping above cannot see it.
+    if (column.notNull && validator.column?.notNull !== false) {
         expression += ".notNull()";
     }
 

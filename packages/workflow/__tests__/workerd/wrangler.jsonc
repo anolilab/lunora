@@ -12,6 +12,8 @@
     "workflows": [
         { "name": "smoke-workflow", "binding": "WORKFLOW_SMOKE", "class_name": "SmokeWorkflow" },
         { "name": "decline-workflow", "binding": "WORKFLOW_DECLINE", "class_name": "DeclineWorkflow" },
+        { "name": "timed-decline-workflow", "binding": "WORKFLOW_TIMED_DECLINE", "class_name": "TimedDeclineWorkflow" },
+        { "name": "rollback-config-workflow", "binding": "WORKFLOW_ROLLBACK_CONFIG", "class_name": "RollbackConfigWorkflow" },
     ],
     // `ctx.run` dispatches to this origin; the test worker answers it in-process
     // (see `originFetch` in test-worker.ts), so no network is involved.

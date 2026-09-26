@@ -1,3 +1,45 @@
+## @lunora/config [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.256...@lunora/config@1.0.0-alpha.257) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.220
+* **@lunora/container:** upgraded to 1.0.0-alpha.57
+
+## @lunora/config [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.255...@lunora/config@1.0.0-alpha.256) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.215
+
+## @lunora/config [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.254...@lunora/config@1.0.0-alpha.255) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.219
+* **@lunora/seed:** upgraded to 1.0.0-alpha.156
+* **@lunora/studio:** upgraded to 1.0.0-alpha.214
+
+## @lunora/config [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.253...@lunora/config@1.0.0-alpha.254) (2026-09-25)
+
+### Bug Fixes
+
+* **config:** remove dropped queue tuning and retune --env consumers ([#830](https://github.com/anolilab/lunora/issues/830)) ([753650e](https://github.com/anolilab/lunora/commit/753650e921801a24b4a4f0be2dbba19ea32c553d)), closes [#817](https://github.com/anolilab/lunora/issues/817)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.217
+
+## @lunora/config [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.252...@lunora/config@1.0.0-alpha.253) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.216
+
 ## @lunora/config [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.251...@lunora/config@1.0.0-alpha.252) (2026-09-25)
 
 

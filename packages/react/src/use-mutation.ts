@@ -1,7 +1,7 @@
 "use client";
 
 import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@lunora/client";
-import { useMutation as useTanStackMutation } from "@tanstack/react-query";
+import { onlineManager, useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
@@ -32,6 +32,23 @@ interface MutationHook<F extends FunctionReference> {
     withOptimisticUpdate: (update: OptimisticUpdate<ArgsOf<F>>) => MutationHook<F>;
 }
 
+/** Resolve once TanStack's `onlineManager` reports the browser online. */
+const whenOnline = async (): Promise<void> =>
+    new Promise((resolve) => {
+        if (onlineManager.isOnline()) {
+            resolve();
+
+            return;
+        }
+
+        const unsubscribe = onlineManager.subscribe((online) => {
+            if (online) {
+                unsubscribe();
+                resolve();
+            }
+        });
+    });
+
 /**
  * Returns `{ mutate, pending, data, error, reset, withOptimisticUpdate }` for the
  * given mutation reference. Prefer destructuring at the call site so the React
@@ -55,6 +72,12 @@ interface MutationHook<F extends FunctionReference> {
  * call options pass straight through to `client.mutation`, which applies and
  * rolls them back against the Lunora subscription cache (Convex parity) — not
  * through TanStack's `onMutate`.
+ *
+ * Offline, a write the client can queue reaches `client.mutation` at once,
+ * which queues it (the offline queue or a durable outbox) and paints the
+ * optimistic update. A write it cannot queue (before the shard's first connect,
+ * or with no WebSocket) waits until the browser is online again, then sends.
+ * TanStack never retries; the queue owns replays.
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
@@ -64,7 +87,24 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
     const [pending, setPending] = useState(false);
 
     const mutation = useTanStackMutation<ReturnOf<F>, Error, MutateVariables<F>>({
-        mutationFn: ({ args, options }) => client.mutation(function_, args, options),
+        mutationFn: async ({ args, options }) => {
+            // A write the client cannot queue would fail at once offline. Hold it
+            // until the network is back instead, as TanStack's default did.
+            if (!client.canQueueOffline(options?.shardKey)) {
+                await whenOnline();
+            }
+
+            return client.mutation(function_, args, options);
+        },
+        // `client.mutation` owns offline behaviour when it can queue: it applies
+        // the optimistic update, mints the `mutationId`, and hands the write to
+        // the offline queue or durable outbox. TanStack's default `"online"` mode
+        // paused every call before `client.mutation` ran, so an offline write got
+        // none of that, and closing the tab lost it.
+        networkMode: "always",
+        // A retry re-runs `mutationFn`, which mints a fresh `mutationId`, so the
+        // server cannot dedupe it against an attempt that already committed.
+        retry: 0,
         // `onMutate` fires when a call starts, `onSettled` when it resolves or
         // rejects — so overlapping calls compose and `pending` only clears once
         // the last one settles.

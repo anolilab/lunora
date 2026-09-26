@@ -62,7 +62,6 @@ interface RateLimitConfig {
     kind: RateLimitKind;
     period: number;
     rate: number;
-    shards?: number;
     start?: number;
 }
 ```

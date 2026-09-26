@@ -17,13 +17,13 @@
  * suite and `@lunora/dispatch`'s own tests.
  */
 import { env, introspectWorkflowInstance } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_KEY } from "../../../../shared/branch-marker";
 import createWorkflows from "../../src/create-workflows";
 import type { WorkflowBindingLike } from "../../src/types";
 import type { SmokeParams } from "./test-worker";
-import { declineLog } from "./test-worker";
+import { declineLog, rollbackLog } from "./test-worker";
 
 const workflows = createWorkflows({ bindings: { smokeWorkflow: env.WORKFLOW_SMOKE as unknown as WorkflowBindingLike } });
 
@@ -116,6 +116,70 @@ describe("@lunora/workflow (workerd)", () => {
             // it made was re-checked until the origin answered.
             expect(declineLog.attempts).toStrictEqual([1]);
             expect(declineLog.dispatches).toBe(4);
+        } finally {
+            await instance.dispose();
+        }
+    }, 60_000);
+
+    // The wait above can outlast a step's own `timeout`. Cut short by the engine,
+    // the attempt fails either way, but the abandoned wait keeps re-dispatching
+    // next to the retry. It has to end with the decline before the timeout, so
+    // the attempt is charged once and nothing from it runs on afterwards.
+    it("ends a decline wait before the step's timeout, so the attempt fails once and stops dispatching", async () => {
+        expect.hasAssertions();
+
+        const id = "timed-decline-run-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_TIMED_DECLINE, id);
+
+        declineLog.attempts.length = 0;
+        declineLog.configs.length = 0;
+        declineLog.dispatchedBy.length = 0;
+
+        try {
+            // Eight declines outlast two 6s attempts (each wait gives up 2s before
+            // its timeout) and are gone by the third.
+            await env.WORKFLOW_TIMED_DECLINE.create({ id, params: { declines: 8 } });
+
+            await instance.waitForStatus("complete");
+
+            await expect(instance.getOutput()).resolves.toBe("charged");
+            // The engine hands the step its timeout, which is what the wait reads.
+            expect(declineLog.configs).toHaveLength(3);
+            expect(declineLog.configs).toStrictEqual(Array.from({ length: 3 }, () => expect.objectContaining({ timeout: "6 seconds" })));
+            // COUNTS: attempts 1 and 2 each dispatched at +0s, +1s and +3s, then
+            // gave up with the decline (keeping 1s of the 4s window for a last
+            // dispatch); attempt 3 met the last two declines and was served on
+            // its third call. No attempt dispatched after the next one began.
+            expect(declineLog.attempts).toStrictEqual([1, 2, 3]);
+            expect(declineLog.dispatchedBy).toStrictEqual([1, 1, 1, 2, 2, 2, 3, 3, 3]);
+        } finally {
+            await instance.dispose();
+        }
+    }, 60_000);
+
+    // A rollback's decline wait is bounded by `rollbackConfig.timeout` because
+    // of what this pins: the engine hands the rollback the FORWARD step's
+    // config, not its own. If this ever reads "7 seconds", `run-step.ts` can go
+    // back to reading `ctx.config`.
+    it("hands a rollback the forward step's config, not its rollbackConfig", async () => {
+        expect.hasAssertions();
+
+        const id = "rollback-config-run-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_ROLLBACK_CONFIG, id);
+
+        rollbackLog.length = 0;
+
+        try {
+            await env.WORKFLOW_ROLLBACK_CONFIG.create({ id, params: {} });
+
+            await vi.waitFor(
+                () => {
+                    expect(rollbackLog).toHaveLength(1);
+                },
+                { interval: 100, timeout: 20_000 },
+            );
+
+            expect(rollbackLog).toStrictEqual([expect.objectContaining({ timeout: "1 hour" })]);
         } finally {
             await instance.dispose();
         }

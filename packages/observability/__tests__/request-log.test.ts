@@ -348,6 +348,57 @@ describe("request-log module", () => {
         // captureRaw (dev) returns the value untouched.
         expect(redactArgs({ password: "hunter2" }, true)).toStrictEqual({ password: "hunter2" });
     });
+
+    it("masks every common credential key spelling, not only the exact names", () => {
+        expect.assertions(2);
+
+        const args = {
+            accessToken: "at-1",
+            api_key: "ak-1",
+            clientSecret: "cs-1",
+            cookie: "session=abc",
+            newPassword: "np-1",
+            passwordConfirmation: "pc-1",
+            privateKey: "pk-1",
+            refreshToken: "rt-1",
+            stripeSecretKey: "sk-1",
+        };
+
+        expect(redactArgs(args)).toStrictEqual({
+            accessToken: "<REDACTED>",
+            api_key: "<REDACTED>",
+            clientSecret: "<REDACTED>",
+            cookie: "<REDACTED>",
+            newPassword: "<REDACTED>",
+            passwordConfirmation: "<REDACTED>",
+            privateKey: "<REDACTED>",
+            refreshToken: "<REDACTED>",
+            stripeSecretKey: "<REDACTED>",
+        });
+        // A credential key holding an object is masked whole — the walk does not
+        // descend into a matched value, so leaving it would leak what it nests.
+        expect(redactArgs({ credentials: { apiKey: "k", user: "u" } })).toStrictEqual({ credentials: "<REDACTED>" });
+    });
+
+    it("keeps numeric and boolean values under credential-looking keys", () => {
+        expect.assertions(1);
+
+        // Token usage counters are what an AI app reads most; no secret is a number.
+        expect(redactArgs({ hasToken: true, maxTokens: 1024, tokenCount: 42 })).toStrictEqual({ hasToken: true, maxTokens: 1024, tokenCount: 42 });
+    });
+
+    it("masks name=value credentials inside a plain string, keeping the name", () => {
+        expect.assertions(4);
+
+        expect(redactArgs("token=abc123")).toBe("token=<REDACTED>");
+        expect(redactArgs("password=hunter2")).toBe("password=<REDACTED>");
+        // The name is kept whole even when the fragment sits mid-name (`new_password`).
+        expect(redactArgs("failed: new_password=hunter2 api_key=zz9 user=alice")).toBe(
+            // eslint-disable-next-line no-secrets/no-secrets -- the redacted output under test, not a secret
+            "failed: new_password=<REDACTED> api_key=<REDACTED> user=alice",
+        );
+        expect(redactArgs("GET /callback?code=1&access_token=abc&x=1")).not.toContain("abc");
+    });
 });
 
 describe("readRequestLog tolerates a malformed identity/args JSON blob", () => {
@@ -897,15 +948,16 @@ describe("emitLogEvent (ctx.log → console)", () => {
         expect(event).toMatchObject({
             function: "messages:list",
             level: "info",
-            message: 'hello {"token":"s3cr3t"}',
+            // The rendered message goes through the same credential masking as
+            // `fields`: the console line is what Workers Logs / Logpush keep.
+            message: 'hello {"token":"<REDACTED>"}',
             shard: "room-9",
             source: "lunora",
             type: "log",
             userId: "user-1",
         });
         // The structured `args` array is deliberately omitted from the console event;
-        // it stays on the opt-in `onLog` sink. (The secret is still in `message` here
-        // because the developer chose to log the object — same as a raw console.log.)
+        // it stays on the opt-in `onLog` sink.
         expect(event.args).toBeUndefined();
         expect(Object.keys(event)).not.toContain("args");
     });

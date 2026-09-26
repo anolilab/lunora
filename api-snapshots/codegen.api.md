@@ -453,6 +453,7 @@ interface LoadedProjectConfig {
 
 ```ts
 interface LunoraProjectConfig {
+    advisor?: unknown;
     app?: unknown;
     remote?: unknown;
     target?: unknown;
@@ -598,6 +599,10 @@ interface PlatformDiagnostic {
 
 ```ts
 interface ProjectConfigLiterals {
+    advisor?: {
+        minSeverity?: string;
+        unreadable?: boolean;
+    };
     remote?: boolean;
     target?: string;
     unreadable?: boolean;

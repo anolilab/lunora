@@ -1,3 +1,289 @@
+## @lunora/do [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.166...@lunora/do@1.0.0-alpha.167) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **container:** `start({ envVars })` no longer replaces the container
+environment; it is merged over `env`, `secrets` and `secretsStore`, and a
+missing Secrets Store binding now fails such a start too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep pool instances out of .get() names
+
+`.any()` and `.pool()` picked instances named `pool-N`, the same namespace
+`.get(name)` uses. An entity called `pool-0` shared a Durable Object, disk
+and lifecycle with the pool's first instance, so `.get("pool-0").destroy()`
+stopped a pool member.
+
+Pool instances are now named `__lunora-pool-N`, and `.get()` rejects names
+with that prefix (also in `createContainerTestContext`).
+* **container:** pooled instances move to new Durable Object ids
+(`__lunora-pool-N`); `.get()` rejects names starting with `__lunora-pool-`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep container spans on one trace without traceparent
+
+Without an inbound `traceparent`, `createContainerTelemetry` minted a new
+trace id for every span, so one job's spans landed as unrelated root traces,
+and its log records carried no trace id at all. A dispatch that reached the
+shard with no `traceparent` (an alarm, a subscription re-run, a non-Lunora
+caller) always produced that case, because the shard forwarded nothing to
+the container even though it had minted its own trace anchor.
+
+- The telemetry instance mints one trace when there is no inbound parent;
+  every span shares it as a root, and every log record is stamped with it.
+- `ShardDO.getCurrentTraceparent()` falls back to the dispatch's minted
+  anchor (its trace id and root span), so container spans join the shard's
+  trace under its root span.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep the pool-N ids and reserve the prefix in .get()
+
+The previous commit renamed pool instances to `__lunora-pool-N`. Instance
+names are Durable Object ids, so a deploy would have started a second set of
+pool instances while the warm `pool-N` ones kept counting against wrangler's
+`max_instances` until `sleepAfter` (10m by default) — long enough for every
+`.any()`/`.pool()` call to fail with "no Container instance available".
+
+The pool keeps its `pool-N` ids. `.get(name)` now rejects any name starting
+with `pool-`, with an error that says the prefix is reserved for the
+instances `.any()`/`.pool()` pick.
+* **container:** `.get(name)` throws for a name starting with `pool-`. This
+only affects an app that already names an instance `pool-*`, and such an
+instance was already sharing a Durable Object (disk, lifecycle, `destroy()`)
+with a pool member, which is the bug this closes. Rename those instances.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep start({ envVars }) replacing the declared env
+
+Reverts the merge semantics from 5810b4341. Replacing the env set is a
+safety feature, not a bug: `start({ envVars })` is how an app boots an
+untrusted or model-driven exec sandbox without the credentials the
+definition declares (DATABASE_URL, Secrets Store values). With a merge the
+only way left to withhold a declared secret was to override each one with
+"", which fails open the moment a new secret is declared.
+
+What was wrong was the documentation. `ContainerStartOptions.envVars` said
+"merged over the definition's env/secrets"; it now says the per-instance
+set replaces `env`, `secrets` and `secretsStore` for that start, and that
+Secrets Store resolution is skipped. The container docs say the same and
+show `start({ envVars: {} })` for a credential-free sandbox.
+
+A new test pins the contract: a start with `envVars` passes exactly those
+variables to the base class, with the declared env, Worker secret and
+Secrets Store value all absent. It and the restored "skips Secrets Store
+resolution" test fail against the merging implementation.
+
+This undoes the BREAKING CHANGE recorded on 5810b4341: `start({ envVars })`
+behaves as it did before this PR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): mint one trace per instance only when it is anchored
+
+f80628f7b gave every telemetry instance one trace even with no anchor. The
+documented setup creates the instance once per process, so a long-running
+container server put every span it ever made into one trace that never
+ended: collectors truncate it, and per-request filtering stops working.
+
+`createContainerTelemetry` is back to the anchored/unanchored split. With
+an anchor (`traceparent` option, the `request`'s header, or
+`LUNORA_TRACEPARENT`) every span hangs off it and every log carries its
+trace id. Without one, each span starts its own trace and logs name none.
+The shard still forwards its minted anchor when the dispatch arrived with
+no traceparent, so containers called through `ctx.containers` stay
+anchored to the shard's trace.
+
+The telemetry JSDoc and the observability docs now say to create the
+instance per request (`{ request }`) in a server and to keep a
+module-scope instance for one-shot jobs started with LUNORA_TRACEPARENT.
+The codegen comment on the forwarded traceparent no longer claims it is
+undefined outside a propagated dispatch, and `getCurrentTraceparent`
+documents the existing alarm-vs-RPC mis-attribution of the shared
+per-instance trace field (not fixed: it needs the anchor passed into
+buildCtx by value).
+
+The one-trace test is split into an anchored and an unanchored case; the
+unanchored one fails against f80628f7b.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): reach exec over an RPC, not a forgeable header
+
+The container DO let a `/__lunora/*` request through when it carried
+`x-lunora-container-exec: 1`. That header was a constant, so it was only as
+strong as every path that could present it:
+
+- an app forwarding an inbound request as-is
+  (`env.CONTAINER_X.get(id).fetch(request)`) forwarded an attacker's header;
+- `containerFetch` is a public RPC on the stub and skipped the `fetch`
+  override entirely.
+
+The exec route is now unreachable from request content:
+
+- `LunoraContainer.fetch` and `containerFetch` both answer 403 for any path
+  touching `/__lunora/*`, whatever headers the request carries.
+- `handle.exec` is delivered through a new `lunoraExec(request)` RPC, which
+  only code holding the binding can call. It serves only POST
+  `/__lunora/exec`, honouring a `.port(n)` handle's target-port header.
+- The header survives only as an in-worker routing mark: the stub sender
+  strips it and calls `lunoraExec` instead of `fetch`. Every caller `fetch`,
+  including on `.port()` and pooled handles, still strips it first.
+
+Both guards now check every successive percent-decoding of the path (up to
+five rounds), so a double-encoded `/%255F%255Flunora/exec` that a decoding
+proxy would turn into `/__lunora/exec` is refused too.
+
+Tests cover: the DO refusing the route with the header set to "1", "0" and
+"true", `%2F`, double encoding and a websocket upgrade; `containerFetch`
+refusing it; `lunoraExec` serving only the exec route on the targeted port;
+exec going over `lunoraExec` and marked caller fetches (plain, `.port()`,
+pooled) over `fetch`, with no mark on the wire; the double-encoded client
+path. All fail against the previous commit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): send exec over RPC without an AbortSignal
+
+`handle.exec` puts its deadline signal on the Request, and cb7ad3337 passed
+that Request to `stub.lunoraExec(...)` as an RPC argument. workerd refuses
+to serialize an AbortSignal ("AbortSignal serialization is not enabled"),
+so every exec with a `timeoutMs` or `signal` failed on real workerd, and
+the error does not match the cold-start pattern, so it was not retried.
+`@lunora/agent`'s sandbox always passes `timeoutMs`. The unit double calls
+`lunoraExec` in-process, which is why the Node suite passed.
+
+- The RPC request is rebuilt from url, method, headers and the (small,
+  JSON) body, with no signal.
+- The deadline is enforced in the worker by racing the RPC against the
+  caller's signal. That signal is passed alongside the request rather than
+  read off it: a Request built from `init.signal` only follows it through a
+  weak reference in undici.
+- A timed-out exec is abandoned, not cancelled: the call keeps running and
+  the command keeps going in the container. The runner receives
+  `timeoutMs` in the body and is the only place that can stop it. The
+  container docs now say this.
+
+A workerd-project test drives `handle.exec` through a real DO RPC
+(`ExecProbe`, which exposes the same `lunoraExec` as `LunoraContainer`,
+which cannot boot without a container runtime): one exec with
+`timeoutMs` that answers, one that times out. Both failed with the
+serialization error before this change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): persist the start({ envVars }) override per instance
+
+The docs advised `start({ envVars: {} })` for a credential-free sandbox,
+but the override lived only for the one start it was passed to:
+
+- after the container stopped (sleepAfter, a crash, hardTimeout), the next
+  `exec`/`fetch` restarted it through `startAndWaitForPorts` with the full
+  declared env and the Secrets Store values;
+- on an instance that was already running, upstream returns early, so the
+  call succeeded while the container kept its credentials.
+
+`LunoraContainer` now persists the override in the Durable Object's
+storage and every start of the instance reads it: explicit `start()`, and
+the implicit restart, on this or any later DO instance. With an override
+the Secrets Store is not read. `destroy()` drops it.
+
+A `start({ envVars })` whose env differs from the one the container is
+running (or starting) with is rejected with `CONFLICT` instead of being
+reported as applied; `stop()` first. The start env is now computed per
+start from the declared env plus a memoised Secrets Store map, rather
+than by merging resolved secrets into `envVars` once.
+
+Tests: restart after stop on a fresh DO instance keeps the override, and
+a differing start on a running instance is refused (both fail without the
+change), plus same-env repeat start and destroy() restoring the declared
+env. The option, secretsStore docblock, README and container docs say the
+same.
+* **container:** a `start({ envVars })` override now persists across
+restarts until `destroy()`, and a differing `start({ envVars })` on a
+running instance throws CONFLICT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): fail closed on malformed and endless path escapes
+
+The reserved-path guards decode a path repeatedly and refuse `/__lunora/*`
+in any decoded form. Two holes remained:
+
+- A malformed escape anywhere made `decodeURIComponent` throw for the whole
+  path, and decoding stopped. `/%5F%5Flunora/exec/%ZZ` was allowed through,
+  while a lenient router (Hono's `tryDecodeURI`) decodes the valid escapes
+  around `%ZZ` and routes it to exec. A failed round now decodes each
+  `%XX` on its own, keeping the invalid ones.
+- A path still changing after the 5-round cap was treated as safe. It now
+  counts as reserved.
+
+`pathMatchesAnyDecoding` replaces `decodedPathForms` in both the client
+guard and the Durable Object guard.
+
+Also fix(do): re-pin the dispatch trace anchor with the request scope.
+`getCurrentTraceparent` falls back to `currentRequestTrace`, which
+`restoreRequestScope` did not restore, so a mutation queued at the replay
+gate forwarded to containers the trace of whichever dispatch ran while it
+waited. It is now part of `RequestScope`.
+
+Tests (each fails without the change): the malformed-escape and
+non-converging paths on the client guard and the DO; a gate-queued
+mutation forwarding its own trace rather than a sibling's.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(container): update the api snapshot for LunoraContainer.destroy
+
+`LunoraContainer` now overrides `destroy()` to drop the persisted
+`start({ envVars })` override.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(container): say a start({ envVars }) override cannot change mid-start
+
+`persistEnvOverride` rejects a differing override with `CONFLICT` while the
+container is running AND while a start is still in flight, but the README,
+the container docs and the `ContainerStartOptions.envVars` JSDoc only named
+the running case. They now say the override cannot change while the
+container is running or still starting.
+
+Also restructures `touchesReservedNamespace` so Prettier and ESLint's
+list-newline rule agree on its formatting (it failed `Lint (prettier)`
+after ESLint's fix pass re-wrapped the call).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **container:** exec reached only over RPC, pool-prefix reserve, anchored container traces ([#832](https://github.com/anolilab/lunora/issues/832)) ([8361d38](https://github.com/anolilab/lunora/commit/8361d38c3376be251c738a840b7433dd2b7da136))
+
+## @lunora/do [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.165...@lunora/do@1.0.0-alpha.166) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.96
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.53
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.74
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+
 ## @lunora/do [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.164...@lunora/do@1.0.0-alpha.165) (2026-09-25)
 
 

@@ -53,24 +53,29 @@ const buildAiGatewayMetadataFields = (metadata: AiGatewayMetadata | undefined): 
         return undefined;
     }
 
+    const builtIns: Record<string, string> = {};
+
+    if (typeof metadata.functionPath === "string" && metadata.functionPath.length > 0) {
+        builtIns["functionPath"] = metadata.functionPath;
+    }
+
+    if (typeof metadata.traceId === "string" && metadata.traceId.length > 0) {
+        builtIns["traceId"] = metadata.traceId;
+    }
+
     const fields: Record<string, string> = {};
 
-    // App tags first so the built-in correlation fields below overwrite a
-    // colliding key: `traceId` is what joins a gateway log entry to its trace,
-    // and an app must not be able to break that join by reusing the name.
+    // An app tag never takes a built-in's name: `traceId` is what joins a gateway
+    // log entry to its trace, and an app must not be able to break that join by
+    // reusing the name. Skipped rather than overwritten, because overwriting keeps
+    // the TAG's insertion slot, so the trim below would cut the built-in first.
     for (const [key, value] of Object.entries(metadata.tags ?? {})) {
-        if (typeof value === "string" && value.length > 0 && key.length > 0) {
+        if (typeof value === "string" && value.length > 0 && key.length > 0 && !Object.hasOwn(builtIns, key)) {
             fields[key] = value;
         }
     }
 
-    if (typeof metadata.functionPath === "string" && metadata.functionPath.length > 0) {
-        fields["functionPath"] = metadata.functionPath;
-    }
-
-    if (typeof metadata.traceId === "string" && metadata.traceId.length > 0) {
-        fields["traceId"] = metadata.traceId;
-    }
+    Object.assign(fields, builtIns);
 
     const keys = Object.keys(fields);
 

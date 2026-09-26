@@ -1,3 +1,582 @@
+## @lunora/codegen [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.219...@lunora/codegen@1.0.0-alpha.220) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **container:** `start({ envVars })` no longer replaces the container
+environment; it is merged over `env`, `secrets` and `secretsStore`, and a
+missing Secrets Store binding now fails such a start too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep pool instances out of .get() names
+
+`.any()` and `.pool()` picked instances named `pool-N`, the same namespace
+`.get(name)` uses. An entity called `pool-0` shared a Durable Object, disk
+and lifecycle with the pool's first instance, so `.get("pool-0").destroy()`
+stopped a pool member.
+
+Pool instances are now named `__lunora-pool-N`, and `.get()` rejects names
+with that prefix (also in `createContainerTestContext`).
+* **container:** pooled instances move to new Durable Object ids
+(`__lunora-pool-N`); `.get()` rejects names starting with `__lunora-pool-`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep container spans on one trace without traceparent
+
+Without an inbound `traceparent`, `createContainerTelemetry` minted a new
+trace id for every span, so one job's spans landed as unrelated root traces,
+and its log records carried no trace id at all. A dispatch that reached the
+shard with no `traceparent` (an alarm, a subscription re-run, a non-Lunora
+caller) always produced that case, because the shard forwarded nothing to
+the container even though it had minted its own trace anchor.
+
+- The telemetry instance mints one trace when there is no inbound parent;
+  every span shares it as a root, and every log record is stamped with it.
+- `ShardDO.getCurrentTraceparent()` falls back to the dispatch's minted
+  anchor (its trace id and root span), so container spans join the shard's
+  trace under its root span.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep the pool-N ids and reserve the prefix in .get()
+
+The previous commit renamed pool instances to `__lunora-pool-N`. Instance
+names are Durable Object ids, so a deploy would have started a second set of
+pool instances while the warm `pool-N` ones kept counting against wrangler's
+`max_instances` until `sleepAfter` (10m by default) — long enough for every
+`.any()`/`.pool()` call to fail with "no Container instance available".
+
+The pool keeps its `pool-N` ids. `.get(name)` now rejects any name starting
+with `pool-`, with an error that says the prefix is reserved for the
+instances `.any()`/`.pool()` pick.
+* **container:** `.get(name)` throws for a name starting with `pool-`. This
+only affects an app that already names an instance `pool-*`, and such an
+instance was already sharing a Durable Object (disk, lifecycle, `destroy()`)
+with a pool member, which is the bug this closes. Rename those instances.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep start({ envVars }) replacing the declared env
+
+Reverts the merge semantics from 5810b4341. Replacing the env set is a
+safety feature, not a bug: `start({ envVars })` is how an app boots an
+untrusted or model-driven exec sandbox without the credentials the
+definition declares (DATABASE_URL, Secrets Store values). With a merge the
+only way left to withhold a declared secret was to override each one with
+"", which fails open the moment a new secret is declared.
+
+What was wrong was the documentation. `ContainerStartOptions.envVars` said
+"merged over the definition's env/secrets"; it now says the per-instance
+set replaces `env`, `secrets` and `secretsStore` for that start, and that
+Secrets Store resolution is skipped. The container docs say the same and
+show `start({ envVars: {} })` for a credential-free sandbox.
+
+A new test pins the contract: a start with `envVars` passes exactly those
+variables to the base class, with the declared env, Worker secret and
+Secrets Store value all absent. It and the restored "skips Secrets Store
+resolution" test fail against the merging implementation.
+
+This undoes the BREAKING CHANGE recorded on 5810b4341: `start({ envVars })`
+behaves as it did before this PR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): mint one trace per instance only when it is anchored
+
+f80628f7b gave every telemetry instance one trace even with no anchor. The
+documented setup creates the instance once per process, so a long-running
+container server put every span it ever made into one trace that never
+ended: collectors truncate it, and per-request filtering stops working.
+
+`createContainerTelemetry` is back to the anchored/unanchored split. With
+an anchor (`traceparent` option, the `request`'s header, or
+`LUNORA_TRACEPARENT`) every span hangs off it and every log carries its
+trace id. Without one, each span starts its own trace and logs name none.
+The shard still forwards its minted anchor when the dispatch arrived with
+no traceparent, so containers called through `ctx.containers` stay
+anchored to the shard's trace.
+
+The telemetry JSDoc and the observability docs now say to create the
+instance per request (`{ request }`) in a server and to keep a
+module-scope instance for one-shot jobs started with LUNORA_TRACEPARENT.
+The codegen comment on the forwarded traceparent no longer claims it is
+undefined outside a propagated dispatch, and `getCurrentTraceparent`
+documents the existing alarm-vs-RPC mis-attribution of the shared
+per-instance trace field (not fixed: it needs the anchor passed into
+buildCtx by value).
+
+The one-trace test is split into an anchored and an unanchored case; the
+unanchored one fails against f80628f7b.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): reach exec over an RPC, not a forgeable header
+
+The container DO let a `/__lunora/*` request through when it carried
+`x-lunora-container-exec: 1`. That header was a constant, so it was only as
+strong as every path that could present it:
+
+- an app forwarding an inbound request as-is
+  (`env.CONTAINER_X.get(id).fetch(request)`) forwarded an attacker's header;
+- `containerFetch` is a public RPC on the stub and skipped the `fetch`
+  override entirely.
+
+The exec route is now unreachable from request content:
+
+- `LunoraContainer.fetch` and `containerFetch` both answer 403 for any path
+  touching `/__lunora/*`, whatever headers the request carries.
+- `handle.exec` is delivered through a new `lunoraExec(request)` RPC, which
+  only code holding the binding can call. It serves only POST
+  `/__lunora/exec`, honouring a `.port(n)` handle's target-port header.
+- The header survives only as an in-worker routing mark: the stub sender
+  strips it and calls `lunoraExec` instead of `fetch`. Every caller `fetch`,
+  including on `.port()` and pooled handles, still strips it first.
+
+Both guards now check every successive percent-decoding of the path (up to
+five rounds), so a double-encoded `/%255F%255Flunora/exec` that a decoding
+proxy would turn into `/__lunora/exec` is refused too.
+
+Tests cover: the DO refusing the route with the header set to "1", "0" and
+"true", `%2F`, double encoding and a websocket upgrade; `containerFetch`
+refusing it; `lunoraExec` serving only the exec route on the targeted port;
+exec going over `lunoraExec` and marked caller fetches (plain, `.port()`,
+pooled) over `fetch`, with no mark on the wire; the double-encoded client
+path. All fail against the previous commit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): send exec over RPC without an AbortSignal
+
+`handle.exec` puts its deadline signal on the Request, and cb7ad3337 passed
+that Request to `stub.lunoraExec(...)` as an RPC argument. workerd refuses
+to serialize an AbortSignal ("AbortSignal serialization is not enabled"),
+so every exec with a `timeoutMs` or `signal` failed on real workerd, and
+the error does not match the cold-start pattern, so it was not retried.
+`@lunora/agent`'s sandbox always passes `timeoutMs`. The unit double calls
+`lunoraExec` in-process, which is why the Node suite passed.
+
+- The RPC request is rebuilt from url, method, headers and the (small,
+  JSON) body, with no signal.
+- The deadline is enforced in the worker by racing the RPC against the
+  caller's signal. That signal is passed alongside the request rather than
+  read off it: a Request built from `init.signal` only follows it through a
+  weak reference in undici.
+- A timed-out exec is abandoned, not cancelled: the call keeps running and
+  the command keeps going in the container. The runner receives
+  `timeoutMs` in the body and is the only place that can stop it. The
+  container docs now say this.
+
+A workerd-project test drives `handle.exec` through a real DO RPC
+(`ExecProbe`, which exposes the same `lunoraExec` as `LunoraContainer`,
+which cannot boot without a container runtime): one exec with
+`timeoutMs` that answers, one that times out. Both failed with the
+serialization error before this change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): persist the start({ envVars }) override per instance
+
+The docs advised `start({ envVars: {} })` for a credential-free sandbox,
+but the override lived only for the one start it was passed to:
+
+- after the container stopped (sleepAfter, a crash, hardTimeout), the next
+  `exec`/`fetch` restarted it through `startAndWaitForPorts` with the full
+  declared env and the Secrets Store values;
+- on an instance that was already running, upstream returns early, so the
+  call succeeded while the container kept its credentials.
+
+`LunoraContainer` now persists the override in the Durable Object's
+storage and every start of the instance reads it: explicit `start()`, and
+the implicit restart, on this or any later DO instance. With an override
+the Secrets Store is not read. `destroy()` drops it.
+
+A `start({ envVars })` whose env differs from the one the container is
+running (or starting) with is rejected with `CONFLICT` instead of being
+reported as applied; `stop()` first. The start env is now computed per
+start from the declared env plus a memoised Secrets Store map, rather
+than by merging resolved secrets into `envVars` once.
+
+Tests: restart after stop on a fresh DO instance keeps the override, and
+a differing start on a running instance is refused (both fail without the
+change), plus same-env repeat start and destroy() restoring the declared
+env. The option, secretsStore docblock, README and container docs say the
+same.
+* **container:** a `start({ envVars })` override now persists across
+restarts until `destroy()`, and a differing `start({ envVars })` on a
+running instance throws CONFLICT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): fail closed on malformed and endless path escapes
+
+The reserved-path guards decode a path repeatedly and refuse `/__lunora/*`
+in any decoded form. Two holes remained:
+
+- A malformed escape anywhere made `decodeURIComponent` throw for the whole
+  path, and decoding stopped. `/%5F%5Flunora/exec/%ZZ` was allowed through,
+  while a lenient router (Hono's `tryDecodeURI`) decodes the valid escapes
+  around `%ZZ` and routes it to exec. A failed round now decodes each
+  `%XX` on its own, keeping the invalid ones.
+- A path still changing after the 5-round cap was treated as safe. It now
+  counts as reserved.
+
+`pathMatchesAnyDecoding` replaces `decodedPathForms` in both the client
+guard and the Durable Object guard.
+
+Also fix(do): re-pin the dispatch trace anchor with the request scope.
+`getCurrentTraceparent` falls back to `currentRequestTrace`, which
+`restoreRequestScope` did not restore, so a mutation queued at the replay
+gate forwarded to containers the trace of whichever dispatch ran while it
+waited. It is now part of `RequestScope`.
+
+Tests (each fails without the change): the malformed-escape and
+non-converging paths on the client guard and the DO; a gate-queued
+mutation forwarding its own trace rather than a sibling's.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(container): update the api snapshot for LunoraContainer.destroy
+
+`LunoraContainer` now overrides `destroy()` to drop the persisted
+`start({ envVars })` override.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(container): say a start({ envVars }) override cannot change mid-start
+
+`persistEnvOverride` rejects a differing override with `CONFLICT` while the
+container is running AND while a start is still in flight, but the README,
+the container docs and the `ContainerStartOptions.envVars` JSDoc only named
+the running case. They now say the override cannot change while the
+container is running or still starting.
+
+Also restructures `touchesReservedNamespace` so Prettier and ESLint's
+list-newline rule agree on its formatting (it failed `Lint (prettier)`
+after ESLint's fix pass re-wrapped the call).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **container:** exec reached only over RPC, pool-prefix reserve, anchored container traces ([#832](https://github.com/anolilab/lunora/issues/832)) ([8361d38](https://github.com/anolilab/lunora/commit/8361d38c3376be251c738a840b7433dd2b7da136))
+
+
+### Dependencies
+
+* **@lunora/container:** upgraded to 1.0.0-alpha.57
+* **@lunora/do:** upgraded to 1.0.0-alpha.167
+
+## @lunora/codegen [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.218...@lunora/codegen@1.0.0-alpha.219) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** defineSchema throws for a table that is both .global()
+and .ttl(). Drop .ttl() and expire those rows from a cron. Codegen now
+fails on a container config key it cannot read statically instead of
+omitting it, and on two containers whose names map to one binding.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(values): say what $type<T>() does and does not override
+
+The JSDoc said $type<T>() overrides "the inferred select/insert type".
+It overrides Infer<> only. The runtime parser is unchanged, so codegen's
+Doc_* / Insert_* / procedure-arg types keep the base kind, which is the
+type a stored value is actually guaranteed to have. The example used
+Id<"users">, the one case with a checked alternative (v.id), so it now
+points there instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* style(codegen): format the imports the key-name codemod touched
+
+The codemod that routed object-literal keys through propertyKeyName /
+findObjectProperty merged names into existing import lists without a space
+after the comma; ESLint's import sort then ran after Prettier and left 16
+files unformatted. Prettier, then ESLint, over packages/codegen/src.
+
+The previous fix(codegen) commit's footer left one break out: nullable
+columns are now typed nullable everywhere codegen renders a type.
+* **codegen:** Doc_*, Insert_* and procedure-argument types now include
+`| null` for `.nullable()` columns (and the injected `.softDelete()` marker
+is `number | null`). Code that reads such a column without a null check,
+e.g. `doc.note.length`, no longer typechecks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): refuse container settings codegen would misread
+
+Four shapes still let a wrangler-relevant container setting be dropped or
+read with a value the app does not run with:
+
+- A spread typed `T | undefined` or `any` has no properties to list, so the
+  opaque-spread check found no guarded key and skipped it, dropping
+  `max_instances`. Keys now come from the non-nullable apparent type (every
+  member of a union), and an `any` / `unknown` spread is refused outright.
+- `const base = { maxInstances: 2 }; base.maxInstances = 10;` wrote 2 to
+  wrangler while the container ran with 10. A const object that is assigned
+  through, incremented, deleted from or `Object.assign`ed anywhere in its
+  file is now refused with a located error.
+- `const a: any = { ...b }; const b: any = { ...a };` overflowed the stack.
+  Spread resolution tracks the literals it is inside and reports the cycle.
+- `const maxInstances = 3 as const` (or `satisfies`, a type assertion or
+  parentheses) failed the "static number literal" check. Type-only wrappers
+  are unwrapped before reading.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): read quoted destructuring keys without their quotes
+
+The object-literal fix left the pattern side: destructuring readers took
+`getPropertyNameNode().getText()`, which keeps a string-literal key's
+quotes, so `({ "ctx": c })` or `const { "storage": bucket } = ctx` read as
+the property `"ctx"` / `"storage"` and the read went unseen.
+
+A `bindingKeyName` helper in discover/ast.ts reads the key through the same
+`propertyNameText` as `propertyKeyName`. It replaces all seven sites:
+argument-taint, ai-tool-side-effects, feature-usage (two),
+functions/internal/resolve-call and http-action-guards (two). A
+feature-usage test covers both spellings and fails without the fix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(server): hold extension tables to the table-mode rules
+
+`defineSchema` validates only the tables it is called with, and
+`mergeSchemaExtension` re-ran only the index and vector checks. A table
+contributed through `.extend()` or `installPlugins` could therefore be
+`.global()` together with `.ttl()`, a `v.bigint()` column or
+`.dropStalePatches()` — every combination `defineSchema` refuses for an
+app's own tables — and the refusal silently did not apply.
+
+The per-table mode checks (commitOrdered, dropStalePatches, global bigint,
+global ttl, memory) are grouped as `validateTableModes`, run by
+`defineSchema` and again by `mergeSchemaExtension` over the merged set.
+Tests cover ttl, bigint and dropStalePatches through both `.extend()` and
+`installPlugins`; all fail without the merge-time call.
+* **codegen:** `.extend()` / `installPlugins` now throw for an extension
+table combining `.global()` with `.ttl()`, `.commitOrdered()`,
+`.dropStalePatches()` or a `v.bigint()` column, or `.memory()` with a
+companion index, as `defineSchema` already did for app tables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): resolve a shorthand container setting through const aliases
+
+`{ maxInstances: LIMIT }` resolved LIMIT to its value, but the shorthand
+`{ maxInstances }` over `const maxInstances = LIMIT` stopped at the first
+initializer, handed the identifier `LIMIT` to the per-key reader, and
+failed the static-number check. The same applied to guarded keys inside
+`rollout`.
+
+Both forms now go through one `resolveBinding`, which follows
+`const a = b` aliases (and type-only wrappers) to the value, up to 16
+hops, and applies the written-through check at each const object it
+passes. A test covers a shorthand `maxInstances` and a two-hop,
+`as const` `rollout.gracePeriodSeconds`; it fails without the change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(codegen): pin numeric object keys to their runtime spelling
+
+`{ 0x10: … }` is the key "16" at runtime, `{ 1e3: … }` "1000", `{ 1.50: … }`
+"1.5". `propertyNameText` reads a numeric key through `getLiteralText()`,
+and TypeScript's scanner already stores a numeric literal's text in that
+normalised form (verified for hex, binary, exponent, separator, trailing
+zero and >2^53 literals against `Object.keys` of the same object), so no
+code change is needed. This test keeps it that way.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **codegen:** read keys, nullability and ttl as the runtime does ([#838](https://github.com/anolilab/lunora/issues/838)) ([57c54d8](https://github.com/anolilab/lunora/commit/57c54d801da44dbbed2380b6b33976a6d8e078a4))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.159
+* **@lunora/agent:** upgraded to 1.0.0-alpha.140
+* **@lunora/values:** upgraded to 1.0.0-alpha.52
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.63
+* **@lunora/server:** upgraded to 1.0.0-alpha.148
+
+## @lunora/codegen [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.217...@lunora/codegen@1.0.0-alpha.218) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,scheduler,workflow:** retryDeclinedMessage is now async and its message needs
+`ack`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait before the step's timeout
+
+A step's ctx.run waits out a DISPATCH_IN_PROGRESS decline in place for up to
+the claim ceiling (15 minutes). A step whose timeout is shorter than that (the
+engine default is 10 minutes) had the attempt timed out under the wait, and
+the abandoned wait kept re-dispatching next to the retry.
+
+Inside ctx.runStep the wait now reads the timeout from the config the engine
+hands the attempt (Cloudflare's default when it names none), stops two seconds
+before it, and rethrows the decline, so the attempt is charged once, to the
+decline, and the next attempt picks the wait up. A rollback is bounded the
+same way by its own config. A ctx.run in a raw ctx.step.do cannot see its
+step's timeout and stays bounded by the claim alone; the docs say so.
+
+On the real Workflows engine, with a 6s step timeout and eight declines, the
+unfixed wait dispatched from attempt 1 after attempt 2 had begun.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(queue,scheduler): authenticate a re-enqueued copy's claimed id
+
+A push consumer derives each message's replay-dedup ids from its id. The copy
+it re-enqueues on a last-delivery decline carries the replaced message's id,
+and the consumer unwrapped any body with that envelope's shape. A queue body
+is app data, often forwarded from outside (a webhook ingest doing
+send(await request.json())), so whoever controlled a body could choose the id
+its calls ran under: be answered with another live message's cached results,
+pre-fill that message's dedup slots so its calls were skipped, or, through
+failure attribution, get that message acked and dropped in a shared batch.
+The broker-assigned id could not be forged before; the envelope made it
+forgeable. The scheduler's `requeuedFrom` marker had the same hole for a job
+sent to the workpool queue by hand.
+
+A copy is now accepted only with an HMAC-SHA256 over its claimed id and
+payload, keyed by the admin token the consumer already holds to dispatch
+(WebCrypto, so workerd and Node alike; domain-separated per package). Any
+other body, including one that copies the envelope's shape or carries a MAC
+under a different key, is delivered as-is under the broker's id.
+
+- @lunora/queue: the envelope holds the id, the body as the JSON text of its
+  wire encoding (so the MAC covers exact bytes and bigint/Date/bytes survive)
+  and the MAC; it is sent as JSON. A copy that would exceed the 128 KB message
+  limit, or a body with no wire encoding, is not sent: the delayed retry and
+  the log stay. ctx.queues send/sendBatch refuse the reserved key. A
+  dead-lettered copy is readable JSON.
+- @lunora/scheduler: createQueueConsumer takes `requeue: { queue, secret }`
+  in place of `queue`; `requeuedFrom` is honoured only with a valid
+  `requeueMac`, and both fields are stripped before a QueueDispatch sees the
+  job. QueueJob no longer declares `requeuedFrom`.
+- @lunora/dispatch: signRequeue / verifyRequeue; DEFAULT_DISPATCH_TIMEOUT_MS is
+  exported for the workflow wait.
+
+Re-proved on the real workerd broker with the delay patched to 1s: deliveries
+1-3 declined, the signed copy delivered as attempt 1 under the original id,
+body and dedup id. A forged envelope sent straight through the binding is
+delivered as-is under the broker's id.
+* **queue,scheduler,workflow:** createQueueConsumer's `queue` option is now
+`requeue: { queue, secret }`, and QueueJob drops `requeuedFrom`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): bound a rollback's decline wait by its own timeout
+
+The previous commit said a rollback's wait was bounded by its own config. It
+was bounded by `rollbackContext.ctx.config`, and on the local Workflows engine
+that is the FORWARD step's config: a step with `timeout: "1 hour"` and
+`rollbackConfig: { timeout: "7 seconds" }` handed its rollback
+`ctx.config.timeout === "1 hour"`. So a rollback shorter than its step still
+had its wait outlive the attempt, and one longer gave up early and reported a
+compensation failed that would have completed. The rollback now reads
+`step.rollbackConfig` (Cloudflare's 10-minute default when unset), and a
+workerd test pins what the engine hands a rollback.
+
+A re-check can find the claim gone and run the call, which could take the
+runner's whole 30s and overrun the step timeout. Under a deadline each
+re-check now gets no more timeoutMs than is left, and the wait ends while at
+least a second remains.
+
+The "Uncaught (in promise)" lines the timed workerd test prints are the engine
+logging each failed step attempt: a plain throw in a raw step.do with no Lunora
+code on the path prints the same line.
+
+The Node host does not enforce step timeouts; its capability note and the
+workflow docs now say the bound charges an attempt there that the host would
+not have ended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): give a decline back when a late pause overran its bound
+
+The decline wait bounded each pause by the claim ceiling and the step deadline, but a timer
+can fire late. On resuming past either bound it started another dispatch anyway, with a zero
+or negative timeout, instead of returning the decline. It now re-checks both bounds after the
+pause and rethrows the decline when either has passed.
+
+The Node workflow note said rollbackConfig is ignored; the adapter ignores its retries, but
+@lunora/workflow reads rollbackConfig.timeout to end a rollback's decline wait.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait only on a real overrun, not timer jitter
+
+The previous change rethrew a decline whenever the time left after a pause was under the
+one-dispatch margin. The pause is sized to leave exactly that margin, so ordinary timer jitter
+tripped it: the final re-check before a step's timeout was skipped and the attempt was spent
+early. It now gives the decline back only when the pause actually ran past the claim ceiling
+or the deadline.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,scheduler,workflow:** close the last-delivery and step-timeout decline edges ([#829](https://github.com/anolilab/lunora/issues/829)) ([f3caafc](https://github.com/anolilab/lunora/commit/f3caafcab18a41ad84799a40dfbc197e4fa5f5b2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.158
+* **@lunora/agent:** upgraded to 1.0.0-alpha.139
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+* **@lunora/queue:** upgraded to 1.0.0-alpha.69
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.87
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.166
+* **@lunora/server:** upgraded to 1.0.0-alpha.147
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+
+## @lunora/codegen [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.216...@lunora/codegen@1.0.0-alpha.217) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/queue:** upgraded to 1.0.0-alpha.68
+
+## @lunora/codegen [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.215...@lunora/codegen@1.0.0-alpha.216) (2026-09-25)
+
+### Features
+
+* **codegen:** add advisor.minSeverity to lunora.config ([#831](https://github.com/anolilab/lunora/issues/831)) ([4fd96c3](https://github.com/anolilab/lunora/commit/4fd96c3d76362ae95e538edd18bef385e5b7f538)), closes [#823](https://github.com/anolilab/lunora/issues/823)
+
 ## @lunora/codegen [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.214...@lunora/codegen@1.0.0-alpha.215) (2026-09-25)
 
 

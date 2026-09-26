@@ -109,7 +109,9 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 
 - **`.get(name)`**: one container instance per name. Use it for stateful,
   per-entity work: a sandbox per user, a room per game, a worker per job id. The
-  same name always reaches the same instance.
+  same name always reaches the same instance. Names starting with `pool-` are
+  reserved for the instances `.any()` / `.pool()` pick and are rejected, so an
+  entity can never share an instance (disk, lifecycle) with a pool member.
 - **`.any(count?)`**: a random instance from a fixed pool (defaults to
   `maxInstances`, else 3). Use it for stateless, interchangeable work where any
   instance can serve the request.
@@ -220,9 +222,10 @@ detail: `fetch` resolves on headers, so a runner that answers `200` when the
 command _starts_ and then stalls would otherwise sit past the deadline.
 
 <Callout type="warn">
-    Abort propagation to a container is best-effort. The request travels through a Durable Object stub, and Cloudflare does not guarantee that cancelling the
-    outer call cancels the inner one — the deadline reliably frees _your_ handler, but the command may keep running inside the container. Send `timeoutMs` (the
-    client always does) and have the runner enforce it too.
+    An exec is not cancelled when its deadline fires. `exec` reaches the container Durable Object over an RPC, and an RPC argument cannot carry an
+    `AbortSignal`, so the deadline is enforced in your worker: it frees _your_ handler on time, while the call it abandons keeps running and the command keeps
+    going inside the container. The client always sends `timeoutMs` in the request body — have the runner enforce it, since the runner is the only place that
+    can stop the command.
 </Callout>
 
 <Callout type="warn">
@@ -250,8 +253,15 @@ Run the command directly — do not concatenate `args` into a shell string, whic
 would make every argument an injection point.
 
 `/__lunora/*` is **reserved** for Lunora's own container routes. `handle.fetch`
-refuses any path resolving into it, so serve your application's routes elsewhere
-and reach exec through `exec`.
+refuses any path resolving into it — in any letter case, percent-encoded (once
+or more), or with `;params` on the segment — so serve your application's routes
+elsewhere and reach exec through `exec`. The container Durable Object enforces
+it a second time on every HTTP entry: its `fetch` and its `containerFetch` RPC
+answer `403` for a path touching `/__lunora/*` (any segment, same spellings),
+whatever headers the request carries. `exec` reaches the route over a separate
+RPC (`lunoraExec`), which only code holding the container binding can call, so
+forwarding an inbound request as-is (`env.CONTAINER_X.get(id).fetch(request)`)
+cannot open it either.
 
 <Callout type="warn">
     `exec` runs whatever it is given. When a model chooses the command — an `@lunora/agent` `containerTool`, say — gate it: that tool's default approval policy
@@ -541,9 +551,19 @@ export const worker = defineContainer({
 
 A name that collides with `env`/`secrets`, or a binding missing from the Worker
 env, is rejected (the collision at authoring time, the missing binding at start):
-the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
-replaces the env set wholesale and skips Secrets Store resolution entirely, so
-the injected values apply only to implicit starts or a bare `start()`.
+the same fail-closed stance as `secrets`.
+
+A per-instance `start({ envVars })` **replaces** the env set wholesale (the
+Secrets Store is not read) and is **persisted** for that instance: every later
+start uses it — an explicit `start()`, and the implicit restart a `fetch` or
+`exec` triggers after the container slept, crashed or hit `hardTimeout` — until
+you `destroy()` the instance. That makes `start({ envVars: {} })` (or with only
+what the job needs) the way to run an untrusted or model-driven exec sandbox
+without the credentials the definition declares, and keep it that way across
+restarts. The override cannot change while the container is running or still
+starting: a `start({ envVars })` that differs from its env is rejected with
+`CONFLICT` in either case, rather than silently ignored — `stop()` the instance
+(and let any start in flight finish) first. Pass every variable the container needs.
 
 Both `env` and `secrets` are **runtime** values, available when the container
 starts. For **build-time** values (`docker build --build-arg`, exposed to the

@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { PrivilegedDispatchIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * The privileged-dispatch handler factories. A `defineQueue` push handler and a
@@ -44,7 +44,7 @@ const handlerFunctionOf = (call: CallExpression): HandlerFunction | undefined =>
         return undefined;
     }
 
-    const property = config.getProperty("handler");
+    const property = findObjectProperty(config, "handler");
 
     if (property === undefined || !Node.isPropertyAssignment(property)) {
         return undefined;

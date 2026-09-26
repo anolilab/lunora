@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { SecretLiteralIR } from "../ir";
 import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "../secret-rules";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * The constant string value of a node, folding `+` concatenations of string
@@ -76,7 +76,7 @@ const boundNameOf = (node: TsNode): string | undefined => {
     }
 
     if (Node.isVariableDeclaration(parent) || Node.isPropertyAssignment(parent) || Node.isPropertySignature(parent)) {
-        return parent.getName();
+        return propertyKeyName(parent);
     }
 
     if (Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.EqualsToken) {

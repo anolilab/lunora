@@ -105,18 +105,27 @@ interface QueryStatEntry {
  * numeric literals, and hex literals, replacing them with `?`, then truncating.
  * The result is used as the primary key of `__lunora_metrics_queries`, so two
  * executions of the same parameterised query collapse to one row regardless of
- * argument values. Single-quoted strings and hex literals become `?`; numeric
- * literals preceded by `=`, `(`, `,`, or whitespace become `?`; double-quoted
- * SQLite identifiers are kept as-is.
+ * argument values. Blob literals (`X'AB'`), single-quoted strings and hex
+ * literals become `?`; a numeric literal — signed, fractional or with an
+ * exponent (`-7`, `1.5`, `1e5`) — becomes `?` wherever it is not part of an
+ * identifier or a numbered parameter, so `age>42` collapses like `age = 42`.
+ * Double-quoted text is kept: Lunora's own SQL double-quotes every identifier,
+ * so stripping it would fold every table's statements into one row.
  */
 const normalizeSql = (sql: string): string => {
     let normalized = sql
+        // Strip blob literals first, or the string rule leaves a stray `X?`.
+        .replaceAll(/\bx'[\da-f]*'/gi, "?")
         // Strip single-quoted string literals (may contain escaped quotes '').
         .replaceAll(/'(?:[^']|'')*'/g, "?")
         // Strip hex literals.
         .replaceAll(/\b0x[\da-f]+\b/gi, "?")
-        // Strip standalone numeric literals (integer or float).
-        .replaceAll(/(?<=[=,([\s])\d+(?:\.\d+)?/g, "?")
+        // Strip standalone numeric literals. The lookbehind keeps digits inside
+        // identifiers (`t1`, `"col2"`) and numbered parameters (`?1`, `:2`)
+        // intact; a sign is taken only where the digit run starts a literal.
+        .replaceAll(/(?<![\w$.?:@"])-?\d+(?:\.\d*)?(?:e[+-]?\d+)?(?![\w.])/gi, "?")
+        // A leading-decimal literal (`.5`), which the rule above cannot start on.
+        .replaceAll(/(?<![\w$?:@"])-?\.\d+(?:e[+-]?\d+)?(?![\w.])/gi, "?")
         // Collapse whitespace.
         .replaceAll(/\s+/g, " ")
         .trim();

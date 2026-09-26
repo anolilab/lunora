@@ -2,7 +2,7 @@
 
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -25,6 +25,13 @@ import { useLunora } from "./lunora-provider";
  * Pass `onError` to surface a subscription-scoped error the server pushes (a
  * session expiry, an RLS denial). Without it such an error is dropped and the
  * hook keeps rendering the SSR snapshot as if it were live.
+ *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires an identity, every `usePreloadedQuery`
+ * on the client (mounted then or later) stops using it and returns `undefined`
+ * until the live value arrives. A token preloaded after the switch (a client-side
+ * navigation that preloads again) is ignored too and costs a loading flash: the
+ * hook cannot tell which identity a token was read under.
  */
 const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
     const client = useLunora();
@@ -43,7 +50,15 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
         onErrorRef.current?.(error);
     }, []);
 
-    const { args, functionPath, shardKey, value } = preloaded;
+    // Read from the client, not kept per instance: a component that mounts (or
+    // remounts) after a user switch must see the switch too. The preloaded value
+    // was rendered for the identity the page loaded under, so it is used only
+    // while no identity has been retired since.
+    const registry = getSubscriptionRegistry(client);
+    const identityEpoch = useSyncExternalStore(registry.subscribeIdentityEpoch, registry.identityEpoch, () => 0);
+
+    const { args, functionPath, shardKey } = preloaded;
+    const value = identityEpoch === 0 ? preloaded.value : undefined;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
     // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
     // reference each render is fine — React Compiler auto-memoizes these
@@ -62,12 +77,11 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
         staleTime: Number.POSITIVE_INFINITY,
     });
 
-    useEffect(() => {
-        const registry = getSubscriptionRegistry(client);
-
-        return registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError });
+    useEffect(
+        () => registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError }),
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is provider-stable (swapping it remounts the provider subtree).
-    }, [client, queryClient, serializeQueryKey(queryKey), stableOnError]);
+        [client, queryClient, serializeQueryKey(queryKey), stableOnError],
+    );
 
     // TanStack types `data` as `T | undefined` even with `initialData` because
     // the option could be a falsy value. We always pass the preloaded `value`,
@@ -77,7 +91,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     // Lunora query result (document deleted, access revoked): a live push of
     // `null` must pass through, not resurrect the stale preloaded value.
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional: a live null push must pass through, not fall back to the stale preloaded value
-    return data === undefined ? value : data;
+    return (data === undefined ? value : data) as T;
 };
 
 /**

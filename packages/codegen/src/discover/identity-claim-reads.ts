@@ -6,7 +6,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { IdentityClaimReadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { calleeName } from "./callee";
 import { IDENTITY_FILENAME } from "./identity";
 
@@ -38,7 +38,7 @@ const declaredClaimKeys = (objectLiteral: ObjectLiteralExpression): Set<string> 
         }
 
         if (Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property)) {
-            keys.add(property.getName());
+            keys.add(propertyKeyName(property));
         }
     }
 

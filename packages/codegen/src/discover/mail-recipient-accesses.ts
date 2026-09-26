@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { MailRecipientAccessIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, propertyKeyName } from "./ast";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
 const MAIL_METHODS = new Set(["queue", "send"]);
@@ -52,10 +52,10 @@ const hasUnscopedArgumentDerivedRecipient = (argument: TsNode): boolean => {
         if (Node.isShorthandPropertyAssignment(property)) {
             const value = property.getNameNode();
 
-            return RECIPIENT_FIELDS.has(property.getName()) && isArgumentDerived(value) && !isScopedByContext(value);
+            return RECIPIENT_FIELDS.has(propertyKeyName(property)) && isArgumentDerived(value) && !isScopedByContext(value);
         }
 
-        if (!Node.isPropertyAssignment(property) || !RECIPIENT_FIELDS.has(property.getName())) {
+        if (!Node.isPropertyAssignment(property) || !RECIPIENT_FIELDS.has(propertyKeyName(property))) {
             return false;
         }
 

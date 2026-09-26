@@ -419,6 +419,7 @@ class LunoraClient {
         result: unknown;
     }>;
     onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe;
+    onIdentityChange(listener: () => void): Unsubscribe;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
@@ -462,6 +463,7 @@ class LunoraClient {
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
     mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
+    canQueueOffline(shardKey?: string): boolean;
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
         chunkSize?: number;
@@ -475,6 +477,7 @@ class LunoraClient {
     }): Promise<{
         chunks: number;
         imported: number;
+        queued: number;
     }>;
     shardTraffic(table: string): Promise<ShardTrafficResult>;
     listScheduledJobs(): Promise<ScheduleRecord[]>;
@@ -2332,6 +2335,7 @@ interface OfflineQueueDeps {
 
 ```ts
 interface OptimisticLayer {
+    acknowledgedAt?: number;
     commitCursor?: number;
     readonly id: symbol;
     readonly transform: (current: unknown) => unknown;

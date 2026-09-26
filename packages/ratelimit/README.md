@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware</h3>
+<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,7 +34,7 @@
 
 ---
 
-Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, optional sharding for hot limits, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
+Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 

@@ -19,7 +19,7 @@
  * `createDispatchRunner`, authenticated with the admin bearer).
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage } from "@lunora/dispatch";
+import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage, signRequeue, verifyRequeue } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { encodeWire } from "../../../shared/wire-codec";
@@ -140,6 +140,46 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
 const isQueueJob = (value: unknown): value is QueueJob =>
     typeof value === "object" && value !== null && typeof (value as { functionPath?: unknown }).functionPath === "string";
 
+/** Separates this package's requeue MACs from `@lunora/queue`'s. */
+const REQUEUE_SCOPE = "scheduler";
+
+/** The marker fields a re-enqueued copy adds to its {@link QueueJob}. */
+interface RequeueMarker {
+    requeuedFrom?: unknown;
+    requeueMac?: unknown;
+}
+
+/** A delivered job, the id it dispatches under, and whether it is an authenticated copy. */
+interface RequeuedJob {
+    id: string;
+    job: QueueJob;
+    requeued: boolean;
+}
+
+/** The exact text a copy's MAC covers: the job as the dispatcher will see it. */
+const requeuePayload = (job: QueueJob): string => JSON.stringify({ args: job.args, functionPath: job.functionPath, shardKey: job.shardKey });
+
+/**
+ * Split a delivered body into the job and the id it dispatches under.
+ *
+ * A body is app data, and anything with the producer binding can put one on
+ * the workpool's queue, so the `requeuedFrom` marker is honoured only with a
+ * MAC over it and the job, keyed by `requeue.secret` (`@lunora/dispatch`'s
+ * `signRequeue`). Anything else dispatches under the broker's id, like any job:
+ * a marker that could choose the id would choose which cached result the call
+ * is answered with. The marker fields are stripped either way, so a custom
+ * `QueueDispatch` never sees them.
+ */
+const readRequeuedJob = async (body: QueueJob & RequeueMarker, messageId: string, secret: string | undefined): Promise<RequeuedJob> => {
+    const { requeuedFrom, requeueMac, ...job } = body;
+    const genuine =
+        typeof requeuedFrom === "string" &&
+        secret !== undefined &&
+        (await verifyRequeue(secret, REQUEUE_SCOPE, requeuedFrom, requeuePayload(job), requeueMac).catch(() => false));
+
+    return genuine ? { id: requeuedFrom, job, requeued: true } : { id: messageId, job, requeued: false };
+};
+
 /**
  * Wrap a {@link QueueDispatch} into a Cloudflare `queue()` consumer handler.
  *
@@ -155,12 +195,21 @@ const createQueueConsumer =
     async (batch: MessageBatchLike): Promise<void> => {
         await Promise.all(
             batch.messages.map(async (message) => {
+                // Resolved before the dispatch so the decline path below
+                // re-enqueues under the same id the dispatch used.
+                let copy: RequeuedJob | undefined;
+
                 try {
                     if (!isQueueJob(message.body)) {
                         throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
-                    await options.dispatch(message.body, message.id);
+                    copy = await readRequeuedJob(message.body, message.id, options.requeue?.secret);
+
+                    // A genuine re-enqueued copy dispatches under the id of the
+                    // message it replaces, so the shard dedups it against that
+                    // message's call. The marker fields never reach `dispatch`.
+                    await options.dispatch(copy.job, copy.id);
                     message.ack();
                 } catch (error: unknown) {
                     // A `DISPATCH_IN_PROGRESS` decline is this job's own earlier
@@ -168,9 +217,25 @@ const createQueueConsumer =
                     // dispatch deadline). Retried at once it meets the same
                     // claim and spends the queue's budget in seconds, so wait
                     // the claim's ceiling out: the next delivery is then served
-                    // the finished result, or runs the job if that run died.
-                    if (isDispatchDecline(error)) {
-                        retryDeclinedMessage(message, { maxRetries: options.maxRetries, where: `@lunora/scheduler: queue "${batch.queue}"` });
+                    // the finished result, or runs the job if that run died. On
+                    // the last delivery, where no retry is left, a delayed copy
+                    // goes back on `options.requeue.queue` instead — once per job.
+                    if (isDispatchDecline(error) && copy !== undefined) {
+                        const { requeue } = options;
+                        const { id, job, requeued } = copy;
+
+                        await retryDeclinedMessage(message, {
+                            maxRetries: options.maxRetries,
+                            requeue:
+                                requeue === undefined || requeued
+                                    ? undefined
+                                    : async (delaySeconds: number): Promise<void> => {
+                                          const requeueMac = await signRequeue(requeue.secret, REQUEUE_SCOPE, id, requeuePayload(job));
+
+                                          await requeue.queue.send({ ...job, requeuedFrom: id, requeueMac } as QueueJob, { delaySeconds });
+                                      },
+                            where: `@lunora/scheduler: queue "${batch.queue}"`,
+                        });
 
                         return;
                     }

@@ -142,6 +142,31 @@ describe(createContainerContext, () => {
         vi.restoreAllMocks();
     });
 
+    it("keeps pool instances out of the .get(name) namespace", async () => {
+        expect.assertions(2);
+
+        const { names, namespace } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 1 },
+        ]);
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        // An entity called "pool-0" must not share a Durable Object (disk,
+        // lifecycle, `destroy()`) with the pool's first instance. The pool keeps
+        // its `pool-N` ids (renaming them would strand warm instances against
+        // `max_instances` on deploy), so `.get()` refuses the prefix instead.
+        expect(() => containers.transcoder!.get("pool-0")).toThrow(/"pool-" prefix is reserved/u);
+
+        await containers.transcoder!.get("pools-of-light").fetch("/probe");
+        await containers.transcoder!.any().fetch("/probe");
+        await containers.transcoder!.pool().fetch("/probe");
+
+        expect(names).toStrictEqual(["pools-of-light", "pool-0", "pool-0"]);
+
+        vi.restoreAllMocks();
+    });
+
     it("throws a directed error when the binding is missing", () => {
         expect.assertions(1);
 
@@ -677,9 +702,9 @@ describe(createContainerTestContext, () => {
         await expect(response.text()).resolves.toBe("video-1:/transcode");
         expect(handler).toHaveBeenCalledTimes(1);
 
-        const pooled = await containers.transcoder!.get("pool-0").fetch("/probe");
+        const pooled = await containers.transcoder!.get("worker-0").fetch("/probe");
 
-        await expect(pooled.text()).resolves.toBe("pool-0:/probe");
+        await expect(pooled.text()).resolves.toBe("worker-0:/probe");
     });
 
     it(".any() spreads across the pool exactly as the real accessor does", async () => {

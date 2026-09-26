@@ -182,6 +182,28 @@ describe("auth audit trail", () => {
             expect(detail["note"]).toBe("login");
         });
 
+        it("masks every credential spelling in the detail payload, not only the exact key names", async () => {
+            expect.assertions(1);
+
+            await appendAuthAuditEntry(executor, {
+                detail: { accessToken: "at-1", clientSecret: "cs-1", note: "login", otp: 123_456, refreshToken: "rt-1", sessionId: "s-1" },
+                event: "sign-in",
+                outcome: "success",
+                ts: 1,
+            });
+
+            const [row] = await readAuthAuditLog(executor);
+
+            expect(row?.detail).toStrictEqual({
+                accessToken: "<REDACTED>",
+                clientSecret: "<REDACTED>",
+                note: "login",
+                otp: "<REDACTED>",
+                refreshToken: "<REDACTED>",
+                sessionId: "<REDACTED>",
+            });
+        });
+
         it("skips redaction when redactDetail is false (trusted, pre-scrubbed payload)", async () => {
             expect.assertions(1);
 

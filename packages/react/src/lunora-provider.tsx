@@ -4,7 +4,9 @@ import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useState } from "react";
+import { createContext, use, useEffect, useState } from "react";
+
+import { getSubscriptionRegistry } from "./cache";
 
 const LunoraContext = createContext<LunoraClient | null>(null);
 
@@ -54,6 +56,13 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     const [internalClient] = useState<QueryClient>(() => queryClient ?? parentQueryClient ?? createDefaultQueryClient());
 
     const effectiveClient = queryClient ?? parentQueryClient ?? internalClient;
+
+    // A sign-out or user switch must not leave the previous user's rows in the
+    // TanStack cache, where a remounting query would read them back. Deliberately
+    // not torn down on unmount: see `clearOnIdentityChange`.
+    useEffect(() => {
+        getSubscriptionRegistry(client).clearOnIdentityChange(effectiveClient);
+    }, [client, effectiveClient]);
 
     const content = <LunoraContext value={client}>{children}</LunoraContext>;
 

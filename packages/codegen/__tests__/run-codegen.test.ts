@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { UMBRELLA_BASE_PACKAGES } from "../src/emit";
+import { emitQueues, UMBRELLA_BASE_PACKAGES } from "../src/emit";
 import {
     createCodegenProject,
     emitApi,
@@ -2300,6 +2300,55 @@ export default schema;
             // Both imports are type-only, so the `Id` edge back into dataModel.ts —
             // which is itself derived from these tables — is erased at compile time.
             expect(result.generated.drizzleShard).not.toContain("import { Id }");
+        });
+
+        it("types a .nullable() column as nullable, so strict TS rejects an unguarded read", () => {
+            expect.assertions(5);
+
+            // `.nullable()` is recorded on the column meta, not as its own kind,
+            // and the type/drizzle emitters keyed only off the kind: `note` came
+            // out as `note: string` + `.notNull()`, so `doc.note.length` compiled
+            // against a value that is `null` at runtime.
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ note: v.string().nullable(), tags: v.optional(v.array(v.string()).nullable()) }),
+});
+
+export default schema;
+`,
+            );
+
+            const { generated } = runCodegen({ projectRoot: workdir });
+
+            expect(generated.dataModel.match(/ {4}note: string \| null;/gu)).toHaveLength(2);
+            expect(generated.dataModel.match(/ {4}tags\?: Array<string> \| null;/gu)).toHaveLength(2);
+            expect(generated.drizzleShard).toContain('note: text("note"),');
+
+            const project = new Project({
+                compilerOptions: { noEmit: true, strict: true, target: ScriptTarget.ES2022 },
+                useInMemoryFileSystem: true,
+            });
+
+            project.createSourceFile("/p/dataModel.ts", generated.dataModel);
+
+            const codesOf = (body: string): number[] =>
+                project
+                    .createSourceFile(
+                        "/p/probe.ts",
+                        `import type { Doc } from "./dataModel";\n\nexport const noteLength = (doc: Doc<"notes">): number => ${body};\n`,
+                        {
+                            overwrite: true,
+                        },
+                    )
+                    .getPreEmitDiagnostics()
+                    .map((diagnostic) => diagnostic.getCode());
+
+            // TS18047: "'doc.note' is possibly 'null'."
+            expect(codesOf("doc.note.length")).toStrictEqual([18_047]);
+            expect(codesOf("doc.note?.length ?? 0")).toStrictEqual([]);
         });
 
         it("marks only an EQUALITY filter on _id as primary-key-addressable", () => {
@@ -4640,6 +4689,18 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(shard).toContain("createQueueContext(env, LUNORA_QUEUES)");
             expect(shard).toContain('{ binding: "QUEUE_EMAIL", exportName: "emailQueue", name: "email-queue" }');
+        });
+
+        it("gives each push consumer its own producer binding, which a last-delivery decline is re-enqueued through", () => {
+            expect.assertions(2);
+
+            const registry = emitQueues([
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push", name: "email-queue", tuning: {} },
+                { bindingName: "QUEUE_PULLED", exportName: "pulled", mode: "pull", name: "pulled", tuning: {} },
+            ]);
+
+            expect(registry).toContain('    "email-queue": { binding: "QUEUE_EMAIL", definition: emailQueue, exportName: "emailQueue" },');
+            expect(registry).not.toContain("QUEUE_PULLED");
         });
 
         it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CONTAINER_EXEC_HEADER } from "../src/exec";
 import type { ContainerNamespaceLike } from "../src/index";
 import { createContainerContext, createContainerTestContext } from "../src/index";
 
@@ -9,19 +10,23 @@ const SPEC = [{ binding: "CONTAINER_RUNNER", exportName: "runner" }];
  * A fake DO namespace whose container answers `respond`, recording every request
  * it was sent so the exec wire format can be asserted rather than assumed.
  */
-const execNamespace = (respond: (request: Request) => Response | Promise<Response>): { namespace: ContainerNamespaceLike; requests: Request[] } => {
+const execNamespace = (
+    respond: (request: Request) => Response | Promise<Response>,
+): { entries: ("fetch" | "lunoraExec")[]; namespace: ContainerNamespaceLike; requests: Request[] } => {
     const requests: Request[] = [];
+    const entries: ("fetch" | "lunoraExec")[] = [];
+    const entry = (name: "fetch" | "lunoraExec") => async (request: Request) => {
+        requests.push(request.clone() as Request);
+        entries.push(name);
+
+        return respond(request);
+    };
 
     return {
+        entries,
         namespace: {
             get: () => {
-                return {
-                    fetch: async (request: Request) => {
-                        requests.push(request.clone() as Request);
-
-                        return respond(request);
-                    },
-                };
+                return { fetch: entry("fetch"), lunoraExec: entry("lunoraExec") };
             },
             idFromName: (name: string) => name,
         },
@@ -411,6 +416,74 @@ describe("containerHandle.exec", () => {
         await handle.fetch("/__lunora-status");
 
         expect(requests).toHaveLength(1);
+    });
+
+    it("refuses the reserved namespace in any letter case or with ;params", async () => {
+        expect.assertions(6);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        // Express (and most routers) match case-insensitively, and servlet-style
+        // routers drop `;params` from a segment — both reach the exec route.
+        await expect(handle.fetch("/__LUNORA/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/__Lunora/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/__lunora;x/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/%5F%5FLUNORA/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(containers.runner!.pool().fetch("/__LUNORA;x/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+
+        expect(requests).toHaveLength(0);
+    });
+
+    it("delivers exec over the lunoraExec RPC and a caller's fetch over fetch, with no mark on either", async () => {
+        expect.assertions(4);
+
+        const { entries, namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        await handle.exec("ls");
+        // A caller presenting the in-worker mark itself — on a plain handle, a
+        // `.port()` handle, and a pooled one — still goes over `fetch`.
+        await handle.fetch("/status", { headers: { [CONTAINER_EXEC_HEADER]: "1" } });
+        await handle.port(9090).fetch("/status", { headers: { [CONTAINER_EXEC_HEADER]: "1" } });
+        await containers.runner!.pool().fetch(new Request("https://container/status", { headers: { [CONTAINER_EXEC_HEADER]: "1" } }));
+
+        expect(entries).toStrictEqual(["lunoraExec", "fetch", "fetch", "fetch"]);
+        // The mark never leaves the worker, so there is nothing for the DO to trust.
+        expect(requests.map((request) => request.headers.get(CONTAINER_EXEC_HEADER))).toStrictEqual([null, null, null, null]);
+        expect(new URL(requests[0]!.url).pathname).toBe("/__lunora/exec");
+        expect(requests[2]!.headers.get("cf-container-target-port")).toBe("9090");
+    });
+
+    it("refuses a double-encoded reserved path a proxy chain would decode twice", async () => {
+        expect.assertions(3);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        await expect(handle.fetch("/%255F%255Flunora/exec", { method: "POST" })).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/%25255F%25255FLUNORA%252Fexec", { method: "POST" })).rejects.toThrow(/reserved/u);
+
+        expect(requests).toHaveLength(0);
+    });
+
+    it("refuses a reserved path hidden behind a malformed escape, and one that never stops decoding", async () => {
+        expect.assertions(3);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+        const handle = containers.runner!.get("s");
+
+        // `decodeURIComponent` throws on `%ZZ` for the whole path, but a lenient
+        // router decodes the valid escapes around it and routes to exec.
+        await expect(handle.fetch("/%5F%5Flunora/exec/%ZZ", { method: "POST" })).rejects.toThrow(/reserved/u);
+        // Still changing after the round cap: refused rather than assumed safe.
+        await expect(handle.fetch(`/${"%25".repeat(1)}${"25".repeat(8)}5F`, { method: "POST" })).rejects.toThrow(/reserved/u);
+
+        expect(requests).toHaveLength(0);
     });
 
     it("rejects a maxOutputBytes that is not a cap, before running anything", async () => {

@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
-import { listLunoraSourceFiles } from "./ast";
+import { bindingKeyName, listLunoraSourceFiles } from "./ast";
 
 /**
  * Code-usage signals for every optional, package-backed feature, in a single
@@ -58,7 +58,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
         }
 
         for (const element of pattern.getElements()) {
-            const name = element.getPropertyNameNode()?.getText() ?? element.getName();
+            const name = bindingKeyName(element);
 
             if (name) {
                 names.add(name);
@@ -70,7 +70,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     // a handler parameter or a `const { ctx } = …`. A rename introduces another
     // context name to follow; a nested pattern is the read itself.
     for (const element of sourceFile.getDescendantsOfKind(SyntaxKind.BindingElement)) {
-        if ((element.getPropertyNameNode()?.getText() ?? element.getName()) !== CONTEXT_PROPERTY) {
+        if (bindingKeyName(element) !== CONTEXT_PROPERTY) {
             continue;
         }
 

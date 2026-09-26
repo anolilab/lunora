@@ -158,6 +158,21 @@ describe(buildAiGatewayMetadataFields, () => {
         expect(fields?.["traceId"]).toBe(FAKE_TRACE_ID);
     });
 
+    it("keeps the built-in traceId when an app tag reuses the name and the set is trimmed", () => {
+        expect.assertions(2);
+
+        // The colliding tag comes FIRST, so overwriting it kept the key in the
+        // tag's slot at the front — exactly what the trim below cuts.
+        const fields = buildAiGatewayMetadataFields({
+            functionPath: "messages:send",
+            tags: { traceId: "not-the-trace", a: "1", b: "2", c: "3", d: "4", e: "5" },
+            traceId: FAKE_TRACE_ID,
+        });
+
+        expect(Object.keys(fields ?? {})).toHaveLength(AI_GATEWAY_METADATA_MAX_KEYS);
+        expect(fields?.["traceId"]).toBe(FAKE_TRACE_ID);
+    });
+
     it("drops non-string tag values rather than coercing them", () => {
         expect.assertions(1);
         expect(buildAiGatewayMetadataFields({ tags: { bad: 1 as unknown as string, good: "yes" } })).toStrictEqual({ good: "yes" });

@@ -187,6 +187,7 @@ type QueueRegistry = Record<string, QueueRegistryEntry>;
 
 ```ts
 interface QueueRegistryEntry {
+    binding?: string;
     definition: QueueDefinition<any>;
     exportName: string;
 }

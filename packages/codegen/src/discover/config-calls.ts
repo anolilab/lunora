@@ -5,7 +5,7 @@ import type { ArrowFunction, FunctionExpression, Node as TsNode, ObjectLiteralEx
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { ConfigCallIR } from "../ir";
-import { listSecurityScanFiles, objectLiteralFromCallbackBody } from "./ast";
+import { listSecurityScanFiles, objectLiteralFromCallbackBody, propertyKeyName } from "./ast";
 import { calleeName } from "./callee";
 
 /**
@@ -68,7 +68,7 @@ const keysFromObjectLiteral = (objectLiteral: ObjectLiteralExpression): ConfigCa
         }
 
         if (Node.isPropertyAssignment(property)) {
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             presentKeys.push(name);
 
@@ -83,7 +83,7 @@ const keysFromObjectLiteral = (objectLiteral: ObjectLiteralExpression): ConfigCa
 
         // A shorthand (`{ verify }`) or method (`verify() {}`) still declares the key.
         if (Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property)) {
-            presentKeys.push(property.getName());
+            presentKeys.push(propertyKeyName(property));
         }
     }
 

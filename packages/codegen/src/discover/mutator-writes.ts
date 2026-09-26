@@ -5,7 +5,7 @@ import type { CallExpression, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { MutatorWriteIR } from "../ir";
-import { isDatabaseAccessor } from "./ast";
+import { findObjectProperty, isDatabaseAccessor } from "./ast";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
@@ -40,7 +40,7 @@ const serverImplNode = (call: CallExpression): Node | undefined => {
         return undefined;
     }
 
-    const property = argument.getProperty("server");
+    const property = findObjectProperty(argument, "server");
 
     if (property === undefined) {
         return undefined;

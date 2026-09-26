@@ -262,6 +262,16 @@ describe("project-declared target", () => {
         expect(diagnosticNames()).toStrictEqual([]);
     });
 
+    it("does not read an unreadable advisor floor as an unreadable target", () => {
+        expect.assertions(1);
+
+        // `advisor.minSeverity` reports its own finding; the target warning means
+        // "you may be shipping to the wrong provider", which this is not.
+        writeConfig(`{ advisor: { minSeverity: ["w", "arn"].join("") } }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
     it("says nothing when --target was passed, which wins anyway", () => {
         expect.assertions(1);
 

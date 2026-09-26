@@ -1,3 +1,54 @@
+## @lunora/ratelimit [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.81...@lunora/ratelimit@1.0.0-alpha.82) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **ratelimit:** `RateLimitConfig.shards` is removed. Delete it from limit
+configs; the limit then enforces the `rate` it declares. A fixed-window
+limit with an explicit `capacity` now admits up to `capacity` on a fresh
+key.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(ratelimit): exact retryAfter for fractional rates, refuse shards
+
+- fixedWindowWait estimated the window count as
+  ceil((needed - value) / rate), which rounds differently from the
+  projection's carry + periods * rate once rate is fractional, so
+  retryAfter could land a window early or late. The estimate is now
+  corrected against projectFixedWindow run on the stored state, which is
+  what the next call evaluates. The property test covers rates 0.1, 0.3,
+  1/3 and 2/3.
+- A config that still carries `shards` now throws at construction.
+  Ignoring it silently enforced a different limit: an app that raised
+  `rate` to offset the split would admit `shards` times the traffic.
+- from-alpha.mdx says previously sharded state does not carry over (the
+  `#<shard>` rows are never read again, debt is forgiven, and reset()
+  does not remove them), drops the stale shard-selection wording, and
+  uses the real `config` option in the example.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **ratelimit:** correct fixed-window retryAfter and drop shards ([#837](https://github.com/anolilab/lunora/issues/837)) ([01d862c](https://github.com/anolilab/lunora/commit/01d862cf50cc28371f9bca5a167b05465bd9b795))
+
+## @lunora/ratelimit [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.80...@lunora/ratelimit@1.0.0-alpha.81) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.148
+* **@lunora/values:** upgraded to 1.0.0-alpha.52
+
+## @lunora/ratelimit [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.79...@lunora/ratelimit@1.0.0-alpha.80) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.147
+
 ## @lunora/ratelimit [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.78...@lunora/ratelimit@1.0.0-alpha.79) (2026-09-25)
 
 

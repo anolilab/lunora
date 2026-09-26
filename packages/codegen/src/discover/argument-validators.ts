@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ArgumentValidatorIR } from "../ir";
 import { procedureArgumentObjects } from "../procedure-argument-objects";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -95,7 +95,7 @@ const classifyArgs = (objects: ReadonlyArray<ObjectLiteralExpression>): { anyArg
             }
 
             const calls = vFactoryCalls(initializer);
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             if (calls.some((call) => vFactoryName(call) === "any")) {
                 anyArgs.push(name);

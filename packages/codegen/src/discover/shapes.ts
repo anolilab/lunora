@@ -8,6 +8,7 @@ import { diagnosticAt } from "../diagnostics";
 import type { ShapeIR, ValidatorIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
+import { findObjectProperty } from "./ast";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
@@ -98,7 +99,7 @@ const tableLiteralFrom = (call: CallExpression): string | undefined => {
         return undefined;
     }
 
-    const tableProperty = config.getProperty("table");
+    const tableProperty = findObjectProperty(config, "table");
 
     if (!tableProperty || !Node.isPropertyAssignment(tableProperty)) {
         return undefined;
@@ -123,7 +124,7 @@ const argsFrom = (call: CallExpression): Record<string, ValidatorIR> => {
         return {};
     }
 
-    const argsProperty = config.getProperty("args");
+    const argsProperty = findObjectProperty(config, "args");
 
     if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
         return {};

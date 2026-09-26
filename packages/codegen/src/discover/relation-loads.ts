@@ -2,7 +2,7 @@ import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { RelationLoadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, readTargetOf } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName, readTargetOf } from "./ast";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The relation accessor names declared by a `with: { … }` object literal (`{ author: true }`, `{ author }`, `{ author() {} }`) — the keys matched against the schema's relation names. Spreads/computed keys yield nothing. */
@@ -20,7 +20,7 @@ const relationNamesOf = (withValue: TsNode | undefined): string[] => {
             Node.isMethodDeclaration(member) ||
             Node.isGetAccessorDeclaration(member)
         ) {
-            names.push(member.getName());
+            names.push(propertyKeyName(member));
         }
     }
 

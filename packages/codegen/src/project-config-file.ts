@@ -48,6 +48,7 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
+import { propertyKeyName } from "./discover/ast";
 import { findProjectConfigFile } from "./project-config-path";
 
 /**
@@ -57,6 +58,13 @@ import { findProjectConfigFile } from "./project-config-path";
  * re-validating a fact this file already knew.
  */
 interface ProjectConfigLiterals {
+    /**
+     * `advisor.minSeverity`, read the same way. `unreadable` when `advisor` is
+     * declared but its `minSeverity` is not a string literal the parser can see,
+     * kept apart from the top-level `unreadable`, which means "the target may
+     * be wrong".
+     */
+    advisor?: { minSeverity?: string; unreadable?: boolean };
     remote?: boolean;
     target?: string;
 
@@ -71,6 +79,8 @@ interface ProjectConfigLiterals {
 
 /** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
 interface LunoraProjectConfig {
+    /** Advisor settings for codegen (`minSeverity`). Read by `runCodegen` through {@link readProjectConfigLiterals}. */
+    advisor?: unknown;
     /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
     app?: unknown;
     /** Remote-binding dev preference. */
@@ -184,26 +194,63 @@ const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | 
     return expression !== undefined && TsNode.isObjectLiteralExpression(expression) ? expression : undefined;
 };
 
-/**
- * One property's key, with a string-literal key's quotes removed.
- *
- * `getName()` keeps them, so `{ "target": … }` — perfectly valid TypeScript —
- * read as the name `"target"` and was silently ignored.
- */
-const propertyKey = (property: PropertyAssignment | ShorthandPropertyAssignment): string => {
-    const nameNode = property.getNameNode();
-
-    return TsNode.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : nameNode.getText();
-};
-
 /** The literal a property is assigned, following a shorthand to its `const` in the same file. */
 const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile) => {
     if (TsNode.isPropertyAssignment(property)) {
         return property.getInitializer();
     }
 
-    return sourceFile.getVariableDeclaration(property.getName())?.getInitializer();
+    return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
 };
+
+/**
+ * `advisor.minSeverity` from the `advisor` object literal, or `unreadable` when
+ * the object or the key is not something the parser can read as a literal.
+ */
+const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    let value = declared;
+
+    while (value !== undefined && (TsNode.isSatisfiesExpression(value) || TsNode.isAsExpression(value) || TsNode.isParenthesizedExpression(value))) {
+        value = value.getExpression();
+    }
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return { advisor: { unreadable: true } };
+    }
+
+    const properties = value.getProperties();
+    const plain = properties.filter(
+        (candidate): candidate is PropertyAssignment | ShorthandPropertyAssignment =>
+            (TsNode.isPropertyAssignment(candidate) && !TsNode.isComputedPropertyName(candidate.getNameNode())) ||
+            TsNode.isShorthandPropertyAssignment(candidate),
+    );
+
+    // A spread (before or after the literal), a getter, a method or a computed
+    // key may be what sets `minSeverity`, or override the literal this would
+    // read. A wrong floor hides findings, so any of them makes it unreadable.
+    if (plain.length !== properties.length) {
+        return { advisor: { unreadable: true } };
+    }
+
+    const property = plain.find((candidate) => propertyKeyName(candidate) === "minSeverity");
+
+    if (property === undefined) {
+        return { advisor: {} };
+    }
+
+    const literal = propertyLiteral(property, sourceFile);
+
+    return literal !== undefined && TsNode.isStringLiteral(literal)
+        ? { advisor: { minSeverity: literal.getLiteralValue() } }
+        : { advisor: { unreadable: true } };
+};
+
+/** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
+const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
+    ["advisor", { advisor: { unreadable: true } }],
+    ["remote", { unreadable: true }],
+    ["target", { unreadable: true }],
+]);
 
 /**
  * What one property of the config object contributes.
@@ -216,16 +263,18 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
 const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
     // A getter or method declares a value this reader cannot see.
     if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
-        const name = property.getName();
-
-        return name === "target" || name === "remote" ? { unreadable: true } : {};
+        return UNREADABLE_ACCESSOR.get(propertyKeyName(property)) ?? {};
     }
 
     if (!TsNode.isPropertyAssignment(property) && !TsNode.isShorthandPropertyAssignment(property)) {
         return {};
     }
 
-    const key = propertyKey(property);
+    const key = propertyKeyName(property);
+
+    if (key === "advisor") {
+        return readAdvisor(propertyLiteral(property, sourceFile), sourceFile);
+    }
 
     if (key !== "target" && key !== "remote") {
         return {};
@@ -252,7 +301,7 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 };
 
 /**
- * The `target` and `remote` LITERALS declared in the config, without evaluating
+ * The `target`, `remote` and `advisor.minSeverity` LITERALS declared in the config, without evaluating
  * it — see the module header for what this can and cannot see, and why.
  */
 const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
@@ -286,9 +335,13 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     // A spread can SHADOW a literal later in the object, so the literal this
     // reader sees is not necessarily the value that wins. Reporting it anyway is
     // the one case where this reader would be actively wrong rather than merely
-    // blind, so the whole read gives up instead.
+    // blind, so the whole read gives up instead. It still says so for a
+    // declared `advisor`, whose own warning is what tells the user the floor
+    // was not applied: dropping it here left that warning silent.
     if (object.getProperties().some((property) => TsNode.isSpreadAssignment(property))) {
-        return { unreadable: true };
+        const declaresAdvisor = object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === "advisor");
+
+        return declaresAdvisor ? { advisor: { unreadable: true }, unreadable: true } : { unreadable: true };
     }
 
     let literals: ProjectConfigLiterals = {};
