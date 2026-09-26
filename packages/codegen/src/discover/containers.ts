@@ -11,6 +11,7 @@ import type {
     Project,
     SourceFile,
     SpreadAssignment,
+    Symbol as TsSymbol,
     Type,
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -121,13 +122,7 @@ const unwrapTypeOnly = (expression: Expression): Expression => {
  * a runtime value its initializer does not show, so reading the initializer
  * would put a different number in wrangler.jsonc than the one the app runs.
  */
-const isWrittenThrough = (identifier: Identifier): boolean => {
-    const symbol = identifier.getSymbol();
-
-    if (symbol === undefined) {
-        return false;
-    }
-
+const isWrittenThrough = (symbol: TsSymbol, sourceFile: SourceFile): boolean => {
     const rootOf = (target: Node): Node | undefined => {
         let current: Node = target;
 
@@ -139,58 +134,77 @@ const isWrittenThrough = (identifier: Identifier): boolean => {
     };
     const namesBinding = (node: Node | undefined): boolean => node !== undefined && Node.isIdentifier(node) && node.getSymbol() === symbol;
 
-    return identifier
-        .getSourceFile()
-        .getDescendants()
-        .some((node) => {
-            if (Node.isBinaryExpression(node)) {
-                const operator = node.getOperatorToken().getKind();
+    return sourceFile.getDescendants().some((node) => {
+        if (Node.isBinaryExpression(node)) {
+            const operator = node.getOperatorToken().getKind();
 
-                return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment && namesBinding(rootOf(node.getLeft()));
-            }
+            return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment && namesBinding(rootOf(node.getLeft()));
+        }
 
-            if (Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) {
-                const operator = node.getOperatorToken();
+        if (Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) {
+            const operator = node.getOperatorToken();
 
-                return (operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken) && namesBinding(rootOf(node.getOperand()));
-            }
+            return (operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken) && namesBinding(rootOf(node.getOperand()));
+        }
 
-            if (Node.isDeleteExpression(node)) {
-                return namesBinding(rootOf(node.getExpression()));
-            }
+        if (Node.isDeleteExpression(node)) {
+            return namesBinding(rootOf(node.getExpression()));
+        }
 
-            return Node.isCallExpression(node) && node.getExpression().getText() === "Object.assign" && namesBinding(node.getArguments()[0]);
-        });
+        return Node.isCallExpression(node) && node.getExpression().getText() === "Object.assign" && namesBinding(node.getArguments()[0]);
+    });
+};
+
+/** How many `const a = b; const b = c; …` hops {@link resolveBinding} follows before giving up. */
+const MAX_ALIAS_HOPS = 16;
+
+/**
+ * The value a module-scope `const` binding holds, followed through
+ * `const a = b` aliases and type-only wrappers until it is not a const
+ * identifier; `undefined` when `symbol` is not a module-scope `const`. A const
+ * object that is written through elsewhere in its file is refused — its
+ * initializer is not the value the container runs with. `at` locates that
+ * error; `name` is the binding's spelling for it.
+ */
+const resolveBinding = (symbol: TsSymbol | undefined, at: Node, name: string, what: string): Expression | undefined => {
+    let current: { name: string; symbol: TsSymbol | undefined } = { name, symbol };
+    let value: Expression | undefined;
+
+    for (let hop = 0; hop < MAX_ALIAS_HOPS; hop += 1) {
+        const initializer = symbolConstInitializer(current.symbol);
+
+        if (initializer === undefined || !Node.isExpression(initializer)) {
+            return value;
+        }
+
+        value = unwrapTypeOnly(initializer);
+
+        if (Node.isObjectLiteralExpression(value) && current.symbol !== undefined && isWrittenThrough(current.symbol, at.getSourceFile())) {
+            throw diagnosticAt(
+                at,
+                `${what}: \`${current.name}\` is a const object that is written to elsewhere in this file, so its initializer is not the value the container runs with. Declare the settings where they are final.`,
+            );
+        }
+
+        if (!Node.isIdentifier(value)) {
+            return value;
+        }
+
+        current = { name: value.getText(), symbol: value.getSymbol() };
+    }
+
+    return value;
 };
 
 /**
- * An identifier naming a module-scope `const` reads as that const's
- * initializer; anything else as itself. Type-only wrappers are unwrapped on
- * both sides, and a const object written through elsewhere is refused.
+ * An identifier naming a module-scope `const` reads as that const's value
+ * (see {@link resolveBinding}); anything else as itself, type-only wrappers
+ * unwrapped.
  */
 const resolveConstant = (expression: Expression, what: string): Expression => {
     const bare = unwrapTypeOnly(expression);
 
-    if (!Node.isIdentifier(bare)) {
-        return bare;
-    }
-
-    const initializer = symbolConstInitializer(bare.getSymbol());
-
-    if (initializer === undefined || !Node.isExpression(initializer)) {
-        return bare;
-    }
-
-    const value = unwrapTypeOnly(initializer);
-
-    if (Node.isObjectLiteralExpression(value) && isWrittenThrough(bare)) {
-        throw diagnosticAt(
-            bare,
-            `${what}: \`${bare.getText()}\` is a const object that is written to elsewhere in this file, so its initializer is not the value the container runs with. Declare the settings where they are final.`,
-        );
-    }
-
-    return value;
+    return Node.isIdentifier(bare) ? (resolveBinding(bare.getSymbol(), bare, bare.getText(), what) ?? bare) : bare;
 };
 
 /** Every property a type can carry: `T | undefined` reads as `T`, a union as all of its members' keys. */
@@ -253,10 +267,12 @@ const unreadableMemberEntry = (
     what: string,
 ): [string, Expression] | undefined => {
     const key = propertyKeyName(property);
-    const value = Node.isShorthandPropertyAssignment(property) ? symbolConstInitializer(property.getValueSymbol()) : undefined;
+    // The same resolution an explicit `{ key: name }` gets, so `{ maxInstances }`
+    // over `const maxInstances = LIMIT` reads LIMIT's value, not the identifier.
+    const value = Node.isShorthandPropertyAssignment(property) ? resolveBinding(property.getValueSymbol(), property, key, what) : undefined;
 
-    if (value !== undefined && Node.isExpression(value)) {
-        return [key, unwrapTypeOnly(value)];
+    if (value !== undefined) {
+        return [key, value];
     }
 
     if (guarded === "every" || guarded.has(key)) {

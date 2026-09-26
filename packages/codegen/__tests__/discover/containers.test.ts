@@ -443,4 +443,27 @@ describe("emit (containers)", () => {
 
         expect({ instanceType: container?.instanceType, maxInstances: container?.maxInstances }).toStrictEqual({ instanceType: "standard-2", maxInstances: 3 });
     });
+
+    it("reads a shorthand whose const aliases another const, like the explicit form", () => {
+        expect.assertions(1);
+
+        // `{ maxInstances: LIMIT }` already resolved; `{ maxInstances }` over
+        // `const maxInstances = LIMIT` stopped at the identifier and failed the
+        // static-number check. Same for guarded keys inside `rollout`.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const LIMIT = 3;
+            const maxInstances = LIMIT;
+            const GRACE = 30;
+            const ALIASED_GRACE = GRACE;
+            const gracePeriodSeconds = ALIASED_GRACE as const;
+
+            export const worker = defineContainer({ image: "./containers/worker", maxInstances, rollout: { gracePeriodSeconds } });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir);
+
+        expect({ maxInstances: container?.maxInstances, rollout: container?.rollout }).toStrictEqual({ maxInstances: 3, rollout: { gracePeriodSeconds: 30 } });
+    });
 });
