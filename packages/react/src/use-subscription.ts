@@ -9,6 +9,9 @@ import { useLunora } from "./lunora-provider";
 import { stableWireKey } from "./query-key";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types";
 
+/** The result before the current subscription has answered; one object so its identity is stable across renders. */
+const EMPTY: UseSubscriptionResult<unknown> = Object.freeze({ data: undefined, error: undefined });
+
 /**
  * Subscribe to a real-time stream from the server. Unlike `useQuery`, this
  * hook does not issue an initial HTTP fetch — it only delivers values that
@@ -25,10 +28,17 @@ const useSubscription = <F extends FunctionReference>(
     options: UseQueryOptions = {},
 ): UseSubscriptionResult<ReturnOf<F>> => {
     const client = useLunora();
-    const [state, setState] = useState<UseSubscriptionResult<ReturnOf<F>>>({ data: undefined, error: undefined });
 
     const skipped = args === "skip";
     const serialized = skipped ? "skip" : stableWireKey(args);
+
+    // Each result is stored with the subscription it came from (client + fn +
+    // args + shard) and returned only while that subscription is still the
+    // current one. New args therefore read as "no data, no error" from their
+    // first render instead of showing the previous args' result until the new
+    // subscription answers, and no reset `setState` is needed.
+    const key = `${function_.__lunoraRef}\u0000${serialized}\u0000${options.shardKey ?? ""}`;
+    const [state, setState] = useState<{ client: typeof client; key: string; result: UseSubscriptionResult<ReturnOf<F>> } | undefined>(undefined);
 
     // The subscribe effect keys off the serialized args, so an inline `onError`
     // must not change its identity — read the latest handler through a ref.
@@ -50,15 +60,11 @@ const useSubscription = <F extends FunctionReference>(
         subscribeRef.current = { args, fn: function_ };
     });
 
-    // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- intentional: the several `setState` calls here fire in mutually-exclusive branches/callbacks (skip reset, onData, deferred onError) across the subscription lifecycle, not as a synchronous cascade within one render.
+    // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- intentional: the `setState` calls here fire in mutually-exclusive callbacks (onData, deferred onError) across the subscription lifecycle, not as a synchronous cascade within one render.
     useEffect(() => {
         if (skipped) {
-            // Args transitioned to "skip" — tear down any prior subscription
-            // (handled by the previous effect's cleanup) and clear stale data so
-            // the UI reflects "no subscription, no data", matching Solid/Vue.
-            // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change, react-hooks-js/set-state-in-effect -- intentional: clearing data when `args` becomes "skip" is a deliberate teardown that matches the Solid/Vue adapters; there is no prior value to derive from (the subscription is gone), so this cannot be lifted to render-phase derived state.
-            setState({ data: undefined, error: undefined });
-
+            // "skip" tears down any prior subscription (the previous effect's
+            // cleanup); the render-time key check already reports no data.
             return () => {};
         }
 
@@ -81,7 +87,7 @@ const useSubscription = <F extends FunctionReference>(
                         return;
                     }
 
-                    setState({ data: value, error: undefined });
+                    setState({ client, key, result: { data: value, error: undefined } });
                 },
                 onError: (error) => {
                     // Preserve the server-supplied `code` (matching Vue/Svelte's
@@ -93,7 +99,7 @@ const useSubscription = <F extends FunctionReference>(
 
                     queueMicrotask(() => {
                         if (!cancelled) {
-                            setState({ data: undefined, error: normalized });
+                            setState({ client, key, result: { data: undefined, error: normalized } });
                         }
                     });
                 },
@@ -105,9 +111,9 @@ const useSubscription = <F extends FunctionReference>(
             cancelled = true;
             unsubscribe();
         };
-    }, [client, function_.__lunoraRef, serialized, options.shardKey, skipped]);
+    }, [client, function_.__lunoraRef, key, serialized, options.shardKey, skipped]);
 
-    return state;
+    return state?.client === client && state.key === key ? state.result : (EMPTY as UseSubscriptionResult<ReturnOf<F>>);
 };
 
 export default useSubscription;

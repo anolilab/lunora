@@ -4,7 +4,7 @@ import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useState } from "react";
+import { createContext, use, useEffect, useRef, useState } from "react";
 
 import { getSubscriptionRegistry } from "./cache";
 
@@ -62,6 +62,28 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     // not torn down on unmount: see `clearOnIdentityChange`.
     useEffect(() => {
         getSubscriptionRegistry(client).clearOnIdentityChange(effectiveClient);
+    }, [client, effectiveClient]);
+
+    // Swapping `client` does not remount the subtree, and the QueryClient (ours
+    // or the caller's) outlives it: TanStack binds each mounted hook's observer
+    // to one QueryClient for life, so a fresh QueryClient would not reach them.
+    // The keys omit the client, so without this the new client would render
+    // the old one's rows, which `staleTime: Infinity` never refetches. Clear the
+    // `["lunora", …]` entries and refetch the ones on screen; this runs after
+    // the children's effects, so their observers already hold query functions
+    // bound to the new client.
+    const previousClient = useRef(client);
+
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- prop → external-store sync: a `client` swap must clear the TanStack cache, and no event in this component carries the swap. It must run post-commit, after the children's observers took the new client's query functions.
+        if (previousClient.current === client) {
+            return;
+        }
+
+        previousClient.current = client;
+        getSubscriptionRegistry(client).clearQueries(effectiveClient);
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget: a failed refetch lands on the query's own error state
+        effectiveClient.invalidateQueries({ queryKey: ["lunora"] });
     }, [client, effectiveClient]);
 
     const content = <LunoraContext value={client}>{children}</LunoraContext>;

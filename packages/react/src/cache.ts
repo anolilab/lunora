@@ -66,7 +66,7 @@ interface SnapshotSample {
  * TanStack {@link QueryClient}. The flow on every push is
  * `client.subscribe(fn, args, value => qc.setQueryData(queryKey, value))`.
  *
- * Every hook that mounts a `useQuery({queryKey: ["lunora", fn, args, shard]})`
+ * Every hook that mounts a `useQuery({queryKey: lunoraQueryKey(fn, args, shard)})`
  * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
  * dedupes by hashed queryKey so two components observing the same query open a
  * single WS subscription. On the last `detach()` the subscription is closed.
@@ -247,19 +247,28 @@ class LunoraSubscriptionRegistry {
             this.epoch += 1;
 
             for (const queryClient of this.identityWatched) {
-                const cache = queryClient.getQueryCache();
-
-                for (const query of cache.findAll({ queryKey: ["lunora"] })) {
-                    // Blanked either way: an observer's `placeholderData` can
-                    // still hold a removed query, and must find nothing in it.
-                    blankQuery(query);
-
-                    if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
-                        cache.remove(query);
-                    }
-                }
+                this.clearQueries(queryClient);
             }
         });
+    }
+
+    /**
+     * Take every `["lunora", …]` entry in `queryClient` off screen: entries
+     * nothing uses are removed, entries still in use (an observer, or a hook fed
+     * through this registry) are blanked so their observers stay attached.
+     */
+    public clearQueries(queryClient: QueryClient): void {
+        const cache = queryClient.getQueryCache();
+
+        for (const query of cache.findAll({ queryKey: ["lunora"] })) {
+            // Blanked either way: an observer's `placeholderData` can still hold
+            // a removed query, and must find nothing in it.
+            blankQuery(query);
+
+            if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
+                cache.remove(query);
+            }
+        }
     }
 
     /**

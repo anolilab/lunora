@@ -66,7 +66,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
     const queryKey = lunoraQueryKey(functionRef, args, shardKey);
 
-    // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
     const { data } = useTanStackQuery<T>({
         // Seed the cache with the server value so the first paint doesn't
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
@@ -79,7 +79,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
 
     useEffect(
         () => registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError }),
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is provider-stable (swapping it remounts the provider subtree).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
         [client, queryClient, serializeQueryKey(queryKey), stableOnError],
     );
 
