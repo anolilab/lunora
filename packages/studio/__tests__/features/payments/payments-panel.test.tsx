@@ -138,3 +138,47 @@ describe("paymentsPanel", () => {
         expect(row.textContent).not.toContain("$lunora.wire$");
     });
 });
+
+describe("paymentsPanel — past the first page", () => {
+    it("asks for the newest rows and reports whole-table totals", async () => {
+        expect.hasAssertions();
+
+        const reads: Record<string, unknown>[] = [];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "subscriptions" }, { name: "events" }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.facetColumn) {
+                    return {
+                        truncated: false,
+                        values: [
+                            { count: 140, value: "active" },
+                            { count: 10, value: "canceled" },
+                        ],
+                    };
+                }
+
+                reads.push(args as Record<string, unknown>);
+
+                // 150 subscriptions, of which the panel loads one page.
+                return (args as { table: string }).table === "subscriptions"
+                    ? { columns: [], rows: SUBSCRIPTIONS, total: 150 }
+                    : { columns: [], rows: EVENTS, total: 60 };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PaymentsPanel />
+            </LunoraProvider>,
+        );
+
+        await screen.findByText("150 total");
+
+        expect(screen.getByTestId("payments-summary").textContent).toContain("140 active");
+        expect(reads.find((args) => args["table"] === "subscriptions")?.["orderBy"]).toStrictEqual({ column: "updatedAt", direction: "desc" });
+        expect(reads.find((args) => args["table"] === "events")?.["orderBy"]).toStrictEqual({ column: "processedAt", direction: "desc" });
+    });
+});

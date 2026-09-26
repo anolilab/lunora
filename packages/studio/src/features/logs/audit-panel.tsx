@@ -16,26 +16,20 @@ import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { AuditEntry, AuditLogResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { formatTimestamp } from "../../lib/internal";
+import { formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 
 interface AuditPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-/** Longest `detail` JSON rendered inline before it's truncated; the full value stays in the cell `title`. */
-const DETAIL_MAX = 80;
-
-/** Serialise an entry's `detail` to a compact, length-bounded string for the table cell. */
-const formatDetail = (detail: Record<string, unknown> | undefined): string => {
-    if (detail === undefined) {
-        return "";
-    }
-
-    const json = JSON.stringify(detail);
-
-    return json.length > DETAIL_MAX ? `${json.slice(0, DETAIL_MAX)}…` : json;
-};
+/**
+ * Serialise an entry's `detail` IN FULL. The cell truncates it visually (CSS),
+ * so the whole value stays in the DOM, the `title` and a copy of the cell — a
+ * PITR restore's `undoBookmark` lives only here, and an 80-character cut made it
+ * unrecoverable.
+ */
+const formatDetail = (detail: Record<string, unknown> | undefined): string => (detail === undefined ? "" : JSON.stringify(detail, jsonRowReplacer));
 
 /** Estimated height of one virtualized audit row, and the bounded height of the scroll viewport. */
 const ROW_HEIGHT = 41;

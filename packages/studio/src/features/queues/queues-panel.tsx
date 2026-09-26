@@ -26,7 +26,7 @@ import type {
     SendQueueMessageResult,
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { computeQueueReliability } from "./reliability";
 
 interface QueuesPanelProps {
@@ -55,7 +55,7 @@ const formatBody = (value: unknown): string => {
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         // Captured bodies come from JSON.parse, so this only fires for exotic values (BigInt/cyclic).
         return "[unserializable]";

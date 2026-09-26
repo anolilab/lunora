@@ -75,3 +75,37 @@ describe("organizationDetail row actions", () => {
         expect(mock.listAuthOrgMembers.mock.calls.length).toBeGreaterThan(callsBefore);
     });
 });
+
+describe("organizationDetail members paging", () => {
+    it("pages members, and starts another organization at its first page", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        const page = (offset: number) => {
+            return { rows: [{ id: `mem_${String(offset)}`, role: "member", userId: "u" }], total: 450 };
+        };
+
+        mock.listAuthOrgMembers.mockResolvedValue(page(0));
+
+        const { rerender } = render(renderDetail(mock));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("org-members-page-info").textContent).toBe("1-1 of 450");
+        });
+
+        mock.listAuthOrgMembers.mockResolvedValueOnce(page(200));
+        fireEvent.click(screen.getByTestId("org-members-next"));
+        await screen.findByTestId("org-member-mem_200");
+
+        rerender(
+            <LunoraProvider client={mock.asClient}>
+                <OrganizationDetail organizationId="org_2" rolesEnabled={false} teamsEnabled={false} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.listAuthOrgMembers).toHaveBeenLastCalledWith({ limit: 200, offset: 0, organizationId: "org_2" });
+        });
+    });
+});

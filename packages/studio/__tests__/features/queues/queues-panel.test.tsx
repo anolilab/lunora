@@ -104,6 +104,28 @@ describe("queuesPanel", () => {
         expect(screen.queryByTestId("queues-error")).toBeNull();
     });
 
+    it("renders a bigint / bytes body instead of [unserializable]", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                return { entries: [message({ body: { amountMinor: 1999n, receipt: new Uint8Array([1, 2]).buffer } })] };
+            },
+        });
+
+        render(renderPanel(mock));
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        const row = await screen.findByTestId("queues-message-msg-1");
+
+        expect(row.textContent).toContain('{"amountMinor":"1999","receipt":"<bytes: 2 B>"}');
+        expect(row.textContent).not.toContain("unserializable");
+    });
+
     it("surfaces a rejected replay in the panel's error surface", async () => {
         expect.assertions(1);
 

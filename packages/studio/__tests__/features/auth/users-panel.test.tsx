@@ -107,6 +107,7 @@ describe("usersPanel", () => {
 
         const callsBefore = mock.listAuthUsers.mock.calls.length;
 
+        fireEvent.click(screen.getByTestId("ud-ban-permanent"));
         fireEvent.click(screen.getByTestId("ud-ban"));
 
         await waitFor(() => {
@@ -122,6 +123,34 @@ describe("usersPanel", () => {
 
         expect(mock.banAuthUser).toHaveBeenCalledWith(expect.objectContaining({ userId: "u1" }));
         expect(mock.listAuthUsers.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+
+    it("bans for a whole number of days, and never turns a bad length into a permanent ban", async () => {
+        expect.hasAssertions();
+
+        const mock = createUsersClient();
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("us-manage-u1"));
+        await screen.findByTestId("ud-panel");
+
+        const ban = screen.getByTestId<HTMLButtonElement>("ud-ban");
+
+        for (const days of ["", "0", "0.5", "-1"]) {
+            fireEvent.change(screen.getByTestId("ud-ban-days"), { target: { value: days } });
+
+            expect(ban.disabled).toBe(true);
+        }
+
+        fireEvent.change(screen.getByTestId("ud-ban-days"), { target: { value: "3" } });
+        fireEvent.click(ban);
+
+        await waitFor(() => {
+            expect(mock.banAuthUser).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mock.banAuthUser.mock.calls[0]?.[0]).toMatchObject({ expiresInSeconds: 3 * 86_400, userId: "u1" });
     });
 
     it("unbans an already-banned user from the drawer", async () => {
@@ -261,5 +290,41 @@ describe("usersPanel", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe("usersPanel — past the first page", () => {
+    const MANY: AuthUser[] = Array.from({ length: 120 }, (_, index) => {
+        return { createdAt: index, email: `u${String(index)}@example.com`, id: `u${String(index)}` };
+    });
+
+    it("shows the total and pages through every user", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            listAuthUsers: (options): AuthPage<AuthUser> => {
+                const { limit = 50, offset = 0 } = options as { limit?: number; offset?: number };
+
+                return { rows: MANY.slice(offset, offset + limit), total: MANY.length };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("us-page-info").textContent).toBe("1-50 of 120");
+        });
+
+        fireEvent.click(screen.getByTestId("us-next"));
+        await waitFor(() => {
+            expect(screen.getByTestId("us-page-info").textContent).toBe("51-100 of 120");
+        });
+        fireEvent.click(screen.getByTestId("us-next"));
+        await waitFor(() => {
+            expect(screen.getByTestId("us-page-info").textContent).toBe("101-120 of 120");
+        });
+
+        expect(screen.getByTestId("us-row-u119").textContent).toContain("u119@example.com");
+        expect(screen.getByTestId<HTMLButtonElement>("us-next").disabled).toBe(true);
     });
 });

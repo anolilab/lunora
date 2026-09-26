@@ -12,7 +12,7 @@ import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { CreateWorkflowInstanceResult, WorkflowInstanceStatusResult, WorkflowMetadata, WorkflowsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import { WorkflowInstanceHistory } from "./workflow-instances";
 
 const CREATE_WORKFLOW_INSTANCE = adminRef(ADMIN_FUNCTIONS.createWorkflowInstance);
@@ -38,7 +38,7 @@ const formatPayload = (instance: ObservedInstance): string => {
     }
 
     try {
-        return JSON.stringify(instance.output);
+        return JSON.stringify(instance.output, jsonRowReplacer);
     } catch {
         return "(unserializable)";
     }

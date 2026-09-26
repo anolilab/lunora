@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -216,6 +216,45 @@ describe("kvBrowser", () => {
 
         await expect(screen.findByTestId("kv-key-row-session:abc")).resolves.toBeDefined();
         expect(screen.getByTestId("kv-key-table")).toBeDefined();
+    });
+
+    it("drops a Load more that resolves after the list was reloaded", async () => {
+        expect.hasAssertions();
+
+        let resolveStale: (value: { cursor?: string; keys: { name: string }[]; listComplete: boolean }) => void = () => {};
+
+        const firstPage = { cursor: "c1", keys: [{ name: "fresh:1" }], listComplete: false };
+
+        // Initial page, then a Load more that stays pending, then the reload's first page.
+        mock.listKvKeys
+            .mockResolvedValueOnce(firstPage)
+            .mockReturnValueOnce(
+                new Promise((resolve) => {
+                    resolveStale = resolve;
+                }),
+            )
+            .mockResolvedValueOnce(firstPage);
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-load-more"));
+
+        // A create reloads the first page while the Load more is still in flight.
+        fireEvent.click(screen.getByTestId("kv-new-key-btn"));
+        fireEvent.change(screen.getByTestId("kv-create-name"), { target: { value: "flag:beta" } });
+        fireEvent.change(screen.getByTestId("kv-create-value"), { target: { value: "on" } });
+        fireEvent.click(screen.getByTestId("kv-create-submit"));
+        await waitFor(() => {
+            expect(mock.listKvKeys.mock.calls.filter(([options]) => (options as { cursor?: string }).cursor === undefined)).toHaveLength(2);
+        });
+        await screen.findByTestId("kv-key-row-fresh:1");
+
+        await act(async () => {
+            resolveStale({ keys: [{ name: "stale:page-2" }], listComplete: true });
+        });
+
+        expect(screen.queryByTestId("kv-key-row-stale:page-2")).toBeNull();
+        expect(screen.getAllByTestId(/^kv-key-row-/u)).toHaveLength(1);
     });
 
     it("shows an empty state when no namespaces are configured", async () => {

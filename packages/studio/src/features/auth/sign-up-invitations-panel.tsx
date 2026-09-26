@@ -9,12 +9,96 @@ import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
-import { fireAndForget, formatTimestamp } from "../../lib/internal";
+import { fireAndForget, formatTimestamp, workerBaseUrl } from "../../lib/internal";
 import type { InvitationRow } from "./invitation-status";
 import { invitationStatus } from "./invitation-status";
 
 /** How many invitations to pull — the admin plane's own ceiling, so this asks for everything it will give. */
 const INVITATION_LIMIT = 500;
+
+/**
+ * The link the invitee opens: `signUpPage` with `email` + `invite` set, keeping
+ * any query the page already carries.
+ * @returns the link, or `null` while `signUpPage` is not an absolute URL
+ */
+const invitationLink = (signUpPage: string, issued: { email: string; token: string }): null | string => {
+    if (!URL.canParse(signUpPage.trim())) {
+        return null;
+    }
+
+    const url = new URL(signUpPage.trim());
+
+    url.searchParams.set("email", issued.email);
+    url.searchParams.set("invite", issued.token);
+
+    return url.toString();
+};
+
+/**
+ * The one-time link for a just-issued invitation, with the sign-up page it
+ * points at editable in place. Keyed on the token by the parent, so a new
+ * invitation starts un-copied.
+ */
+const IssuedInvitation = ({
+    issued,
+    onSignUpPageChange,
+    signUpPage,
+}: {
+    readonly issued: { email: string; token: string };
+    readonly onSignUpPageChange: (page: string) => void;
+    readonly signUpPage: string;
+}): ReactElement => {
+    const t = useT();
+    const [copied, setCopied] = useState(false);
+    const link = invitationLink(signUpPage, issued);
+
+    const onCopyLink = (): void => {
+        // Mirrors `apply-index-button.tsx`: a studio served over a LAN IP is not a
+        // secure context, so `navigator.clipboard` is undefined there, and even
+        // where it exists the write can be denied. `copied` is therefore only set
+        // in the success branch — the link stays selectable in the field either
+        // way, and claiming a copy that did not happen is how an operator loses a
+        // token they cannot get back.
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
+        const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
+
+        if (link === null || clipboard === undefined) {
+            return;
+        }
+
+        fireAndForget(
+            clipboard.writeText(link).then((): boolean => {
+                setCopied(true);
+
+                return true;
+            }),
+        );
+    };
+
+    return (
+        <Card>
+            <CardContent className="flex flex-col gap-2 p-4">
+                <p className="text-sm">{t("Send this link to the invitee. It is shown once and cannot be recovered.")}</p>
+                <Input
+                    aria-invalid={link === null}
+                    aria-label={t("Your app's sign-up page")}
+                    data-testid="sign-up-invitation-page"
+                    onChange={(event) => {
+                        onSignUpPageChange(event.target.value);
+                        setCopied(false);
+                    }}
+                    value={signUpPage}
+                />
+                <div className="flex gap-2">
+                    <Input data-testid="sign-up-invitation-link" readOnly value={link ?? ""} />
+                    <Button data-testid="sign-up-invitation-copy" onClick={onCopyLink} type="button">
+                        {copied ? t("Copied") : t("Copy")}
+                    </Button>
+                </div>
+            </CardContent>
+        </Card>
+    );
+};
 
 /**
  * Sign-up invitations — the operator surface for the `inviteOnly` plugin, which
@@ -35,8 +119,13 @@ const SignUpInvitationsPanel = (): ReactElement => {
     // The plaintext token exists for exactly one response. Held in state so the
     // operator can copy the link, and never re-fetchable — the server keeps only
     // a hash.
-    const [issuedLink, setIssuedLink] = useState<null | string>(null);
-    const [copied, setCopied] = useState(false);
+    const [issued, setIssued] = useState<null | { email: string; token: string }>(null);
+    // Where the invitee signs up. The page belongs to the APP, which the studio
+    // cannot see — so it defaults to the auth UI's `sign-up` route on the worker
+    // origin the studio talks to (not the studio's own origin, which is a
+    // different host whenever the studio is served separately), and the operator
+    // can correct it before copying. Kept here so a correction survives the next invite.
+    const [signUpPage, setSignUpPage] = useState(() => `${workerBaseUrl(client.url)}/sign-up`);
 
     const invitationsQuery = useClientQuery(["lunora-auth-sign-up-invitations", INVITATION_LIMIT], () =>
         client.listAuthSignUpInvitations({ limit: INVITATION_LIMIT }),
@@ -57,44 +146,16 @@ const SignUpInvitationsPanel = (): ReactElement => {
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    const issued = await client.createAuthSignUpInvitation({ email: address });
-                    const token = typeof issued["token"] === "string" ? issued["token"] : undefined;
+                    const created = await client.createAuthSignUpInvitation({ email: address });
+                    const token = typeof created["token"] === "string" ? created["token"] : undefined;
 
-                    setIssuedLink(
-                        token === undefined
-                            ? null
-                            : `${globalThis.location.origin}/sign-up?email=${encodeURIComponent(address)}&invite=${encodeURIComponent(token)}`,
-                    );
-                    setCopied(false);
+                    setIssued(token === undefined ? null : { email: address, token });
                     setEmail("");
                     invitationsQuery.refetch();
                 } catch (error_) {
                     setError(error_ instanceof Error ? error_.message : String(error_));
                 }
             })(),
-        );
-    };
-
-    const onCopyLink = (): void => {
-        // Mirrors `apply-index-button.tsx`: a studio served over a LAN IP is not a
-        // secure context, so `navigator.clipboard` is undefined there, and even
-        // where it exists the write can be denied. `copied` is therefore only set
-        // in the success branch — the link stays selectable in the field either
-        // way, and claiming a copy that did not happen is how an operator loses a
-        // token they cannot get back.
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
-        const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-        if (issuedLink === null || clipboard === undefined) {
-            return;
-        }
-
-        fireAndForget(
-            clipboard.writeText(issuedLink).then((): boolean => {
-                setCopied(true);
-
-                return true;
-            }),
         );
     };
 
@@ -140,19 +201,7 @@ const SignUpInvitationsPanel = (): ReactElement => {
                 </Button>
             </div>
 
-            {issuedLink !== null && (
-                <Card>
-                    <CardContent className="flex flex-col gap-2 p-4">
-                        <p className="text-sm">{t("Send this link to the invitee. It is shown once and cannot be recovered.")}</p>
-                        <div className="flex gap-2">
-                            <Input data-testid="sign-up-invitation-link" readOnly value={issuedLink} />
-                            <Button data-testid="sign-up-invitation-copy" onClick={onCopyLink} type="button">
-                                {copied ? t("Copied") : t("Copy")}
-                            </Button>
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
+            {issued !== null && <IssuedInvitation issued={issued} key={issued.token} onSignUpPageChange={setSignUpPage} signUpPage={signUpPage} />}
 
             {(error ?? invitationsQuery.error) !== null && (
                 <p className="text-sm text-destructive" data-testid="sign-up-invitations-error" role="alert">

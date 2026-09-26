@@ -33,7 +33,7 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
  *
  * Reads the persisted run-state via the `__lunora_admin__:migrationStatus` RPC
  * and lets an operator kick off a migration by id (`__lunora_admin__:runMigration`)
- * with a direction, an optional batch cap and a dry-run toggle. Both calls
+ * with a direction and a dry-run toggle. Both calls
  * travel over the ordinary {@link useLunora} client transport and are gated by
  * the server's `LUNORA_ADMIN_TOKEN` — this component issues no credentials of
  * its own.

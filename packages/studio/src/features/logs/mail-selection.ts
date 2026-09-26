@@ -37,13 +37,26 @@ const recipientText = (value: string | string[] | undefined): string => {
     return Array.isArray(value) ? value.join(", ") : value;
 };
 
-/** The first link in a captured message: HTML body first, then the plain-text body. */
+/** The `href` of the first `<a>` pointing at an `http(s)` URL — the link a reader would click, not a `<link>` stylesheet in `<head>`. */
+const ANCHOR_HREF = /<a\s[^>]*?href\s*=\s*["'](https?:\/\/[^"'\s]+)["']/iu;
+
+/** Ampersand entity (named + numeric decimal/hex forms) an HTML renderer escapes `&` to — the same set `@lunora/mail` decodes. */
+const AMPERSAND_ENTITY = /&(?:amp|#0*38|#x0*26);/giu;
+
+/**
+ * The link a captured message is about: the first `<a href>` in the HTML body,
+ * else the first URL in the text body, else any URL in the HTML. HTML escapes
+ * `&` as `&amp;` inside `href`, so the entity is decoded — followed verbatim, a
+ * `?uid=1&amp;token=abc` link sends a param literally named `amp;token`.
+ */
 const selectedLink = (mail: CapturedMail | undefined): string | undefined => {
     if (mail === undefined) {
         return undefined;
     }
 
-    return firstLink(mail.html) ?? firstLink(mail.text);
+    const link = (mail.html === undefined ? undefined : ANCHOR_HREF.exec(mail.html)?.[1]) ?? firstLink(mail.text) ?? firstLink(mail.html);
+
+    return link?.replaceAll(AMPERSAND_ENTITY, "&");
 };
 
 /**

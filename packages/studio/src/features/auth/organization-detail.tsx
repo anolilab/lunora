@@ -7,6 +7,7 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
+import { AuthPager, useOwnedOffset } from "./auth-pager";
 import {
     ConfirmDialog,
     MemberAddDialog,
@@ -20,6 +21,9 @@ import type { Column, DialogState } from "./organization-primitives";
 import { ManagedTable, SectionCard } from "./organization-primitives";
 import { OrganizationMembers, OrganizationRoles, OrganizationTeamMembers, OrganizationTeams } from "./organization-sections";
 import type { Row } from "./types";
+
+/** Members per page. */
+const MEMBERS_PAGE_SIZE = 200;
 
 interface OrganizationDetailProps {
     /** The organization being managed. */
@@ -48,7 +52,11 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
     const [actionBusy, setActionBusy] = useState<boolean>(false);
     const [actionError, setActionError] = useState<null | string>(null);
 
-    const membersQuery = useClientQuery(["lunora-auth-org-members", organizationId], () => client.listAuthOrgMembers({ limit: 200, organizationId }));
+    // Owned by the organization, so picking another one opens its first page.
+    const [membersOffset, setMembersOffset] = useOwnedOffset(organizationId);
+    const membersQuery = useClientQuery(["lunora-auth-org-members", organizationId, membersOffset], () =>
+        client.listAuthOrgMembers({ limit: MEMBERS_PAGE_SIZE, offset: membersOffset, organizationId }),
+    );
     const invitationsQuery = useClientQuery(["lunora-auth-org-invitations", organizationId], () =>
         client.listAuthOrgInvitations({ limit: 200, organizationId }),
     );
@@ -178,6 +186,15 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                 onRemoveMember={(memberId) => {
                     runAction(() => client.removeAuthOrgMember({ memberId }));
                 }}
+            />
+
+            <AuthPager
+                count={members.length}
+                offset={membersOffset}
+                onOffsetChange={setMembersOffset}
+                pageSize={MEMBERS_PAGE_SIZE}
+                prefix="org-members"
+                total={membersQuery.data?.total}
             />
 
             {invitations.length > 0 && (

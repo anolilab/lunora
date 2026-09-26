@@ -27,6 +27,17 @@ describe("selectedLink", () => {
         );
     });
 
+    it("picks the anchor over a stylesheet link and decodes the escaped ampersand", () => {
+        expect.assertions(2);
+
+        const stylesheet = '<link rel="stylesheet" href="https://css.test/a.css">';
+        const anchor = '<a class="btn" href="https://app.test/v?a=1&amp;b=2">go</a>';
+
+        expect(selectedLink(mail({ html: `<head>${stylesheet}</head><body>${anchor}</body>`, id: "m1" }))).toBe("https://app.test/v?a=1&b=2");
+        // Numeric forms of the entity, and an html body with no anchor at all.
+        expect(selectedLink(mail({ html: "<p>https://app.test/r?a=1&#38;b=2</p>", id: "m1" }))).toBe("https://app.test/r?a=1&b=2");
+    });
+
     it("falls back to the text body, then to nothing", () => {
         expect.assertions(3);
 

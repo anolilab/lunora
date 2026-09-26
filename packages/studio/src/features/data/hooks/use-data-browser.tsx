@@ -13,7 +13,7 @@ import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
 import type { BulkRowOpResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
-import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
+import { adminRef, callOptions, facetFilterValue, fireAndForget, formatCell } from "../../../lib/internal";
 import type { DataView } from "../../../lib/saved-queries";
 import { recordShard } from "../../../lib/shard-history";
 import type { DataBrowserTableModel, TableRow } from "../data-browser-grid";
@@ -39,21 +39,10 @@ const toOrderBy = (sorting: SortingState): undefined | { column: string; directi
 /**
  * Coerce a clicked facet value into the string an `EditableFilter` carries (the
  * filter bar's values are strings until coerced for the wire). NULL/undefined map
- * to the empty string; objects are JSON-encoded so they don't stringify to
- * `[object Object]`.
+ * to the empty string; bytes and objects render as the grid renders them, so
+ * they don't stringify to `[object Object]` or `{}`.
  */
-const facetValueText = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above
-    return String(value);
-};
+const facetValueText = (value: unknown): string => formatCell(value);
 
 /**
  * Hydrate the filter bar from URL/saved-query {@link FilterClause}s. The inverse
@@ -799,7 +788,7 @@ const useDataBrowser = ({
     // a facet's count disagree with the rows the click returned. Replaces any
     // existing clause for the same column so repeated clicks don't stack.
     const facetFilter = (column: string, value: unknown): void => {
-        const row: EditableFilter = { column, literal: [value], operator: "eq", value: facetValueText(value) };
+        const row: EditableFilter = { column, literal: [facetFilterValue(value)], operator: "eq", value: facetValueText(value) };
 
         setFilters((current) => [...current.filter((clause) => clause.column !== column), row]);
         setOffset(0);
@@ -917,6 +906,18 @@ const useDataBrowser = ({
     const discardStaged = (): void => {
         stagedEdits.clear();
         setEditingCell(null);
+    };
+
+    // A manual shard switch leaves the rows the staged edits were made against.
+    // The commit writes through the CURRENT shard, so an edit staged on one
+    // shard would otherwise land on a same-id row of another — a silent
+    // overwrite. Reset exactly what a URL re-seed resets for a shard change.
+    const changeShard = (value: string): void => {
+        setShardKey(value);
+        stagedEdits.clear();
+        setEditingCell(null);
+        setOffset(0);
+        bulkResume.current = null;
     };
 
     // Resolve the staged buffer against the loaded page for the old→new diff.
@@ -1324,7 +1325,7 @@ const useDataBrowser = ({
         selectedTable,
         selectTable,
         setEditorDocumentText,
-        setShardKey,
+        setShardKey: changeShard,
         shardKey,
         showJson,
         showTable,

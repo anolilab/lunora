@@ -11,7 +11,7 @@ import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useStudioFeatures from "../../hooks/use-studio-features";
 import { useT } from "../../i18n/i18n-context";
-import type { TableInfo, TablePage } from "../../lib/admin";
+import type { FacetResult, TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 
@@ -99,13 +99,15 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     // Payment tables are ordinary app tables, read through the generic
     // `readTablePage` RPC (no payment-specific endpoint). The structural query
     // key dedupes the inline args, so a fresh object each render is harmless.
+    // Newest first, server-side: with no sort the page is the OLDEST `limit`
+    // rows in insertion order, which a "recent" list must never show.
     const subscriptionsQuery = useAdminQuery<TablePage>(
         ADMIN_FUNCTIONS.readTablePage,
         {
             filters: [],
             limit,
             offset: 0,
-            orderBy: [],
+            orderBy: { column: "updatedAt", direction: "desc" },
             search: "",
             table: "subscriptions",
         },
@@ -117,12 +119,15 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
             filters: [],
             limit: 25,
             offset: 0,
-            orderBy: [],
+            orderBy: { column: "processedAt", direction: "desc" },
             search: "",
             table: "events",
         },
         { enabled: hasPaymentTables },
     );
+    // Per-state counts over the WHOLE table, so "N active" is not capped at the
+    // page the list shows.
+    const statesQuery = useAdminQuery<FacetResult>(ADMIN_FUNCTIONS.facetColumn, { column: "state", table: "subscriptions" }, { enabled: hasPaymentTables });
 
     // The payment sync store has no client-observable write event to push on, so
     // poll (skipped while the tab is hidden by `useAutoRefresh`). Skip the poll when
@@ -135,16 +140,20 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
 
         subscriptionsQuery.refetch();
         eventsQuery.refetch();
+        statesQuery.refetch();
     }, true);
 
     const subscriptions = subscriptionsQuery.data?.rows ?? [];
-    const events = eventsQuery.data?.rows ?? [];
+    const recentEvents = eventsQuery.data?.rows ?? [];
     const error = subscriptionsQuery.error ?? eventsQuery.error;
     const errorSource = subscriptionsQuery.error === null ? eventsQuery.errorSource : subscriptionsQuery.errorSource;
 
-    const activeCount = subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length;
-
-    const recentEvents = events.toSorted((a, b) => Number(readField(b, "processedAt") ?? 0) - Number(readField(a, "processedAt") ?? 0));
+    // Whole-table figures; the loaded page stands in only until they arrive.
+    const totalSubscriptions = subscriptionsQuery.data?.total ?? subscriptions.length;
+    const activeCount =
+        statesQuery.data?.values === undefined
+            ? subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length
+            : statesQuery.data.values.reduce((sum, entry) => sum + (ACTIVE_STATES.has(text(entry.value)) ? entry.count : 0), 0);
 
     // The app pulls in `@lunora/payment` (or an old worker shows every page) but never
     // declared the store tables — guide the user rather than surfacing a table error.
@@ -174,7 +183,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
                         </div>
                     </div>
                     <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px] text-muted-foreground">
-                        {t("{total} total", { total: subscriptions.length })}
+                        {t("{total} total", { total: totalSubscriptions })}
                     </div>
                 </Card>
             </div>
