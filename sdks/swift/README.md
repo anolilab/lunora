@@ -47,9 +47,20 @@ client.attachSocket { frame in try socket.send(frame) }
 let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
 
-`handleFrame(raw)` is what you call with each inbound WebSocket message;
-`resendSubscriptions()` re-subscribes everything after a reconnect — queries and
-shape views alike — carrying each one's resume cursor or checkpoint.
+`handleFrame(raw)` is what you call with each inbound WebSocket message. It
+cannot throw: a frame that is not JSON, not an object, or not shaped like any
+server frame is ignored (a non-integer `cursor` never replaces the tracked one),
+and a payload that does not decode reaches its own subscription's `onError` as
+`INVALID_FRAME`. A shape poke applies whole or not at all: one undecodable row
+leaves that shape's view, checkpoint and epoch untouched and reports
+`INVALID_FRAME` to it. `resendSubscriptions()` re-subscribes everything after a
+reconnect — queries and shape views alike — carrying each one's resume cursor or
+checkpoint.
+
+Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
+is `INTERNAL`, and a success whose `result` does not decode is
+`WIRE_DECODE_FAILED` (the call committed). `close()` also ends every live
+`stream(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
 
 ## Optimistic updates and offline writes
 
@@ -108,13 +119,26 @@ A flush that comes back rate-limited — whole response or one batch slot —
 re-queues rather than dropping, reports the server's `error.data.retryAfterMs` as
 `LunoraFlushReport.retryAfterMs` (clamped at `lunoraMaxRetryAfterMs`, 60 s), and
 holds the next flush off until it passes. The `Retry-After` HEADER is not read:
-`LunoraHTTPPoster` surfaces `(status, body)` only. A batch the worker refuses for size (`413 PAYLOAD_TOO_LARGE`) is
-split in half and retried, so no write is dropped for the size of the batch it
-shared.
+`LunoraHTTPPoster` surfaces `(status, body)` only. A batch refused for size — ANY
+413, the worker's coded `PAYLOAD_TOO_LARGE` or an edge's HTML page — is split in
+half and retried, so no write is dropped for the size of the batch it shared; a
+lone write still refused settles `PAYLOAD_TOO_LARGE`.
+
+One predicate classifies a failed replay, alone or batched: a coded envelope by
+its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE` and the rate-limit codes
+re-queue, every other code — a coded 5xx included — is terminal), an
+envelope-less reply by its status (re-queued, except a 413). A write the server
+committed whose result does not decode settles `committed` with a
+`WIRE_DECODE_FAILED` error and no value, and is never retried. A client with no
+poster re-queues its writes, alone or batched — a configuration gap, not a
+verdict.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Changing
+it from one set value to another (or to nil) also evicts the previous session:
+every subscription drops its resume cursor and epoch, and every shape view is
+emptied, its `onRows` told `[]`.
 
 `LunoraOfflineQueue` is not internally locked: the client already holds a
 **non-recursive** `NSLock` over the registry the queue is settled against, so

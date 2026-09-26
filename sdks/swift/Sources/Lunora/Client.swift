@@ -33,14 +33,21 @@ public struct LunoraAPIError: Error, CustomStringConvertible {
     public let message: String
     public let data: Any?
 
-    /// Whether the call reached no verdict — a 5xx, or a non-2xx carrying no
-    /// envelope at all (an edge error page, a WAF block, a proxy).
+    /// Whether the call reached no verdict — a reply carrying no readable
+    /// envelope at all (an edge error page, a WAF block, a proxy; a 413 aside),
+    /// or no poster to send it with. A CODED envelope is never transient by
+    /// status: its code alone decides.
     ///
     /// Set where the HTTP STATUS is still in scope, because nothing downstream
     /// can recover it: ``code`` alone cannot tell a `BAD_REQUEST` a function
     /// returned from the `INTERNAL` this client synthesises for a body that never
     /// came from one. See ``LunoraClient/isTransient(_:)``.
     public let transient: Bool
+
+    /// A reply the server SUCCEEDED with whose `result` does not decode. The call
+    /// committed, so a queued write carrying it settles `committed` — with this
+    /// error on its settled event — and is never retried.
+    public static let wireDecodeFailed = "WIRE_DECODE_FAILED"
 
     public init(code: String, message: String, data: Any? = nil, transient: Bool = false) {
         self.code = code
@@ -96,6 +103,10 @@ public final class LunoraClient {
     private var pokeOrder: [String] = []
     private var nextID = 0
     private var nextShapeID = 0
+    private var nextStreamID = 0
+
+    /// How ``close()`` ends each live ``stream(_:args:shardKey:)``, by stream.
+    private var streamFinishers: [Int: () -> Void] = [:]
 
     /// Serialises every mutable field above, and the `cursor`/`epoch`/row state
     /// hanging off `Subscription` and `ShapeSubscription`.
@@ -225,9 +236,44 @@ public final class LunoraClient {
     /// re-checked before that write replays, so a restart cannot push one user's
     /// queued writes as another. Nil means signed out, which is itself an identity
     /// a write can be stamped with.
+    ///
+    /// Changing it FROM a set value to a different one — a sign-out, or another
+    /// user signing in — evicts what the previous identity left live: every
+    /// query and shape subscription drops its resume cursor and epoch (the next
+    /// resubscribe is a cold one), and every shape view is emptied and its
+    /// `onRows` told so with `[]`. Those cursors were the previous identity's
+    /// position in the changelog and those rows were what IT could see; resuming
+    /// from them splices the new identity's diff onto someone else's view. A
+    /// first sign-in and a same-value set evict nothing.
     public var identity: String? {
         get { withLock { storedIdentity } }
-        set { withLock { storedIdentity = newValue } }
+        set {
+            let emptied = withLock { () -> [([Any]) -> Void] in
+                let previous = storedIdentity
+
+                storedIdentity = newValue
+
+                guard previous != nil, previous != newValue else { return [] }
+
+                for entry in subscriptions.values {
+                    entry.cursor = nil
+                    entry.epoch = nil
+                }
+
+                for shape in shapes.values {
+                    shape.rows.removeAll()
+                    shape.order.removeAll()
+                    shape.checkpoint = nil
+                    shape.epoch = nil
+                }
+
+                return shapes.values.compactMap(\.onRows)
+            }
+
+            for onRows in emptied {
+                onRows([])
+            }
+        }
     }
 
     /// The durable write queue backing ``submit(_:)``.
@@ -273,14 +319,24 @@ public final class LunoraClient {
         withLock { settledListeners.append(listener) }
     }
 
-    /// Rejects every queued write so no caller waits on a dead client. Durable
-    /// storage is untouched: the next session restores those writes.
+    /// Rejects every queued write so no caller waits on a dead client, and ENDS
+    /// every live ``stream(_:args:shardKey:)`` — a `for await` loop over one
+    /// would otherwise wait forever on a client that will never deliver again.
+    /// Durable storage is untouched: the next session restores those writes.
     public func close() {
-        let queue = withLock { () -> LunoraOfflineQueue in
+        let (queue, finishers) = withLock { () -> (LunoraOfflineQueue, [() -> Void]) in
             closed = true
             send = nil
 
-            return storedOfflineQueue
+            let finishers = Array(streamFinishers.values)
+
+            streamFinishers.removeAll()
+
+            return (storedOfflineQueue, finishers)
+        }
+
+        for finish in finishers {
+            finish()
         }
 
         reportDiscarded(withLock { queue.clear() })
@@ -323,29 +379,52 @@ public final class LunoraClient {
     /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
     /// returns nil and throws nothing — the caller believes its mutation committed.
     public static func parseRPCResponse(_ body: [String: Any], status: Int) throws -> Any {
+        try checkRPCResponse(body, status: status)
+
+        return try decodeResult(body["result"])
+    }
+
+    /// Throws the verdict or transport error a reply carries, if any.
+    ///
+    /// A CODED envelope is classified by its code alone, whatever the HTTP
+    /// status: a coded 5xx is the server's verdict, terminal on the single-call
+    /// path exactly as on the batch path, so a durable write's fate does not
+    /// depend on how many siblings were queued with it (`protocol/README.md`
+    /// §4.3). A transient code (``LunoraOfflineCode/transient``) still re-queues.
+    static func checkRPCResponse(_ body: [String: Any], status: Int) throws {
         if let envelope = body["error"] as? [String: Any] {
-            let data = envelope["data"].flatMap { $0 is NSNull ? nil : try? Wire.decode($0) }
-            throw LunoraAPIError(
-                code: envelope["code"] as? String ?? "INTERNAL",
-                message: envelope["message"] as? String ?? "request failed",
-                data: data,
-                // A 5xx is the shard or the edge failing under the call, not a
-                // verdict on it, so a queued write replayed under the same
-                // idempotency key is still good.
-                transient: status >= 500
-            )
+            throw batchSlotError(envelope, fallback: "request failed")
         }
 
-        guard (200...299).contains(status) else {
-            // No envelope at all, so this body never came from a Lunora function:
-            // an edge error page, a WAF block, a proxy. Nothing reached the shard,
-            // which makes it transport rather than a verdict — the batch path
-            // already classified the identical response that way, and a lone
-            // queued write must not be dropped for being alone.
-            throw LunoraAPIError(code: "INTERNAL", message: "HTTP \(status) without an error envelope", transient: true)
+        guard (200...299).contains(status) else { throw envelopelessError(status: status) }
+    }
+
+    /// The error for a reply with no readable envelope: not JSON, not an object,
+    /// or an object without an `error` envelope on a non-2xx.
+    ///
+    /// Such a body never came from a Lunora function — an edge error page, a WAF
+    /// block, a proxy — so nothing reached the shard: transport, and transient,
+    /// on both replay paths. Except a 413: that is a verdict on the REQUEST
+    /// whatever its body, and an edge refuses an oversized one with its own HTML
+    /// long before the worker's coded `PAYLOAD_TOO_LARGE`. Re-queued, the next
+    /// flush sent the identical body into the identical refusal, forever.
+    static func envelopelessError(status: Int) -> LunoraAPIError {
+        if status == 413 {
+            return LunoraAPIError(code: LunoraOfflineCode.payloadTooLarge, message: "HTTP 413 without an error envelope")
         }
 
-        return try Wire.decode(body["result"])
+        return LunoraAPIError(code: "INTERNAL", message: "HTTP \(status) without a readable error envelope", transient: true)
+    }
+
+    /// Decodes a success reply's `result`, as ``LunoraAPIError/wireDecodeFailed``
+    /// when it does not decode — never the codec's own error, which a replay
+    /// would mistake for transport and retry forever.
+    static func decodeResult(_ raw: Any?) throws -> Any {
+        do {
+            return try Wire.decode(raw)
+        } catch {
+            throw LunoraAPIError(code: LunoraAPIError.wireDecodeFailed, message: "result could not be decoded: \(error)")
+        }
     }
 
     public func query(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) throws -> Any {
@@ -364,7 +443,11 @@ public final class LunoraClient {
     }
 
     private func rpc(_ functionPath: String, args: Any?, shardKey: String?, mutationID: String?) throws -> Any {
-        try rpcFull(functionPath, args: args, shardKey: shardKey, mutationID: mutationID).result
+        let reply = try rpcFull(functionPath, args: args, shardKey: shardKey, mutationID: mutationID)
+
+        if let decodeError = reply.decodeError { throw decodeError }
+
+        return reply.result
     }
 
     /// The CDC cursor a write committed at, echoed on a mutation's response.
@@ -398,13 +481,19 @@ public final class LunoraClient {
 
     /// Rebuilds a ``LunoraAPIError`` from a slot's or a batch's error envelope,
     /// defaulting the way ``parseRPCResponse(_:status:)`` does.
-    static func batchSlotError(_ envelope: [String: Any], fallback: String, transient: Bool = false) -> LunoraAPIError {
+    static func batchSlotError(_ envelope: [String: Any], fallback: String) -> LunoraAPIError {
         LunoraAPIError(
             code: envelope["code"] as? String ?? "INTERNAL",
             message: envelope["message"] as? String ?? fallback,
-            data: envelope["data"].flatMap { try? Wire.decode($0) },
-            transient: transient
+            data: envelope["data"].flatMap { $0 is NSNull ? nil : try? Wire.decode($0) }
         )
+    }
+
+    /// Thrown when no ``LunoraHTTPPoster`` was configured. A configuration gap,
+    /// not a verdict on the write: TRANSIENT, so a queued write — alone or in a
+    /// batch — stays durably queued for a client that has one.
+    static var noPoster: LunoraAPIError {
+        LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured", transient: true)
     }
 
     /// One round-trip, keeping the echoed `commitCursor`.
@@ -413,14 +502,20 @@ public final class LunoraClient {
     /// survive the call rather than be discarded by ``parseRPCResponse(_:status:)``.
     /// `issuingClientID` overrides this session's, so a replayed write namespaces
     /// server-side under the id that ISSUED it.
+    ///
+    /// A success whose `result` does not decode is RETURNED, as `decodeError`
+    /// beside the commit cursor, rather than thrown: the write committed, so its
+    /// overlay must still be confirmed against that cursor and a queued write
+    /// settled `committed` — never retried, since a replay can only return the
+    /// same undecodable result.
     func rpcFull(
         _ functionPath: String,
         args: Any?,
         shardKey: String?,
         mutationID: String?,
         issuingClientID: String? = nil
-    ) throws -> (result: Any, commitCursor: Int?) {
-        guard let post else { throw LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured") }
+    ) throws -> (result: Any, commitCursor: Int?, decodeError: LunoraAPIError?) {
+        guard let post else { throw LunoraClient.noPoster }
 
         var headers = ["content-type": "application/json"]
         if let authToken { headers["authorization"] = "Bearer \(authToken)" }
@@ -440,9 +535,23 @@ public final class LunoraClient {
         // key uses — which cannot fail and spells every number and string the way
         // `JSON.stringify` does, a lone surrogate included.
         let (status, raw) = try post(join(lunoraRPCPath), headers, Data(Wire.stableStringify(body).utf8))
-        let parsed = try LunoraJSON.parse(raw) as? [String: Any] ?? [:]
 
-        return (try LunoraClient.parseRPCResponse(parsed, status: status), LunoraClient.parseCommitCursor(parsed))
+        // A body that is not JSON, or JSON that is not an object (`null`, `[]`, an
+        // HTML page), is the SDK's own error — never the reader's, and never a
+        // silent nil result the caller takes for a committed write.
+        guard let parsed = (try? LunoraJSON.parse(raw)) as? [String: Any] else {
+            throw LunoraClient.envelopelessError(status: status)
+        }
+
+        try LunoraClient.checkRPCResponse(parsed, status: status)
+
+        let cursor = LunoraClient.parseCommitCursor(parsed)
+
+        do {
+            return (try LunoraClient.decodeResult(parsed["result"]), cursor, nil)
+        } catch let error as LunoraAPIError {
+            return (NSNull(), cursor, error)
+        }
     }
 
     /// POSTs one `/_lunora/rpc-batch` chunk, returning the parsed body.
@@ -451,8 +560,12 @@ public final class LunoraClient {
     /// carrying independent calls, so each entry carries its own idempotency key
     /// and client id in the body. A single outer header would name one write and
     /// de-duplicate the whole chunk against it.
+    ///
+    /// Throws only what the poster throws (transport). An unreadable body comes
+    /// back EMPTY with its status, so the caller can still classify it — a 413
+    /// edge page splits the batch rather than re-queuing it whole.
     func rpcBatch(_ calls: [Any]) throws -> (status: Int, body: [String: Any]) {
-        guard let post else { throw LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured") }
+        guard let post else { throw LunoraClient.noPoster }
 
         var headers = ["content-type": "application/json"]
         if let authToken { headers["authorization"] = "Bearer \(authToken)" }
@@ -463,7 +576,7 @@ public final class LunoraClient {
         // status says.
         let (status, raw) = try post(join(lunoraRPCBatchPath), headers, payload)
 
-        return (status, try LunoraJSON.parse(raw) as? [String: Any] ?? [:])
+        return (status, (try? LunoraJSON.parse(raw)) as? [String: Any] ?? [:])
     }
 
     /// Projects a generated model into the dictionary tree ``Wire/encode(_:depth:)``
@@ -660,8 +773,19 @@ public final class LunoraClient {
                 onError: { continuation.yield(.failure($0)) },
                 shardKey: shardKey
             )
+            let (token, alreadyClosed) = withLock { () -> (Int, Bool) in
+                nextStreamID += 1
+                if !closed { streamFinishers[nextStreamID] = { continuation.finish() } }
 
-            continuation.onTermination = { _ in unsubscribe() }
+                return (nextStreamID, closed)
+            }
+
+            continuation.onTermination = { [weak self] _ in
+                _ = self?.withLock { self?.streamFinishers.removeValue(forKey: token) }
+                unsubscribe()
+            }
+
+            if alreadyClosed { continuation.finish() }
         }
     }
 
@@ -758,18 +882,24 @@ public final class LunoraClient {
 
     /// Applies one server frame and returns its type. Unknown types are ignored,
     /// per the protocol's forward-compatibility rule.
+    ///
+    /// It cannot throw: an error out of here ends the caller's read loop, and
+    /// with it every subscription on the client. A frame that is not JSON, not an
+    /// object, or not shaped like any server frame is ignored; a payload that
+    /// does not decode goes to its own subscription's `onError` as
+    /// `INVALID_FRAME`.
     @discardableResult
-    public func handleFrame(_ raw: String) throws -> String? {
+    public func handleFrame(_ raw: String) -> String? {
         if raw == "lunora-ping" || raw == "lunora-pong" { return nil }
         guard let frame = try? LunoraJSON.parse(raw) as? [String: Any] else {
             // Non-JSON frames are ignored by the client parser, not fatal.
             return nil
         }
 
-        return try dispatch(frame)
+        return dispatch(frame)
     }
 
-    private func dispatch(_ frame: [String: Any]) throws -> String? {
+    private func dispatch(_ frame: [String: Any]) -> String? {
         let kind = frame["type"] as? String
         let id = frame["id"] as? String
 
@@ -923,14 +1053,16 @@ public final class LunoraClient {
             bufferPokePart(frame)
             return kind
         case "pokeEnd":
-            try applyPoke(frame)
+            applyPoke(frame)
             return kind
         default: return kind
         }
     }
 
     private func advance(_ entry: Subscription, _ frame: [String: Any]) {
-        if let cursor = frame["cursor"] { entry.cursor = cursor }
+        // Only an INTEGER cursor is a cursor. A string or a null one resent
+        // verbatim asked the server to resume from `"9"`.
+        if let cursor = LunoraClient.intValue(frame["cursor"]) { entry.cursor = cursor }
         if let epoch = frame["epoch"] { entry.epoch = epoch }
     }
 
@@ -957,48 +1089,80 @@ public final class LunoraClient {
         }
     }
 
-    private func applyPoke(_ frame: [String: Any]) throws {
-        // The view is mutated under the lock; `onRows` fires after it is released,
-        // with the row snapshot taken while still holding it — so a callback sees
-        // one consistent poke even if the next one lands mid-delivery.
-        let deliveries = try withLock { () -> [(([Any]) -> Void, [Any])] in
-            guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return [] }
+    /// Applies a buffered poke, WHOLE or not at all per shape.
+    ///
+    /// Every row a shape's part carries is decoded BEFORE its view is touched.
+    /// Decoding mid-apply cleared a reset shape's view and then threw out of the
+    /// read loop on the bad row — the view half-applied or empty, and nothing
+    /// reported. A shape with an undecodable row keeps its view, checkpoint and
+    /// epoch exactly as they were (so the next resume asks for the same rows
+    /// again) and its `onError` hears `INVALID_FRAME`; every other shape in the
+    /// poke applies as usual.
+    private func applyPoke(_ frame: [String: Any]) {
+        typealias Delivery = (([Any]) -> Void, [Any])
+        typealias Refusal = ((LunoraSubscriptionError) -> Void, String)
+
+        // The view is mutated under the lock; callbacks fire after it is
+        // released, with the row snapshot taken while still holding it — so a
+        // callback sees one consistent poke even if the next one lands
+        // mid-delivery.
+        let (deliveries, refusals) = withLock { () -> ([Delivery], [Refusal]) in
+            guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return ([], []) }
 
             // Drop it from the eviction order too, or that array grows a stale
             // entry per completed poke and stops tracking the map.
             pokeOrder.removeAll { $0 == pokeID }
 
-            var deliveries: [(([Any]) -> Void, [Any])] = []
+            var deliveries: [Delivery] = []
+            var refusals: [Refusal] = []
 
             for (shapeID, operations) in buffer.parts {
                 guard let shape = shapes[shapeID] else { continue }
 
+                // Decoded up front: (key, nil) is a delete, (key, value) an upsert.
+                var decoded: [(String, Any?)] = []
+
+                do {
+                    for operation in operations {
+                        guard let key = operation["key"] as? String else { continue }
+
+                        if operation["op"] as? String == "delete" {
+                            decoded.append((key, nil))
+                            continue
+                        }
+
+                        // A value-less upsert is membership-only; it must not
+                        // blank an existing row.
+                        guard let value = operation["value"], !(value is NSNull) else { continue }
+
+                        decoded.append((key, try Wire.decode(value)))
+                    }
+                } catch {
+                    if let onError = shape.onError { refusals.append((onError, "\(error)")) }
+
+                    continue
+                }
+
                 // A reset part is the shape's complete membership, so it is
                 // authoritative on its own: drop what we hold before applying it.
-                // `.global()` shapes re-seed in full on EVERY reconnect and an op-log
-                // shape past changelog retention does too, so without this a row
-                // deleted while the socket was down is never removed.
+                // `.global()` shapes re-seed in full on EVERY reconnect and an
+                // op-log shape past changelog retention does too, so without this
+                // a row deleted while the socket was down is never removed.
                 if buffer.resets.contains(shapeID) {
                     shape.rows.removeAll()
                     shape.order.removeAll()
                 }
 
-                for operation in operations {
-                    guard let key = operation["key"] as? String else { continue }
-
-                    if operation["op"] as? String == "delete" {
+                for (key, value) in decoded {
+                    guard let value else {
                         if shape.rows.removeValue(forKey: key) != nil {
                             shape.order.removeAll { $0 == key }
                         }
                         continue
                     }
 
-                    // A value-less upsert is membership-only; it must not blank an
-                    // existing row.
-                    guard let value = operation["value"], !(value is NSNull) else { continue }
-
                     if shape.rows[key] == nil { shape.order.append(key) }
-                    shape.rows[key] = try Wire.decode(value)
+                    shape.rows[key] = value
                 }
 
                 if let checkpoint = frame["checkpoint"] { shape.checkpoint = checkpoint }
@@ -1009,7 +1173,11 @@ public final class LunoraClient {
                 }
             }
 
-            return deliveries
+            return (deliveries, refusals)
+        }
+
+        for (onError, reason) in refusals {
+            onError(LunoraSubscriptionError(code: "INVALID_FRAME", message: "poke row could not be decoded: \(reason)"))
         }
 
         for (onRows, rows) in deliveries {
@@ -1051,5 +1219,14 @@ public final class LunoraClient {
 
     private func join(_ path: String) -> String {
         (baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL) + path
+    }
+}
+
+/// `dump(client)` reflects every stored property by default — the bearer token
+/// included, into whatever log the dump lands in. The mirror names the token's
+/// presence and never its value.
+extension LunoraClient: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: ["url": baseURL, "authToken": authToken == nil ? "nil" : "<redacted>"], displayStyle: .class)
     }
 }

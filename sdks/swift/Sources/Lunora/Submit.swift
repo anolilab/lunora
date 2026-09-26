@@ -186,30 +186,35 @@ extension LunoraClient {
             return LunoraMutationOutcome(status: .queued, mutationID: writeID)
         }
 
+        let reply: (result: Any, commitCursor: Int?, decodeError: LunoraAPIError?)
+
         do {
-            let reply = try rpcFull(
+            reply = try rpcFull(
                 options.functionPath,
                 args: options.args,
                 shardKey: options.shardKey,
                 mutationID: writeID
-            )
-
-            // Confirmed against the write's COMMITTED cursor, so the overlay drops
-            // when (or once) a frame at that cursor lands — never on this call's
-            // return, which races the socket broadcast.
-            settleLayers(confirm: handles, rollback: [], commitCursor: reply.commitCursor)
-
-            return LunoraMutationOutcome(
-                status: .committed,
-                mutationID: writeID,
-                value: reply.result,
-                commitCursor: reply.commitCursor
             )
         } catch {
             settleLayers(confirm: [], rollback: handles, commitCursor: nil)
 
             throw error
         }
+
+        // Confirmed against the write's COMMITTED cursor, so the overlay drops
+        // when (or once) a frame at that cursor lands — never on this call's
+        // return, which races the socket broadcast. Confirmed even when the
+        // result is unreadable: the write committed all the same.
+        settleLayers(confirm: handles, rollback: [], commitCursor: reply.commitCursor)
+
+        if let decodeError = reply.decodeError { throw decodeError }
+
+        return LunoraMutationOutcome(
+            status: .committed,
+            mutationID: writeID,
+            value: reply.result,
+            commitCursor: reply.commitCursor
+        )
     }
 
     /// Restores writes persisted in a prior session; returns their shard keys.
@@ -405,21 +410,10 @@ extension LunoraClient {
                     issuingClientID: entry.clientID
                 )
 
-                withLock { queue.unpersist(entry.id) }
-                // The overlay is confirmed BEFORE the caller is told, so the
-                // gapless drop is already in place when the confirming frame lands.
-                settleLayers(confirm: entry.handles, rollback: [], commitCursor: reply.commitCursor)
-                report.committed.append(entry.id)
-                emitSettled(
-                    LunoraMutationSettled(
-                        mutationID: entry.id,
-                        status: .committed,
-                        value: reply.result,
-                        error: nil,
-                        hadAwaiter: entry.liveAwaiter
-                    ),
-                    entry.onSettled
-                )
+                // The outcome — including an unreadable result, which is still a
+                // COMMIT and is never retried — is decided by the time the reply
+                // is in hand, so the durable record goes only now.
+                settleCommitted(queue, entry, value: reply.result, decodeError: reply.decodeError, reply.commitCursor, &report)
             } catch {
                 if LunoraClient.isTransient(error) {
                     noteRetryAfter(&report, error)
@@ -494,8 +488,13 @@ extension LunoraClient {
             calls.append(call)
         }
 
-        guard let reply = try? rpcBatch(calls) else {
-            // Transport failure — nothing committed, so retry everything.
+        let reply: (status: Int, body: [String: Any])
+
+        do {
+            reply = try rpcBatch(calls)
+        } catch {
+            // Transport failure (or no poster at all) — nothing committed, so
+            // retry everything.
             return (items, true)
         }
 
@@ -504,15 +503,24 @@ extension LunoraClient {
         }
 
         // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
-        // a bad request, an authorization denial — and therefore terminal for
-        // every entry; anything else is transport, and transient.
-        guard let envelope = reply.body["error"] as? [String: Any] else { return (items, true) }
+        // a bad request, an authorization denial — classified by its code alone,
+        // exactly as the single-call path classifies it. An envelope-less reply
+        // is transport, and transient — except a 413, which is a verdict on the
+        // request whatever its body.
+        let error: LunoraAPIError
 
-        let error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected", transient: reply.status >= 500)
+        if let envelope = reply.body["error"] as? [String: Any] {
+            error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected")
+        } else if reply.status == 413 {
+            error = LunoraClient.envelopelessError(status: 413)
+        } else {
+            return (items, true)
+        }
 
         // The body was too big, not wrong — every entry in it would have committed
         // alone. Halve and retry; the estimate the chunker used cannot see the
-        // framing the worker actually measured, and only the answer can.
+        // framing the worker actually measured, and only the answer can. A lone
+        // write still refused falls through and settles terminally below.
         if error.code == LunoraOfflineCode.payloadTooLarge, items.count > 1 {
             let middle = items.count / 2
             let left = replayBatched(queue, Array(items[..<middle]), &report)
@@ -659,24 +667,51 @@ extension LunoraClient {
                 continue
             }
 
-            withLock { queue.unpersist(entry.id) }
-            // The overlay is confirmed BEFORE the caller is told, so the gapless
-            // drop is already in place when the confirming frame lands.
-            settleLayers(confirm: entry.handles, rollback: [], commitCursor: LunoraClient.parseSlotID(slot["commitCursor"]))
-            report.committed.append(entry.id)
-            emitSettled(
-                LunoraMutationSettled(
-                    mutationID: entry.id,
-                    status: .committed,
-                    value: (try? Wire.decode(slot["result"] ?? NSNull())) ?? NSNull(),
-                    error: nil,
-                    hadAwaiter: entry.liveAwaiter
-                ),
-                entry.onSettled
-            )
+            // Decoded FIRST, inside its own guard: a slot whose result does not
+            // decode is still committed, and it neither aborts the loop nor
+            // loses a sibling. Only once the outcome is decided does the durable
+            // record go.
+            var value: Any = NSNull()
+            var decodeError: LunoraAPIError?
+
+            do {
+                value = try LunoraClient.decodeResult(slot["result"])
+            } catch {
+                decodeError = error as? LunoraAPIError
+            }
+
+            settleCommitted(queue, entry, value: value, decodeError: decodeError, LunoraClient.parseSlotID(slot["commitCursor"]), &report)
         }
 
         return requeue
+    }
+
+    /// Un-persists a committed write, confirms its overlay and settles it —
+    /// carrying the ``LunoraAPIError/wireDecodeFailed`` error, with no value,
+    /// when its result did not decode.
+    private func settleCommitted(
+        _ queue: LunoraOfflineQueue,
+        _ entry: LunoraQueuedMutation,
+        value: Any,
+        decodeError: LunoraAPIError?,
+        _ commitCursor: Int?,
+        _ report: inout LunoraFlushReport
+    ) {
+        withLock { queue.unpersist(entry.id) }
+        // The overlay is confirmed BEFORE the caller is told, so the gapless drop
+        // is already in place when the confirming frame lands.
+        settleLayers(confirm: entry.handles, rollback: [], commitCursor: commitCursor)
+        report.committed.append(entry.id)
+        emitSettled(
+            LunoraMutationSettled(
+                mutationID: entry.id,
+                status: .committed,
+                value: decodeError == nil ? value : nil,
+                error: decodeError,
+                hadAwaiter: entry.liveAwaiter
+            ),
+            entry.onSettled
+        )
     }
 
     /// Un-persists a batch-rejected write, rolls its overlay back and settles it.
