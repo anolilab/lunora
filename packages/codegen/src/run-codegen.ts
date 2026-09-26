@@ -41,6 +41,7 @@ import discoverHyperdriveCalls from "./discover/hyperdrive-calls";
 import discoverIdentityClaimReads from "./discover/identity-claim-reads";
 import discoverImageDeliveryUrlAccesses from "./discover/image-delivery-url-accesses";
 import discoverInserts from "./discover/inserts";
+import { assertJurisdictionMoveAcknowledged, findDoAuthDeclaration } from "./discover/jurisdiction-move";
 import discoverKvKeyAccesses from "./discover/kv-key-accesses";
 import discoverMailRecipientAccesses from "./discover/mail-recipient-accesses";
 import discoverMaskProcedures from "./discover/mask-procedures";
@@ -643,6 +644,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflows,
     } = buildDeclarationSurface({ lunoraDirectory, project, projectRoot: options.projectRoot, schema, target: options.target });
 
+    // Before anything is written: pinning voice sessions / DO-backed auth that
+    // were unpinned before would start them out empty, and nothing else about
+    // the upgrade changes the schema, so this is the one place that can stop it.
+    assertJurisdictionMoveAcknowledged(schema, agents, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
+
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
@@ -1012,6 +1018,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
+        // `{ pinAuthAndVoice: true }` — only then is DO-backed auth pinned too.
+        jurisdictionPinsAuthAndVoice: schema.jurisdictionPinsAuthAndVoice === true,
         // Drives the emitted `listSchemaTables` — export's seed for "every table".
         tableNames: schema.tables.map((table) => table.name),
         useUmbrella,

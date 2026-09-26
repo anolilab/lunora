@@ -288,6 +288,14 @@ export interface SchemaIR {
     jurisdiction?: JurisdictionIR;
 
     /**
+     * `.jurisdiction("…", { pinAuthAndVoice: true })` — the acknowledgement that
+     * voice sessions and DO-backed auth, unpinned before, move into the
+     * jurisdiction (and so to new, empty objects). Without it codegen refuses a
+     * project that has either, and does not pin DO-backed auth.
+     */
+    jurisdictionPinsAuthAndVoice?: true;
+
+    /**
      * Set when `defineSchema(...).rls("required")` was chained onto the schema —
      * every table's `ctx.db` write path is denied without an RLS-covering
      * procedure unless the table itself is `.public()` (see {@link TableIR.isPublic}).

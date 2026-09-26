@@ -38,10 +38,11 @@ reaches**:
 - **`ctx.scheduler`**: the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
 - **`ctx.containers`**: container DOs and their lifecycle reporting.
 - **Voice agents**: each voice-enabled agent's `VoiceSessionDO`, which holds the
-  live session for `/_lunora/voice/<agent>`.
+  live session for `/_lunora/voice/<agent>`, once acknowledged (see
+  [Pinning auth and voice](#pinning-auth-and-voice)).
 - **DO-backed auth**: when `.auth()` is wired with a `namespace` (the auth tables
   live in a Durable Object), that object is pinned too, so users, sessions, and
-  credentials stay in-region.
+  credentials stay in-region — again once acknowledged.
 
 It does **not** pin, by design:
 
@@ -66,6 +67,42 @@ It does **not** pin, by design:
     **Fail-closed.** If the bound DO namespace can't honour the jurisdiction (an older `@cloudflare/workers-types` without `.jurisdiction()`), the worker throws
     rather than silently routing to the un-pinned global namespace: a dropped residency constraint is never allowed to leak data out of region.
 </Callout>
+
+## Pinning auth and voice
+
+Voice sessions and DO-backed auth were not pinned by earlier releases, even with
+`.jurisdiction(...)` declared. Pinning them now moves them exactly the way a
+jurisdiction change moves everything else: each resolves to a **new, empty
+object**, and the old data stays in the un-pinned one. For DO-backed auth that
+means every user, account, session and credential; for voice, every stored
+transcript. Nothing about the upgrade changes your schema, so the drift gate
+below does not fire.
+
+So both are pinned only on an explicit acknowledgement:
+
+```ts
+export const schema = defineSchema({/* … */}).jurisdiction("eu", { pinAuthAndVoice: true });
+```
+
+Without it, codegen **refuses** a project that declares `.jurisdiction(...)`
+and has a voice-enabled agent or an `.auth({ namespace })` (DO-backed auth),
+pointing at the declaration. It also refuses when it cannot tell — an `.auth(…)`
+whose options it cannot read — because for D1-mode auth the acknowledgement
+changes nothing. Until you acknowledge, DO-backed auth stays on the un-pinned
+object, where its data is.
+
+Before acknowledging on an app with existing users or transcripts, decide what
+happens to that data. There is no built-in copy path:
+
+- **DO-backed auth**: `lunora export` does not read the auth object, so users
+  and sessions do not travel with the table rows. Either accept a fresh user
+  base (everyone signs up / signs in again), or move the rows yourself: the old
+  object is still reachable through the un-pinned namespace
+  (`env.AUTH.get(env.AUTH.idFromName("auth"))`) until you delete it, and its
+  tables are better-auth's own, so a one-off script can read them there and
+  write them through the pinned object.
+- **Voice**: transcripts in the un-pinned `VoiceSessionDO`s are left behind. Live
+  sessions end at the deploy; clients reconnect into the pinned objects.
 
 ## Set it once: changing it strands data
 
