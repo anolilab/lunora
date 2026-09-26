@@ -21,7 +21,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient
+from lunora.client import MAX_WS_FRAME_BYTES, LunoraClient
 
 # Generous: every wait below is satisfied in microseconds when the loop is
 # correct, and this only bounds how long a REGRESSION hangs the suite.
@@ -60,9 +60,11 @@ class _FakeWebsockets:
     def __init__(self, socket: _FakeSocket) -> None:
         self._socket = socket
         self.urls: list = []
+        self.options: list = []
 
-    def connect(self, url: str) -> _FakeWebsockets:
+    def connect(self, url: str, **options: object) -> _FakeWebsockets:
         self.urls.append(url)
+        self.options.append(options)
         return self
 
     async def __aenter__(self) -> _FakeSocket:
@@ -81,10 +83,12 @@ async def _wait_for(predicate) -> None:
 
 
 class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
-    def _install(self, socket: _FakeSocket) -> None:
+    def _install(self, socket: _FakeSocket) -> _FakeWebsockets:
         self._saved = sys.modules.get("websockets")
-        sys.modules["websockets"] = _FakeWebsockets(socket)
+        fake = _FakeWebsockets(socket)
+        sys.modules["websockets"] = fake
         self.addCleanup(self._restore)
+        return fake
 
     def _restore(self) -> None:
         if self._saved is None:
@@ -155,6 +159,47 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(run, TIMEOUT)
 
         self.assertFalse(client.online)
+
+    async def test_close_returns_the_run_and_ends_every_stream(self):
+        """``close()`` must end the loop, not leave it delivering to a dead client."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+
+        client = LunoraClient("http://example.invalid")
+        values = client.stream("messages:list", {})
+        run = asyncio.ensure_future(client.connect_and_run())
+
+        await _wait_for(lambda: len(socket.sent) >= 2)
+        socket.inbound.put_nowait(json.dumps({"data": 1, "id": "sub_1", "type": "data"}))
+        self.assertEqual(await asyncio.wait_for(values.__anext__(), TIMEOUT), 1)
+
+        client.close()
+
+        # Nothing is fed to `socket.inbound`: returning is the assertion.
+        await asyncio.wait_for(run, TIMEOUT)
+        with self.assertRaises(StopAsyncIteration):
+            await asyncio.wait_for(values.__anext__(), TIMEOUT)
+        self.assertFalse(client.online)
+
+    async def test_frames_past_the_library_default_size_are_accepted(self):
+        """``websockets`` closes on any message over 1 MiB (1009) unless told otherwise.
+
+        A query result or shape seed that size is re-sent on every reconnect, so
+        with the default the client could never stay connected to it.
+        """
+
+        socket = _FakeSocket()
+        fake = self._install(socket)
+
+        client = LunoraClient("http://example.invalid")
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: socket.sent)
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        self.assertEqual(fake.options, [{"max_size": MAX_WS_FRAME_BYTES}])
+        self.assertEqual(MAX_WS_FRAME_BYTES, 32 * 1024 * 1024)
 
 
 if __name__ == "__main__":
