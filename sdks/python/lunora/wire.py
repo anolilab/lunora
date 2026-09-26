@@ -277,6 +277,19 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
     if depth > MAX_DEPTH:
         raise WireFormatError(f"wire-codec: value nesting exceeds the {MAX_DEPTH}-level limit")
 
+    if isinstance(value, int) and not isinstance(value, bool) and not -MAX_EXACT_INTEGER <= value <= MAX_EXACT_INTEGER:
+        # A number off the wire is a float64 whatever its spelling, and
+        # ``JSON.stringify`` writes every double in [2**53, 1e21) as an INTEGER
+        # literal, which ``json.loads`` types as ``int``. Yield the double
+        # ``JSON.parse`` reads (correctly rounded; past the range, Infinity):
+        # kept as an ``int``, ``encode_wire`` refused it, so such a frame could
+        # be neither re-encoded nor keyed. A natively constructed ``int`` past
+        # the range is still refused on encode.
+        try:
+            return float(value)
+        except OverflowError:
+            return math.inf if value > 0 else -math.inf
+
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
@@ -581,11 +594,14 @@ def _is_bigint_literal(raw: str) -> bool:
 def _format_number(value: Any) -> str:
     """Render a number exactly as ``String(v)`` does in JavaScript.
 
-    Python's ``repr`` switches to exponent notation below 1e-4 and spells it
-    ``1e-05``; ECMAScript stays positional down to 1e-7 and never pads the
-    exponent (``0.00001``, ``1e-7``). The stable key is compared verbatim
-    against one produced by the reference TypeScript client, so a different
-    spelling here silently splits one subscription into two.
+    ECMA-262 ``Number::toString``: the SHORTEST digit string that reads back as
+    the same double, laid out positionally for a decimal exponent in (-6, 21]
+    and in exponent form (``1e-7``, ``1e+21``) outside it. ``repr`` supplies the
+    shortest digits; only the layout is ECMAScript's. The key is compared
+    verbatim against the reference client's, so a different spelling splits one
+    subscription into two — and a spelling capped at a fixed number of places
+    merges ADJACENT doubles into one key, so one subscription received
+    another's frames and optimistic overlays.
     """
 
     if isinstance(value, bool):  # pragma: no cover - handled before this is reached
@@ -594,77 +610,30 @@ def _format_number(value: Any) -> str:
         return str(value)
     if not math.isfinite(value):  # pragma: no cover - tagged before this is reached
         return "null"
-    magnitude = abs(value)
+    if value == 0:
+        return "-0" if math.copysign(1.0, value) < 0 else "0"
 
-    if value.is_integer() and magnitude < 1e21:
-        return _integral(value)
+    sign = "-" if value < 0 else ""
+    mantissa, _, exponent = repr(abs(value)).partition("e")
+    whole, _, fraction = mantissa.partition(".")
+    digits = whole + fraction
+    significant = digits.lstrip("0")
+    # value = 0.<digits> x 10**point, with no leading or trailing zero digit.
+    point = len(whole) + int(exponent or "0") - (len(digits) - len(significant))
+    digits = significant.rstrip("0")
+    count = len(digits)
 
-    if 1e-6 <= magnitude < 1e21:
-        return _trim_zeros(f"{value:.17f}", value)
+    if count <= point <= 21:
+        return sign + digits + "0" * (point - count)
+    if 0 < point <= 21:
+        return sign + digits[:point] + "." + digits[point:]
+    if -6 < point <= 0:
+        return sign + "0." + "0" * -point + digits
 
-    return _exponential(value)
+    power = point - 1
+    tail = "." + digits[1:] if count > 1 else ""
 
-
-def _integral(value: float) -> str:
-    """Positional spelling of an integral double, ECMAScript-style.
-
-    ECMAScript prints the SHORTEST digit string that reads back as the same
-    double and then zero-pads it, so ``String(2**60)`` is
-    ``1152921504606847000`` — not the exact expansion ``1152921504606846976``
-    that ``int(value)`` (and every other exact converter) produces. It also
-    spells negative zero ``-0``, which every integer conversion flattens.
-    """
-
-    for precision in range(18):
-        candidate = f"{value:.{precision}e}"
-        if float(candidate) == value:
-            mantissa, _, exponent = candidate.partition("e")
-            sign = "-" if mantissa.startswith("-") else ""
-            digits = mantissa.lstrip("-").replace(".", "").rstrip("0") or "0"
-
-            return sign + digits.ljust(int(exponent) + 1, "0")
-
-    return str(int(value))  # pragma: no cover - 17 significant digits always round-trip
-
-
-def _trim_zeros(text: str, value: float) -> str:
-    """Shortest positional spelling that still parses back to ``value``."""
-
-    for precision in range(21):
-        candidate = f"{value:.{precision}f}"
-        if float(candidate) == value:
-            text = candidate
-            break
-
-    if "." not in text:
-        return text
-
-    return text.rstrip("0").rstrip(".")
-
-
-def _exponential(value: float) -> str:
-    """Exponent spelling without ECMAScript's absent zero padding."""
-
-    rendered = repr(value)
-
-    for precision in range(18):
-        candidate = f"{value:.{precision}e}"
-        if float(candidate) == value:
-            rendered = candidate
-            break
-
-    if "e" not in rendered:
-        return rendered
-
-    mantissa, _, exponent = rendered.partition("e")
-
-    if "." in mantissa:
-        mantissa = mantissa.rstrip("0").rstrip(".")
-
-    sign = "-" if exponent.startswith("-") else "+"
-    digits = exponent.lstrip("+-").lstrip("0") or "0"
-
-    return f"{mantissa}e{sign}{digits}"
+    return f"{sign}{digits[0]}{tail}e{'+' if power >= 0 else '-'}{abs(power)}"
 
 
 def _utf16_sort_key(value: str) -> tuple:

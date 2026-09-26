@@ -157,6 +157,13 @@ explicitly with wrappers; plain values map to JSON directly:
 
 `decode_wire` returns these same wrappers so values round-trip exactly.
 
+A JSON number off the wire is a float64 whatever its spelling. `json.loads` types
+an integer literal as `int`, so `decode_wire` turns one outside ±(2**53 − 1) into
+the `float` `JSON.parse` reads (`9007199254740993` decodes to
+`9007199254740992.0`) — `JSON.stringify` writes every double in [2**53, 1e21)
+that way. An `int` you construct past that range is still refused by
+`encode_wire`: wrap it in `WireBigInt`.
+
 ## Tests
 
 The suite drives the SDK against the **shared** golden fixtures in
