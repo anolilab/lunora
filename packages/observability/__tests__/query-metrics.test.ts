@@ -59,6 +59,12 @@ describe("normalizeSql", () => {
         expect(new Set([1, 42, 1000].map((n) => normalizeSql(`SELECT * FROM "t1" WHERE "age">${String(n)}`))).size).toBe(1);
     });
 
+    it("strips leading- and trailing-decimal literals", () => {
+        expect.assertions(1);
+
+        expect(normalizeSql("SELECT * FROM t WHERE a = .5 AND b = 1. AND c = -.25e2")).toBe("SELECT * FROM t WHERE a = ? AND b = ? AND c = ?");
+    });
+
     it("keeps numbered parameters, double-quoted identifiers and subtraction intact", () => {
         expect.assertions(2);
 

@@ -244,15 +244,25 @@ const maskValue = (value: unknown): unknown => (typeof value === "boolean" || va
  * A URL with its query, fragment and userinfo dropped — they carry signatures,
  * tokens and passwords. The userinfo ends at the LAST `@` before the query,
  * provided a `user:password` colon precedes it that is not a `host:port`, so a
- * password holding an unencoded `/` (`u:p/ss@host`) is still found.
+ * password holding an unencoded `/` (`u:p/ss@host`) is still found. When that
+ * `user:` colon is followed by a raw `?` or `#` and a later `@`
+ * (`u:pa?ss@host`), there is no telling where the password ends, so only the
+ * scheme is kept.
  */
 const stripUrl = (url: string): string => {
     const scheme = url.indexOf("://") + 3;
-    const beforeQuery = url.slice(scheme).split(/[?#]/, 1)[0] as string;
+    const afterScheme = url.slice(scheme);
+    const beforeQuery = afterScheme.split(/[?#]/, 1)[0] as string;
     const at = beforeQuery.lastIndexOf("@");
     const colon = beforeQuery.indexOf(":");
     const firstSlash = beforeQuery.indexOf("/");
     const isPort = colon !== -1 && /^\d+$/.test(beforeQuery.slice(colon + 1, firstSlash === -1 ? undefined : firstSlash));
+    const looksLikeUserinfo = colon !== -1 && !isPort && (firstSlash === -1 || colon < firstSlash);
+
+    if (at === -1 && looksLikeUserinfo && afterScheme.includes("@", beforeQuery.length)) {
+        return url.slice(0, scheme);
+    }
+
     const hasUserinfo = at !== -1 && (firstSlash === -1 || at < firstSlash || (colon !== -1 && colon < at && !isPort));
 
     return `${url.slice(0, scheme)}${hasUserinfo ? beforeQuery.slice(at + 1) : beforeQuery}`;

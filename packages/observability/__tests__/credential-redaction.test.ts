@@ -259,6 +259,21 @@ describe.each(sinks)("%s redaction of more string forms", (_sink, redact) => {
         expect(redact("run curl -u admin:hunter2 https://api.example.test/x")).toMatch(/^run curl -u <REDACTED> https:\/\/\S+\/x$/);
     });
 
+    it.each(["https://user:pa?ss@api.example.test/x", "https://user:pa#ss@api.example.test/x"])(
+        "drops the whole authority when a raw ? or # sits inside what looks like userinfo: %s",
+        (url) => {
+            expect.assertions(1);
+
+            expect(redact(`fetch ${url} failed`)).toBe("fetch https:// failed");
+        },
+    );
+
+    it("keeps host and path when the only @ is in the query", () => {
+        expect.assertions(1);
+
+        expect(redact("GET https://api.example.test:8443/users?email=a@b.test failed")).toMatch(/^GET https:\/\/\S+:8443\/users failed$/);
+    });
+
     it("drops the userinfo of a URL whose password holds an unencoded slash", () => {
         expect.assertions(1);
 

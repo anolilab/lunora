@@ -123,7 +123,9 @@ const normalizeSql = (sql: string): string => {
         // Strip standalone numeric literals. The lookbehind keeps digits inside
         // identifiers (`t1`, `"col2"`) and numbered parameters (`?1`, `:2`)
         // intact; a sign is taken only where the digit run starts a literal.
-        .replaceAll(/(?<![\w$.?:@"])-?\d+(?:\.\d+)?(?:e[+-]?\d+)?(?![\w.])/gi, "?")
+        .replaceAll(/(?<![\w$.?:@"])-?\d+(?:\.\d*)?(?:e[+-]?\d+)?(?![\w.])/gi, "?")
+        // A leading-decimal literal (`.5`), which the rule above cannot start on.
+        .replaceAll(/(?<![\w$?:@"])-?\.\d+(?:e[+-]?\d+)?(?![\w.])/gi, "?")
         // Collapse whitespace.
         .replaceAll(/\s+/g, " ")
         .trim();
