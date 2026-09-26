@@ -21,9 +21,10 @@ from lunora.offline import (
     ABSENT_IDENTITY,
     OfflineQueue,
     QueuedMutation,
-    identity_allows_replay,
     is_stale_version,
     random_id,
+    replay_identity_verdict,
+    token_digest,
 )
 from lunora.submit import MAX_BATCH_ENTRIES, SubmitOptions
 from lunora.wire import WireBigInt, WireBytes, WireDate
@@ -298,7 +299,7 @@ class TestIdentityGate(unittest.TestCase):
             stamped = ABSENT_IDENTITY if spec["stamped"] == "absent" else spec["stamped"]
 
             with self.subTest(spec["name"]):
-                self.assertEqual(identity_allows_replay(stamped, spec["current"]), spec["replays"])
+                self.assertEqual(replay_identity_verdict(stamped, spec["current"], None) == "match", spec["replays"])
 
     def test_flush_rejects_a_write_stamped_under_another_identity(self):
         covers("offline_queue_identity_gate_rejects_replay")
@@ -330,6 +331,184 @@ class TestIdentityGate(unittest.TestCase):
         # queued writes as the current one.
         self.assertEqual(posts, [])
         self.assertEqual(settled[0].error.code, case["code"])
+
+
+class TestTokenDigestIdentity(unittest.TestCase):
+    """With no ``identity`` set, the token's digest is who a write belongs to.
+
+    Every write goes through ``submit`` — the path that stamps it — and every
+    flush is the caller's own, so nothing here depends on a socket.
+    """
+
+    def _client(self, token):
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(headers.get("authorization"))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", auth_token=token, http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        return client, posts, settled
+
+    def test_a_token_switched_mid_flush_does_not_carry_the_rest_of_it(self):
+        # The gate judged the pass against token-a, so every request in that
+        # pass carries token-a: a later chunk must not go out with token-b.
+        client = None
+        posts = []
+
+        def post(_url, headers, body):
+            calls = json.loads(body).get("calls", [])
+            posts.append((headers.get("authorization"), len(calls)))
+            client.auth_token = "token-b"
+            return 200, {"results": [{"body": {"commitCursor": 1, "result": None}, "id": call["id"]} for call in calls]}
+
+        client = LunoraClient("https://app.example", auth_token="token-a", http_post=post)
+        client.offline_queue = OfflineQueue(max_items=MAX_BATCH_ENTRIES + 1, queue_before_first_connect=True)
+
+        async def queue_and_flush():
+            for _ in range(MAX_BATCH_ENTRIES + 1):
+                await client.submit(SubmitOptions("messages:send", {}))
+            await client.flush_offline_queue()
+
+        asyncio.run(queue_and_flush())
+
+        self.assertEqual(posts, [("Bearer token-a", MAX_BATCH_ENTRIES), ("Bearer token-a", 1)])
+
+    def test_any_string_is_accepted_as_an_identity(self):
+        for identity in ("org:team:u1", "tenant:42:user", "a:b:c", token_digest("token-a")):
+            with self.subTest(identity):
+                self.assertEqual(LunoraClient("https://app.example", identity=identity).identity, identity)
+                client = LunoraClient("https://app.example")
+                client.identity = identity
+                self.assertEqual(client.identity, identity)
+
+    def _flush_after(self, queue_as, replay_as):
+        """Queue one write under ``queue_as`` and flush it under ``replay_as``.
+
+        Each is ``(identity, token)``; returns the authorization headers sent.
+        """
+
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(headers.get("authorization"))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", identity=queue_as[0], auth_token=queue_as[1], http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        client.identity, client.auth_token = replay_as
+        asyncio.run(client.flush_offline_queue())
+
+        return posts
+
+    def test_an_identity_spelled_like_a_digest_never_matches_that_tokens_writes(self):
+        # A token write is stamped as a token digest, an identity as itself, so
+        # neither can be taken for the other however the identity is spelled.
+        digest = token_digest("token-a")
+
+        self.assertEqual(self._flush_after((None, "token-a"), (digest, None)), [])
+        self.assertEqual(self._flush_after((digest, None), (None, "token-a")), [])
+        self.assertEqual(replay_identity_verdict({"tokenDigest": digest}, digest, None), "mismatch")
+        self.assertEqual(replay_identity_verdict(digest, {"tokenDigest": digest}, "token-a"), "mismatch")
+
+    def test_a_token_stamp_survives_persistence(self):
+        client = LunoraClient("https://app.example", auth_token="token-a")
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        [item] = client.offline_queue.items()
+        stamp = {"tokenDigest": token_digest("token-a")}
+        self.assertEqual(item.identity, stamp)
+
+        restored = QueuedMutation.from_record(json.loads(json.dumps(item.to_record())))
+
+        self.assertEqual(restored.identity, stamp)
+        self.assertEqual(replay_identity_verdict(restored.identity, stamp, "token-a"), "match")
+
+    def test_plain_string_and_none_stamps_are_judged_as_before(self):
+        cases = [
+            # (stamped, current, token, verdict)
+            ("user-a", "user-a", None, "match"),
+            ("user-a", "user-b", None, "mismatch"),
+            ("user-a", None, None, "unknown"),
+            (None, None, None, "match"),
+            (None, "user-a", None, "mismatch"),
+            (None, {"tokenDigest": token_digest("token-b")}, "token-b", "mismatch"),
+            (ABSENT_IDENTITY, "user-a", None, "match"),
+        ]
+
+        for stamped, current, token, verdict in cases:
+            with self.subTest(stamped=stamped, current=current):
+                self.assertEqual(replay_identity_verdict(stamped, current, token), verdict)
+
+    def test_the_digest_matches_the_reference_client(self):
+        for spec in FIXTURES["tokenIdentity"]["digests"]:
+            with self.subTest(spec["token"]):
+                self.assertEqual(token_digest(spec["token"]), spec["digest"])
+
+    def test_a_write_queued_under_one_token_never_travels_with_another(self):
+        client, posts, settled = self._client("token-a")
+        client.auth_token = "token-b"
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, [], "user A's write must not be sent with user B's bearer")
+        self.assertEqual(report.rejected, [settled[0].mutation_id])
+        self.assertEqual(settled[0].error.code, FIXTURES["identityGate"]["code"])
+        self.assertEqual(client.pending_mutation_count, 0)
+
+    def test_a_write_replays_under_the_token_it_was_queued_with(self):
+        client, posts, settled = self._client("token-a")
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, ["Bearer token-a"])
+        self.assertEqual(len(report.committed), 1)
+        self.assertEqual(settled[0].status, "committed")
+
+    def test_a_write_queued_with_no_token_replays_with_none(self):
+        client, posts, settled = self._client(None)
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, [None])
+        self.assertEqual(len(report.committed), 1)
+        self.assertEqual(settled[0].status, "committed")
+
+    def test_a_write_queued_under_a_token_is_held_once_the_token_is_cleared(self):
+        # Nobody is signed in, so whose write it is cannot be told: held, neither
+        # sent nor dropped, as the reference's "unknown" verdict holds it.
+        client, posts, settled = self._client("token-a")
+        client.auth_token = None
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual((posts, settled, report.rejected), ([], [], []))
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        client.auth_token = "token-a"
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, ["Bearer token-a"])
+
+    def test_a_record_stamped_none_by_an_earlier_build_is_not_sent_under_a_token(self):
+        # Before token digests a write queued with no identity was stamped
+        # `None` whatever token was held, so `None` no longer says whose it is.
+        # Signed in, it is a mismatch, as a `null` stamp is in the reference.
+        posts = []
+        client = LunoraClient(
+            "https://app.example", auth_token="token-b", http_post=lambda _url, headers, _body: posts.append(headers) or (200, {"result": None})
+        )
+        client.offline_queue.enqueue(QueuedMutation("messages:send", {}, mutation_id="m1", identity=None))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual((posts, report.rejected), ([], ["m1"]))
 
 
 class TestFlushIntegration(unittest.TestCase):

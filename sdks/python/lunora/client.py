@@ -32,7 +32,7 @@ from functools import partial
 from typing import Any, Callable, Optional, Union
 
 from .errors import WIRE_DECODE_FAILED, LunoraError, SubscriptionError, decode_failed, reply_error
-from .offline import OfflineQueue, random_id
+from .offline import Identity, OfflineQueue, random_id, token_stamp
 from .optimistic import drop_confirmed_layers, fold_optimistic
 from .submit import (
     FlushReport,
@@ -244,6 +244,10 @@ _DELETE = object()
 #: Sentinel a :meth:`LunoraClient.stream` buffer receives when the client closes.
 _CLOSED = object()
 
+#: Default for an RPC's ``token``: send the bearer held when the request goes
+#: out. ``None`` cannot mean that, since it is a real value: no bearer at all.
+LIVE_TOKEN = object()
+
 
 def _derive_ws_url(url: str) -> str:
     if url.startswith("https://"):
@@ -430,34 +434,59 @@ class LunoraClient:
         """The bearer token every RPC carries; the next call picks up a new one.
 
         Setting a DIFFERENT, non-``None`` token while :meth:`connect_and_run` is
-        live also re-flushes its shard, provided :attr:`identity` is set. A
-        queued write the old token was refused for (``TOKEN_EXPIRED``,
+        live also re-flushes its shard, as the reference's ``setAuthToken``
+        does. A queued write the old token was refused for (``TOKEN_EXPIRED``,
         ``UNAUTHENTICATED``, ``UNAUTHORIZED``) is held for exactly this, and
         nothing else would replay it: only a reconnect flushes, and a healthy
         socket does not reconnect.
 
-        Only with an identity, because the identity is what the replay gate
-        checks and a token alone cannot say whose it is. With ``identity`` left
-        ``None`` every write is stamped ``None`` and matches any token, so a
-        flush here would send one user's held write with the next user's
-        credential. The reference client closes that by keying its identity on
-        a digest of the token; this port's identity is the app's own stamp, so
-        without one a token change flushes nothing and the write waits for the
-        caller's flush. The flush runs on the loop, not in this setter, and
-        judges each write against :attr:`identity` as it is then, so on an
-        account switch set the new identity first. Outside ``connect_and_run``
-        the flush is the caller's, as every other one is.
+        The flush is identity-gated, so it cannot send one user's write with
+        the next user's credential. With :attr:`identity` set, a write replays
+        under the new token only while the identity is unchanged — on an account
+        switch set the new identity first; the flush runs on the loop, not in
+        this setter, and reads the identity as it is then. With none set the
+        identity is the token's digest, so a new token is a new identity: the
+        refused write is rejected ``OFFLINE_IDENTITY_CHANGED`` rather than
+        replayed, exactly as the reference rejects it, and setting an identity
+        is how a refresh keeps it. A token cleared to ``None`` flushes nothing:
+        there is no credential to replay with. Outside ``connect_and_run`` the
+        flush is the caller's, as every other one is.
         """
 
         return self._auth_token
 
     @auth_token.setter
     def auth_token(self, value: Optional[str]) -> None:
+        deferred: list[Callable[[], None]] = []
         with self._lock:
+            previous = self._identity_fingerprint()
             changed, self._auth_token = value != self._auth_token, value
-            listeners = list(self._token_listeners) if value is not None and self._identity is not None else []
+            listeners = list(self._token_listeners) if value is not None else []
+            # With no identity the token's digest IS the identity, so a new token
+            # retires the previous one's session exactly as :attr:`identity`
+            # changing from a set value does. With an identity set the digest
+            # is not consulted, and a token refresh is not a change of user.
+            if previous is not None and previous != self._identity_fingerprint():
+                self._evict_session(deferred)
+        _run_callbacks(deferred)
         if changed:
             _run_callbacks(listeners)
+
+    def _identity_fingerprint(self) -> Identity:
+        """Who a write queued now belongs to; call with the lock held.
+
+        :attr:`identity` when set, else :func:`~lunora.offline.token_stamp` of
+        :attr:`auth_token`, else ``None`` — the reference's
+        ``identityFingerprint``. Without the digest branch every write made with
+        no identity was stamped ``None`` and matched any token, so a flush after
+        an account switch sent the previous user's writes with the new user's
+        credential.
+        """
+
+        if self._identity is not None:
+            return self._identity
+
+        return None if self._auth_token is None else token_stamp(self._auth_token)
 
     @property
     def identity(self) -> Optional[str]:
@@ -465,8 +494,12 @@ class LunoraClient:
 
         A user id, not a bearer token. It is persisted alongside every queued
         write and re-checked before the write replays, so a restart cannot push
-        one user's queued writes as another. ``None`` means signed out, which is
-        itself an identity a write can be stamped with.
+        one user's queued writes as another. Left ``None``, a write is stamped
+        with a digest of :attr:`auth_token` instead (``None`` with no token
+        either), so a new token is a new identity: a token refresh rejects the
+        writes queued under the old one and evicts its session. Set this to keep
+        them across a refresh. Any string is accepted: a token write is stamped
+        ``{"tokenDigest": ...}``, which no identity string can equal.
         """
 
         with self._lock:
@@ -485,26 +518,36 @@ class LunoraClient:
         is blanked, and each shape view is emptied with its callbacks told
         ``[]``. A first sign-in (from ``None``) and a re-assertion of the same
         identity evict nothing. Mirrors ``evictPreviousIdentitySession`` in
-        ``@lunora/client``.
+        ``@lunora/client``. With no identity set, :attr:`auth_token` evicts the
+        same way when a new token changes the digest.
         """
 
         deferred: list[Callable[[], None]] = []
         with self._lock:
             previous, self._identity = self._identity, value
             if previous is not None and previous != value:
-                for sub in self._subs.values():
-                    sub.server_base = None
-                    sub.server_cursor = None
-                    sub.server_epoch = None
-                    sub.acked = False
-                    sub.last_value = fold_optimistic(None, sub.optimistic_layers)
-                    deferred.extend(partial(cb, sub.last_value) for cb in sub.callbacks)
-                for shape in self._shapes.values():
-                    shape.rows.clear()
-                    shape.server_cursor = None
-                    shape.server_epoch = None
-                    deferred.extend(partial(cb, []) for cb in shape.callbacks)
+                self._evict_session(deferred)
         _run_callbacks(deferred)
+
+    def _evict_session(self, deferred: list[Callable[[], None]]) -> None:
+        """Drop every resume cursor and shape row; call with the lock held.
+
+        The callbacks are appended to ``deferred`` for the caller to run once it
+        has released the lock. See the :attr:`identity` setter for why.
+        """
+
+        for sub in self._subs.values():
+            sub.server_base = None
+            sub.server_cursor = None
+            sub.server_epoch = None
+            sub.acked = False
+            sub.last_value = fold_optimistic(None, sub.optimistic_layers)
+            deferred.extend(partial(cb, sub.last_value) for cb in sub.callbacks)
+        for shape in self._shapes.values():
+            shape.rows.clear()
+            shape.server_cursor = None
+            shape.server_epoch = None
+            deferred.extend(partial(cb, []) for cb in shape.callbacks)
 
     def close(self) -> None:
         """Reject every queued write so no caller waits on a dead client, and end every stream.
@@ -553,6 +596,13 @@ class LunoraClient:
             raise decode_error
         return value
 
+    def _headers(self, token: Any) -> dict:
+        bearer = self.auth_token if token is LIVE_TOKEN else token
+        headers = {"content-type": "application/json"}
+        if bearer:
+            headers["authorization"] = f"Bearer {bearer}"
+        return headers
+
     async def _rpc_full(
         self,
         function_path: str,
@@ -560,6 +610,7 @@ class LunoraClient:
         shard_key: Optional[str],
         mutation_id: Optional[str],
         client_id: Optional[str] = None,
+        token: Any = LIVE_TOKEN,
     ) -> tuple:
         """One RPC round-trip, returning ``(result, commit_cursor, decode_error)``.
 
@@ -569,11 +620,13 @@ class LunoraClient:
         answered a success whose result does not decode: the call COMMITTED, so
         it is returned beside the cursor rather than raised like a failure —
         the replay settles such a write ``committed``, never retries it.
+
+        ``token`` is the bearer to send; left out, the one held now. A replay
+        passes the token its identity gate judged the pass against, so a token
+        swapped mid-flush cannot carry the rest of it.
         """
 
-        headers = {"content-type": "application/json"}
-        if self.auth_token:
-            headers["authorization"] = f"Bearer {self.auth_token}"
+        headers = self._headers(token)
         if mutation_id is not None:
             headers["x-lunora-mutation-id"] = mutation_id
             # Rides WITH the idempotency key, never alone. An anonymous caller has
@@ -595,7 +648,7 @@ class LunoraClient:
         except WireFormatError as failure:
             return None, cursor, decode_failed(failure)
 
-    async def _rpc_batch(self, calls: list) -> tuple:
+    async def _rpc_batch(self, calls: list, token: Any = LIVE_TOKEN) -> tuple:
         """POST one ``/_lunora/rpc-batch`` chunk, returning ``(status, parsed body)``.
 
         The status is kept because a reply with no ``results`` is classified by
@@ -605,12 +658,11 @@ class LunoraClient:
         No ``x-lunora-mutation-id`` on the request: a batch is ONE transport hop
         carrying independent calls, so each entry carries its own idempotency key
         and client id in the body. A single outer header would name one write and
-        de-duplicate the whole chunk against it.
+        de-duplicate the whole chunk against it. ``token`` as for
+        :meth:`_rpc_full`.
         """
 
-        headers = {"content-type": "application/json"}
-        if self.auth_token:
-            headers["authorization"] = f"Bearer {self.auth_token}"
+        headers = self._headers(token)
         body = json.dumps({"calls": calls}).encode("utf-8")
         return await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_BATCH_PATH), headers, body))
 

@@ -17,11 +17,15 @@ its own reconnect logic.
   IndexedDB is; a consumer here injects whatever it likes (a file, SQLite, a
   key-value store) and owns its own threading, exactly as it does for the HTTP
   poster and the frame sender.
-- The identity stamp is an opaque string the CONSUMER sets
-  (``LunoraClient.identity``), not a fingerprint this client derives from an auth
-  token. These SDKs do not manage auth sessions, and a derived stamp would mean
-  persisting a hash of a bearer token in the consumer's storage. Put a stable
-  non-secret subject (a user id) there.
+- The identity stamp is the consumer's own ``LunoraClient.identity`` when set
+  (a stable, non-secret subject such as a user id), stored as given rather than
+  under the reference's ``subj:`` namespace, so records persisted before token
+  digests existed keep matching. With none set it is :func:`token_stamp`,
+  ``{"tokenDigest": <digest>}`` over the reference's digest of the bearer token,
+  so a different token is a different identity; with neither it is ``None``. The
+  token stamp is a dict rather than the reference's bare string because the
+  identity carries no ``subj:`` namespace: no identity string, however it is
+  spelled, can equal a dict, so neither can be taken for the other.
 - There is no multi-tab leader election. There are no tabs.
 """
 
@@ -69,11 +73,11 @@ class _AbsentIdentity:
 
 ABSENT_IDENTITY = _AbsentIdentity()
 
-#: The three-case identity stamp: a subject, ``None`` (signed out), or
-#: :data:`ABSENT_IDENTITY` (an unstamped legacy record). Spelled as the union
-#: rather than ``Any`` — the alias for a three-case sum must not type-check
-#: against every argument in the language.
-Identity = Union[str, None, _AbsentIdentity]
+#: The identity stamp: a subject string, a :func:`token_stamp` dict, ``None``
+#: (signed out), or :data:`ABSENT_IDENTITY` (an unstamped legacy record).
+#: Spelled as the union rather than ``Any`` — the alias for a sum type must not
+#: type-check against every argument in the language.
+Identity = Union[str, dict, None, _AbsentIdentity]
 
 
 class OfflineError(Exception):
@@ -301,17 +305,73 @@ def same_shard(left: Optional[str], right: Optional[str]) -> bool:
     return (left or "") == (right or "")
 
 
-def identity_allows_replay(stamped: Identity, current: Optional[str]) -> bool:
-    """Whether a write stamped ``stamped`` may replay under ``current``.
+def token_digest(token: str) -> str:
+    """The reference client's ``hashToken``: who a bearer token stamps a write as.
 
-    A record with no stamp at all predates stamping and replays ambiently;
-    anything else must match exactly, ``None`` (signed out) included.
+    A digest, not the token, because the stamp is persisted and a queue store
+    should not become somewhere a credential sits at rest. FNV-1a and djb2 side
+    by side over UTF-16 code UNITS (JavaScript's ``charCodeAt`` walk), each
+    base36 and prefixed by the length in code units, so the two cannot encode
+    to one string through variable-width concatenation.
     """
 
-    if stamped is ABSENT_IDENTITY:
-        return True
+    encoded = token.encode("utf-16-le", "surrogatepass")
+    fnv, djb2 = 0x811C9DC5, 5381
 
-    return stamped == current
+    for index in range(0, len(encoded), 2):
+        code = encoded[index] | encoded[index + 1] << 8
+        fnv = ((fnv ^ code) * 0x01000193) & 0xFFFFFFFF
+        djb2 = (djb2 * 33 + code) & 0xFFFFFFFF
+
+    return f"{_base36(len(encoded) // 2)}:{_base36(fnv)}:{_base36(djb2)}"
+
+
+def token_stamp(token: str) -> dict:
+    """The stamp a write made with ``token`` and no identity carries.
+
+    Typed, not the digest string itself: an identity is any string the app
+    chooses, and one spelled like a digest must not match that token's writes.
+    Survives the JSON round trip every persistence adapter makes.
+    """
+
+    return {"tokenDigest": token_digest(token)}
+
+
+def _base36(value: int) -> str:
+    digits = ""
+
+    while True:
+        value, digit = divmod(value, 36)
+        digits = "0123456789abcdefghijklmnopqrstuvwxyz"[digit] + digits
+
+        if value == 0:
+            return digits
+
+
+def replay_identity_verdict(stamped: Identity, current: Identity, token: Optional[str]) -> str:
+    """``"match"``, ``"unknown"`` or ``"mismatch"`` for a write stamped ``stamped``.
+
+    ``current`` is the identity in effect now (see ``LunoraClient``), ``token``
+    the bearer now held. Mirrors the reference's ``replayIdentityVerdict``:
+
+    - ``"match"`` — the same identity, ``None`` (signed out) included, or a
+      :func:`token_stamp` of the very token held now (the write was queued under
+      this credential before an identity named it). A token stamp only ever
+      equals a token stamp, and an identity string only an identity string. A record with no stamp at
+      all predates stamping and replays ambiently: there is nothing to wait for.
+    - ``"unknown"`` — nobody is signed in, so whose write it is cannot be told.
+      The write is HELD, neither sent nor dropped, until someone is.
+    - ``"mismatch"`` — someone else is signed in. Terminal: replaying would
+      attribute one user's write to another.
+    """
+
+    if stamped is ABSENT_IDENTITY or stamped == current:
+        return "match"
+
+    if isinstance(stamped, dict) and token is not None and token_stamp(token) == stamped:
+        return "match"
+
+    return "unknown" if current is None else "mismatch"
 
 
 class OfflineQueue:

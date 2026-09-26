@@ -409,6 +409,36 @@ class TestFrameManifestCases(unittest.TestCase):
                     self.assertEqual(len(client._shapes["shape_1"].rows), retained["shapeRowCount"])
                     self.assertEqual(shape_rows, [])
 
+    def test_a_new_token_without_an_identity_evicts_the_previous_session(self):
+        # With no identity the token's digest is the identity, so a token change
+        # is a change of user for the session as it is for the queue. Only a
+        # change FROM a token evicts, as only a change from a set identity does.
+        case = FRAMES["identityChange"]
+        transitions = [
+            ("token-a", "token-b", None, True),
+            ("token-a", None, None, True),
+            ("token-a", "token-a", None, False),
+            (None, "token-a", None, False),
+            ("token-a", "token-b", "user-a", False),
+        ]
+
+        for before, after, identity, evicts in transitions:
+            with self.subTest(before=before, after=after, identity=identity):
+                client = LunoraClient("https://app.example", auth_token=before, identity=identity)
+                client.attach_socket(lambda _frame: None)
+                client.subscribe("messages:list", {}, lambda _value: None)
+                client.subscribe_shape("roomMessages", {"room": "general"}, lambda _rows: None)
+                client.handle_frame(case["queryFrame"])
+                for frame in FRAMES["shape"]["pokeSequence"]:
+                    client.handle_frame(frame)
+
+                client.auth_token = after
+
+                resent = self._resend_all(client)
+                self.assertEqual("sinceSeq" not in resent["subscribe"]["query"], evicts)
+                self.assertEqual("sinceCheckpoint" not in resent["shape_subscribe"], evicts)
+                self.assertEqual(len(client._shapes["shape_1"].rows) == 0, evicts)
+
     def _resend_all(self, client):
         sent = []
         client.attach_socket(sent.append)

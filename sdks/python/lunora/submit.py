@@ -36,8 +36,8 @@ from .offline import (
     OFFLINE_WRITE_UNENCODABLE,
     OfflineError,
     QueuedMutation,
-    identity_allows_replay,
     random_id,
+    replay_identity_verdict,
     same_shard,
 )
 from .optimistic import (
@@ -169,7 +169,8 @@ class FlushReport:
         #: Ids dropped on a server verdict, an identity change, an unencodable
         #: payload, or a stale precondition.
         self.rejected: list[str] = []
-        #: Ids left queued for the next reconnect after a transient failure.
+        #: Ids left queued for the next flush: a transient failure, or held
+        #: because nobody is signed in to say whose write it is.
         self.requeued: list[str] = []
         #: Ids dropped because their precondition no longer held.
         self.conflicted: list[str] = []
@@ -368,7 +369,8 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
             return report
 
         queue = client.offline_queue
-        current_identity = client._identity
+        current_identity = client._identity_fingerprint()
+        current_token = client._auth_token
         pending = queue.items()
 
     # The consumer's predicate, evaluated with the lock RELEASED and over a
@@ -396,12 +398,21 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         return report
 
     # Gated against ONE identity snapshot: a flush is a single authenticated
-    # burst, so every write in it necessarily runs under one identity.
+    # burst, so every write in it runs under one identity — and is SENT with the
+    # token snapshotted beside it, never the one held when its request goes out,
+    # or a token swapped mid-flush would carry the rest of the pass. A write
+    # whose owner cannot be told (nobody signed in) is HELD: back on the queue,
+    # still persisted, unsettled — the reference's "unknown" verdict.
     sendable: list = []
     terminal: list = []
 
     for item in drained:
-        if not identity_allows_replay(item.identity, current_identity):
+        verdict = replay_identity_verdict(item.identity, current_identity, current_token)
+
+        if verdict == "unknown":
+            continue
+
+        if verdict == "mismatch":
             terminal.append((item, OfflineError(OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")))
             continue
 
@@ -431,23 +442,24 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         # or more coalesce into batch round trips — the flaky-reconnect win,
         # where N queued writes cost a handful of hops instead of N.
         if len(sendable) == 1:
-            await _replay_sequential(client, queue, sendable, report)
+            await _replay_sequential(client, queue, sendable, report, current_token)
         else:
             # Chunks replay sequentially, which is what preserves FIFO across a
             # flush longer than one batch. A whole-chunk transport failure stops
             # the flush rather than sending on into a connection that just failed.
             for chunk in _chunk_batches(sendable):
-                if await _replay_batched(client, queue, chunk, report):
+                if await _replay_batched(client, queue, chunk, report, current_token):
                     break
     finally:
         # EVERY drained write that did not settle goes back to the FRONT, in
-        # order: a transient failure, a slot the server never answered, the
-        # chunks after a stop — and whatever was still in hand when something
-        # unexpected raised. The replay paths never requeue themselves; doing it
-        # once, here, is what keeps an exception from losing drained writes that
-        # were no longer in the queue and not yet settled.
+        # order: a held write, a transient failure, a slot the server never
+        # answered, the chunks after a stop — and whatever was still in hand when
+        # something unexpected raised. The replay paths never requeue themselves;
+        # doing it once, here, is what keeps an exception from losing drained
+        # writes that were no longer in the queue and not yet settled. Over
+        # `drained`, not `sendable`, so a held write keeps its place in line.
         settled = set(report.committed) | set(report.rejected)
-        leftover = [item for item in sendable if item.id not in settled]
+        leftover = [item for item in drained if item.id not in settled]
 
         if leftover:
             with client._lock:
@@ -517,7 +529,7 @@ def _note_retry_after(client: LunoraClient, report: FlushReport, error: BaseExce
         client._flush_not_before = max(client._flush_not_before, time.monotonic() + delay / 1000)
 
 
-async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> None:
+async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport, token: Optional[str]) -> None:
     """Replay writes one at a time. FIFO is preserved by the loop itself.
 
     A write left unsettled — a transient failure, and every write after it — is
@@ -534,6 +546,7 @@ async def _replay_sequential(client: LunoraClient, queue: Any, items: list, repo
                 item.shard_key,
                 item.id,
                 client_id=item.client_id,
+                token=token,
             )
         except Exception as error:
             if is_transient(error):
@@ -557,7 +570,7 @@ async def _replay_sequential(client: LunoraClient, queue: Any, items: list, repo
         settle_committed(client, item, value, commit_cursor, decode_error)
 
 
-async def _replay_batched(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> bool:
+async def _replay_batched(client: LunoraClient, queue: Any, items: list, report: FlushReport, token: Optional[str]) -> bool:
     """Replay one chunk over ``POST /_lunora/rpc-batch``; ``True`` means stop the flush.
 
     The worker forwards the entries to their shard, which dispatches each through
@@ -587,7 +600,7 @@ async def _replay_batched(client: LunoraClient, queue: Any, items: list, report:
     ]
 
     try:
-        status, body = await client._rpc_batch(calls)
+        status, body = await client._rpc_batch(calls, token)
     except Exception:
         # Transport failure — nothing committed, so retry everything.
         return True
@@ -613,7 +626,7 @@ async def _replay_batched(client: LunoraClient, queue: Any, items: list, report:
     if error.code == PAYLOAD_TOO_LARGE and len(items) > 1:
         middle = len(items) // 2
 
-        return await _replay_batched(client, queue, items[:middle], report) or await _replay_batched(client, queue, items[middle:], report)
+        return await _replay_batched(client, queue, items[:middle], report, token) or await _replay_batched(client, queue, items[middle:], report, token)
 
     # A shard blip or a rate limit is not a verdict on the batch's contents.
     if is_transient(error):
@@ -795,7 +808,7 @@ def _build_entry(client: LunoraClient, options: SubmitOptions, write_id: str, co
         function_path=options.function_path,
         # Bound at enqueue time, so the write can only ever replay as whoever
         # made it.
-        identity=client._identity,
+        identity=client._identity_fingerprint(),
         live_awaiter=True,
         mutation_id=write_id,
         on_settled=options.on_settled,

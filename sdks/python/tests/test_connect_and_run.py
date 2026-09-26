@@ -253,11 +253,12 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
-    async def test_a_new_token_without_an_identity_does_not_replay_the_held_write(self):
-        """With no identity set, nothing says the new token is the same user's.
+    async def test_a_new_token_without_an_identity_rejects_the_held_write(self):
+        """With no identity set, the identity is the token's digest.
 
-        Replaying on it would send user A's held write with user B's credential,
-        so a token change flushes nothing until an identity is set.
+        So a new token is someone else as far as the gate can tell: the flush it
+        starts rejects user A's held write instead of sending it with user B's
+        credential, as the reference rejects it.
         """
 
         socket = _FakeSocket()
@@ -272,15 +273,17 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
 
         client = LunoraClient("http://example.invalid", auth_token="token-a", http_post=post)
         client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
         await client.submit(SubmitOptions("messages:send", {}))
         run = asyncio.ensure_future(client.connect_and_run())
 
         await _wait_for(lambda: headers)
         client.auth_token = "token-b"
-        client.auth_token = None
-        await asyncio.sleep(0.2)
+        await _wait_for(lambda: settled)
         self.assertEqual(headers, ["Bearer token-a"], "the held write never travels with another token")
-        self.assertEqual(client.pending_mutation_count, 1)
+        self.assertEqual(settled[0].error.code, "OFFLINE_IDENTITY_CHANGED")
+        self.assertEqual(client.pending_mutation_count, 0)
 
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)

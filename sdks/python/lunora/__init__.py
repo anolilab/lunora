@@ -27,9 +27,11 @@ from .offline import (
     OfflineQueue,
     PersistenceAdapter,
     QueuedMutation,
-    identity_allows_replay,
     is_stale_version,
     random_id,
+    replay_identity_verdict,
+    token_digest,
+    token_stamp,
 )
 from .optimistic import (
     OptimisticHandle,
@@ -112,15 +114,17 @@ __all__ = [
     "drop_confirmed_layers",
     "encode_wire",
     "fold_optimistic",
-    "identity_allows_replay",
     "is_stale_version",
     "notify_subscription",
     "parse_commit_cursor",
     "parse_rpc_response",
     "random_id",
+    "replay_identity_verdict",
     "rollback_all",
     "stable_stringify",
     "stable_wire_key",
+    "token_digest",
+    "token_stamp",
 ]
 
 __version__ = "0.1.0"

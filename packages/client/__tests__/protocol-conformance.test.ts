@@ -240,6 +240,27 @@ describe("batch entry cap", () => {
     });
 });
 
+describe("token identity digests", () => {
+    const { offlineQueue } = readFixture("offline-optimistic.json") as { offlineQueue: { tokenIdentity: { digests: { digest: string; token: string }[] } } };
+
+    // The ports that derive an identity from the token (dart, python) assert
+    // these same vectors; this is where they are pinned to the reference.
+    it.each(
+        table(
+            "tokenIdentity.digests",
+            offlineQueue.tokenIdentity.digests.map((spec) => [spec.token, spec.digest] as const),
+        ),
+    )("stamps a %j token as %s", (token, digest) => {
+        expect.hasAssertions();
+
+        const client = new LunoraClient({ fetch: vi.fn<typeof fetch>(), url: "https://app.example" });
+
+        client.setAuthToken(token);
+
+        expect(client.currentIdentity()).toBe(digest);
+    });
+});
+
 // --- HTTP RPC ---------------------------------------------------------------
 
 interface RpcRequestCase {
