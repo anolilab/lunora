@@ -200,4 +200,25 @@ describe("pitrPanel", () => {
 
         expect(screen.getByTestId("pitr-error").textContent).toContain("PITR_UNAVAILABLE");
     });
+
+    it("disables preview and restore when the host keeps no bookmarks", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (): unknown => {
+                throw Object.assign(new Error("point-in-time recovery is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("pitr-error");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-typed" } });
+
+        expect((screen.getByTestId("pitr-preview")).disabled).toBe(true);
+        expect((screen.getByTestId("pitr-restore")).disabled).toBe(true);
+        expect(screen.getByTestId("pitr-error").textContent).toContain("not available");
+    });
 });

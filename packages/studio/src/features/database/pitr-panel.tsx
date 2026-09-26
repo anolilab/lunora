@@ -11,7 +11,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorCode, errorMessage, fireAndForget } from "../../lib/internal";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */
@@ -88,6 +88,10 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     const [restored, setRestored] = useState<null | PitrRestoreResult>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
+    // The host answered that it keeps no bookmarks (e.g. local Wrangler), so no
+    // preview or restore can succeed: say so and disable them rather than let each
+    // click fail the same way.
+    const [unavailable, setUnavailable] = useState<boolean>(false);
 
     const refresh = useCallback(async (): Promise<void> => {
         setBusy(true);
@@ -97,8 +101,10 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
             const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
 
             setCurrent(result.current);
+            setUnavailable(false);
         } catch (error_) {
             setError(errorMessage(error_));
+            setUnavailable(errorCode(error_) === "PITR_UNAVAILABLE");
         }
 
         setBusy(false);
@@ -125,7 +131,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 }
             })(),
         );
-    }, true);
+    }, !unavailable);
 
     const onTimeChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setTime(event.target.value);
@@ -253,7 +259,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                         <Input data-testid="pitr-time" id="pitr-time" onChange={onTimeChange} placeholder="2026-06-01T00:00:00.000Z" value={time} />
                         <Button
                             data-testid="pitr-preview"
-                            disabled={busy || resolvedTime === undefined}
+                            disabled={busy || unavailable || resolvedTime === undefined}
                             onClick={onPreview}
                             size="sm"
                             type="button"
@@ -288,7 +294,12 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 </Label>
 
                 <div>
-                    <ConfirmButton confirmLabel={confirmRestoreLabel} disabled={busy || !canRestore} onConfirm={onConfirmRestore} testId="pitr-restore">
+                    <ConfirmButton
+                        confirmLabel={confirmRestoreLabel}
+                        disabled={busy || unavailable || !canRestore}
+                        onConfirm={onConfirmRestore}
+                        testId="pitr-restore"
+                    >
                         {t("Restore")}
                     </ConfirmButton>
                 </div>
@@ -309,7 +320,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                         {t("Undo bookmark")}: {restored.undoBookmark}
                     </p>
                     <div>
-                        <ConfirmButton confirmLabel={t("Confirm undo")} disabled={busy} onConfirm={onUndo} testId="pitr-undo">
+                        <ConfirmButton confirmLabel={t("Confirm undo")} disabled={busy || unavailable} onConfirm={onUndo} testId="pitr-undo">
                             {t("Undo restore")}
                         </ConfirmButton>
                     </div>

@@ -93,9 +93,13 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
  * can fail open meanwhile, but the host's capabilities cannot: until the worker
  * has said which host it is, a capability-gated page must not mount its panel.
  */
+const UNSETTLED: StudioFeatures = { ...DEFAULT_STUDIO_FEATURES, settled: false };
+
 const useStudioFeatures = (): StudioFeatures => {
     const client = useLunora();
-    const [features, setFeatures] = useState<StudioFeatures>({ ...DEFAULT_STUDIO_FEATURES, settled: false });
+    // Keyed on the client that answered, so a client swap reads as unsettled at
+    // once rather than serving the previous worker's host until the new one answers.
+    const [answer, setAnswer] = useState<{ client: typeof client; features: StudioFeatures } | undefined>(undefined);
 
     useEffect(() => {
         // A client swap re-runs this effect; the superseded fetch must not land.
@@ -113,7 +117,7 @@ const useStudioFeatures = (): StudioFeatures => {
                 }
 
                 if (!superseded.signal.aborted) {
-                    setFeatures(next);
+                    setAnswer({ client, features: next });
                 }
             })(),
         );
@@ -123,7 +127,7 @@ const useStudioFeatures = (): StudioFeatures => {
         };
     }, [client]);
 
-    return features;
+    return answer?.client === client ? answer.features : UNSETTLED;
 };
 
 export default useStudioFeatures;
