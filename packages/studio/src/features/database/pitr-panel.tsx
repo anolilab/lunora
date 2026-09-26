@@ -93,27 +93,49 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     // click fail the same way.
     const [unavailable, setUnavailable] = useState<boolean>(false);
 
-    const refresh = useCallback(async (): Promise<void> => {
-        setBusy(true);
-        setError(null);
+    // `superseded` aborts once the client or shard changes, so an answer from the
+    // previous host can't re-enable controls the current one refuses.
+    const refresh = useCallback(
+        async (superseded?: AbortSignal): Promise<void> => {
+            setBusy(true);
+            setError(null);
 
-        try {
-            const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+            let next: { current: null | string; error: null | string; unavailable: boolean };
 
-            setCurrent(result.current);
-            setUnavailable(false);
-        } catch (error_) {
-            setError(errorMessage(error_));
-            setUnavailable(errorCode(error_) === "PITR_UNAVAILABLE");
-        }
+            try {
+                const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
 
-        setBusy(false);
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `shardKey` is derived from the `initialShardKey` prop (this view has no shard input of its own) and is listed, so a prop change re-targets the read
-    }, [client, shardKey]);
+                next = { current: result.current, error: null, unavailable: false };
+            } catch (error_) {
+                next = { current: null, error: errorMessage(error_), unavailable: errorCode(error_) === "PITR_UNAVAILABLE" };
+            }
+
+            if (superseded?.aborted === true) {
+                return;
+            }
+
+            if (next.error === null) {
+                setCurrent(next.current);
+            } else {
+                setError(next.error);
+            }
+
+            setUnavailable(next.unavailable);
+            setBusy(false);
+            // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `shardKey` is derived from the `initialShardKey` prop (this view has no shard input of its own) and is listed, so a prop change re-targets the read
+        },
+        [client, shardKey],
+    );
 
     useEffect(() => {
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async refresh of the current bookmark, not derived state
-        fireAndForget(refresh());
+        const superseded = new AbortController();
+
+        fireAndForget(refresh(superseded.signal));
+
+        return () => {
+            superseded.abort();
+        };
     }, [refresh]);
 
     // The current bookmark advances on every shard write; poll it so it doesn't go
@@ -185,6 +207,11 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     await refresh();
                 } catch (error_) {
                     setError(errorMessage(error_));
+                    // Restore support is checked on its own, so a host can serve bookmarks
+                    // and still refuse to arm one.
+                    if (errorCode(error_) === "PITR_UNAVAILABLE") {
+                        setUnavailable(true);
+                    }
                 }
 
                 setBusy(false);
