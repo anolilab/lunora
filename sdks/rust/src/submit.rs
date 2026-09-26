@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use crate::client::{ApiError, Client, ClientError, Subscription};
+use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
     identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
-    RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES,
+    MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -204,18 +204,19 @@ impl Client {
             });
         }
 
-        match self.rpc_full(&options.function_path, &options.args, options.shard_key.as_deref(), Some(&write_id), None) {
-            Ok((value, commit_cursor)) => {
+        match self.rpc_raw(&options.function_path, &options.args, options.shard_key.as_deref(), Some(&write_id), None) {
+            Ok((result, commit_cursor)) => {
                 // Confirmed against the write's COMMITTED cursor, so the overlay
                 // drops when (or once) a frame at that cursor lands — never on
-                // this call's return, which races the socket broadcast.
+                // this call's return, which races the socket broadcast. Before
+                // the decode: a result that does not decode still committed.
                 self.confirm_layers(&layers, commit_cursor);
 
                 Ok(MutationOutcome {
                     commit_cursor,
                     mutation_id: write_id,
                     status: MutationStatus::Committed,
-                    value,
+                    value: decode_wire(&result)?,
                 })
             }
             Err(error) => {
@@ -293,7 +294,7 @@ impl Client {
 
         // Gated against ONE identity snapshot: a flush is a single authenticated
         // burst, so every write in it necessarily runs under one identity.
-        let current = self.identity.clone();
+        let current = self.identity().map(str::to_string);
         let mut sendable = Vec::with_capacity(drained.len());
 
         for entry in drained {
@@ -395,7 +396,7 @@ impl Client {
         let mut pending = sendable.into_iter();
 
         while let Some(entry) = pending.next() {
-            let outcome = self.rpc_full(
+            let outcome = self.rpc_raw(
                 &entry.function_path,
                 &entry.args,
                 entry.shard_key.as_deref(),
@@ -404,15 +405,7 @@ impl Client {
             );
 
             match outcome {
-                Ok((value, commit_cursor)) => {
-                    self.offline_queue.unpersist(&entry.id);
-                    // The overlay is confirmed BEFORE the caller is told, so the
-                    // gapless drop is already in place when the confirming frame
-                    // lands.
-                    self.confirm_layers(&entry.layers, commit_cursor);
-                    report.committed.push(entry.id.clone());
-                    self.emit_settled(&entry, MutationStatus::Committed, value, None);
-                }
+                Ok((result, commit_cursor)) => self.settle_committed(&entry, &result, commit_cursor, report),
                 Err(error) if is_transient(&error) => {
                     if let ClientError::Api(inner) = &error {
                         self.note_retry_after(report, inner);
@@ -486,7 +479,7 @@ impl Client {
             calls.push(call);
         }
 
-        let Ok(body) = self.rpc_batch(calls) else {
+        let Ok((status, body)) = self.rpc_batch(calls) else {
             // Transport failure — nothing committed, so retry everything.
             return (items, true);
         };
@@ -497,19 +490,21 @@ impl Client {
             return (self.settle_batch_slots(items, &results, report), false);
         }
 
-        // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
-        // a bad request, an authorization denial — and therefore terminal for
-        // every entry; anything else is transport, and transient.
-        let Some(envelope) = body.get("error").filter(|value| value.is_object()) else {
-            return (items, true);
+        // No per-slot results: ONE verdict on the whole batch, reached by the
+        // rule the single-call path uses. A coded envelope is classified by its
+        // code alone, whatever the status; an envelope-less reply by its status
+        // (`envelopeless_error`), so a proxy's HTML 413 is the same
+        // PAYLOAD_TOO_LARGE the worker's coded one is.
+        let error = match body.get("error").filter(|value| value.is_object()) {
+            Some(envelope) => batch_slot_error(envelope, "batch rejected"),
+            None => envelopeless_error(status),
         };
-
-        let error = batch_slot_error(envelope, "batch rejected");
 
         // The body was too big, not wrong — every entry in it would have
         // committed alone. Halve and retry; the estimate `chunk_batches` used
         // cannot see the framing the worker actually measured, and only the
-        // answer can.
+        // answer can. A chunk halved down to one write falls through to the
+        // terminal verdict below: splitting cannot help it.
         if error.code == CODE_PAYLOAD_TOO_LARGE && items.len() > 1 {
             let mut left = items;
             let right = left.split_off(left.len() / 2);
@@ -530,9 +525,9 @@ impl Client {
             return (requeue, stop);
         }
 
-        // A shard blip or a rate limit is not a verdict on the batch's contents.
-        // Requeue it whole and stop the flush, exactly as the single-call path
-        // does for the same codes.
+        // A shard blip, a rate limit or a reply with no envelope is not a verdict
+        // on the batch's contents. Requeue it whole and stop the flush, exactly
+        // as the single-call path does for the same answers.
         if api_is_transient(&error) {
             self.note_retry_after(report, &error);
 
@@ -611,17 +606,35 @@ impl Client {
             }
 
             let commit_cursor = slot.get("commitCursor").and_then(Value::as_i64);
-            let value = slot.get("result").map_or(WireValue::Null, |raw| decode_wire(raw).unwrap_or(WireValue::Null));
 
-            self.offline_queue.unpersist(&entry.id);
-            // The overlay is confirmed BEFORE the caller is told, so the gapless
-            // drop is already in place when the confirming frame lands.
-            self.confirm_layers(&entry.layers, commit_cursor);
-            report.committed.push(entry.id.clone());
-            self.emit_settled(&entry, MutationStatus::Committed, value, None);
+            self.settle_committed(&entry, slot.get("result").unwrap_or(&Value::Null), commit_cursor, report);
         }
 
         requeue
+    }
+
+    /// Settles a write the server COMMITTED, on either replay path.
+    ///
+    /// The result is decoded FIRST, and a result that does not decode changes
+    /// nothing about the verdict: the write committed, and replaying it could
+    /// only return the same result, so retrying parks the head of the queue
+    /// forever. It settles committed with no value and the decode error attached
+    /// (`WIRE_DECODE_FAILED`). Then, in order: the durable record goes, and the
+    /// overlay is confirmed BEFORE the caller is told, so the gapless drop is
+    /// already in place when the confirming frame lands.
+    fn settle_committed(&mut self, entry: &QueuedMutation, result: &Value, commit_cursor: Option<i64>, report: &mut FlushReport) {
+        let (value, error) = match decode_wire(result) {
+            Ok(value) => (value, None),
+            Err(error) => (
+                WireValue::Null,
+                Some(coded(CODE_WIRE_DECODE_FAILED, &format!("committed, but its result does not decode: {error}"))),
+            ),
+        };
+
+        self.offline_queue.unpersist(&entry.id);
+        self.confirm_layers(&entry.layers, commit_cursor);
+        report.committed.push(entry.id.clone());
+        self.emit_settled(entry, MutationStatus::Committed, value, error);
     }
 
     /// Registers both optimistic paths' layers, returning `(subscription id,
@@ -722,7 +735,7 @@ impl Client {
     fn enqueue_write(&mut self, options: SubmitOptions, write_id: String, layers: Vec<(String, u64)>) {
         // Bound at enqueue time, so the write can only ever replay as whoever
         // made it.
-        let identity = Identity::stamp(self.identity.clone());
+        let identity = Identity::stamp(self.identity().map(str::to_string));
         // Never a substitute value: a record persisted as `args: null` hydrates
         // after a restart as a write that replays SUCCESSFULLY with empty args,
         // which is corruption rather than failure. The queue reports the failed
@@ -800,9 +813,8 @@ fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
         code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
         data: envelope.get("data").filter(|value| !value.is_null()).and_then(|value| decode_wire(value).ok()),
         message: envelope.get("message").and_then(Value::as_str).unwrap_or(fallback).to_string(),
-        // The batch transport reads the body, not the status: an entry-less
-        // envelope that is transport rather than a verdict arrives here as a
-        // parse failure instead, already classified transient.
+        // A coded envelope is a verdict: its code alone decides a replay, as
+        // on the single-call path (`crate::client::rpc_result`).
         transient: false,
     }
 }
@@ -888,8 +900,7 @@ fn api_is_transient(error: &ApiError) -> bool {
 /// encoded now and will not encode any better on the next reconnect, so retrying
 /// it is a poison loop that also blocks every write behind it. (The flush already
 /// weeds those out before the replay loop; this keeps the classification honest
-/// for anything the encode pass could not see, such as a response that fails to
-/// decode.)
+/// for anything the encode pass could not see.)
 pub fn is_transient(error: &ClientError) -> bool {
     match error {
         ClientError::Api(inner) => api_is_transient(inner),

@@ -753,7 +753,7 @@ pub fn offline_queue_identity_gate_rejects_replay() {
         })),
     );
 
-    client.identity = Some("user-b".to_string());
+    client.set_identity(Some("user-b".to_string()));
 
     let mut queued = entry("m1", None);
 
@@ -1529,4 +1529,316 @@ fn submit_before_first_connect_fails_fast() {
 
     assert_eq!(outcome.status, MutationStatus::Queued);
     assert_eq!(client.pending_mutation_count(), 1);
+}
+
+/// Every request a flush sent, as `(url, parsed body)`.
+type Requests = Arc<Mutex<Vec<(String, Value)>>>;
+
+/// A client whose poster answers every request through `respond`, recording each.
+fn replying_client(respond: impl Fn(&Value) -> (u16, Vec<u8>) + Send + 'static) -> (Client, Requests) {
+    let requests: Requests = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&requests);
+    let client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |url, _headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+
+            recorder.lock().expect("requests").push((url.to_string(), request.clone()));
+
+            Ok(respond(&request))
+        })),
+    );
+
+    (client, requests)
+}
+
+/// A reply committing every write the request carries, on either endpoint.
+fn committing(request: &Value) -> (u16, Vec<u8>) {
+    let body = match request.get("calls").and_then(Value::as_array) {
+        Some(calls) => json!({
+            "results": calls
+                .iter()
+                .map(|call| json!({ "id": call["id"], "body": { "commitCursor": 1, "result": "ok" } }))
+                .collect::<Vec<_>>(),
+        }),
+        None => json!({ "commitCursor": 1, "result": "ok" }),
+    };
+
+    (200, serde_json::to_vec(&body).expect("body"))
+}
+
+/// How many writes one request carries: a batch's calls, or the one single call.
+fn call_count(request: &Value) -> usize {
+    request.get("calls").and_then(Value::as_array).map_or(1, Vec::len)
+}
+
+/// `(id, status, error code, value)` of every settled event, in order.
+type SettledLog = Arc<Mutex<Vec<(String, MutationStatus, Option<String>, WireValue)>>>;
+
+fn record_settled(client: &mut Client) -> SettledLog {
+    let log: SettledLog = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&log);
+
+    client.on_mutation_settled(Box::new(move |event| {
+        observer.lock().expect("settled").push((
+            event.mutation_id.clone(),
+            event.status,
+            event.error.as_ref().map(|error| error.code.clone()),
+            event.value.clone(),
+        ));
+    }));
+
+    log
+}
+
+/// The error codes the writes in `ids` settled with, in order.
+fn settled_codes(log: &SettledLog, ids: &[String]) -> Vec<Option<String>> {
+    let log = log.lock().expect("settled");
+
+    ids.iter()
+        .map(|id| log.iter().find(|entry| &entry.0 == id).and_then(|entry| entry.2.clone()))
+        .collect()
+}
+
+/// An empty shard key is the default shard on BOTH replay paths: no request body
+/// the flush sends — a single call or a batch entry — carries a `shardKey` key.
+pub fn offline_flush_empty_shard_key_routes_to_default() {
+    let case = queue_case("emptyShardKey");
+
+    for path in ["batch", "lone"] {
+        let spec = &case[path];
+        let (mut client, requests) = replying_client(committing);
+
+        for queued in spec["queued"].as_array().expect("queued") {
+            client
+                .offline_queue
+                .enqueue(entry(queued["id"].as_str().expect("id"), queued["shardKey"].as_str()), Ok(json!({})));
+        }
+
+        let report = client.flush_offline_queue(spec["flushShardKey"].as_str());
+
+        assert_eq!(report.committed, ids(&spec["committed"]), "{path}");
+
+        let requests = requests.lock().expect("requests");
+
+        assert!(!requests.is_empty(), "{path}: the flush sent nothing");
+
+        for (url, request) in requests.iter() {
+            let bodies = match request.get("calls").and_then(Value::as_array) {
+                Some(calls) => calls.clone(),
+                None => vec![request.clone()],
+            };
+
+            for body in bodies {
+                assert!(body.get("shardKey").is_none(), "{path}: {url} carried a shardKey: {body}");
+            }
+        }
+    }
+}
+
+/// A write the server COMMITTED whose result does not decode settles committed —
+/// overlay confirmed, record removed, the decode error attached — on the batch
+/// path without costing any other slot, and on the lone path without a retry.
+pub fn offline_flush_undecodable_result_settles_committed() {
+    let case = queue_case("undecodableResult");
+    let code = case["code"].as_str().expect("code").to_string();
+    let raw = case["rawResult"].clone();
+
+    // Batch: one undecodable slot among good ones.
+    let spec = &case["batch"];
+    let bad_slot = spec["undecodableSlot"].clone();
+    let slot_result = raw.clone();
+    let (mut client, _requests) = replying_client(move |request| {
+        let slots: Vec<Value> = request["calls"]
+            .as_array()
+            .expect("a batch")
+            .iter()
+            .map(|call| {
+                let result = if call["id"] == bad_slot { slot_result.clone() } else { json!("ok") };
+
+                json!({ "id": call["id"], "body": { "commitCursor": 3, "result": result } })
+            })
+            .collect();
+
+        (200, serde_json::to_vec(&json!({ "results": slots })).expect("body"))
+    });
+    let store = MemoryStore::default();
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    let settled = record_settled(&mut client);
+
+    for id in ids(&spec["queued"]) {
+        client.offline_queue.enqueue(entry(&id, None), Ok(json!({})));
+    }
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed, ids(&spec["committed"]), "batch: every slot commits");
+    assert_eq!(report.rejected, ids(&spec["rejected"]), "batch");
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&spec["queuedAfterFlush"]),
+        "batch: nothing is left queued"
+    );
+    assert_eq!(store.removed(), ids(&spec["persistRemoveCalls"]), "batch: every record is removed");
+    assert_decode_failures(&settled, &ids(&spec["queued"]), &ids(&spec["decodeFailed"]), &code);
+
+    // Lone: the single-call path, with an overlay that must be confirmed rather
+    // than rolled back.
+    let spec = &case["lone"];
+    let lone_result = raw.clone();
+    let (mut client, requests) =
+        replying_client(move |_request| (200, serde_json::to_vec(&json!({ "commitCursor": 7, "result": lone_result })).expect("body")));
+    let store = MemoryStore::default();
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    let settled = record_settled(&mut client);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let subscription = client.subscribe(FUNCTION, args(), None, None);
+
+    client.detach_socket();
+
+    for id in ids(&spec["queued"]) {
+        let mut options = SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(WireValue::String("pending".into())));
+
+        options.mutation_id = Some(id);
+        client.submit(options).expect("queued");
+    }
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed, ids(&spec["committed"]), "lone: it commits");
+    assert_eq!(report.rejected, ids(&spec["rejected"]), "lone");
+    assert_eq!(queued_ids(&client.offline_queue), ids(&spec["queuedAfterFlush"]), "lone: never requeued");
+    assert_eq!(store.removed(), ids(&spec["persistRemoveCalls"]), "lone");
+    assert_decode_failures(&settled, &ids(&spec["queued"]), &ids(&spec["decodeFailed"]), &code);
+    assert_eq!(layers(&client, &subscription), 1, "lone: the overlay is confirmed, not rolled back");
+
+    client
+        .handle_frame(&frame(&subscription, &json!({ "cursor": 7, "data": [] })))
+        .expect("confirming frame");
+
+    assert_eq!(layers(&client, &subscription), 0, "lone: and drops at the echoed commit cursor");
+
+    client.flush_offline_queue(None);
+
+    assert_eq!(
+        requests.lock().expect("requests").len() as u64,
+        count(&spec["requestsAfterSecondFlush"]),
+        "lone: a second flush sends nothing"
+    );
+}
+
+/// Every write in `queued` settled committed; exactly `failed` carry `code` and
+/// no value.
+fn assert_decode_failures(settled: &SettledLog, queued: &[String], failed: &[String], code: &str) {
+    let log = settled.lock().expect("settled");
+
+    assert_eq!(
+        log.iter().map(|entry| entry.0.clone()).collect::<Vec<_>>(),
+        queued,
+        "each settles once, in order"
+    );
+
+    for (id, status, error, value) in log.iter() {
+        assert_eq!(*status, MutationStatus::Committed, "{id} settles committed");
+
+        if failed.contains(id) {
+            assert_eq!(error.as_deref(), Some(code), "{id} carries the decode error");
+            assert_eq!(*value, WireValue::Null, "{id} has no value");
+        } else {
+            assert_eq!(*error, None, "{id} settles clean");
+            assert_eq!(*value, WireValue::String("ok".into()), "{id} keeps its value");
+        }
+    }
+}
+
+/// ONE predicate for both replay paths: a coded envelope is classified by its
+/// code alone whatever the status, an envelope-less reply by its status.
+pub fn offline_flush_classifies_single_and_batch_alike() {
+    let case = queue_case("replayClassification");
+
+    for spec in case["cases"].as_array().expect("cases") {
+        let status = spec["status"].as_u64().expect("status") as u16;
+        let body = match spec.get("body") {
+            Some(body) => serde_json::to_vec(body).expect("body"),
+            None => spec["rawBody"].as_str().expect("rawBody").as_bytes().to_vec(),
+        };
+
+        for path in ["single", "batch"] {
+            let label = format!("{} ({path})", spec["name"].as_str().unwrap_or("?"));
+            let queued = ids(&case["paths"][path]);
+            let reply = body.clone();
+            let (mut client, _requests) = replying_client(move |_request| (status, reply.clone()));
+            let settled = record_settled(&mut client);
+
+            for id in &queued {
+                client.offline_queue.enqueue(entry(id, None), Ok(json!({})));
+            }
+
+            let report = client.flush_offline_queue(None);
+
+            match spec["outcome"].as_str() {
+                Some("rejected") => {
+                    assert_eq!(report.rejected, queued, "{label}: a coded envelope is a verdict");
+                    assert!(queued_ids(&client.offline_queue).is_empty(), "{label}");
+                    assert_eq!(
+                        settled_codes(&settled, &queued),
+                        vec![spec["code"].as_str().map(str::to_string); queued.len()],
+                        "{label}"
+                    );
+                }
+                Some("requeued") => {
+                    assert_eq!(report.requeued, queued, "{label}: no verdict was reached");
+                    assert_eq!(queued_ids(&client.offline_queue), queued, "{label}");
+                    assert!(settled.lock().expect("settled").is_empty(), "{label}: nothing settles");
+                }
+                other => panic!("{label}: unknown outcome {other:?}"),
+            }
+        }
+    }
+}
+
+/// A 413 is PAYLOAD_TOO_LARGE whatever its body: a batch splits on an HTML 413 as
+/// it does on a coded one, and a lone write still refused settles terminally.
+pub fn offline_flush_batch_splits_on_envelopeless_413() {
+    let case = queue_case("envelopelessPayloadTooLarge");
+    let raw = case["rawBody"].as_str().expect("rawBody").as_bytes().to_vec();
+    let code = case["code"].as_str().map(str::to_string);
+
+    for name in ["split", "alwaysRefused", "lone"] {
+        let spec = &case[name];
+        let refuse_above = spec.get("refuseCallsAbove").and_then(Value::as_u64).map_or(0, |above| above as usize);
+        let refusal = raw.clone();
+        let (mut client, _requests) = replying_client(move |request| {
+            if call_count(request) > refuse_above {
+                (413, refusal.clone())
+            } else {
+                committing(request)
+            }
+        });
+        let settled = record_settled(&mut client);
+
+        for id in ids(&spec["queued"]) {
+            client.offline_queue.enqueue(entry(&id, None), Ok(json!({})));
+        }
+
+        let report = client.flush_offline_queue(None);
+        let rejected = ids(&spec["rejected"]);
+
+        assert_eq!(report.committed, ids(&spec["committed"]), "{name}");
+        assert_eq!(report.rejected, rejected, "{name}");
+        assert_eq!(
+            queued_ids(&client.offline_queue),
+            ids(&spec["queuedAfterFlush"]),
+            "{name}: nothing parks in the queue"
+        );
+        assert_eq!(settled_codes(&settled, &rejected), vec![code.clone(); rejected.len()], "{name}");
+    }
 }

@@ -21,8 +21,8 @@ pub use key::{stable_stringify, stable_wire_key};
 pub use offline::{
     identity_allows_replay, is_stale_version, random_id, Discarded, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
     CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE,
-    CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, DEFAULT_MAX_ITEMS, MAX_BATCH_BYTES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES,
-    TRANSIENT_ERROR_CODES,
+    CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, DEFAULT_MAX_ITEMS, MAX_BATCH_BYTES, MAX_RETRY_AFTER_MS,
+    RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 pub use optimistic::{
     apply_layer, confirm_layer, constant, drop_confirmed_layers, fold, rollback_layer, shared, OptimisticLayer, OptimisticState, SharedTransform, Transform,

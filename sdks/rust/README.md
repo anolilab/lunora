@@ -30,8 +30,8 @@ retries and socket library:
 
 ```rust
 let mut client = Client::new("https://my-app.example.com", Some(my_poster));
-client.auth_token = Some("…".into());
-client.identity = Some(current_user_id);
+client.auth_token = Some("…".into()); // redacted from the client's `{:?}`
+client.set_identity(Some(current_user_id));
 // `client_id` is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -50,6 +50,17 @@ from their resume cursor and shape views from their checkpoint and epoch. A
 `data`/`delta` payload the wire codec refuses is reported on that subscription's
 own `on_error` as `INVALID_FRAME` rather than returned from `handle_frame`, so
 one bad frame cannot end your read loop and with it every other subscription.
+The same goes for a poke: a shape whose part carries a row the codec refuses
+keeps its view, checkpoint and epoch untouched and hears `INVALID_FRAME` on its
+`on_error`, while every other shape in the poke applies. A frame shaped like no
+server frame is ignored, and a `cursor` that is not an integer never replaces
+the tracked one.
+
+An RPC reply the call cannot read — a body that is not JSON, or JSON that is not
+an object (`null`, `[]`, a string), at any status — fails with
+`ClientError::Api` coded `INTERNAL`, never a success with a null result; `{}` is
+the void result. `close()` also drops every subscription, which ends every
+`stream()` receiver after the values already delivered.
 
 ## Optimistic updates and offline writes
 
@@ -98,15 +109,31 @@ _restored_ record whose args no longer decode is purged and settled
 discard — including one the capacity cap evicts out of a restored queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
 
-A flush chunks itself by bytes as well as by entries, and a chunk the worker
-refuses with `413 PAYLOAD_TOO_LARGE` is halved and retried rather than settled
-`rejected` whole. A rate-limited replay (`TOO_MANY_REQUESTS`) is re-queued, not
-dropped: `FlushReport::retry_after_ms` reports the envelope's delay and the
-client holds the next flush off until it passes.
+One rule classifies a failed replay, whether the write went out alone or in a
+batch: a CODED envelope is classified by its code alone, whatever the HTTP
+status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED` and
+`TOO_MANY_REQUESTS` re-queue, every other code (a coded 500 included) settles
+`rejected` — and a reply with no envelope re-queues, except a 413.
 
-`client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
-token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+A flush chunks itself by bytes as well as by entries, and a chunk refused with a
+413 — the worker's coded `PAYLOAD_TOO_LARGE` or a proxy's HTML page alike — is
+halved and retried rather than settled `rejected` whole; a lone write still
+refused settles `rejected` with `PAYLOAD_TOO_LARGE`. A rate-limited replay
+(`TOO_MANY_REQUESTS`) is re-queued, not dropped: `FlushReport::retry_after_ms`
+reports the envelope's delay and the client holds the next flush off until it
+passes.
+
+A replayed write the server committed but whose result does not decode settles
+`Committed` — overlay confirmed, durable record removed — with no value and the
+decode error coded `WIRE_DECODE_FAILED` on its settled event. It is never
+retried: the replay could only return the same result.
+
+The identity is an opaque, **non-secret** stamp — a user id, not a bearer token
+— set with `client.set_identity(…)`. It is persisted with every queued write and
+re-checked before that write replays, so a restart cannot push one user's queued
+writes as another. Changing it FROM a set identity (another user, or signed out)
+evicts the previous session: every query and shape resubscribes cold, and every
+shape view is emptied and its `on_rows` told so with `[]`.
 
 ### Two shapes the borrow checker chose
 

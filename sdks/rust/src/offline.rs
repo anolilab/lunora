@@ -50,6 +50,9 @@ pub const CODE_OFFLINE_WRITE_UNENCODABLE: &str = "OFFLINE_WRITE_UNENCODABLE";
 pub const CODE_OFFLINE_WRITE_UNDECODABLE: &str = "OFFLINE_WRITE_UNDECODABLE";
 /// The client was closed while the write was still queued.
 pub const CODE_CLIENT_CLOSED: &str = "CLIENT_CLOSED";
+/// The server COMMITTED a replayed write but its result does not decode. Rides a
+/// `Committed` settle event, with no value — never a retry.
+pub const CODE_WIRE_DECODE_FAILED: &str = "WIRE_DECODE_FAILED";
 
 /// The coded errors a replay must NOT treat as the server's final word.
 ///
@@ -73,9 +76,10 @@ pub const RATE_LIMIT_ERROR_CODES: [&str; 2] = ["RATE_LIMITED", "TOO_MANY_REQUEST
 /// would otherwise park a durable queue for hours on one unvalidated number.
 pub const MAX_RETRY_AFTER_MS: i64 = 60_000;
 
-/// The worker's answer to a batch body over its cap. Coded, so it arrives as a
-/// whole-batch envelope — which every other coded envelope makes a verdict on
-/// every entry, and this one is not.
+/// The worker's answer to a batch body over its cap — and what any 413 means,
+/// coded or not: an edge in front of the worker refuses an oversized body with
+/// its own page. A batch of more than one write is split and retried on it
+/// rather than settled; a lone write still refused settles with it.
 pub const CODE_PAYLOAD_TOO_LARGE: &str = "PAYLOAD_TOO_LARGE";
 
 /// Hard cap on entries in one batch, matching the server's own
