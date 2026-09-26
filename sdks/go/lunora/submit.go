@@ -32,6 +32,14 @@ var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABL
 // data.retryAfterMs (see protocol/fixtures/rpc.json's responseError.with-data).
 var RateLimitErrorCodes = map[string]bool{"RATE_LIMITED": true, "TOO_MANY_REQUESTS": true}
 
+// AuthHoldErrorCodes are the codes that refuse the CREDENTIAL, not the write.
+//
+// A write queued offline replays with whatever bearer the client held when it
+// went offline, which has very often expired by the reconnect; settling it
+// would destroy the user's own durable write over a problem one token refresh
+// fixes. So a replay HOLDS it — re-queued like a transient code.
+var AuthHoldErrorCodes = map[string]bool{"TOKEN_EXPIRED": true, "UNAUTHENTICATED": true, "UNAUTHORIZED": true}
+
 // CodePayloadTooLarge is the worker's answer to a body over its cap. Coded, so
 // it arrives as a whole-batch envelope — which every other coded envelope is a
 // verdict on every entry, and this one is not.
@@ -557,8 +565,11 @@ func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutat
 			// An undecodable result is still a commit: re-sending returns the same
 			// unreadable result, so it settles committed carrying the error.
 			c.unpersist(queue, item.ID)
-			c.settleCommitted(item, value, commitCursor, err)
+			// Recorded BEFORE the settle runs its callbacks: the flush guard
+			// requeues whatever the report does not name, and this write's durable
+			// record is already gone — requeued, it would be sent twice.
 			report.Committed = append(report.Committed, item.ID)
+			c.settleCommitted(item, value, commitCursor, err)
 
 			continue
 		}
@@ -580,8 +591,8 @@ func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutat
 		}
 
 		c.unpersist(queue, item.ID)
-		c.settleRejected(item, err)
 		report.Rejected = append(report.Rejected, item.ID)
+		c.settleRejected(item, err)
 	}
 }
 
@@ -685,8 +696,8 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 
 	for _, item := range items {
 		c.unpersist(queue, item.ID)
-		c.settleRejected(item, batchError)
 		report.Rejected = append(report.Rejected, item.ID)
+		c.settleRejected(item, batchError)
 	}
 
 	return nil, false
@@ -756,8 +767,8 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 			}
 
 			c.unpersist(queue, item.ID)
-			c.settleRejected(item, slotError)
 			report.Rejected = append(report.Rejected, item.ID)
+			c.settleRejected(item, slotError)
 
 			continue
 		}
@@ -781,8 +792,8 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 		}
 
 		c.unpersist(queue, item.ID)
-		c.settleCommitted(item, value, commitCursor, settleErr)
 		report.Committed = append(report.Committed, item.ID)
+		c.settleCommitted(item, value, commitCursor, settleErr)
 	}
 
 	return requeue
@@ -901,7 +912,7 @@ func (c *Client) settleRejected(entry *QueuedMutation, err error) {
 func isUndecodableResult(err error) bool {
 	var apiError APIError
 
-	return errors.As(err, &apiError) && apiError.Code == CodeWireDecodeFailed
+	return errors.As(err, &apiError) && apiError.resultUndecodable
 }
 
 // isTransient reports whether a failed replay may be retried rather than dropped.
@@ -912,7 +923,7 @@ func isTransient(err error) bool {
 	var apiError APIError
 
 	if errors.As(err, &apiError) {
-		return apiError.Transient || TransientErrorCodes[apiError.Code] || RateLimitErrorCodes[apiError.Code]
+		return apiError.Transient || TransientErrorCodes[apiError.Code] || RateLimitErrorCodes[apiError.Code] || AuthHoldErrorCodes[apiError.Code]
 	}
 
 	return true

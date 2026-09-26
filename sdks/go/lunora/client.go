@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,11 @@ type APIError struct {
 	// is the verdict whatever the status, so a coded 5xx is terminal on the
 	// single-call and batch replay paths alike. See isTransient.
 	Transient bool
+	// resultUndecodable marks the error this client raises when a SUCCESSFUL
+	// reply's result will not decode — the write committed. It is where the
+	// failure arose, not the code: a server may answer WIRE_DECODE_FAILED
+	// itself, and that is a refusal.
+	resultUndecodable bool
 }
 
 func (e APIError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
@@ -183,6 +189,12 @@ type pokeBuffer struct {
 	// because the flag is per part, and sticky (never cleared) so a server that
 	// splits a seed across several parts still replaces rather than merges.
 	resets map[string]bool
+	// bases holds, per shape, the checkpoint the server computed its diff
+	// against: the part's baseCheckpoint, else the pokeStart's. epoch is the
+	// pokeStart's. Both are compared with the view's own at pokeEnd.
+	bases          map[string]any
+	baseCheckpoint any
+	epoch          any
 }
 
 // MaxPendingPokes bounds the un-applied poke buffers a client retains. A buffer
@@ -450,13 +462,13 @@ func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 
 		var data any
 
+		// A `data` the codec refuses is dropped, not raised: the envelope is still
+		// the server's coded verdict, and escaping as a bare codec error made a
+		// replay classify it as a transport failure and re-send it forever.
 		if payload, present := envelope["data"]; present && payload != nil {
-			decoded, err := DecodeWire(payload)
-			if err != nil {
-				return nil, nil, err
+			if decoded, err := DecodeWire(payload); err == nil {
+				data = decoded
 			}
-
-			data = decoded
 		}
 
 		// Classified by its code alone, whatever the status: a coded 5xx is the
@@ -477,7 +489,7 @@ func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 		// unreadable. Coded so a replay can tell it from a transport failure and
 		// settle the write rather than re-send it forever; the cursor rides along
 		// so its overlay still confirms.
-		return nil, commitCursor, APIError{Code: CodeWireDecodeFailed, Message: "result could not be decoded: " + err.Error()}
+		return nil, commitCursor, APIError{Code: CodeWireDecodeFailed, Message: "result could not be decoded: " + err.Error(), resultUndecodable: true}
 	}
 
 	return result, commitCursor, nil
@@ -1210,7 +1222,13 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			c.pokeOrder = append(c.pokeOrder, pokeID)
 		}
 
-		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}, resets: map[string]bool{}}
+		c.pokes[pokeID] = &pokeBuffer{
+			bases:          map[string]any{},
+			baseCheckpoint: frame["baseCheckpoint"],
+			epoch:          frame["epoch"],
+			parts:          map[string][]map[string]any{},
+			resets:         map[string]bool{},
+		}
 
 		// Evict oldest-first at the cap; a poke that old is no longer going to
 		// see its pokeEnd.
@@ -1256,6 +1274,19 @@ func (c *Client) bufferPokePart(frame map[string]any) {
 	// atomic batch to join, and guessing would apply a fragment of one.
 	if buffer := c.pokes[pokeID]; buffer != nil {
 		buffer.parts[shapeID] = append(buffer.parts[shapeID], operations...)
+
+		base := frame["baseCheckpoint"]
+		if base == nil {
+			base = buffer.baseCheckpoint
+		}
+
+		if base != nil {
+			if buffer.bases == nil {
+				buffer.bases = map[string]any{}
+			}
+
+			buffer.bases[shapeID] = base
+		}
 
 		if reset, _ := frame["reset"].(bool); reset {
 			if buffer.resets == nil {
@@ -1305,6 +1336,8 @@ func (c *Client) applyPoke(frame map[string]any) {
 
 	deliveries := make([]delivery, 0, len(buffer.parts))
 
+	var reseeds []*shapeSubscription
+
 	for shapeID, operations := range buffer.parts {
 		shape := c.shapes[shapeID]
 		if shape == nil {
@@ -1320,7 +1353,31 @@ func (c *Client) applyPoke(frame map[string]any) {
 		decoded, err := decodePokeRows(operations)
 		if err != nil {
 			if shape.onError != nil {
-				deliveries = append(deliveries, delivery{onError: shape.onError, err: SubscriptionError{Code: "INVALID_FRAME", Message: err.Error()}})
+				deliveries = append(deliveries, delivery{onError: shape.onError, err: SubscriptionError{Code: CodeWireDecodeFailed, Message: err.Error()}})
+			}
+
+			continue
+		}
+
+		// A forked epoch (the changelog timeline was reset) or a base that is not
+		// the checkpoint this view is at (a poke went missing — or was refused
+		// above) means the ops are a diff against a view we do not hold. Splicing
+		// them on would corrupt it, so drop the view, clear its resume point, tell
+		// its callback, skip the ops and re-subscribe cold so the server re-seeds.
+		// A reset part is exempt: it carries the whole membership anyway.
+		base, based := buffer.bases[shapeID]
+		epochForked := buffer.epoch != nil && shape.epoch != nil && !reflect.DeepEqual(buffer.epoch, shape.epoch)
+		baseDiverged := based && shape.checkpoint != nil && !reflect.DeepEqual(base, shape.checkpoint)
+
+		if !buffer.resets[shapeID] && (epochForked || baseDiverged) {
+			shape.rows = map[string]any{}
+			shape.order = nil
+			shape.checkpoint = nil
+			shape.epoch = nil
+			reseeds = append(reseeds, shape)
+
+			if shape.onRows != nil {
+				deliveries = append(deliveries, delivery{handler: shape.onRows, rows: []any{}})
 			}
 
 			continue
@@ -1383,6 +1440,7 @@ func (c *Client) applyPoke(frame map[string]any) {
 		}
 	}
 
+	send := c.send
 	c.mu.Unlock()
 
 	// Callbacks run outside the lock: a handler that subscribes or unsubscribes
@@ -1395,6 +1453,16 @@ func (c *Client) applyPoke(frame map[string]any) {
 		}
 
 		item.handler(item.rows)
+	}
+
+	// The cold re-subscribe for every view dropped above (id, name and args
+	// never change after SubscribeShape, so reading them unlocked is safe).
+	if send != nil {
+		for _, shape := range reseeds {
+			if frame, err := BuildShapeSubscribeFrame(shape.id, shape.name, shape.args, nil, nil); err == nil {
+				_ = send(frame)
+			}
+		}
 	}
 }
 

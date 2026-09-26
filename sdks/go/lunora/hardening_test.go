@@ -282,6 +282,51 @@ func TestAPanicMidFlushLosesNoDrainedWrite(t *testing.T) {
 	}
 }
 
+// TestAPanicInOnCommitDoesNotRequeueACommittedWrite pins the other side of the
+// flush guard: a write the server committed (and whose durable record is gone)
+// must be recorded as settled before any callback runs, so a panic out of that
+// callback cannot put it back on the queue to be sent twice.
+func TestAPanicInOnCommitDoesNotRequeueACommittedWrite(t *testing.T) {
+	covers("offline_flush_undecodable_result_settles_committed")
+
+	for _, ids := range [][]string{{"single"}, {"batch-a", "batch-b"}} {
+		t.Run(ids[0], func(t *testing.T) {
+			poster := &replayPoster{answer: func(batch bool, calls []map[string]any) (int, string) {
+				return 200, okReply(batch, calls, alwaysOK)
+			}}
+
+			client, _, _ := replayClient(poster, nil)
+
+			for _, id := range ids {
+				client.OfflineQueue().Enqueue(&QueuedMutation{
+					Args:         map[string]any{},
+					FunctionPath: "messages:send",
+					ID:           id,
+					OnCommit:     func(*int64) { panic("overlay callback blew up") },
+				})
+			}
+
+			recovered := func() (value any) {
+				defer func() { value = recover() }()
+
+				client.FlushOfflineQueue("")
+
+				return nil
+			}()
+
+			if recovered == nil {
+				t.Fatal("the callback's panic must still reach the caller")
+			}
+
+			// The first write committed and was recorded; any later one never
+			// reached its settle and goes back.
+			if got, want := queuedIDs(client.OfflineQueue().Items()), ids[1:]; len(got) != len(want) || (len(want) > 0 && !reflect.DeepEqual(got, want)) {
+				t.Fatalf("queued after the panic: got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestSingleAndBatchReplayShareOneFailurePredicate(t *testing.T) {
 	covers("offline_flush_classifies_single_and_batch_alike")
 
@@ -476,6 +521,90 @@ func TestAPokeWithAnUndecodableRowIsRefusedWhole(t *testing.T) {
 
 	if got, want := canonical(t, resent[0]["sinceCheckpoint"]), canonical(t, shape["undecodableRowResendCheckpoint"]); got != want {
 		t.Fatalf("sinceCheckpoint = %s, want %s", got, want)
+	}
+
+	// The next poke's base no longer matches the view (the server believes it
+	// delivered the refused rows): the view is dropped and re-seeded cold rather
+	// than having the diff spliced onto it. resendFrames left a recording sender
+	// attached, so the cold subscribe it sends lands in `sent`.
+	var sent []map[string]any
+
+	client.AttachSocket(func(frame map[string]any) error {
+		sent = append(sent, frame)
+
+		return nil
+	})
+
+	delivered = nil
+	gap, _ := shape["gapPokeSequence"].([]any)
+	deliverAll(t, client, gap)
+
+	if got, want := canonical(t, shapeView(client)), canonical(t, shape["gapExpectedRows"]); got != want {
+		t.Fatalf("view after the gap poke\n got: %s\nwant: %s", got, want)
+	}
+
+	if len(delivered) != 1 || len(delivered[0]) != 0 {
+		t.Fatalf("rows callback after the gap: got %v, want one []", delivered)
+	}
+
+	if len(sent) != 1 || sent[0]["type"] != "shape_subscribe" || sent[0]["id"] != "shape_1" {
+		t.Fatalf("sent after the gap: got %v, want one shape_subscribe for shape_1", sent)
+	}
+
+	for _, frame := range append(sent, resendFrames(t, client)...) {
+		if _, present := frame["sinceCheckpoint"]; present {
+			t.Fatalf("re-seed is not cold: %v", frame)
+		}
+
+		if _, present := frame["sinceEpoch"]; present {
+			t.Fatalf("re-seed is not cold: %v", frame)
+		}
+	}
+}
+
+// shapeView is shape_1's rows in insertion order.
+func shapeView(client *Client) []any {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	shape := client.shapes["shape_1"]
+	view := make([]any, 0, len(shape.order))
+
+	for _, key := range shape.order {
+		view = append(view, shape.rows[key])
+	}
+
+	return view
+}
+
+// TestAContiguousBasedPokeAppliesNormally is the gap check's counterweight: a
+// poke whose base matches the view's checkpoint must not re-seed it.
+func TestAContiguousBasedPokeAppliesNormally(t *testing.T) {
+	covers("shape_poke_with_undecodable_row_is_refused_whole")
+
+	shape := shapeFixture(t)
+	client := NewClient("https://app.example", nil)
+
+	var sent []map[string]any
+
+	client.AttachSocket(func(frame map[string]any) error {
+		sent = append(sent, frame)
+
+		return nil
+	})
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, nil)
+
+	sequence, _ := shape["pokeSequence"].([]any)
+	contiguous, _ := shape["contiguousPokeSequence"].([]any)
+	deliverAll(t, client, sequence)
+	deliverAll(t, client, contiguous)
+
+	if got, want := canonical(t, shapeView(client)), canonical(t, shape["contiguousExpectedRows"]); got != want {
+		t.Fatalf("view after the contiguous poke\n got: %s\nwant: %s", got, want)
+	}
+
+	if len(sent) != 1 {
+		t.Fatalf("sent %d frames, want only the initial subscribe: %v", len(sent), sent)
 	}
 }
 

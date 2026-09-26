@@ -60,7 +60,11 @@ that is not shaped like any server frame is ignored without panicking, and a
 cursor that is not an integer never replaces the tracked one. A poke applies
 per shape whole or not at all: a row that will not decode leaves that shape's
 view, checkpoint and epoch untouched and reaches its error callback as
-`INVALID_FRAME`.
+`WIRE_DECODE_FAILED`. A later poke whose `baseCheckpoint` (the part's, else its
+`pokeStart`'s) differs from the view's checkpoint, or whose epoch differs from
+the view's, is not spliced on: unless it is a `reset`, the view is emptied, its
+callback receives `[]`, and a cold `shape_subscribe` (no `sinceCheckpoint` or
+`sinceEpoch`) goes out at once so the server re-seeds it.
 
 `Stream` returns a channel for `for event := range …`; it closes when the
 returned `Unsubscribe` runs or when `client.Close()` does, and closing it never
@@ -70,7 +74,8 @@ Any reply the RPC cannot read a result or an error envelope out of (a non-JSON
 body, or JSON that is not an object — `null`, `[]`, `"ok"`) fails with an
 `APIError` coded `INTERNAL`; `{}` is a void result. A success whose `result`
 does not decode fails with `WIRE_DECODE_FAILED` (for `Submit`, alongside the
-committed outcome).
+committed outcome). An error envelope whose `data` does not decode is still
+that coded error, with `Data` nil.
 
 `client.String()`/`GoString()` redact `AuthToken`, so `%v`, `%+v`, `%#v` and
 `%s` of a `*Client` never print the bearer token.
@@ -130,14 +135,19 @@ has no caller left to tell — reaches `client.OnMutationSettled`.
 
 A replay failure is classified by ONE rule on the single-call and batch paths:
 a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
-`RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue; every other code — a coded 5xx
-included — is terminal), a reply with no envelope by its status (re-queued). A
+`RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue, and so do the refused-credential
+codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — the write is held
+until a fresh token replays it; every other code — a coded 5xx included — is
+terminal), a reply with no envelope by its status (re-queued). A
 413 is `PAYLOAD_TOO_LARGE` with or without an envelope: a batch splits and
 retries, a lone write still refused settles terminally. A write the server
-committed whose result does not decode settles `committed`, carrying a
-`WIRE_DECODE_FAILED` error on its settled event, and is never re-sent; a panic
-escaping a flush puts every drained-but-unsettled write back at the front of
-the queue before it propagates.
+committed whose result THIS client could not decode settles `committed`,
+carrying a `WIRE_DECODE_FAILED` error on its settled event, and is never
+re-sent; a `WIRE_DECODE_FAILED` envelope the SERVER sends is a refusal and
+settles rejected. A panic escaping a flush puts every drained write not yet
+recorded as settled back at the front of the queue before it propagates; a
+write is recorded before its settle callbacks run, so a panicking callback
+never re-queues a write that already committed.
 
 `client.SetIdentity` records an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
