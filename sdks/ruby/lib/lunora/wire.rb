@@ -211,8 +211,20 @@ module Lunora
     case value
     when ::Array then value.first == TAG ? decode_tagged(value, depth) : value.map { |item| decode_wire(item, depth + 1) }
     when ::Hash then value.each_with_object({}) { |(key, item), out| out[key.to_s] = decode_wire(item, depth + 1) }
+    when ::Integer then decode_integer(value)
     else value
     end
+  end
+
+  # A JSON number off the wire is a float64 whatever its spelling, but Ruby's
+  # JSON parser types an integer literal as an exact Integer. JSON.stringify
+  # writes every double in [2**53, 1e21) as such a literal, so keeping it exact
+  # handed +encode_wire+ an Integer its range guard refuses, and a frame holding
+  # one could be neither re-encoded nor keyed. Yield the double JSON.parse reads
+  # (9007199254740993 -> 9007199254740992.0). A natively built Integer past the
+  # range is still refused on encode.
+  def decode_integer(value)
+    value.abs > MAX_EXACT_INTEGER ? value.to_f : value
   end
 
   def decode_tagged(value, depth)
