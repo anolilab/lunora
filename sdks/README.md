@@ -285,9 +285,11 @@ another: under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`, with
 no token at all it is held until one is set, and a digest stamp of the token
 held NOW matches even after a subject is named. Dart and python mirror it (python
 stores its `identity` as given rather than under `subj:`, so records persisted
-before the digest keep matching); both assert the reference's digests from
-`fixtures/offline-optimistic.json` `tokenIdentity` — dart through `identityFingerprint()`,
-python directly. The other six stamp only the consumer's `identity`, so with it
+before the digest keep matching, and refuses a digest-shaped one so it cannot
+match a token's writes). The reference's digests are pinned in
+`fixtures/offline-optimistic.json` `tokenIdentity` and asserted by the reference
+(`protocol-conformance.test.ts`), by dart through `identityFingerprint()`, and
+by python directly. The other six stamp only the consumer's `identity`, so with it
 left unset every write is stamped `null`, `null` matches `null`, and a flush the
 app starts after an account switch sends the previous user's queued writes with
 the new user's token. Until they derive it, set `identity` in those ports

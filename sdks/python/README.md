@@ -140,15 +140,21 @@ replays, so a restart cannot push one user's queued writes as another. Left
 reference client's, never the token itself), and `None` only when there is no
 token either — so a write queued under one token is never sent with another.
 Under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token
-at all it is held, unsettled, until one is set. Setting `identity` is what lets
-a token refresh keep the queue. A record persisted by an earlier build with a
-`None` stamp is rejected the same way once a token is held, since `None` then
-said nothing about whose write it was.
+at all it is held, unsettled, until one is set. A flush sends each write with
+the token its identity was checked against, so a token set mid-flush applies
+from the next pass, never to the rest of the current one. Setting `identity` is
+what lets a token refresh keep the queue. A record persisted by an earlier build
+with a `None` stamp is rejected the same way once a token is held, since `None`
+then said nothing about whose write it was. `identity` is stored as given, so a
+value shaped like a digest (`<base36>:<base36>:<base36>`, e.g. `org:team:u1`)
+raises `ValueError` rather than risk matching a token's writes.
 Changing it FROM a set value (a sign-out, or another user signing in) evicts the
 previous session: every query and shape subscription drops its resume cursor and
 epoch, each query's callbacks receive its blanked value (`None` unless an
 optimistic layer is pending), and each shape view is emptied with its callbacks
-told `[]`. A first sign-in and re-setting the same value evict nothing. The
+told `[]`. A first sign-in and re-setting the same value evict nothing. With
+`identity` unset, setting a different `auth_token` (or clearing it) evicts the
+same way, since the token's digest is then the identity. The
 eviction does not replace the socket — reconnect (`connect_and_run` again) so
 the next resubscribe is a cold one under the new credentials.
 

@@ -356,6 +356,47 @@ class TestTokenDigestIdentity(unittest.TestCase):
 
         return client, posts, settled
 
+    def test_a_token_switched_mid_flush_does_not_carry_the_rest_of_it(self):
+        # The gate judged the pass against token-a, so every request in that
+        # pass carries token-a: a later chunk must not go out with token-b.
+        client = None
+        posts = []
+
+        def post(_url, headers, body):
+            calls = json.loads(body).get("calls", [])
+            posts.append((headers.get("authorization"), len(calls)))
+            client.auth_token = "token-b"
+            return 200, {"results": [{"body": {"commitCursor": 1, "result": None}, "id": call["id"]} for call in calls]}
+
+        client = LunoraClient("https://app.example", auth_token="token-a", http_post=post)
+        client.offline_queue = OfflineQueue(max_items=MAX_BATCH_ENTRIES + 1, queue_before_first_connect=True)
+
+        async def queue_and_flush():
+            for _ in range(MAX_BATCH_ENTRIES + 1):
+                await client.submit(SubmitOptions("messages:send", {}))
+            await client.flush_offline_queue()
+
+        asyncio.run(queue_and_flush())
+
+        self.assertEqual(posts, [("Bearer token-a", MAX_BATCH_ENTRIES), ("Bearer token-a", 1)])
+
+    def test_an_identity_shaped_like_a_token_digest_is_refused(self):
+        # An identity is stored as given, so one spelled like a digest would
+        # match a write stamped under that token: user "7:lbbjyc:1ujs3qs" could
+        # replay what token-a queued.
+        digest = token_digest("token-a")
+
+        with self.assertRaises(ValueError):
+            LunoraClient("https://app.example", identity=digest)
+
+        client = LunoraClient("https://app.example")
+        with self.assertRaises(ValueError):
+            client.identity = digest
+        self.assertIsNone(client.identity)
+
+        client.identity = "user:42"  # two segments is not the digest's shape
+        self.assertEqual(client.identity, "user:42")
+
     def test_the_digest_matches_the_reference_client(self):
         for spec in FIXTURES["tokenIdentity"]["digests"]:
             with self.subTest(spec["token"]):

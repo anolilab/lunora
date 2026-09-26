@@ -20,7 +20,9 @@ its own reconnect logic.
 - The identity stamp is the consumer's own ``LunoraClient.identity`` when set
   (a stable, non-secret subject such as a user id), stored as given rather than
   under the reference's ``subj:`` namespace, so records persisted before token
-  digests existed keep matching. With none set it is :func:`token_digest` of the
+  digests existed keep matching. Without the namespace an identity could spell
+  a digest and match that token's writes, so ``LunoraClient`` refuses a
+  digest-shaped one instead. With none set it is :func:`token_digest` of the
   bearer token, exactly as the reference derives it, so a different token is a
   different identity; with neither it is ``None``.
 - There is no multi-tab leader election. There are no tabs.
