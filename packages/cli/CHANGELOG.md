@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.298...@lunora/cli@1.0.0-alpha.299) (2026-09-26)
+
+### Bug Fixes
+
+* **cli:** wait for the export stream to close before removing its .partial ([#840](https://github.com/anolilab/lunora/issues/840)) ([bf932c4](https://github.com/anolilab/lunora/commit/bf932c44e3fd11cb6f673a8723ee3c797fd36bf9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.160
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.75
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.221
+* **@lunora/config:** upgraded to 1.0.0-alpha.258
+* **@lunora/container:** upgraded to 1.0.0-alpha.58
+* **@lunora/d1:** upgraded to 1.0.0-alpha.140
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.173
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.148
+* **@lunora/seed:** upgraded to 1.0.0-alpha.157
+* **@lunora/testing:** upgraded to 1.0.0-alpha.198
+
 ## @lunora/cli [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.297...@lunora/cli@1.0.0-alpha.298) (2026-09-26)
 
 
