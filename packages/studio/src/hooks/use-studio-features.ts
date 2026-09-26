@@ -98,16 +98,29 @@ const useStudioFeatures = (): StudioFeatures => {
     const [features, setFeatures] = useState<StudioFeatures>({ ...DEFAULT_STUDIO_FEATURES, settled: false });
 
     useEffect(() => {
+        // A client swap re-runs this effect; the superseded fetch must not land.
+        const superseded = new AbortController();
+
         fireAndForget(
             (async (): Promise<void> => {
+                let next: StudioFeatures;
+
                 try {
-                    setFeatures({ ...coerceFeatures(await client.query(STUDIO_FEATURES, {}, callOptions(""))), settled: true });
+                    next = { ...coerceFeatures(await client.query(STUDIO_FEATURES, {}, callOptions(""))), settled: true };
                 } catch {
                     // Conservative defaults (everything shown, no host known) if the endpoint is unavailable.
-                    setFeatures({ ...DEFAULT_STUDIO_FEATURES, settled: true });
+                    next = { ...DEFAULT_STUDIO_FEATURES, settled: true };
+                }
+
+                if (!superseded.signal.aborted) {
+                    setFeatures(next);
                 }
             })(),
         );
+
+        return () => {
+            superseded.abort();
+        };
     }, [client]);
 
     return features;
