@@ -41,6 +41,7 @@ const createFakeClientQueryClient = (): {
             values.set(ref.key, value);
             notify(ref.key, value);
         },
+        onIdentityChange: () => () => undefined,
         subscribeClientQuery: (ref: ClientQueryRef, callback: (value: unknown) => void) => {
             counters.subscribeCalls += 1;
 

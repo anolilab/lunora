@@ -61,6 +61,12 @@ export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
  * in-flight (so the overlay survives unrelated deltas until confirmed).
  */
 export interface OptimisticLayer {
+    /**
+     * Where this write's RPC resolved in the process-wide acknowledgement order
+     * (see `acknowledgementMark`); `undefined` until confirmed. A polled snapshot
+     * carries no cursor, so this is what lets it drop the layer instead.
+     */
+    acknowledgedAt?: number;
     /** The committed CDC cursor (from the mutation response); `undefined` until confirmed. */
     commitCursor?: number;
     readonly id: symbol;

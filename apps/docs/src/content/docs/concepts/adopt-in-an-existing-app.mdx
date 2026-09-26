@@ -191,6 +191,10 @@ await client.importRows(api.migrate.importNodes, rows, {
 });
 ```
 
+The result's `imported` counts rows the server committed. `queued` counts rows a
+durable outbox took but has not replayed yet, so the import is done only when
+`queued` is `0`.
+
 Back the receiving mutation with `ctx.db.insertMany(...)` (or `insertManyUnsafe` for
 data you vouch for). For the reverse (a user leaving, or GDPR erasure), use
 `ctx.db.wipeShard()` from an `internalMutation`.

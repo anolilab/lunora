@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
 
@@ -21,6 +21,34 @@ interface RegistryEntry {
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
+
+/**
+ * Take a query's value off screen.
+ *
+ * `setQueryData(key, undefined)` cannot do this: TanStack v5 ignores an
+ * `undefined` update, so the previous value stays cached, and with
+ * `staleTime: Infinity` nothing refetches it. The client pushes `undefined` when
+ * it blanks a subscription, most importantly when a sign-out or user switch
+ * retires the previous user's session, so ignoring it kept that user's rows on
+ * screen for the next one.
+ *
+ * Not `resetQueries` either: a reset restores the query's initial state, which
+ * is the previous identity's hydrated cache value when `initialData` seeded it.
+ * A snapshot still in flight is cancelled too: it was requested under the
+ * credential that just went away.
+ */
+const blankQuery = (query: Query | undefined): void => {
+    if (query === undefined) {
+        return;
+    }
+
+    // Never rejects: `cancel` swallows the fetch's own cancellation error.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget: the promise only settles the cancelled fetch
+    query.cancel({ silent: true });
+
+    // eslint-disable-next-line unicorn/no-null -- TanStack's `QueryState.error` is `TError | null`; `null` is its "no error" value
+    query.setState({ ...query.state, data: undefined, dataUpdatedAt: 0, error: null, fetchStatus: "idle", status: "pending" });
+};
 
 /** A push-count sample held open across a `queryFn`'s fetch. */
 interface SnapshotSample {
@@ -71,6 +99,15 @@ class LunoraSubscriptionRegistry {
 
     /** Open snapshot samples per key — the lifetime bound on the push counter. */
     private readonly samples = new Map<string, number>();
+
+    /** How many identities the client has retired since this registry started listening. */
+    private epoch = 0;
+
+    /** Query clients cleared on each identity change (see `clearOnIdentityChange`). */
+    private readonly identityWatched = new Set<QueryClient>();
+
+    /** Whether the single `onIdentityChange` listener is registered. */
+    private listening = false;
 
     public constructor(private readonly client: LunoraClient) {}
 
@@ -156,6 +193,76 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
+     * Clear `queryClient`'s `["lunora", …]` entries whenever the client retires
+     * the previous identity's session (see `LunoraClient.onIdentityChange`).
+     * Idempotent per `QueryClient`, and never unsubscribed: an app can keep its
+     * `QueryClient` across an unmounted `LunoraProvider`, and a sign-out in that
+     * window must still clear it. The listener lives as long as the client
+     * (`close()` releases it).
+     *
+     * The client blanks only the subscriptions still open. An entry kept for an
+     * unmounted query (the 5-minute `gcTime`) hears nothing, and a remount would
+     * render it with no refetch (`staleTime: Infinity`), showing the previous
+     * user's rows to the next one. Entries nothing uses are removed; entries
+     * still in use (an observer, or a hook fed through this registry) are blanked
+     * so their observers stay attached.
+     */
+    public clearOnIdentityChange(queryClient: QueryClient): void {
+        this.listenForIdentityChange();
+        this.identityWatched.add(queryClient);
+    }
+
+    /**
+     * How many identities the client has retired since this registry started
+     * listening (see `listenForIdentityChange`). A preloaded value is
+     * only good while this is `0`: it was rendered for whoever was signed in
+     * when the page loaded.
+     */
+    public readonly identityEpoch = (): number => this.epoch;
+
+    /**
+     * `useSyncExternalStore` subscribe for `identityEpoch`: registers the
+     * counting listener first, so the epoch has moved by the time `onChange` runs.
+     */
+    public readonly subscribeIdentityEpoch = (onChange: () => void): Unsubscribe => {
+        this.listenForIdentityChange();
+
+        return this.client.onIdentityChange(onChange);
+    };
+
+    /**
+     * Register the one `onIdentityChange` listener that counts epochs and clears
+     * every watched `QueryClient`. Idempotent. Call it before registering any
+     * listener that reads {@link identityEpoch}: listeners fire in insertion
+     * order, so this one must run first.
+     */
+    public listenForIdentityChange(): void {
+        if (this.listening) {
+            return;
+        }
+
+        this.listening = true;
+
+        this.client.onIdentityChange(() => {
+            this.epoch += 1;
+
+            for (const queryClient of this.identityWatched) {
+                const cache = queryClient.getQueryCache();
+
+                for (const query of cache.findAll({ queryKey: ["lunora"] })) {
+                    // Blanked either way: an observer's `placeholderData` can
+                    // still hold a removed query, and must find nothing in it.
+                    blankQuery(query);
+
+                    if (query.getObserversCount() === 0 && !this.hasConsumers(query.queryKey)) {
+                        cache.remove(query);
+                    }
+                }
+            }
+        });
+    }
+
+    /**
      * Attach a consumer to the live subscription for `queryKey`. The first
      * attach opens the underlying WS subscription; subsequent attaches reuse
      * it (refcount-bumped). Returns the detach function — call it exactly once
@@ -184,6 +291,13 @@ class LunoraSubscriptionRegistry {
                     args,
                     (value) => {
                         this.pushes.set(key, (this.pushes.get(key) ?? 0) + 1);
+
+                        if (value === undefined) {
+                            blankQuery(queryClient.getQueryCache().find({ exact: true, queryKey }));
+
+                            return;
+                        }
+
                         queryClient.setQueryData(queryKey, value);
                     },
                     {
