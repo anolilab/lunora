@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.89...@lunora/shard-engine@1.0.0-alpha.90) (2026-09-26)
+
+### Bug Fixes
+
+* **studio:** bigint filter data loss, cross-shard commits, and panel defects ([#844](https://github.com/anolilab/lunora/issues/844)) ([41585c7](https://github.com/anolilab/lunora/commit/41585c7142c20932f2aefbb0fbc84fc52f7e7db8))
+
 ## @lunora/shard-engine [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.88...@lunora/shard-engine@1.0.0-alpha.89) (2026-09-26)
 
 
