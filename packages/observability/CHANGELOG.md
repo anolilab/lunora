@@ -1,3 +1,10 @@
+## @lunora/observability [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.100...@lunora/observability@1.0.0-alpha.101) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.92
+
 ## @lunora/observability [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.99...@lunora/observability@1.0.0-alpha.100) (2026-09-26)
 
 
