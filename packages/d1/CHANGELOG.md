@@ -1,3 +1,16 @@
+## @lunora/d1 [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.146...@lunora/d1@1.0.0-alpha.147) (2026-09-27)
+
+### Code Refactoring
+
+* **sql-store,d1:** remove unused exports ([#882](https://github.com/anolilab/lunora/issues/882)) ([46f0bbb](https://github.com/anolilab/lunora/commit/46f0bbb37098517abc55d67d2876f52969fd0a2c))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.148
+* **@lunora/do:** upgraded to 1.0.0-alpha.177
+
 ## @lunora/d1 [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.145...@lunora/d1@1.0.0-alpha.146) (2026-09-27)
 
 ### Bug Fixes
