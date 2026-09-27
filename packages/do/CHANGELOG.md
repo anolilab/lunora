@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.174...@lunora/do@1.0.0-alpha.175) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** storage origin, presence authz, message window, e2e specs ([#866](https://github.com/anolilab/lunora/issues/866)) ([86f9032](https://github.com/anolilab/lunora/commit/86f903253ed3017876443d30bf33100c766010df))
+
 ## @lunora/do [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.173...@lunora/do@1.0.0-alpha.174) (2026-09-27)
 
 
