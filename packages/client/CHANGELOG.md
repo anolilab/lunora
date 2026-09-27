@@ -1,3 +1,9 @@
+## @lunora/client [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.153...@lunora/client@1.0.0-alpha.154) (2026-09-27)
+
+### Bug Fixes
+
+* **client:** stop retaining durable-stream cancels across sockets ([#870](https://github.com/anolilab/lunora/issues/870)) ([8ea34ea](https://github.com/anolilab/lunora/commit/8ea34ea22a0975ed57cd66774271e8742983dee8))
+
 ## @lunora/client [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.152...@lunora/client@1.0.0-alpha.153) (2026-09-27)
 
 

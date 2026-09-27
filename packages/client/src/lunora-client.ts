@@ -642,7 +642,7 @@ interface ShardConnection {
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
-    pendingUnsubscribes: { durable?: true; id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
+    pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see {@link file://./polling-fallback.ts}). */
     readonly polling: PollingFallback;
     reconnect: ReconnectCalculator;
@@ -870,6 +870,22 @@ const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
     } catch {
         /* socket may have closed between checks; reconnect will handle it */
         return false;
+    }
+};
+
+/** Send the stream-start frames queued while the socket was (re)connecting. */
+const flushPendingStreams = (conn: ShardConnection): void => {
+    if (!conn.pendingStreams || conn.pendingStreams.length === 0) {
+        return;
+    }
+
+    const pending = conn.pendingStreams;
+
+    // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+    conn.pendingStreams = [];
+
+    for (const message of pending) {
+        sendOn(conn, message);
     }
 };
 
@@ -1572,14 +1588,6 @@ class LunoraClient {
             lastSeq: number;
             message: ClientMessage;
             shardKey: string | undefined;
-
-            /**
-             * Whether the start frame ever reached the server. Distinguishes "the
-             * run exists server-side and must be told to stop" from "the frame is
-             * still queued locally and can simply be dropped" — which is the whole
-             * question on the cancel path when the socket is down.
-             */
-            started: boolean;
         }
     >();
 
@@ -4375,8 +4383,13 @@ class LunoraClient {
      * rejection on the next `next()`.
      *
      * Streams ride the same WS as subscriptions and share the unsubscribe
-     * channel: cancelling sends `{type:"unsubscribe", id}` with the stream id,
-     * which the DO recognises as an abort signal for the in-flight iterator.
+     * channel: cancelling sends `{type:"unsubscribe", id}` with the stream id on
+     * the socket the stream runs over. For an ephemeral stream the DO aborts the
+     * in-flight iterator. For a `durable` stream, cancelling detaches this
+     * consumer and the run keeps going: it finishes and stays readable for the
+     * next attach. A cancel made while the socket is down is dropped rather
+     * than queued, because the server already detached every consumer on that
+     * socket when it closed.
      *
      * Stream-start frames buffered while the socket is (re)connecting are
      * capped at {@link MAX_PENDING_STREAMS} per connection — overflowing the
@@ -4436,7 +4449,6 @@ class LunoraClient {
             lastSeq: 0,
             message,
             shardKey,
-            started: false,
         };
 
         this.streams.set(id, record);
@@ -4447,10 +4459,6 @@ class LunoraClient {
         // delivered, so fall through to the bounded pending-queue path below so it
         // rides the next reconnect instead of leaking a forever-hanging consumer.
         const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
-
-        // Once the frame lands the server owns a run for this id, so a later
-        // cancel has to reach it rather than just dropping the local record.
-        record.started = sentImmediately;
 
         if (!sentImmediately && conn === undefined) {
             // No connection at all, so there is nothing to send on AND nothing to
@@ -4742,12 +4750,7 @@ class LunoraClient {
             this.connectionContexts.has(key) ||
             this.connectionContextHolders.has(key) ||
             this.offlineFlushes.has(key) ||
-            this.offlineQueue.hasPending((item) => onShard(item.shardKey)) ||
-            // A durable stream's cancel queued while the socket was down: that run
-            // outlives the socket, so only a reconnect can stop it. (A queued
-            // plain unsubscribe needs no delivery — the server dropped the
-            // subscription with the socket.)
-            (this.connections.get(key)?.pendingUnsubscribes.some((pending) => pending.durable === true) ?? false)
+            this.offlineQueue.hasPending((item) => onShard(item.shardKey))
         );
     }
 
@@ -4835,11 +4838,9 @@ class LunoraClient {
         // Every consumer these frames belonged to was just failed above, and the
         // socket they were waiting on is going away — drop them rather than
         // leaving them attached to a connection record the caller may reuse.
-        // Queued unsubscribes go the same way. The server drops a socket's live
-        // subscriptions when it closes, so those need no message — but a queued
-        // cancel for a DURABLE stream is lost here, and that run keeps producing.
-        // This is why an idle close never runs while any are queued
-        // (`shardInUse`); on `close()` and cross-tab demotion they are dropped.
+        // Queued unsubscribes go the same way: when a socket closes the server
+        // drops its live subscriptions and detaches its stream consumers, so
+        // none of them needs a message.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
         this.clearResubscribeQueue(conn);
@@ -7121,13 +7122,8 @@ class LunoraClient {
                     // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
                     conn.pendingUnsubscribes = [];
 
-                    for (const { durable, id, type } of pending) {
-                        // A durable stream's cancel that fails to send is kept for
-                        // the next reconnect: its run outlives the socket and only
-                        // this frame stops it. A plain unsubscribe needs no retry.
-                        if (!sendOn(conn, { id, type }) && durable === true) {
-                            conn.pendingUnsubscribes.push({ durable, id, type });
-                        }
+                    for (const { id, type } of pending) {
+                        sendOn(conn, { id, type });
                     }
 
                     // Delivering them may leave nothing holding the shard open.
@@ -7138,7 +7134,7 @@ class LunoraClient {
                 // Reconnect-after-close: in-flight streams have already torn down
                 // on the server, so the only entries here are brand-new ones that
                 // raced the connect.
-                this.flushPendingStreams(conn);
+                flushPendingStreams(conn);
 
                 // Rejoin every whisper topic registered for this shard so ephemeral
                 // channels survive a socket bounce.
@@ -7156,37 +7152,11 @@ class LunoraClient {
     }
 
     /**
-     * Send the stream-start frames queued while the socket was (re)connecting,
-     * marking each one that lands as started on the server.
-     */
-    private flushPendingStreams(conn: ShardConnection): void {
-        if (!conn.pendingStreams || conn.pendingStreams.length === 0) {
-            return;
-        }
-
-        const pending = conn.pendingStreams;
-
-        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
-        conn.pendingStreams = [];
-
-        for (const message of pending) {
-            // Reaching the server is what makes a later cancel owe it an
-            // unsubscribe rather than a silent local delete.
-            const stream = sendOn(conn, message) ? this.streams.get(String((message as { id?: string }).id)) : undefined;
-
-            if (stream) {
-                stream.started = true;
-            }
-        }
-    }
-
-    /**
-     * Tear down a stream the consumer cancelled, telling the server when the
-     * server is the one still holding it.
+     * Tear down a stream the consumer cancelled, telling the server when its
+     * socket is up.
      */
     private cancelStream(id: string, shardKey: string | undefined): void {
         const conn = this.getConnection(shardKey);
-        const stream = this.streams.get(id);
 
         if (conn) {
             // Drop a start frame still waiting on the socket. Without this the
@@ -7198,18 +7168,13 @@ class LunoraClient {
             // reached the cancel path.
             conn.pendingStreams = conn.pendingStreams?.filter((pending) => (pending as { id?: string }).id !== id);
 
-            // Dropping the cancel when the socket is down is right only for an
-            // EPHEMERAL run: the DO lost its handle on close, so there is nothing
-            // left to abort. A DURABLE run is the opposite — it outlives the
-            // socket by design, and the line above just removed the resume frame
-            // that would have carried us back to it. Without queueing the
-            // unsubscribe the server keeps producing and persisting a run no one
-            // will ever read, and nothing later says stop. `pendingUnsubscribes`
-            // already flushes ahead of `pendingStreams` on open, so the teardown
-            // lands before any resume that races it.
-            if (!sendOn(conn, { id, type: "unsubscribe" }) && stream?.durable === true && stream.started) {
-                conn.pendingUnsubscribes.push({ durable: true, id, type: "unsubscribe" });
-            }
+            // A cancel that can't be sent is dropped, durable or not. The server
+            // only acts on an `unsubscribe` from the socket the stream is
+            // attached to, and when that socket closed it already aborted an
+            // ephemeral run and detached this consumer from a durable one — a
+            // durable run keeps going either way. Sent on a later socket, the
+            // frame would reach nothing.
+            sendOn(conn, { id, type: "unsubscribe" });
         }
 
         this.forgetStream(id);
