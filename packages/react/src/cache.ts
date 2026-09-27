@@ -112,15 +112,6 @@ class LunoraSubscriptionRegistry {
     public constructor(private readonly client: LunoraClient) {}
 
     /**
-     * Hash a TanStack `queryKey` to the internal registry index. Exposed so a
-     * hook can look up the registry without re-implementing the hash.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method by design: callers reach the hash through a registry handle rather than importing the module-level helper.
-    public keyOf(queryKey: QueryKey): string {
-        return keyHash(queryKey);
-    }
-
-    /**
      * Whether any consumer still holds the subscription for `queryKey`.
      *
      * Read by {@link file://./use-paginated-core.ts} after its own `detach()`:
@@ -395,4 +386,4 @@ const getSubscriptionRegistry = (client: LunoraClient): LunoraSubscriptionRegist
 };
 
 export { getSubscriptionRegistry, LunoraSubscriptionRegistry };
-export { lunoraQueryKey, serializeQueryKey, stableStringify, stableWireKey } from "./query-key";
+export { lunoraQueryKey, serializeQueryKey } from "./query-key";
