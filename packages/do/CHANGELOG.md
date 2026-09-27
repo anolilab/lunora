@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.176...@lunora/do@1.0.0-alpha.177) (2026-09-27)
+
+### Code Refactoring
+
+* **do:** remove unused exports ([#884](https://github.com/anolilab/lunora/issues/884)) ([ef91c62](https://github.com/anolilab/lunora/commit/ef91c6280664a447d9db102a294619a5d172bc70))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+
 ## @lunora/do [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.175...@lunora/do@1.0.0-alpha.176) (2026-09-27)
 
 ### ⚠ BREAKING CHANGES
