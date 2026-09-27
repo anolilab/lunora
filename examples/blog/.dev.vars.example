@@ -9,8 +9,15 @@
 # Required — the worker throws "AUTH_SECRET is required" without it.
 AUTH_SECRET="replace-with-openssl-rand-hex-32"
 
-# Base URL better-auth resolves callback URLs against — the Vite dev origin.
-AUTH_URL="http://localhost:5173"
+# Optional, LOCAL ONLY — the Vite dev origin (`server.port` in vite.config.ts).
+# `@lunora/auth` treats an `http://localhost` value as port-agnostic: it derives
+# the origin from each request, so auth keeps working if Vite falls back to
+# another port, and this value is only the fallback. Keeping an explicit
+# `http://` origin here is what marks the worker as local dev (no `Secure` flag
+# on session cookies). Never put it in `wrangler.jsonc` `vars`, which ship with
+# the deployed worker; left unset there, better-auth resolves the HTTPS origin
+# per request.
+AUTH_URL="http://localhost:5175"
 
 # Required as soon as you use the featured-image upload: `@lunora/storage` signs
 # the direct-to-R2 PUT URL with it, and `getSignedUrl`/`generateUploadUrl` throw
