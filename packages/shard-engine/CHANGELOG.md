@@ -1,3 +1,25 @@
+## @lunora/shard-engine [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.95...@lunora/shard-engine@1.0.0-alpha.96) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** `ApplyOnDeleteOptions` from @lunora/shard-engine now has the
+shape `applyOnDelete` accepts (`deletedId`, `deletedReference`, `findHolders`,
+`onCascade`, `onRestrict`, `onSetNull`, `schema`, `tableName`); the old
+`database`/`relation`/`row` shape is gone.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **shard-engine:** export the options applyOnDelete actually takes ([#889](https://github.com/anolilab/lunora/issues/889)) ([ad1b235](https://github.com/anolilab/lunora/commit/ad1b2356b953a1a166002e2ee242daec51462757))
+
+### Code Refactoring
+
+* **shard-engine:** remove unused re-exports and exports ([#883](https://github.com/anolilab/lunora/issues/883)) ([2e0288b](https://github.com/anolilab/lunora/commit/2e0288bbc6b60f787a5f2abbcb74b4c1a76c166b))
+
 ## @lunora/shard-engine [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.94...@lunora/shard-engine@1.0.0-alpha.95) (2026-09-27)
 
 ### ⚠ BREAKING CHANGES
