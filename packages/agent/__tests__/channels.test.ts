@@ -369,7 +369,7 @@ describe(dispatchAgentChannel, () => {
         await expect(handler(await slackRequest(secret, body), env)).rejects.toThrow(TRANSIENT_FAILURE_PATTERN);
     });
 
-    it("does not dedupe deliveries with an empty event id (falls back to a non-idempotent create)", async () => {
+    it("keys an empty event id on the body: distinct events both run, a replay does not", async () => {
         const { binding, created } = fakeBinding();
         const agent = {
             onInbound: {
@@ -382,19 +382,96 @@ describe(dispatchAgentChannel, () => {
         };
         const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
         const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
-        // An empty (but present) event_id gives no dedup key — each delivery
-        // must start its own run rather than collapsing to a single "slack-" id.
-        const body = JSON.stringify({ event: {}, event_id: "" });
+        // An empty (but present) event_id must not collapse every such event to
+        // one "slack-" id; the body hash keys it instead.
+        const bodyA = JSON.stringify({ event: { ts: "1" }, event_id: "" });
+        const bodyB = JSON.stringify({ event: { ts: "2" }, event_id: "" });
 
-        const first = await handler(await slackRequest(secret, body), env);
-        const second = await handler(await slackRequest(secret, body), env);
+        const responses = [
+            await handler(await slackRequest(secret, bodyA), env),
+            await handler(await slackRequest(secret, bodyB), env),
+            await handler(await slackRequest(secret, bodyA), env),
+        ];
 
-        expect(first.status).toBe(200);
-        expect(second.status).toBe(200);
-        expect(created).toStrictEqual([
-            { input: "hi", threadKey: "t" },
-            { input: "hi", threadKey: "t" },
-        ]);
+        expect(responses.map((response) => response.status)).toStrictEqual([200, 200, 200]);
+        expect(created).toHaveLength(2);
+    });
+
+    it("keys a GitHub run on the signed body, so a replay under a new or missing delivery header starts no run", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "github" as const,
+                map: () => {
+                    return { input: "gh", threadKey: "pr-1" };
+                },
+                secret: "GH_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+        const env = { AGENT_GH: binding, GH_SECRET: "gh-secret" };
+        const body = '{"action":"opened","number":1}';
+        const signature = `sha256=${await hmacHex("gh-secret", body)}`;
+        // The delivery header is NOT covered by GitHub's HMAC — any value (or none) verifies.
+        const send = async (delivery?: string): Promise<Response> =>
+            handler(
+                new Request("https://app/webhooks/agent", {
+                    body,
+                    headers:
+                        delivery === undefined ? { "x-hub-signature-256": signature } : { "x-github-delivery": delivery, "x-hub-signature-256": signature },
+                    method: "POST",
+                }),
+                env,
+            );
+
+        // Honest redelivery, replay under a fresh header, replay with the header dropped.
+        const responses = [await send("d-1"), await send("d-1"), await send("d-2"), await send()];
+
+        expect(responses.map((response) => response.status)).toStrictEqual([200, 200, 200, 200]);
+        expect(created).toStrictEqual([{ input: "gh", threadKey: "pr-1" }]);
+    });
+
+    it("starts one run per distinct GitHub event", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "github" as const,
+                map: () => {
+                    return { input: "gh", threadKey: "pr-1" };
+                },
+                secret: "GH_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+        const env = { AGENT_GH: binding, GH_SECRET: "gh-secret" };
+
+        await handler(await githubRequest("gh-secret", '{"action":"opened","number":1}'), env);
+        await handler(await githubRequest("gh-secret", '{"action":"opened","number":2}'), env);
+
+        expect(created).toHaveLength(2);
+    });
+
+    it("dedupes a replayed Slack payload that carries no event_id", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "hi", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        // Interactive payloads and slash commands carry no event_id.
+        const body = JSON.stringify({ trigger_id: "t-1", type: "block_actions" });
+
+        await handler(await slackRequest(secret, body), env);
+        await handler(await slackRequest(secret, body), env);
+        await handler(await slackRequest(secret, JSON.stringify({ trigger_id: "t-2", type: "block_actions" })), env);
+
+        expect(created).toHaveLength(2);
     });
 
     it("returns 400 for a request with no recognized signature headers", async () => {
