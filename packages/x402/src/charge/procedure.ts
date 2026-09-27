@@ -42,8 +42,8 @@ export interface X402ProcedureSpec {
 
 /**
  * Gate one paid RPC. Returns a real `402` + `PAYMENT-REQUIRED` challenge when the
- * request is unpaid, or the dispatched response (with `X-PAYMENT-RESPONSE`
- * attached) once the client's `X-PAYMENT` is verified and settled. `dispatch`
+ * request is unpaid, or the dispatched response (with `PAYMENT-RESPONSE`
+ * attached) once the client's `PAYMENT-SIGNATURE` is verified and settled. `dispatch`
  * runs the actual shard forward — settlement happens **before** `dispatch` is
  * invoked (settle-first), so a settlement failure means the shard forward
  * (the mutation's commit) never runs at all — no committed-but-unpaid write is

@@ -3,8 +3,8 @@
  *
  * A Lunora deployment gates a resource (an HTTP-action route, a procedure, or
  * an MCP tool) behind a USDC price: it returns `402 Payment Required` with a
- * `PAYMENT-REQUIRED` header, verifies the client's `X-PAYMENT` payload (via a
- * facilitator), runs the handler, settles, and attaches `X-PAYMENT-RESPONSE`.
+ * `PAYMENT-REQUIRED` header, verifies the client's `PAYMENT-SIGNATURE` payload (via a
+ * facilitator), runs the handler, settles, and attaches `PAYMENT-RESPONSE`.
  *
  * `withX402` gates a Lunora HTTP action; `createChargeMiddleware` is the
  * framework-agnostic core for other surfaces (procedures, MCP tools).

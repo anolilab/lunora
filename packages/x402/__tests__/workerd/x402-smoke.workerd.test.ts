@@ -15,7 +15,7 @@
  * Boundary (documented per the plan): the upstream x402 facilitator is mocked
  * at the fetch boundary (only `/supported` answers, so middleware init
  * succeeds; `/verify` + `/settle` reject). Verify + settle require a
- * client-signed `X-PAYMENT` payload and an on-chain settlement — no real chain
+ * client-signed `PAYMENT-SIGNATURE` payload and an on-chain settlement — no real chain
  * calls are made here; the settle-path logic is covered by the Node suite's
  * stubs.
  */

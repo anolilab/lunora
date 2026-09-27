@@ -50,7 +50,7 @@ const paymentVerifiedResult = {
 } as const;
 
 const successSettlement = {
-    headers: { "x-payment-response": "settled" },
+    headers: { "payment-response": "settled" },
     network: "eip155:8453",
     payer: "0xPayer",
     requirements: { amount: "10000", asset: "0xUSDC", payTo: "0x1111111111111111111111111111111111111111" },
@@ -142,7 +142,7 @@ describe("createChargeMiddleware", () => {
         const response = await middleware.handle(new Request("https://api.example/report"), handler, { waitUntil });
 
         expect(handler).toHaveBeenCalledTimes(1);
-        expect(response.headers.get("x-payment-response")).toBe("settled");
+        expect(response.headers.get("payment-response")).toBe("settled");
 
         // The receipt sink ran synchronously (best-effort) and its promise was
         // registered with the injected `waitUntil` so workerd keeps it alive.
@@ -289,5 +289,108 @@ describe("withX402", () => {
 
         expect(response.status).toBe(402);
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+});
+
+/**
+ * The wire names, end to end against the real `@x402/core` v2 server (only the
+ * facilitator is stubbed). A client following the docs sends `PAYMENT-SIGNATURE`
+ * and reads `PAYMENT-RESPONSE`; core v2 does not read v1's `X-PAYMENT`, so that
+ * name is answered with a fresh challenge and nothing is charged.
+ */
+describe("x402 v2 wire headers", () => {
+    const payer = "0x2222222222222222222222222222222222222222";
+    const url = "https://api.example/report";
+
+    const settlingFacilitator = (): string[] => {
+        const calls: string[] = [];
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<(input: RequestInfo | URL) => Promise<Response>>((input) => {
+                const target = requestUrl(input);
+
+                calls.push(target.split("/").pop() ?? target);
+
+                if (target.endsWith("/supported")) {
+                    return Promise.resolve(Response.json({ kinds: [{ network: "eip155:8453", scheme: "exact", x402Version: 2 }] }));
+                }
+
+                if (target.endsWith("/verify")) {
+                    return Promise.resolve(Response.json({ isValid: true, payer }));
+                }
+
+                if (target.endsWith("/settle")) {
+                    return Promise.resolve(Response.json({ network: "eip155:8453", payer, success: true, transaction: "0xabc" }));
+                }
+
+                return Promise.reject(new Error(`unexpected facilitator call: ${target}`));
+            }),
+        );
+
+        return calls;
+    };
+
+    /** Sign the way `@x402/fetch` (v2) does, from the challenge's `PAYMENT-REQUIRED`. */
+    const signedPayment = (challenge: Response): string => {
+        const required = JSON.parse(atob(challenge.headers.get("payment-required") ?? "")) as { accepts: unknown[]; resource: unknown };
+
+        return btoa(
+            JSON.stringify({ accepted: required.accepts[0], payload: { authorization: {}, signature: "0x" }, resource: required.resource, x402Version: 2 }),
+        );
+    };
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("serves a client that sends PAYMENT-SIGNATURE and returns the receipt as PAYMENT-RESPONSE", async () => {
+        expect.assertions(4);
+
+        const calls = settlingFacilitator();
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handler = vi.fn<() => Response>(() => new Response("report"));
+
+        const challenge = await middleware.handle(new Request(url), handler);
+        const paid = await middleware.handle(new Request(url, { headers: { "PAYMENT-SIGNATURE": signedPayment(challenge) } }), handler);
+
+        expect(paid.status).toBe(200);
+        expect(paid.headers.get("payment-response")).not.toBeNull();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(calls).toStrictEqual(["supported", "verify", "settle"]);
+    });
+
+    it("answers the v1 X-PAYMENT name with a fresh challenge and charges nothing", async () => {
+        expect.assertions(3);
+
+        const calls = settlingFacilitator();
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handler = vi.fn<() => Response>(() => new Response("report"));
+
+        const challenge = await middleware.handle(new Request(url), handler);
+        const response = await middleware.handle(new Request(url, { headers: { "X-PAYMENT": signedPayment(challenge) } }), handler);
+
+        expect(response.status).toBe(402);
+        expect(handler).not.toHaveBeenCalled();
+        expect(calls).toStrictEqual(["supported"]);
+    });
+
+    it.each([
+        ["public, max-age=60", "private, max-age=60"],
+        ["public, s-maxage=600, max-age=60", "private, max-age=60"],
+        [undefined, "private"],
+    ])("never lets a paid response carry a shared-cache directive (handler sent %s)", async (sent, expected) => {
+        expect.assertions(2);
+
+        settlingFacilitator();
+
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handler = (): Response => new Response("report", sent === undefined ? {} : { headers: { "cache-control": sent } });
+
+        const challenge = await middleware.handle(new Request(url), handler);
+        const paid = await middleware.handle(new Request(url, { headers: { "PAYMENT-SIGNATURE": signedPayment(challenge) } }), handler);
+
+        expect(paid.status).toBe(200);
+        expect(paid.headers.get("cache-control")).toBe(expected);
     });
 });

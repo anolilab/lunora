@@ -3,10 +3,14 @@
  * Fetch `Request` / `Response`.
  *
  * For each request it runs the four-step protocol — match the route, challenge
- * (`402` + `PAYMENT-REQUIRED`) when unpaid, verify the client's `X-PAYMENT`
- * payload with the facilitator, run the resource handler, then settle on-chain
- * and attach `X-PAYMENT-RESPONSE`. Any Lunora HTTP surface (HTTP actions today,
- * procedures and MCP tools later) wraps its handler with this.
+ * (`402` + `PAYMENT-REQUIRED`) when unpaid, verify the client's
+ * `PAYMENT-SIGNATURE` payload with the facilitator, run the resource handler,
+ * then settle on-chain and attach `PAYMENT-RESPONSE`. Any Lunora HTTP surface
+ * (HTTP actions, procedures, MCP tools) wraps its handler with this.
+ *
+ * These are the x402 v2 header names, and the only ones: `@x402/core` v2 reads
+ * the payment from `PAYMENT-SIGNATURE` alone, so a v1 client sending `X-PAYMENT`
+ * is answered with a fresh `402` challenge and is never charged.
  */
 import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, ProcessSettleSuccessResponse, RouteConfig } from "@x402/core/http";
 import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
@@ -17,8 +21,30 @@ import type { X402ReceiptSink } from "./receipt";
 import { toReceipt } from "./receipt";
 import { buildResourceServer } from "./resource-server";
 
-/** The x402 request header carrying the client's signed payment payload. */
-const PAYMENT_HEADER = "X-PAYMENT";
+/** The x402 v2 request header carrying the client's signed payment payload. */
+const PAYMENT_HEADER = "PAYMENT-SIGNATURE";
+
+/**
+ * A paid response's `Cache-Control`, with every shared-cache directive replaced
+ * by `private`.
+ *
+ * The payment is verified per request, so a paid body stored by a shared cache
+ * (a CDN, a colo cache, a proxy) would be served to the next caller for free,
+ * together with the payer's receipt. The handler may have set `public` for its
+ * unpaid life; once gated, the exchange is the payer's alone.
+ */
+const privateCacheControl = (value: string | null): string => {
+    const kept = (value ?? "")
+        .split(",")
+        .map((directive) => directive.trim())
+        .filter((directive) => {
+            const name = directive.split("=")[0]?.trim().toLowerCase();
+
+            return name !== "" && name !== "public" && name !== "private" && name !== "s-maxage";
+        });
+
+    return ["private", ...kept].join(", ");
+};
 
 /** Snapshot a `Headers` into a plain record (for the settlement transport context). */
 const headerRecord = (headers: Headers): Record<string, string> => {
@@ -186,7 +212,7 @@ export const toResponse = (instructions: HTTPResponseInstructions): Response => 
     return Response.json(body, { headers, status: instructions.status });
 };
 
-/** Return a copy of `response` with `extra` headers (e.g. `X-PAYMENT-RESPONSE`) merged in. */
+/** Return a copy of `response` with `extra` headers (e.g. `PAYMENT-RESPONSE`) merged in. */
 export const withHeaders = (response: Response, extra: Record<string, string>): Response => {
     const headers = new Headers(response.headers);
 
@@ -254,6 +280,10 @@ export const createChargeMiddleware = async (
 
     const settleBeforeHandler = options?.settleBeforeHandler ?? true;
 
+    /** The paid resource: the settlement receipt attached, and never shared-cacheable (see {@link privateCacheControl}). */
+    const paidResponse = (response: Response, settlementHeaders: Record<string, string>): Response =>
+        withHeaders(response, { ...settlementHeaders, "cache-control": privateCacheControl(response.headers.get("cache-control")) });
+
     const handle = async (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps): Promise<Response> => {
         const url = new URL(request.url);
         const context: HTTPRequestContext = {
@@ -297,7 +327,7 @@ export const createChargeMiddleware = async (
 
             const response = await runHandler();
 
-            return withHeaders(response, settlement.headers);
+            return paidResponse(response, settlement.headers);
         }
 
         // Settle-after (opt-in via `settleBeforeHandler: false`): run the handler,
@@ -330,7 +360,7 @@ export const createChargeMiddleware = async (
         if (settlement.success) {
             reportReceipt(config.onReceipt, settlement, resource, deps?.waitUntil);
 
-            return withHeaders(response, settlement.headers);
+            return paidResponse(response, settlement.headers);
         }
 
         // Settlement failed after the handler ran: the client did not actually

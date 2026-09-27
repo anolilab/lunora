@@ -2,7 +2,7 @@
  * Facilitator wiring shared by both rails.
  *
  * A **facilitator** is the third party that actually talks to the chain: it
- * `/verify`s a signed `X-PAYMENT` payload and `/settle`s it on-chain, so neither
+ * `/verify`s a signed `PAYMENT-SIGNATURE` payload and `/settle`s it on-chain, so neither
  * the seller (charge rail) nor the buyer (pay rail) needs an RPC node or a
  * settlement key of its own. The public `x402.org/facilitator` needs no auth; a
  * private / CDP facilitator authenticates per request.
