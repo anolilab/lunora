@@ -928,9 +928,22 @@ class SchedulerDO {
             // that wait deletes the header, and dispatching the copy read earlier
             // would fire a job the caller was told is cancelled. Re-read it here;
             // a miss leaves only the claim key, which is dropped as dangling.
-            if ((await this.state.storage.get(`${HEADER_PREFIX}${record.id}`)) === undefined) {
+            //
+            // Presence alone is not enough: after the cancel, `/schedule` may
+            // have reused the id for a NEW job. That header is not this record,
+            // so it is left alone with its own index entry, and the stale copy is
+            // simply not dispatched. Nothing rewrites a due record's header
+            // between `alarm()` reading it and this claim, so any difference
+            // means a different job.
+            const stored = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${record.id}`);
+
+            if (stored === undefined) {
                 await this.state.storage.delete(claimKey);
 
+                return;
+            }
+
+            if (JSON.stringify(stored) !== JSON.stringify(record)) {
                 return;
             }
 

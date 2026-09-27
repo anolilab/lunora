@@ -453,6 +453,37 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
         expect(scheduler.started).not.toContain("job-6");
         expect(rowsFor(state.storageMap, "job-6")).toStrictEqual([]);
     });
+
+    it("leaves a new job that reused a cancelled queued job's id untouched", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, MAX_CONCURRENT_DISPATCHES + 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-6" }));
+        // The id is free again, so a caller can schedule a different job under it.
+        await scheduler.fetch(post("/schedule", { args: { fresh: true }, functionPath: "jobs.fresh", id: "job-6", scheduledFor: at + 60_000 }));
+
+        scheduler.releaseAll(true);
+        await settle();
+        scheduler.releaseAll(true);
+        await drain;
+
+        // The cancelled copy `alarm()` read is not dispatched, and the new job
+        // keeps its header and its own index entry.
+        expect(scheduler.started).not.toContain("job-6");
+        expect(state.storageMap.get("id:job-6")).toMatchObject({ functionPath: "jobs.fresh" });
+        expect(indexedAt(state.storageMap, "job-6")).toBe(at + 60_000);
+    });
 });
 
 /**
