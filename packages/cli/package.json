@@ -86,7 +86,6 @@
         "@visulima/tui": "catalog:cli",
         "@visulima/tui-kit": "catalog:cli",
         "adm-zip": "catalog:prod",
-        "cfonts": "catalog:cli",
         "csv-parse": "catalog:prod",
         "giget": "catalog:cli",
         "jsonc-parser": "catalog:vite",

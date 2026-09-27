@@ -423,7 +423,6 @@ catalogs:
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
     "@visulima/tui": 4.0.7
     "@visulima/tui-kit": 1.0.10
-    cfonts: ^3.3.1
     giget: 3.3.1
     magic-string: ^1.2.3
     react-reconciler: ^0.33.0
