@@ -175,12 +175,13 @@ const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
 
     const node = schema as Record<string, unknown>;
 
-    // `format` alone, whatever the `type`: `v.bigint()` schemas as
-    // `{format:"int64",type:"string"}` (its decimal-string payload), and it
-    // schemaed as `type:"integer"` before that. Keying on the pair missed the
-    // new spelling, so every bigint got a plain `String` field that sent `"5"` —
-    // which the validator rejects as a string where it demands a bigint.
-    if (node["format"] === "int64") {
+    // `v.bigint()` schemas as `{format:"int64",type:"string"}` (its
+    // decimal-string payload). Keying on `type:"integer"` — its old spelling —
+    // missed that, so every bigint got a plain `String` field that sent `"5"`,
+    // which the validator rejects as a string where it demands a bigint. Only a
+    // string (or type-less) int64 is a bigint: a hand-written `--spec` that
+    // annotates a plain number `int64` is a number and keeps its typed model.
+    if (node["format"] === "int64" && (node["type"] === undefined || node["type"] === "string")) {
         return true;
     }
 
@@ -685,6 +686,36 @@ const assertGeneratable = (namespaces: ReadonlyArray<SdkNamespace>): void => {
     }
 };
 
+/**
+ * Reject two functions whose FINAL member names coincide in one target.
+ *
+ * {@link assertGeneratable} compares PascalCase names, before any target escapes
+ * a keyword — and five targets escape one by appending `_`. So a function named
+ * `self_` and a sibling `self` passed validation and then both became `self_`
+ * in Rust (and `class_`/`class` in Ruby and Python), a duplicate definition the
+ * compiler reports, or in Python a silent shadow. Each such target calls this
+ * over the names it actually emits.
+ */
+const assertDistinctMembers = (namespaces: ReadonlyArray<SdkNamespace>, language: string, memberNames: (method: SdkMethod) => ReadonlyArray<string>): void => {
+    for (const namespace of namespaces) {
+        const seen = new Map<string, string>();
+
+        for (const method of namespace.methods) {
+            for (const name of memberNames(method)) {
+                const clash = seen.get(name);
+
+                if (clash !== undefined && clash !== method.functionPath) {
+                    throw new Error(
+                        `sdk: functions "${clash}" and "${method.functionPath}" both generate the ${language} member "${name}" — rename one so the generated methods stay distinct.`,
+                    );
+                }
+
+                seen.set(name, method.functionPath);
+            }
+        }
+    }
+};
+
 /** Every method in the document, flattened — for imports and summary counts. */
 const allMethods = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArray<SdkMethod> => namespaces.flatMap((namespace) => namespace.methods);
 
@@ -810,6 +841,7 @@ export type { ModelNullPaths, SchemaPath };
 export {
     allMethods,
     argsChoice,
+    assertDistinctMembers,
     assertGeneratable,
     commentText,
     generatedHeaderLines,

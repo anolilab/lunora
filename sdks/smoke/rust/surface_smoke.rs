@@ -47,6 +47,9 @@ fn surface_shapes_reach_the_wire_and_decode() {
     set(r#"{"size":2,"title":"t"}"#);
     let summary = api.items().summary(&HashMap::new(), None).expect("summary");
     assert!(summary.size == 2.0 && summary.title == "t");
+    set(r#"{"title":"t","value":"x"}"#);
+    let detail = api.items().detail(&HashMap::new(), None).expect("detail");
+    assert!(detail.title == "t" && matches!(detail.value, ItemsPickResult::PurpleString(ref value) if value == "x"));
     set(r#""items_1""#);
     let created = api.items().create(
         &ItemsCreateArgs {
@@ -105,6 +108,7 @@ fn surface_shapes_reach_the_wire_and_decode() {
     let want = vec![
         r#"{"args":{},"functionPath":"items:count"}"#.to_owned(),
         r#"{"args":{},"functionPath":"items:summary"}"#.to_owned(),
+        r#"{"args":{},"functionPath":"items:detail"}"#.to_owned(),
         r#"{"args":{"title":"t"},"functionPath":"items:create"}"#.to_owned(),
         r#"{"args":{},"functionPath":"items:clear"}"#.to_owned(),
         r#"{"args":{},"functionPath":"items:tags"}"#.to_owned(),

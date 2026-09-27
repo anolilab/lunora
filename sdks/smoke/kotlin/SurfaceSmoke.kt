@@ -14,6 +14,7 @@ import lunoraapi.Api
 import lunoraapi.models.ItemsClearArgs
 import lunoraapi.models.ItemsCountArgs
 import lunoraapi.models.ItemsCreateArgs
+import lunoraapi.models.ItemsDetailArgs
 import lunoraapi.models.ItemsFindArgs
 import lunoraapi.models.ItemsLabelsArgs
 import lunoraapi.models.ItemsMatchArgs
@@ -54,6 +55,9 @@ fun main() {
     reply = """{"size":2,"title":"t"}"""
     val summary = items.summary(ItemsSummaryArgs())
     expect("summary", summary.size to summary.title, 2.0 to "t")
+    reply = """{"title":"t","value":"x"}"""
+    val detail = items.detail(ItemsDetailArgs())
+    expect("detail", detail.title to detail.value, "t" to text("x"))
     reply = "\"items_1\""
     expect("create", items.create(ItemsCreateArgs(title = "t")), text("items_1"))
     reply = "null"
@@ -88,6 +92,7 @@ fun main() {
         listOf(
             """{"args":{},"functionPath":"items:count"}""",
             """{"args":{},"functionPath":"items:summary"}""",
+            """{"args":{},"functionPath":"items:detail"}""",
             """{"args":{"title":"t"},"functionPath":"items:create"}""",
             """{"args":{},"functionPath":"items:clear"}""",
             """{"args":{},"functionPath":"items:tags"}""",

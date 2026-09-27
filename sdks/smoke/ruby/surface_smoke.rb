@@ -44,6 +44,8 @@ expect.call("count", items.count({}), 2)
 reply.replace('{"size":2,"title":"t"}')
 summary = items.summary({})
 expect.call("summary", [summary.size, summary.title], [2, "t"])
+reply.replace('{"title":"t","value":"x"}')
+expect.call("detail", items.detail({}), { "title" => "t", "value" => "x" })
 reply.replace('"items_1"')
 expect.call("create", items.create(ItemsCreateArgs.from_dynamic!({ "title" => "t" })), "items_1")
 reply.replace("null")
@@ -76,6 +78,7 @@ expect.call("balances", balances, { "rows" => [{ "amount" => five }], "total" =>
 want = [
   '{"args":{},"functionPath":"items:count"}',
   '{"args":{},"functionPath":"items:summary"}',
+  '{"args":{},"functionPath":"items:detail"}',
   '{"args":{"title":"t"},"functionPath":"items:create"}',
   '{"args":{},"functionPath":"items:clear"}',
   '{"args":{},"functionPath":"items:tags"}',

@@ -39,7 +39,7 @@
  */
 
 import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
-import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { argsChoice, assertDistinctMembers, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("rust")
@@ -261,6 +261,7 @@ const renderNamespaceStruct = (namespace: SdkNamespace): string => {
 };
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(namespaces, "Rust", (method) => [memberName(method.functionName), `subscribe_${toSnakeCase(method.functionName)}`]);
     const accessors = namespaces
         .map((namespace) =>
             [

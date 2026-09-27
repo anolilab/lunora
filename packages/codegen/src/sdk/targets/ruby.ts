@@ -27,7 +27,7 @@
  */
 
 import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
-import { allMethods, argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { allMethods, argsChoice, assertDistinctMembers, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("ruby")
@@ -189,19 +189,46 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
  * call on one raised NoMethodError — including `{}` arguments, which render as a
  * Hash alias and made a no-argument function uncallable. A union of scalars
  * does render a struct, but its `from_dynamic!` indexes `schema[:double]`, which
- * current dry-struct rejects ("can't convert Symbol into Hash"). So the test is
- * the object form's first statement, `d = Types::Hash[d]`, inside that class.
- * Everything else degrades to the untyped forms: the decoded result is returned
- * as-is, and the arguments are a plain Hash (`{}`).
+ * current dry-struct rejects ("can't convert Symbol into Hash") — and so does
+ * every struct that reaches one, at any depth, because its own `from_dynamic!`
+ * calls the union's. So a model is typed only when it is an object struct (its
+ * `from_dynamic!` opens with `d = Types::Hash[d]`) AND names no union struct,
+ * directly or through another model. Everything else degrades to the untyped
+ * forms: the decoded result is returned as-is, and the arguments are a plain
+ * Hash (`{}`).
  */
+/** An object `Dry::Struct`: its `from_dynamic!` opens by coercing a Hash. */
+const OBJECT_STRUCT = /^class \w+ < Dry::Struct\n[\s\S]*?def self\.from_dynamic!\(d\)\n\s*d = Types::Hash\[d\]/u;
+
 const structsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
-    const struct = (name: string | undefined): string | undefined =>
-        name !== undefined &&
-        new RegExp(String.raw`^class ${name} < Dry::Struct\n(?:(?!^(?:class|module) )[^])*?def self\.from_dynamic!\(d\)\n\s*d = Types::Hash\[d\]`, "mu").test(
-            models,
-        )
-            ? name
-            : undefined;
+    const classes = new Map<string, string>();
+
+    for (const match of models.matchAll(/^class (\w+)\b[^\n]*\n[\s\S]*?^end$/gmu)) {
+        classes.set(match[1] as string, match[0]);
+    }
+
+    const isObjectStruct = (body: string): boolean => OBJECT_STRUCT.test(body);
+
+    // Seeded with the union structs, then closed over "names a broken model".
+    const broken = new Set([...classes].filter(([, body]) => body.includes("< Dry::Struct") && !isObjectStruct(body)).map(([name]) => name));
+    let grew = true;
+
+    while (grew) {
+        grew = false;
+
+        for (const [name, body] of classes) {
+            if (!broken.has(name) && [...broken].some((other) => new RegExp(String.raw`\b${other}\b`, "u").test(body))) {
+                broken.add(name);
+                grew = true;
+            }
+        }
+    }
+
+    const struct = (name: string | undefined): string | undefined => {
+        const body = name === undefined ? undefined : classes.get(name);
+
+        return body !== undefined && isObjectStruct(body) && !broken.has(name as string) ? name : undefined;
+    };
 
     return namespaces.map((namespace) => {
         return {
@@ -214,6 +241,7 @@ const structsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): R
 };
 
 const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(declared, "Ruby", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
     const namespaces = structsOnly(declared, models);
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");

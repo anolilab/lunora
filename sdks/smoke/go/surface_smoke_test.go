@@ -60,6 +60,9 @@ func TestSurfaceShapesReachTheWireAndDecode(t *testing.T) {
 	reply = `{"size":2,"title":"t"}`
 	summary, err := items.Summary(lunoraapi.ItemsSummaryArgs{}, "")
 	expect("summary", summary, err, lunoraapi.ItemsSummaryResult{Size: 2, Title: "t"})
+	reply = `{"title":"t","value":"x"}`
+	detail, err := items.Detail(lunoraapi.ItemsDetailArgs{}, "")
+	expect("detail", detail, err, map[string]any{"title": "t", "value": "x"})
 	reply = `"items_1"`
 	created, err := items.Create(lunoraapi.ItemsCreateArgs{Title: "t"}, "")
 	expect("create", created, err, lunoraapi.ItemsCreateResult("items_1"))
@@ -107,6 +110,7 @@ func TestSurfaceShapesReachTheWireAndDecode(t *testing.T) {
 	want := []string{
 		`{"args":{},"functionPath":"items:count"}`,
 		`{"args":{},"functionPath":"items:summary"}`,
+		`{"args":{},"functionPath":"items:detail"}`,
 		`{"args":{"title":"t"},"functionPath":"items:create"}`,
 		`{"args":{},"functionPath":"items:clear"}`,
 		`{"args":{},"functionPath":"items:tags"}`,

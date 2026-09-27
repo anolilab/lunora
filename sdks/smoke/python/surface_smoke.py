@@ -53,6 +53,8 @@ async def main() -> None:
     expect("count", await call("2", items.count({})), 2)
     summary = await call('{"size":2,"title":"t"}', items.summary({}))
     expect("summary", (summary.size, summary.title), (2, "t"))
+    detail = await call('{"title":"t","value":"x"}', items.detail({}))
+    expect("detail", (detail.title, detail.value), ("t", "x"))
     expect("create", await call('"items_1"', items.create(ItemsCreateArgs(title="t"))), "items_1")
     expect("clear", await call("null", items.clear({})), None)
     expect("tags", await call('["a"]', items.tags({})), ["a"])
@@ -78,6 +80,7 @@ async def main() -> None:
     want = [
         '{"args":{},"functionPath":"items:count"}',
         '{"args":{},"functionPath":"items:summary"}',
+        '{"args":{},"functionPath":"items:detail"}',
         '{"args":{"title":"t"},"functionPath":"items:create"}',
         '{"args":{},"functionPath":"items:clear"}',
         '{"args":{},"functionPath":"items:tags"}',

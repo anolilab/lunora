@@ -11,6 +11,15 @@ export const summary = query
         return { size: 2, title: "t" };
     });
 
+// An object whose FIELD is a union of scalars — the union model is nested, so a
+// target that only checks the top level still renders it.
+export const detail = query
+    .input({})
+    .output(v.object({ title: v.string(), value: v.union(v.string(), v.number()) }))
+    .query(async () => {
+        return { title: "t", value: "x" };
+    });
+
 export const count = query
     .input({})
     .output(v.number())

@@ -49,6 +49,9 @@ Future<void> main() async {
   reply = '{"size":2,"title":"t"}';
   final summary = await items.summary(<String, Object?>{});
   expect('summary', '${summary.size} ${summary.title}', '2.0 t');
+  reply = '{"title":"t","value":"x"}';
+  final detail = await items.detail(<String, Object?>{});
+  expect('detail', '${detail.title} ${detail.value}', 't x');
   reply = '"items_1"';
   expect('create', await items.create(ItemsCreateArgs(title: 't')), 'items_1');
   reply = 'null';
@@ -95,6 +98,7 @@ Future<void> main() async {
   final want = <String>[
     '{"args":{},"functionPath":"items:count"}',
     '{"args":{},"functionPath":"items:summary"}',
+    '{"args":{},"functionPath":"items:detail"}',
     '{"args":{"title":"t"},"functionPath":"items:create"}',
     '{"args":{},"functionPath":"items:clear"}',
     '{"args":{},"functionPath":"items:tags"}',

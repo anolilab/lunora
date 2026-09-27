@@ -17,6 +17,8 @@ import lunoraapi.Api;
 import lunoraapi.models.ItemsClearArgs;
 import lunoraapi.models.ItemsCountArgs;
 import lunoraapi.models.ItemsCreateArgs;
+import lunoraapi.models.ItemsDetailArgs;
+import lunoraapi.models.ItemsDetailResult;
 import lunoraapi.models.ItemsFindArgs;
 import lunoraapi.models.ItemsLabelsArgs;
 import lunoraapi.models.ItemsMatchArgs;
@@ -65,6 +67,9 @@ public final class SurfaceSmoke {
         reply = "{\"size\":2,\"title\":\"t\"}";
         ItemsSummaryResult summary = items.summary(new ItemsSummaryArgs(), null);
         expect("summary", summary.size + " " + summary.title, "2.0 t");
+        reply = "{\"title\":\"t\",\"value\":\"x\"}";
+        ItemsDetailResult detail = items.detail(new ItemsDetailArgs(), null);
+        expect("detail", detail.title + " " + detail.value, "t x");
         reply = "\"items_1\"";
         expect("create", items.create(new ItemsCreateArgs(null, "t"), null), "items_1");
         reply = "null";
@@ -107,6 +112,7 @@ public final class SurfaceSmoke {
                 List.of(
                         "{\"args\":{},\"functionPath\":\"items:count\"}",
                         "{\"args\":{},\"functionPath\":\"items:summary\"}",
+                        "{\"args\":{},\"functionPath\":\"items:detail\"}",
                         "{\"args\":{\"title\":\"t\"},\"functionPath\":\"items:create\"}",
                         "{\"args\":{},\"functionPath\":\"items:clear\"}",
                         "{\"args\":{},\"functionPath\":\"items:tags\"}",

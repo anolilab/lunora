@@ -45,6 +45,11 @@ expect("count", "\(try items.count([:]))", "2.0")
 reply = #"{"size":2,"title":"t"}"#
 let summary = try items.summary([:])
 expect("summary", "\(summary.size) \(summary.title)", "2.0 t")
+reply = #"{"title":"t","value":"x"}"#
+let detail = try items.detail([:])
+guard detail.title == "t", case .string("x") = detail.value else {
+    fatalError("detail decoded to \(detail)")
+}
 reply = #""items_1""#
 expect("create", try items.create(ItemsCreateArgs(note: nil, title: "t")), "items_1")
 reply = "null"
@@ -87,6 +92,7 @@ else {
 let want = [
     #"{"args":{},"functionPath":"items:count"}"#,
     #"{"args":{},"functionPath":"items:summary"}"#,
+    #"{"args":{},"functionPath":"items:detail"}"#,
     #"{"args":{"title":"t"},"functionPath":"items:create"}"#,
     #"{"args":{},"functionPath":"items:clear"}"#,
     #"{"args":{},"functionPath":"items:tags"}"#,

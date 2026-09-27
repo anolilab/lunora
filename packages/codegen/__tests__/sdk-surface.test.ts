@@ -102,6 +102,66 @@ describe("generated SDKs over the sdk-surface spec", () => {
         expect(surface).not.toMatch(/\bItemsFindResult\b/u);
     });
 
+    it("ruby: leaves untyped any model that reaches a scalar union at any depth", async () => {
+        expect.assertions(2);
+
+        const { surface } = await generate("ruby");
+
+        // `detail` is an object whose `value` field is `string | number`: its
+        // struct's `from_dynamic!` calls the union's, which dry-struct rejects.
+        expect(surface).toContain(`@client.query("items:detail", args, shard_key)`);
+        expect(surface).not.toMatch(/ItemsDetail\w*\.from_dynamic!/u);
+    });
+
+    it.each(["python", "ruby", "rust"])("%s: rejects two functions whose emitted member names collide", async (language) => {
+        expect.assertions(1);
+
+        // Distinct PascalCase (`GetURL`, `GetUrl`), so the language-neutral check
+        // passes them — but snake_case folds both to `get_url`.
+        const method = (name: string): OpenRpcDocument["methods"][number] => {
+            return { name, params: [{ name: "args", schema: { properties: {}, type: "object" } }], "x-lunora-function-kind": "query" };
+        };
+
+        await expect(generateSdk({ methods: [method("things:getURL"), method("things:getUrl")] }, SDK_TARGETS[language]!)).rejects.toThrow(
+            /both generate the \w+ member "get_url"/u,
+        );
+    });
+
+    it("keeps a typed model for a plain number a hand-written spec annotates int64", () => {
+        expect.assertions(3);
+
+        expect(hasUnrepresentableWireType({ format: "int64", type: "number" })).toBe(false);
+        expect(hasUnrepresentableWireType({ format: "int64", type: "integer" })).toBe(false);
+        expect(hasUnrepresentableWireType({ format: "int64" })).toBe(true);
+    });
+
+    it("dart: fails generation when a declared model has no decoder by the expected name", () => {
+        expect.assertions(1);
+
+        const namespaces = [
+            {
+                methods: [
+                    {
+                        argsNullPaths: { nullable: [], optional: [] },
+                        argsType: undefined,
+                        functionName: "get",
+                        functionPath: "things:get",
+                        namespace: "things",
+                        resultType: "ThingsGetResult",
+                        summary: "query: things:get",
+                        takesArgs: false,
+                        verb: "query" as const,
+                    },
+                ],
+                name: "things",
+            },
+        ];
+        // A decoder spelled any other way than `thingsGetResultFromJson`.
+        const models = "ThingsGetResult ThingsGetResultFromJson(String str) => ThingsGetResult.fromJson(json.decode(str));\n\nclass ThingsGetResult {}\n";
+
+        expect(() => SDK_TARGETS["dart"]!.render({ models, namespaces })).toThrow(/no top-level decoder "thingsGetResultFromJson"/u);
+    });
+
     it("swift: emits no per-shape convenience extension and no comment-only type", async () => {
         expect.assertions(3);
 
