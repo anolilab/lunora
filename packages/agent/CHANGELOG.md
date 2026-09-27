@@ -1,3 +1,14 @@
+## @lunora/agent [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.147...@lunora/agent@1.0.0-alpha.148) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/agent [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.146...@lunora/agent@1.0.0-alpha.147) (2026-09-27)
 
 
