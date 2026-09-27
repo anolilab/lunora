@@ -757,9 +757,11 @@ Future<void> caseIdentityChangeDiscardsQueuedWrites() async {
 
 /// The identity stamp is a digest, not the token: an app's queue file must not
 /// become somewhere a bearer token sits at rest. The values are the reference
-/// client's, read from the shared fixture python asserts too, so no port can
+/// client's, read from the shared fixture every port asserts, so none can
 /// drift from it silently.
-void caseTokenDigestMatchesTheReferenceClient() {
+Future<void> caseTokenDigestMatchesTheReferenceClient() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
   for (final raw in _scenario('tokenIdentity')['digests']! as List<Object?>) {
     final spec = raw! as Map<String, Object?>;
     final token = spec['token']! as String;
@@ -773,6 +775,39 @@ void caseTokenDigestMatchesTheReferenceClient() {
     'subj:user_1',
     'a subject wins over the token, so a refresh keeps the queue',
   );
+
+  // The account switch: with no subject, a write queued under one token is
+  // never sent with another, and replays under the one it was queued with.
+  final tokenSwitch = _scenario('tokenIdentity')['accountSwitch']! as Map<String, Object?>;
+  final queuedUnder = tokenSwitch['queuedUnder']! as String;
+
+  for (final flushedUnder in <String>[tokenSwitch['flushedUnder']! as String, queuedUnder]) {
+    final poster = Poster(result: 'null');
+    final client = LunoraClient(url: 'https://app.example', post: poster.call, authToken: queuedUnder)
+      ..attachSocket((_) {})
+      ..setConnected(true)
+      ..setConnected(false);
+    final pending = client.mutation('messages:send');
+
+    client
+      ..authToken = flushedUnder
+      ..setConnected(true);
+
+    if (flushedUnder == queuedUnder) {
+      await pending;
+      equals(canonical(poster.headers.map((headers) => headers['authorization']).toList()), canonical(<Object?>['Bearer $queuedUnder']),
+          'the same token replays the write');
+    } else {
+      try {
+        await pending;
+        failures.add('a write queued under another token should reject');
+      } on LunoraApiException catch (error) {
+        equals(error.code, offlineIdentityChanged, 'the discarded write names why');
+      }
+
+      equals(poster.paths.length, 0, 'the previous token\'s write is never sent with the next one');
+    }
+  }
 }
 
 /// A reconnect that lands WHILE a flush is running must not be dropped: the

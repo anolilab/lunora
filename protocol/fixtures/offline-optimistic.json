@@ -214,7 +214,7 @@
             "code": "OFFLINE_IDENTITY_CHANGED"
         },
         "tokenIdentity": {
-            "$comment": "With no explicit subject set, a queued write is stamped with a DIGEST of the bearer token (never the token itself, which would put a credential at rest in the queue store), so a different token is a different identity. The digest is the reference client's `hashToken`: over UTF-16 code units, a 32-bit FNV-1a and a 32-bit djb2 side by side, each base36, prefixed by the token's length in code units and joined with `:`. No token and no subject stamps `null`. Two vectors carry a surrogate pair, because a code-point walk would produce a different digest there and nowhere else. Only the ports that derive an identity from the token assert these vectors (the reference in packages/client/__tests__/protocol-conformance.test.ts, dart, python); the capability matrix in sdks/README.md records which.",
+            "$comment": "With no explicit subject set, a queued write is stamped with a DIGEST of the bearer token (never the token itself, which would put a credential at rest in the queue store), so a different token is a different identity. The digest is the reference client's `hashToken`: over UTF-16 code units, a 32-bit FNV-1a and a 32-bit djb2 side by side, each base36, prefixed by the token's length in code units and joined with `:`. No token and no subject stamps `null`. Two vectors carry a surrogate pair, because a code-point walk would produce a different digest there and nowhere else. Every port asserts these vectors (the reference in packages/client/__tests__/protocol-conformance.test.ts, and all eight SDKs under `offline_unset_identity_stamps_token_digest` in protocol/conformance-cases.json). `accountSwitch` is the account switch that case replays: with no identity set, one write is queued under `queuedUnder`, the token is replaced by `flushedUnder`, and a flush sends NOTHING and rejects the write with `identityGate.code`, where stamping `null` would have matched `null` and sent user A's write with user B's bearer. Flushed under `queuedUnder` instead, the same write replays with it.",
             "digests": [
                 { "token": "", "digest": "0:ztntfp:45h" },
                 { "token": "a", "digest": "1:1r9wi7g:3t3a" },
@@ -224,7 +224,8 @@
                 { "token": "eyJhbGciOiJIUzI1NiJ9.payload.sig", "digest": "w:t846r5:1i09z6p" },
                 { "token": "caf\u00e9-\ud83d\ude00", "digest": "7:153fab2:1dk3l6q" },
                 { "token": "\ud83d\udd11\u00fcn\u00efcode", "digest": "9:zq7trr:4ipgmf" }
-            ]
+            ],
+            "accountSwitch": { "queuedUnder": "token-a", "flushedUnder": "token-b" }
         },
         "batchReplay": {
             "$comment": "Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip instead of N single calls — the flaky-reconnect win. The worker forwards each entry to its shard, which dispatches it through the ordinary single-call path, so per-entry `mutationId` idempotency is inherited rather than re-implemented: the key rides in the ENTRY, not in a request header, because a batch is one hop carrying independent calls. `clientId` rides with it for the same reason the header does — the shard namespaces an anonymous caller's de-duplication rows by it. Slot classification mirrors the single-call path exactly, with one rule that only a batch can express: a slot carrying a TRANSIENT shard code is not a verdict, so that write goes back on the queue rather than being reported as failed. A slot the server never returned (`m4`) is likewise retried, since it may or may not have committed and the idempotency key makes that safe.",
