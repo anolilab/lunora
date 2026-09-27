@@ -1703,6 +1703,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `ReplayCredential` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ReplayIdentityVerdict` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `ReturnOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1942,6 +1950,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `httpStream` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `isAuthReplayFailure` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isConflictError` (const)
 

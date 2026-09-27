@@ -1,6 +1,8 @@
+import { LunoraClient } from "@lunora/client";
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { WriteRejectedEvent } from "../src";
 import {
     bindMutators,
     createCheckpointRegistry,
@@ -122,15 +124,18 @@ const makeClient = (options?: { baseline?: number; identity?: string | null; mut
         confirmedMutationWatermark: () => 0,
         currentBaseline: () => baseline,
         currentIdentity: () => identity,
+        getAuthToken: () => null,
         mutation,
         // Mirrors `LunoraClient.replayIdentityVerdict`: nobody signed in yet is
-        // "unknown" (hold the write), a different user is "mismatch" (drop it).
-        replayIdentityVerdict: (stamped: null | string | undefined): "match" | "mismatch" | "unknown" => {
+        // "unknown" (hold the write), a different user is "mismatch" (drop it). A
+        // match carries the credential it was judged under, which the replay must
+        // hand back; `{ judged }` stands in for the client's opaque one.
+        replayIdentityVerdict: (stamped: null | string | undefined) => {
             if (stamped === identity) {
-                return "match";
+                return { credential: { judged: stamped }, verdict: "match" as const };
             }
 
-            return identity === null ? "unknown" : "mismatch";
+            return { verdict: identity === null ? ("unknown" as const) : ("mismatch" as const) };
         },
         subscribe: vi.fn<() => () => void>(() => () => undefined),
     };
@@ -208,7 +213,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: null, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
 
         await vi.waitFor(() => {
@@ -238,7 +243,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: 10, replayIdentity: "user-a", shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: 10, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
     });
 
@@ -381,7 +386,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(database.pendingCount()).toBe(0);
         // Sent once, naming the user who queued it; the retry never went out.
         expect(mutation).toHaveBeenCalledTimes(1);
-        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayIdentity: "user-a" });
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayCredential: { judged: "user-a" } });
         // Dropped by the identity guard, not by the refusal itself.
         expect(onWriteRejected.mock.calls.map(([event]) => event.code)).toStrictEqual([undefined]);
     });
@@ -420,8 +425,18 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         // Both attempts replayed under the SAME idempotency key — and the same
         // pinned baseline, so a retry that lands minutes later is still judged
         // against what the write's author could see.
-        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: undefined });
-        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({ mutationId: "c1:1", replayBaseline: null, replayIdentity: "user-a", shardKey: undefined });
+        expect(mutation.mock.calls[0]?.[2]).toStrictEqual({
+            mutationId: "c1:1",
+            replayBaseline: null,
+            replayCredential: { judged: "user-a" },
+            shardKey: undefined,
+        });
+        expect(mutation.mock.calls[1]?.[2]).toStrictEqual({
+            mutationId: "c1:1",
+            replayBaseline: null,
+            replayCredential: { judged: "user-a" },
+            shardKey: undefined,
+        });
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
@@ -791,5 +806,334 @@ describe("subpath barrels", () => {
     it("@lunora/db/mutators re-exports the client-mutator runtime", () => {
         expect(mutatorsBindMutators).toBe(bindMutators);
         expect(mutatorsDefineMutator).toBe(defineMutator);
+    });
+});
+
+/**
+ * The outbox's replay is two public client calls — the identity verdict, then
+ * the send — and a token change between them must not put a write judged as one
+ * user's on another user's bearer: a bearer request carries no `expectSubject`
+ * for the worker to refuse it on. Driven through a real `LunoraClient` over a
+ * fake transport, because the defect lives in what the request actually carries.
+ */
+describe("durable outbox replay credential", () => {
+    const RPC_URL = "https://app.example/_lunora/rpc";
+
+    const clients: LunoraClient[] = [];
+
+    /** A real client whose `/rpc` answers come from `respond`; every RPC's function path and bearer is recorded. */
+    const realClient = (respond: (authorization: string | undefined, functionPath: string) => Response) => {
+        const requests: { authorization: string | undefined; functionPath: string }[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (input !== RPC_URL) {
+                return new Response("{}", { status: 404 });
+            }
+
+            const authorization = (init?.headers as Record<string, string> | undefined)?.authorization;
+            const { functionPath } = JSON.parse(init?.body as string) as { functionPath: string };
+
+            requests.push({ authorization, functionPath });
+
+            return respond(authorization, functionPath);
+        });
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example" });
+
+        clients.push(client);
+
+        return { client, requests };
+    };
+
+    const ok = (): Response => Response.json({ result: "ok" });
+    const expired = (): Response => Response.json({ error: { code: "UNAUTHENTICATED", message: "token expired" } }, { status: 401 });
+
+    /** The bearers the outbox's replays of `messages:send` went out with, in order. */
+    const replayBearers = (requests: { authorization: string | undefined; functionPath: string }[]): (string | undefined)[] =>
+        requests.filter((request) => request.functionPath === "messages:send").map((request) => request.authorization);
+
+    const write = (key: string, functionPath = "messages:send") =>
+        ({ args: { text: key }, clientId: "c1", functionPath, idempotencyKey: key, identity: "subj:user-a", mutationId: 1 }) as never;
+
+    const startOutbox = async (client: LunoraClient, options?: Parameters<typeof defineCollections>[2]) => {
+        const database = defineCollections(client, {}, options);
+
+        executors.push(database.executor);
+        await database.executor.waitForInit();
+
+        return { database, sink: createExecutorOutboxSink(database.executor) };
+    };
+
+    /** Run `between` once, right after the next identity verdict and before the replay it gates is sent. */
+    const betweenVerdictAndSend = (client: LunoraClient, between: () => void): void => {
+        const verdict = client.replayIdentityVerdict.bind(client);
+
+        vi.spyOn(client, "replayIdentityVerdict").mockImplementationOnce((stamped) => {
+            const judged = verdict(stamped);
+
+            between();
+
+            return judged;
+        });
+    };
+
+    beforeEach(() => {
+        vi.stubGlobal("localStorage", memoryLocalStorage());
+        vi.stubGlobal("window", globalThis);
+        vi.stubGlobal("navigator", { locks: memoryWebLocks() });
+    });
+
+    afterEach(() => {
+        for (const executor of executors.splice(0)) {
+            executor.dispose();
+        }
+
+        for (const client of clients.splice(0)) {
+            client.close();
+        }
+
+        vi.unstubAllGlobals();
+    });
+
+    it("sends the replay with the token its verdict judged, re-judges the next one, and leaves normal mutations on the live token", async () => {
+        const { client, requests } = realClient(ok);
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        let normal: Promise<unknown> | undefined;
+
+        client.setAuthToken("token-a", "user-a");
+
+        // User B signs in after A's first write was judged, and fires a normal
+        // mutation of their own while that replay is still in flight.
+        betweenVerdictAndSend(client, () => {
+            client.setAuthToken("token-b", "user-b");
+            normal = client.mutation({ __lunoraRef: "notes:touch" }, {});
+        });
+
+        const { database, sink } = await startOutbox(client, { onWriteRejected: rejected });
+
+        await sink.enqueue(write("c1:1"));
+        await sink.enqueue(write("c1:2"));
+
+        await vi.waitFor(() => {
+            expect(rejected).toHaveBeenCalledTimes(1);
+            expect(database.pendingCount()).toBe(0);
+        });
+        await normal;
+
+        // A's first write went out once, on A's bearer; A's second was judged
+        // under B, dropped, and never sent at all.
+        expect(replayBearers(requests)).toStrictEqual(["Bearer token-a"]);
+        expect(rejected).toHaveBeenCalledTimes(1);
+        // B's own write is not pinned to anything: it rides the live token.
+        expect(requests.filter((request) => request.functionPath === "notes:touch").map((request) => request.authorization)).toStrictEqual(["Bearer token-b"]);
+    });
+
+    it("holds a replay refused for an expired token, notifies once, and re-sends it under the refreshed one", async () => {
+        const { client, requests } = realClient((authorization) => (authorization === "Bearer token-a" ? expired() : ok()));
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        // The app refreshes the same user's token when told the old one expired.
+        const onExpired = vi.fn<() => void>(() => {
+            client.setAuthToken("token-a2", "user-a");
+        });
+
+        client.setAuthToken("token-a", "user-a");
+        client.onTokenExpired(onExpired);
+
+        const { database, sink } = await startOutbox(client, { onWriteRejected: rejected });
+
+        await sink.enqueue(write("c1:1"));
+
+        await vi.waitFor(
+            () => {
+                expect(replayBearers(requests)).toHaveLength(2);
+                expect(database.pendingCount()).toBe(0);
+            },
+            { timeout: 8000 },
+        );
+
+        expect(replayBearers(requests)).toStrictEqual(["Bearer token-a", "Bearer token-a2"]);
+        expect(onExpired).toHaveBeenCalledTimes(1);
+        expect(rejected).not.toHaveBeenCalled();
+    }, 10_000);
+
+    it("does not report a refusal of a token the app already replaced, and re-sends under the current one", async () => {
+        const { client, requests } = realClient((authorization) => (authorization === "Bearer token-a" ? expired() : ok()));
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const onExpired = vi.fn<() => void>();
+
+        client.setAuthToken("token-a", "user-a");
+        client.onTokenExpired(onExpired);
+
+        // A same-user refresh lands after the verdict: the replay still goes out
+        // on the token it was judged under, and that token's 401 is stale news.
+        betweenVerdictAndSend(client, () => {
+            client.setAuthToken("token-a2", "user-a");
+        });
+
+        const { database, sink } = await startOutbox(client, { onWriteRejected: rejected });
+
+        await sink.enqueue(write("c1:1"));
+
+        await vi.waitFor(
+            () => {
+                expect(replayBearers(requests)).toHaveLength(2);
+                expect(database.pendingCount()).toBe(0);
+            },
+            { timeout: 8000 },
+        );
+
+        expect(replayBearers(requests)).toStrictEqual(["Bearer token-a", "Bearer token-a2"]);
+        expect(onExpired).not.toHaveBeenCalled();
+        expect(rejected).not.toHaveBeenCalled();
+    }, 10_000);
+
+    describe("refusals", () => {
+        const refusal = (code: string, message: string): Response => Response.json({ error: { code, message } }, { status: 401 });
+
+        const sendsOf = (requests: { functionPath: string }[], functionPath: string): number =>
+            requests.filter((request) => request.functionPath === functionPath).length;
+
+        /** Twenty simulated seconds of the executor's one-second drain tick. */
+        const twentySeconds = async (): Promise<void> => {
+            await vi.advanceTimersByTimeAsync(20_000);
+        };
+
+        const startFakeOutbox = async (client: LunoraClient, options?: Parameters<typeof defineCollections>[2]) => {
+            const database = defineCollections(client, {}, options);
+
+            executors.push(database.executor);
+
+            const ready = database.executor.waitForInit();
+
+            await vi.advanceTimersByTimeAsync(0);
+            await ready;
+
+            return { database, sink: createExecutorOutboxSink(database.executor) };
+        };
+
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("rejects a write refused UNAUTHORIZED once, without re-sending it or holding the writes behind it", async () => {
+            // The app's own verdict on this write, as in the chess example.
+            const { client, requests } = realClient((_authorization, functionPath) => {
+                if (functionPath === "games:move") {
+                    return refusal("UNAUTHORIZED", "you are not playing in this game");
+                }
+
+                return ok();
+            });
+            const onExpired = vi.fn<() => void>();
+            const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+
+            client.setAuthToken("token-a", "user-a");
+            client.onTokenExpired(onExpired);
+
+            const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+            await sink.enqueue(write("k1", "games:move"));
+            await sink.enqueue(write("k2"));
+            await twentySeconds();
+
+            expect(sendsOf(requests, "games:move")).toBe(1);
+            expect(sendsOf(requests, "messages:send")).toBe(1);
+            expect(rejected).toHaveBeenCalledTimes(1);
+            expect(rejected.mock.calls[0]?.[0].code).toBe("UNAUTHORIZED");
+            expect(onExpired).not.toHaveBeenCalled();
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        it("parks a write refused for an expired token without re-sending it, and rejects it if no fresh token arrives", async () => {
+            const { client, requests } = realClient((authorization) => (authorization === "Bearer token-a" ? expired() : ok()));
+            const onExpired = vi.fn<() => void>();
+            const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+            const rolledBack = vi.fn<() => void>();
+
+            client.setAuthToken("token-a", "user-a");
+            client.onTokenExpired(onExpired);
+
+            const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+            await sink.enqueue({ ...(write("k1") as object), onRejected: rolledBack } as never);
+            await sink.enqueue(write("k2"));
+            await twentySeconds();
+
+            // Sent once, then parked on the refused token: nothing re-sent, nothing
+            // behind it sent under a token the worker already refused.
+            expect(replayBearers(requests)).toStrictEqual(["Bearer token-a"]);
+            expect(onExpired).toHaveBeenCalledTimes(1);
+            expect(rejected).not.toHaveBeenCalled();
+            expect(database.pendingCount()).toBe(2);
+
+            // The app never refreshes: the write is rejected and rolled back, and the
+            // one behind it is sent (and refused) in turn.
+            await vi.advanceTimersByTimeAsync(60_000);
+
+            expect(rejected.mock.calls.map(([event]) => event.code)).toContain("UNAUTHENTICATED");
+            expect(rolledBack).toHaveBeenCalledTimes(1);
+            expect(replayBearers(requests).length).toBeLessThanOrEqual(2);
+        });
+
+        it("re-sends a parked write promptly once the token is refreshed", async () => {
+            const { client, requests } = realClient((authorization) => (authorization === "Bearer token-a" ? expired() : ok()));
+            const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+
+            client.setAuthToken("token-a", "user-a");
+
+            const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+            await sink.enqueue(write("k1"));
+            await sink.enqueue(write("k2"));
+            await vi.advanceTimersByTimeAsync(16_000);
+
+            client.setAuthToken("token-a2", "user-a");
+            await vi.advanceTimersByTimeAsync(3000);
+
+            expect(replayBearers(requests)).toStrictEqual(["Bearer token-a", "Bearer token-a2", "Bearer token-a2"]);
+            expect(rejected).not.toHaveBeenCalled();
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        it("rejects a write whose refreshed token is refused too, instead of holding it again", async () => {
+            const { client, requests } = realClient(() => expired());
+            const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+
+            client.setAuthToken("token-a", "user-a");
+
+            const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+            await sink.enqueue(write("k1"));
+            await vi.advanceTimersByTimeAsync(2000);
+
+            client.setAuthToken("token-a2", "user-a");
+            await twentySeconds();
+
+            expect(replayBearers(requests)).toStrictEqual(["Bearer token-a", "Bearer token-a2"]);
+            expect(rejected).toHaveBeenCalledTimes(1);
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        it("rejects and rolls back a write refused by a 401 with no readable body", async () => {
+            const { client, requests } = realClient(
+                () => new Response("<html>401 Unauthorized</html>", { headers: { "content-type": "text/html" }, status: 401 }),
+            );
+            const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+            const rolledBack = vi.fn<() => void>();
+
+            client.setAuthToken("token-a", "user-a");
+
+            const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+            await sink.enqueue({ ...(write("k1") as object), onRejected: rolledBack } as never);
+            await twentySeconds();
+
+            expect(replayBearers(requests)).toHaveLength(1);
+            expect(rejected).toHaveBeenCalledTimes(1);
+            expect(rolledBack).toHaveBeenCalledTimes(1);
+            expect(database.pendingCount()).toBe(0);
+        });
     });
 });

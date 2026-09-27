@@ -314,7 +314,7 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
         // gate lands exactly here, as does `hydrateOnStart`'s reseed.
         getIdentityStore(client);
 
-        expect(client.replayIdentityVerdict(null)).toBe("unknown");
+        expect(client.replayIdentityVerdict(null).verdict).toBe("unknown");
 
         let seeded: unknown;
 
@@ -362,7 +362,7 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
 
         // The probe is over and named nobody. That is not the same as being
         // told there is no session — the next probe may still say `subj:<id>`.
-        expect(client.replayIdentityVerdict(null)).toBe("unknown");
+        expect(client.replayIdentityVerdict(null).verdict).toBe("unknown");
 
         let seeded: unknown;
 
@@ -402,7 +402,7 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
 
         await client.whenReady();
 
-        expect(client.replayIdentityVerdict(null)).toBe("match");
+        expect(client.replayIdentityVerdict(null).verdict).toBe("match");
 
         let seeded: unknown;
 
@@ -432,7 +432,7 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
         await settle();
 
         expect(client.currentIdentity()).toBeNull();
-        expect(client.replayIdentityVerdict(null)).toBe("match");
+        expect(client.replayIdentityVerdict(null).verdict).toBe("match");
 
         client.close();
     });

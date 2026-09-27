@@ -294,7 +294,15 @@ you writing sync glue:
    rolls the layer back.
 4. **Identity is the trust boundary.** A token change between sessions drops both
    the cached reads and the queued writes rather than replaying them under the
-   new identity.
+   new identity. A replay is sent with the token its identity check judged, never
+   one swapped in afterwards. A replay refused for its token (`TOKEN_EXPIRED` or
+   `UNAUTHENTICATED`) stays queued, and so do the writes behind it: `onTokenExpired`
+   fires once, nothing is re-sent under the refused token, and the write goes out
+   again after `setAuthToken` hands the client a fresh one. In `@lunora/db`, if no
+   fresh token arrives within a minute, or the fresh one is refused too, the write
+   is rejected: `onWriteRejected` receives the refusal's code and the optimistic
+   row rolls back. `UNAUTHORIZED` is the app's own verdict on the write ("Sign in
+   to post"), so it is rejected straight away, never held.
 
 ## Write ordering
 
