@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import type { JWTVerifyGetKey } from "jose";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 
 import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
 import type { AccessClaims, AccessJwtFallbackOptions, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
@@ -198,8 +198,14 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
  * {@link verifyAccessJwt} call, and the `onError`-observed fail-closed catch all
  * live here. `onError` fires for a present-but-invalid token, never for an
  * absent one.
+ *
+ * With `acceptExpired`, a token that failed ONLY on its `exp` still yields its
+ * claims (their past `exp` included). `jose` checks the signature, then `iss`
+ * and `aud`, before `exp`, so such a token is a genuine credential that has
+ * lapsed — which the caller must be able to tell from "no identity" to answer
+ * `TOKEN_EXPIRED` instead of running the request anonymous.
  */
-const verifyRequest = async (request: Request, options: RequestVerifyOptions): Promise<AccessClaims | undefined> => {
+const verifyRequest = async (request: Request, options: RequestVerifyOptions, acceptExpired = false): Promise<AccessClaims | undefined> => {
     const headerName = (options.headerName ?? DEFAULT_HEADER).toLowerCase();
     const cookieName = options.cookieName ?? DEFAULT_COOKIE;
     const token = readToken(request, headerName, cookieName);
@@ -219,6 +225,10 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions): P
             options.onError?.(error, request);
         } catch {
             /* ignore observer errors — fail closed regardless */
+        }
+
+        if (acceptExpired && error instanceof errors.JWTExpired && error.claim === "exp") {
+            return error.payload;
         }
 
         return undefined;

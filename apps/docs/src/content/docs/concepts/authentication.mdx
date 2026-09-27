@@ -277,6 +277,41 @@ If you set `security.cors.allowedHeaders`, your list is added to the headers the
 client sends on its own. It no longer replaces them, so a list written before a
 new client header existed cannot block that header.
 
+### Expired credentials
+
+When the identity your `resolveIdentity` returns carries an `exp` (JWT epoch
+seconds) or `expiresAtMs` (epoch milliseconds) that has already passed, the
+worker answers `401 TOKEN_EXPIRED` and nothing runs. This covers `/_lunora/rpc`,
+`/_lunora/rpc-batch`, the REST surface and `serverQuery`. A live subscription
+gets the same code as a socket close (`4001`) once its credential lapses.
+`@lunora/client` treats the code as a refusal of the credential, not of the
+write: a queued offline write stays queued, `onTokenExpired` fires, and the
+write is sent again after `setAuthToken`.
+
+The worker can only answer this if your resolver tells it the credential
+expired. Returning `null` for an expired token makes the call anonymous, and
+the `UNAUTHORIZED` your own check then throws reads to the client as a verdict
+on the write. For a token you verified that has only expired, do one of these:
+
+```ts
+// Return the identity with its past expiry: the worker refuses it.
+return { exp: payload.exp, userId: payload.sub };
+
+// Or refuse it yourself.
+throw new LunoraError("token expired", { code: "TOKEN_EXPIRED", status: 401 });
+```
+
+`@lunora/cloudflare-access` already does the first for a correctly signed
+Access JWT whose only fault is its `exp`. The better-auth session resolvers
+cannot tell an expired session from no session (`getSession` answers `null`
+for both), so a lapsed cookie session still reads as signed out.
+
+An `httpRouter` route does not get the refusal, because its context is built
+for every page, including the sign-in page. There a lapsed identity reads as
+anonymous (`auth.userId` is `null`), and a route that needs a caller answers
+its own `401`. The admin routes ignore the user's expiry, because the admin
+credential authorizes them.
+
 ## Feeding row-level security
 
 `ctx.auth` is also the input to authorization. An ad-hoc `if (!ctx.auth.userId)`

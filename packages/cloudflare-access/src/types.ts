@@ -132,7 +132,9 @@ export interface RequestVerifyOptions extends VerifyAccessJwtOptions {
     /**
      * Invoked when a token is present but fails verification (bad signature,
      * wrong audience, expired, …). The caller still fails closed (resolver
-     * returns `null`, admin gate returns `false`); this is your hook to
+     * returns `null` — or, for a token whose only fault is its `exp`, the
+     * identity with that past `exp`, which the runtime refuses with
+     * `TOKEN_EXPIRED`; the admin gate returns `false`); this is your hook to
      * log/observe. It is **not** called when no token is present at all.
      */
     onError?: (error: unknown, request: Request) => void;
@@ -173,7 +175,9 @@ export interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
     /**
      * Remap verified claims into the resolved identity. Return an object to
      * shallow-merge over the defaults; return a `userId` to override the derived
-     * caller id. Runs only after signature/issuer/audience/expiry are verified.
+     * caller id. Runs only after signature/issuer/audience are verified; an
+     * expired token's claims still pass through it, so the identity keeps its
+     * `userId` and the runtime can answer `TOKEN_EXPIRED` for it.
      *
      * It is merged OVER the `roles` claim {@link CreateAccessResolverOptions.roles}
      * mints, so returning `roles` here replaces the mapped set outright.

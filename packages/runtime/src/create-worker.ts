@@ -11,7 +11,13 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
-import { decodeExpectedSubjectHeader, encodeIdentityHeader, encodeUserIdHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
+import {
+    decodeExpectedSubjectHeader,
+    encodeIdentityHeader,
+    encodeUserIdHeader,
+    EXPECT_SUBJECT_HEADER,
+    isIdentityExpired,
+} from "../../../shared/identity-header";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import type { RegionHint } from "../../../shared/region-hint";
@@ -1985,6 +1991,44 @@ const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
     return undefined;
 };
 
+/** Whether the resolved caller's credential declares an expiry that has already passed. */
+const hasLapsedCredential = ({ identity }: ForwardContext): boolean => identity !== null && isIdentityExpired(identityExpiryMs(identity));
+
+/**
+ * Refuse a caller whose credential has lapsed, the HTTP counterpart of the
+ * shard's `TOKEN_EXPIRED` / 4001 socket drop. Without it an identity whose
+ * `exp` / `expiresAtMs` is already past was forwarded and ran as authenticated,
+ * and a client could never tell "refresh your token" from "this write was
+ * refused": the offline queue holds a write on `TOKEN_EXPIRED` and re-sends it
+ * after `setAuthToken`, which only works if the server answers with that code.
+ */
+const assertLiveCredential = (resolved: ForwardContext): ForwardContext => {
+    if (hasLapsedCredential(resolved)) {
+        throw new LunoraError("authentication token expired", { code: "TOKEN_EXPIRED", status: 401 });
+    }
+
+    return resolved;
+};
+
+/**
+ * The anonymous view of a forward context whose credential has lapsed: the
+ * identity headers are dropped so nothing downstream runs as that caller.
+ */
+const withoutLapsedCredential = (resolved: ForwardContext): ForwardContext => {
+    if (!hasLapsedCredential(resolved)) {
+        return resolved;
+    }
+
+    const headers = { ...resolved.headers };
+
+    delete headers["x-lunora-identity"];
+    delete headers["x-lunora-identity-exp"];
+    delete headers["x-lunora-userid"];
+
+    // eslint-disable-next-line unicorn/no-null -- the public HttpActionContext anonymous sentinel is `null`
+    return { claims: null, headers, identity: null, userId: null };
+};
+
 /**
  * Build the headers forwarded to the shard and the resolved identity, shared by
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
@@ -2948,6 +2992,24 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         return resolved;
     };
+
+    /**
+     * The {@link forwardContext} of a caller invoking a function over HTTP — the
+     * RPC route, batch RPC, the REST surface and `serverQuery` — refusing a
+     * lapsed credential with `TOKEN_EXPIRED` / 401 before anything runs.
+     *
+     * The WebSocket upgrades keep the plain {@link forwardContext}: the shard
+     * stamps the expiry on the socket and drops it with the same code (4001) once
+     * it passes, which is the only refusal a browser can read off a socket. The
+     * admin routes keep it too — their authority is the admin credential, not
+     * whichever session cookie rode along.
+     */
+    const forwardCallerContext = async (
+        request: Request,
+        env: unknown,
+        resolveIdentity: WorkerOptions["resolveIdentity"],
+        executionContext?: ExecutionContextLike,
+    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, executionContext));
 
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
@@ -4002,7 +4064,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await forwardContext(request, env, publicResolveIdentity);
+        // A lapsed credential reads as anonymous here rather than being refused:
+        // this context is built for EVERY `httpRouter` request — SSR pages, the
+        // sign-in page, webhooks — before any route matched, so a refusal would
+        // lock a user with a stale cookie out of the very page that refreshes it.
+        // A route that needs a caller answers its own 401 off `auth.userId`.
+        const { claims, headers, userId } = withoutLapsedCredential(await forwardContext(request, env, publicResolveIdentity));
 
         const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
@@ -4668,7 +4735,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity);
 
         assertExpectedSubject(request, identity);
 
@@ -4794,7 +4861,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Use `publicResolveIdentity` (the contract-wrapped resolver) so this public
         // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
         // resolver would let contract-violating claims through to the shard verbatim.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity);
 
         // One identity per batch, so one expectation covers every entry.
         assertExpectedSubject(request, identity);
@@ -5134,7 +5201,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // byte-identical to `handleRpc`'s. The context is passed explicitly
             // because this path has no `fetch` funnel to have recorded it, and an
             // SSR host may well hand us a rebuilt `Request` object.
-            const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity, callOptions.context);
+            const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, callOptions.context);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -5383,7 +5450,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertArgsObject(args, "REST");
 
         const envelope: RpcEnvelope = { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) };
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity);
 
         await authorizeRpcEnvelope(envelope, identity);
 

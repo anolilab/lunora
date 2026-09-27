@@ -609,7 +609,15 @@ export const ERROR_CATALOG = {
     STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
-    TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
+    TOKEN_EXPIRED: {
+        hint: [
+            "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",
+            "",
+            "It is a refusal of the credential, not of the call: `@lunora/client` holds a queued write, fires `onTokenExpired`, and re-sends it after `setAuthToken`. The worker can only tell expired from anonymous if your `resolveIdentity` returns the identity with its past `exp` (or `expiresAtMs`), or throws a `LunoraError` with this code. Returning `null` runs the call anonymous.",
+        ],
+        status: 401,
+        title: "Authentication token expired",
+    },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
 
     /**
