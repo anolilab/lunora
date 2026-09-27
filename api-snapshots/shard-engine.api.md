@@ -252,10 +252,16 @@ interface AppendAuditEntry {
 ### `ApplyOnDeleteOptions` (interface)
 
 ```ts
-interface ApplyOnDeleteOptions$1 {
-    database: DatabaseWriterLike;
-    relation: RelationDefinitionLike;
-    row: Record<string, unknown>;
+interface ApplyOnDeleteOptions {
+    deletedId: string;
+    deletedReference: (references: string) => unknown;
+    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    onCascade: (holderTable: string, id: string) => Promise<void>;
+    onRestrict: (message: string) => never;
+    onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
+    schema: {
+        readonly tables: Record<string, TableDefinitionLike>;
+    };
     tableName: string;
 }
 ```
@@ -5305,23 +5311,6 @@ const defineEngineContractSuite: (name: string, factory: EngineHostFactory, vite
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
-
-### `ApplyOnDeleteOptions` (interface)
-
-```ts
-interface ApplyOnDeleteOptions {
-    deletedId: string;
-    deletedReference: (references: string) => unknown;
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
-    onCascade: (holderTable: string, id: string) => Promise<void>;
-    onRestrict: (message: string) => never;
-    onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
-    schema: {
-        readonly tables: Record<string, TableDefinitionLike>;
-    };
-    tableName: string;
-}
-```
 
 ### `BackfillState` (interface)
 
