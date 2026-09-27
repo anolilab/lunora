@@ -1,3 +1,19 @@
+## @lunora/runtime [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.158...@lunora/runtime@1.0.0-alpha.159) (2026-09-27)
+
+### Code Refactoring
+
+* **runtime:** drop unused auth type re-exports from create-worker ([#878](https://github.com/anolilab/lunora/issues/878)) ([c1c3fa9](https://github.com/anolilab/lunora/commit/c1c3fa9f11073b243ca64a1ffed4bf1e8ca1cb7e))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/observability:** upgraded to 1.0.0-alpha.104
+* **@lunora/do:** upgraded to 1.0.0-alpha.176
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.68
+
 ## @lunora/runtime [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.157...@lunora/runtime@1.0.0-alpha.158) (2026-09-27)
 
 ### Bug Fixes
