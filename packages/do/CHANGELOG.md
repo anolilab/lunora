@@ -1,3 +1,27 @@
+## @lunora/do [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.175...@lunora/do@1.0.0-alpha.176) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `trimStreamRuns(sql, now)` is now
+`trimStreamRuns(sql, now, live)`; pass the keys of runs still producing
+(an empty set keeps the old behaviour).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **do:** stale seeds, re-snapshot refusals, replica freshness, live-run ttl trim ([#872](https://github.com/anolilab/lunora/issues/872)) ([dee5c2e](https://github.com/anolilab/lunora/commit/dee5c2eee5ff81dc635c374ca9729a9eb9d1ed28))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/observability:** upgraded to 1.0.0-alpha.104
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.59
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+
 ## @lunora/do [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.174...@lunora/do@1.0.0-alpha.175) (2026-09-27)
 
 ### Bug Fixes
