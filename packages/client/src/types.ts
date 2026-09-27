@@ -1,6 +1,6 @@
 import type { FunctionReference } from "../../../shared/function-reference";
 
-export type { ArgsOf, FunctionKind, FunctionReference, ReturnOf } from "../../../shared/function-reference";
+export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)

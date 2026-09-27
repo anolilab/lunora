@@ -52,7 +52,7 @@
  */
 
 /** Knobs for {@link createPollingFallback}. */
-export interface PollingFallbackOptions {
+interface PollingFallbackOptions {
     /**
      * Consecutive connect attempts that must fail to reach `open` before polling
      * starts. More than one so a single cold-start timeout or a deploy bounce
