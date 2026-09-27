@@ -20,6 +20,9 @@ interface MockSocket {
 
 const sockets: MockSocket[] = [];
 
+/** When set, the next `unsubscribe` frame any socket sends throws, as a socket closing mid-send does. */
+const sendFaults = { unsubscribe: false };
+
 const createMockWebSocket = (): typeof WebSocket => {
     class WS {
         public readonly url: string;
@@ -49,9 +52,19 @@ const createMockWebSocket = (): typeof WebSocket => {
                 throw new Error("socket is not open");
             }
 
-            if (data !== "lunora-ping") {
-                this.frames.push(JSON.parse(data) as { id?: string; type: string });
+            if (data === "lunora-ping") {
+                return;
             }
+
+            const frame = JSON.parse(data) as { id?: string; type: string };
+
+            if (frame.type === "unsubscribe" && sendFaults.unsubscribe) {
+                sendFaults.unsubscribe = false;
+
+                throw new Error("socket closed mid-send");
+            }
+
+            this.frames.push(frame);
         }
 
         public close(): void {
@@ -221,60 +234,64 @@ describe("idle shard sockets and writes", () => {
         sockets.length = 0;
     });
 
-    for (const queueBeforeFirstConnect of [false, true]) {
-        it(`sends an online write to an idled-out shard over HTTP (queueBeforeFirstConnect: ${String(queueBeforeFirstConnect)})`, async () => {
-            vi.useFakeTimers();
+    it.each([false, true])("sends an online write to an idled-out shard over HTTP (queueBeforeFirstConnect: %s)", async (queueBeforeFirstConnect) => {
+        expect.hasAssertions();
 
-            const fetchMock = makeFetch(true);
-            const client = new LunoraClient({
-                fetch: fetchMock,
-                offlineQueue: { queueBeforeFirstConnect },
-                url: "https://app.example",
-                WebSocket: createMockWebSocket(),
-            });
+        vi.useFakeTimers();
 
-            visitAndIdleOut(client, "a");
-
-            expect(liveShards()).toStrictEqual([]);
-
-            const write = client.mutation(send, { text: "hi" }, { shardKey: "a" });
-
-            await vi.advanceTimersByTimeAsync(1000);
-
-            await expect(write).resolves.toBe("ok");
-            expect(fetchMock).toHaveBeenCalledTimes(1);
-            expect(client.pendingCount()).toBe(0);
-
-            client.close();
+        const fetchMock = makeFetch(true);
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            offlineQueue: { queueBeforeFirstConnect },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
         });
 
-        it(`still queues an offline write to an idled-out shard (queueBeforeFirstConnect: ${String(queueBeforeFirstConnect)})`, async () => {
-            vi.useFakeTimers();
+        visitAndIdleOut(client, "a");
 
-            const client = new LunoraClient({
-                fetch: makeFetch(false),
-                offlineQueue: { queueBeforeFirstConnect },
-                url: "https://app.example",
-                WebSocket: createMockWebSocket(),
-            });
+        expect(liveShards()).toStrictEqual([]);
 
-            visitAndIdleOut(client, "a");
+        const write = client.mutation(send, { text: "hi" }, { shardKey: "a" });
 
-            // Visiting the shard made it queue-eligible; closing its idle socket must not undo that.
-            expect(client.canQueueOffline("a")).toBe(true);
+        await vi.advanceTimersByTimeAsync(1000);
 
-            const write = client.mutation(send, { text: "offline" }, { shardKey: "a" }).catch((error: unknown) => error);
+        await expect(write).resolves.toBe("ok");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(client.pendingCount()).toBe(0);
 
-            await vi.advanceTimersByTimeAsync(0);
+        client.close();
+    });
 
-            expect(client.pendingCount()).toBe(1);
+    it.each([false, true])("still queues an offline write to an idled-out shard (queueBeforeFirstConnect: %s)", async (queueBeforeFirstConnect) => {
+        expect.hasAssertions();
 
-            client.close();
-            await write;
+        vi.useFakeTimers();
+
+        const client = new LunoraClient({
+            fetch: makeFetch(false),
+            offlineQueue: { queueBeforeFirstConnect },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
         });
-    }
+
+        visitAndIdleOut(client, "a");
+
+        // Visiting the shard made it queue-eligible; closing its idle socket must not undo that.
+        expect(client.canQueueOffline("a")).toBe(true);
+
+        const write = client.mutation(send, { text: "offline" }, { shardKey: "a" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(client.pendingCount()).toBe(1);
+
+        client.close();
+        await write;
+    });
 
     it("opens the shard's socket to flush a write queued for a shard with no socket", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const fetchMock = makeFetch(true);
@@ -303,6 +320,8 @@ describe("idle shard sockets and writes", () => {
     });
 
     it("delivers a durable stream's cancel queued while the socket was down, even after the shard idles", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -339,7 +358,56 @@ describe("idle shard sockets and writes", () => {
         client.close();
     });
 
+    it("keeps a durable stream's queued cancel when sending it on reconnect fails", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+        subscribeOn(client, "d");
+
+        const stream = client.stream(generate, {}, { durable: true, shardKey: "d" });
+        const started = socketsFor("d")[0]?.frames.find((frame) => frame.type === "stream");
+
+        socketsFor("d")[0]?.close();
+        await stream[Symbol.asyncIterator]().return?.();
+
+        const reopen = async (): Promise<void> => {
+            for (let tick = 0; tick < 40; tick += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each reconnect attempt must run before the next socket is opened
+                await vi.advanceTimersByTimeAsync(250);
+
+                const pending = socketsFor("d").find((socket) => socket.readyState === 0);
+
+                if (pending) {
+                    pending.open();
+
+                    return;
+                }
+            }
+        };
+
+        // The reconnect's drain fails to send the cancel (the socket closed under it).
+        sendFaults.unsubscribe = true;
+        await reopen();
+        socketsFor("d").at(-1)?.close();
+
+        // The next reconnect must still carry it.
+        await reopen();
+
+        const cancels = socketsFor("d")
+            .flatMap((socket) => socket.frames)
+            .filter((frame) => frame.type === "unsubscribe" && frame.id === started?.id);
+
+        expect(cancels).toHaveLength(1);
+
+        client.close();
+    });
+
     it("stops reconnecting a shard left while its socket was down", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -361,6 +429,8 @@ describe("idle shard sockets and writes", () => {
     });
 
     it("closes a shard that only a stream or a whisper opened, once unused", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });

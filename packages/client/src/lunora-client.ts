@@ -7121,8 +7121,13 @@ class LunoraClient {
                     // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
                     conn.pendingUnsubscribes = [];
 
-                    for (const { id, type } of pending) {
-                        sendOn(conn, { id, type });
+                    for (const { durable, id, type } of pending) {
+                        // A durable stream's cancel that fails to send is kept for
+                        // the next reconnect: its run outlives the socket and only
+                        // this frame stops it. A plain unsubscribe needs no retry.
+                        if (!sendOn(conn, { id, type }) && durable === true) {
+                            conn.pendingUnsubscribes.push({ durable, id, type });
+                        }
                     }
 
                     // Delivering them may leave nothing holding the shard open.
