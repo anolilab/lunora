@@ -221,35 +221,63 @@ const compileInList = <T>(
 };
 
 /**
- * Longest list Postgres and MySQL get as a literal `IN (?, ?, …)`.
+ * Placeholders every `in` / `notIn` list in one `where` may spend between them.
+ *
+ * Half of Workerd's per-statement parameter cap, leaving the other half for the
+ * rest of the statement — the comparators, the cursor, the limit. It is a
+ * whole-statement budget rather than a per-list one because three 40-item `in`
+ * filters are ordinary app code and would otherwise bind 120 placeholders while
+ * each list sat "within budget" on its own.
+ *
+ * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
+ * overrides the hook is free to ignore the budget it is handed.
+ */
+const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
+
+/**
+ * Placeholders every literal `IN (?, ?, …)` list in one Postgres or MySQL
+ * `where` may spend between them.
  *
  * Both engines cap one statement at 65,535 bound parameters, so a literal list
  * past that failed outright — "bind message has … parameter formats but 0
  * parameters" on Postgres, "too many placeholders" on MySQL — where D1 took the
- * same filter as one `json_each` parameter. Well under the cap, so a few wide
- * lists in one `where` still fit beside each other.
+ * same filter as one `json_each` parameter. Under half the cap, leaving the rest
+ * of the statement room, and shared between the lists the way the SQLite budget
+ * is (see {@link serverInList}).
  */
-const SERVER_IN_LIST_LITERAL_MAX = 10_000;
+const SERVER_LIST_PARAM_BUDGET = 30_000;
 
 /**
  * The `IN` / `NOT IN` rendering for Postgres and MySQL: one placeholder per
- * item up to {@link SERVER_IN_LIST_LITERAL_MAX}, and past it the whole list as
- * ONE bound parameter, the way SQLite's `json_each` form carries it.
+ * item while the list fits its share of {@link SERVER_LIST_PARAM_BUDGET}, and
+ * past it the whole list as ONE bound parameter, the way SQLite's `json_each`
+ * form carries it.
+ *
+ * The share is scaled off the SQLite `budget` `compileWhereSql` hands every
+ * list — that budget is already the statement's list allowance divided by the
+ * number of lists — so seven wide lists in one `where` switch early enough that
+ * together they stay under the cap, instead of each fitting on its own.
  *
  * Postgres binds it as an array: `= ANY($1)` is the membership test Postgres
  * rewrites a literal `IN` list into anyway, and `<> ALL($1)` its complement
  * with the same NULL semantics as `NOT IN`.
  *
- * MySQL has no array parameter, so the list travels as a JSON array and is
- * tested with `MEMBER OF`. JSON cannot carry every value (see `isJsonSafe`), so
- * such a list is refused rather than bound as something else, and a `NOT IN`
- * list holding NULL keeps SQL's rule — it matches no row — which
- * `NOT … MEMBER OF` alone would not.
+ * MySQL has no array parameter, so the list travels as a JSON array. Strings
+ * are unpacked with `JSON_TABLE` and converted to the connection's character
+ * set, which leaves them comparable under the COLUMN's collation the way a
+ * bound literal is — a table created before its text columns were pinned to a
+ * binary collation keeps a case-folding one, and a JSON `MEMBER OF` test would
+ * silently compare case-sensitively there. Other values (numbers, NULL) carry no
+ * collation and are tested with `MEMBER OF`. JSON cannot carry every value (see
+ * `isJsonSafe`), so such a list is refused rather than bound as something else,
+ * and a `NOT IN` list holding NULL keeps SQL's rule — it matches no row.
  */
 const serverInList =
     (engine: "mysql" | "postgres") =>
-    (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
-        if (items.length <= SERVER_IN_LIST_LITERAL_MAX) {
+    (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget = WHERE_LIST_PARAM_BUDGET): SQL => {
+        const literalMax = Math.floor((SERVER_LIST_PARAM_BUDGET * budget) / WHERE_LIST_PARAM_BUDGET);
+
+        if (items.length <= literalMax) {
             const list = sql.join(
                 items.map((item) => sql`${item}`),
                 sql`, `,
@@ -265,7 +293,7 @@ const serverInList =
         if (!items.every((item) => isJsonSafe(item))) {
             throw new LunoraError(
                 "BAD_REQUEST",
-                `an "in" list of ${String(items.length)} values holds a value JSON cannot carry (bytes, a non-finite number, or malformed text), so it cannot be bound as one parameter on MySQL. Narrow the list to ${String(SERVER_IN_LIST_LITERAL_MAX)} values or fewer.`,
+                `an "in" list of ${String(items.length)} values holds a value JSON cannot carry (bytes, a non-finite number, or malformed text), so it cannot be bound as one parameter on MySQL. Narrow the list to ${String(literalMax)} values or fewer.`,
             );
         }
 
@@ -274,7 +302,23 @@ const serverInList =
             return sql`1 = 0`;
         }
 
-        const members = sql`${reference} MEMBER OF (CAST(${JSON.stringify(items)} AS JSON))`;
+        const strings = items.filter((item) => typeof item === "string");
+        const others = items.filter((item) => typeof item !== "string");
+        const tests: SQL[] = [];
+
+        if (strings.length > 0) {
+            const value = sql.identifier("v");
+
+            tests.push(
+                sql`${reference} IN (SELECT CONVERT(${value} USING utf8mb4) FROM JSON_TABLE(${JSON.stringify(strings)}, '$[*]' COLUMNS (${value} LONGTEXT PATH '$')) ${sql.identifier("__in__")})`,
+            );
+        }
+
+        if (others.length > 0) {
+            tests.push(sql`${reference} MEMBER OF (CAST(${JSON.stringify(others)} AS JSON))`);
+        }
+
+        const members = tests.length === 1 ? (tests[0] as SQL) : sql`(${sql.join(tests, sql` OR `)})`;
 
         return negated ? sql`NOT (${members})` : members;
     };
@@ -424,20 +468,6 @@ const compileNode = <T>(where: WhereInput, strategy: WhereSqlStrategy<T>, fragme
 
     return joinClauses(clauses, "AND", fragments);
 };
-
-/**
- * Placeholders every `in` / `notIn` list in one `where` may spend between them.
- *
- * Half of Workerd's per-statement parameter cap, leaving the other half for the
- * rest of the statement — the comparators, the cursor, the limit. It is a
- * whole-statement budget rather than a per-list one because three 40-item `in`
- * filters are ordinary app code and would otherwise bind 120 placeholders while
- * each list sat "within budget" on its own.
- *
- * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
- * overrides the hook is free to ignore the budget it is handed.
- */
-const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
 /**
  * What the tree spends: how many `in`/`notIn` lists it holds (so the budget above

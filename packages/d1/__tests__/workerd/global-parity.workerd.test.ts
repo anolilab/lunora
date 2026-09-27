@@ -176,7 +176,14 @@ describe("a required column that accepts null, on a real D1 .global() table", ()
             tables: {
                 nullables: {
                     indexes: [],
-                    shape: { anything: v.any(), literalNull: v.literal(null), note: v.union(v.string(), v.null()), onlyNull: v.null(), title: v.string() },
+                    shape: {
+                        anything: v.any(),
+                        literalNull: v.literal(null),
+                        note: v.union(v.string(), v.null()),
+                        nullableMember: v.union(v.string().nullable(), v.number()),
+                        onlyNull: v.null(),
+                        title: v.string(),
+                    },
                     shardMode: { kind: "global" },
                 },
             },
@@ -185,9 +192,9 @@ describe("a required column that accepts null, on a real D1 .global() table", ()
         await runD1GlobalTableMigrations(exec, schema);
 
         const db = createD1CtxDb({ exec, idGenerator: () => crypto.randomUUID(), schema });
-        const id = await db.insert("nullables", { anything: null, literalNull: null, note: null, onlyNull: null, title: "t" });
+        const id = await db.insert("nullables", { anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
 
-        await expect(db.get(id)).resolves.toMatchObject({ anything: null, literalNull: null, note: null, onlyNull: null, title: "t" });
+        await expect(db.get(id)).resolves.toMatchObject({ anything: null, literalNull: null, note: null, nullableMember: null, onlyNull: null, title: "t" });
 
         // A column that rejects null keeps the engine-level guard.
         const columns = await env.DB.prepare("SELECT name, \"notnull\" AS nn FROM pragma_table_info('nullables')").all<{ name: string; nn: number }>();
@@ -196,6 +203,7 @@ describe("a required column that accepts null, on a real D1 .global() table", ()
             anything: 0,
             literalNull: 0,
             note: 0,
+            nullableMember: 0,
             onlyNull: 0,
             title: 1,
         });

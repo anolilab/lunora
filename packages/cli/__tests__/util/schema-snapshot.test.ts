@@ -71,6 +71,8 @@ describe("schemaIrToSnapshot", () => {
                 anything: field("any", required),
                 literalNull: { column: required, kind: "literal", literalValue: "null" },
                 note: { column: required, kind: "union", members: [field("string"), field("null")] },
+                // A `.nullable()` member keeps its own kind.
+                nullableMember: { column: required, kind: "union", members: [field("string", { notNull: false }), field("number")] },
                 onlyNull: field("null", required),
                 // Neither member accepts null, so the constraint stays.
                 either: { column: required, kind: "union", members: [field("string"), field("number")] },
@@ -83,6 +85,7 @@ describe("schemaIrToSnapshot", () => {
             either: false,
             literalNull: true,
             note: true,
+            nullableMember: true,
             onlyNull: true,
         });
         expect(renderCreateTable(table)).toContain('"either" TEXT NOT NULL');

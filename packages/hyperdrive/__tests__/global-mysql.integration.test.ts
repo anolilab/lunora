@@ -115,6 +115,10 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
     describe("values every engine must treat alike", () => {
         it.each(
             backendParityCases({
+                ddl: async (statement) => {
+                    await harness.query(statement);
+                },
+                engine: "mysql",
                 setup: async (schema) => {
                     await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);
 

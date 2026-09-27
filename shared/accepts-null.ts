@@ -23,27 +23,50 @@ import { effectiveKind } from "./effective-kind";
 /** The kinds that parse `null` on their own. `literal(null)` resolves to `"null"` before it gets here. */
 const NULL_ACCEPTING_KINDS = new Set(["any", "null"]);
 
-/** The one rule: a null-accepting kind, or a union with a null-accepting member. */
-const acceptsNullBy = <T>(node: T, kindOf: (node: T) => string | undefined, membersOf: (node: T) => ReadonlyArray<T> | undefined): boolean => {
-    const kind = kindOf(node);
+/** How one validator shape exposes what the rule reads. */
+interface NullShapeReader<T> {
+    kindOf: (node: T) => string | undefined;
+    membersOf: (node: T) => ReadonlyArray<T> | undefined;
+    /** `.nullable()` was applied — on a union member it keeps its own kind, so the kind alone misses it. */
+    nullableOf: (node: T) => boolean;
+}
 
-    if (kind !== undefined && NULL_ACCEPTING_KINDS.has(kind)) {
+/** The one rule: a null-accepting kind, a `.nullable()` node, or a union with such a member. */
+const acceptsNullBy = <T>(node: T, reader: NullShapeReader<T>): boolean => {
+    const kind = reader.kindOf(node);
+
+    if ((kind !== undefined && NULL_ACCEPTING_KINDS.has(kind)) || reader.nullableOf(node)) {
         return true;
     }
 
-    return kind === "union" && (membersOf(node) ?? []).some((member) => acceptsNullBy(member, kindOf, membersOf));
+    return kind === "union" && (reader.membersOf(node) ?? []).some((member) => acceptsNullBy(member, reader));
 };
 
 /** For a live `@lunora/values` validator: `v.optional` unwrapped and `v.literal(null)` resolved by {@link effectiveKind}. */
-const validatorAcceptsNull = (validator: KindedValidator): boolean =>
-    acceptsNullBy(validator, effectiveKind, (node) => {
-        const meta = node._meta as { inner?: KindedValidator; members?: ReadonlyArray<KindedValidator> } | undefined;
+interface ValidatorMeta {
+    column?: { notNull?: boolean };
+    inner?: KindedValidator;
+    members?: ReadonlyArray<KindedValidator>;
+}
 
-        return node.kind === "optional" && meta?.inner ? (meta.inner._meta as typeof meta)?.members : meta?.members;
+/** The node an `optional` wraps, else the node itself. */
+const unwrapOptional = (node: KindedValidator): KindedValidator => {
+    const inner = (node._meta as ValidatorMeta | undefined)?.inner;
+
+    return node.kind === "optional" && inner ? unwrapOptional(inner) : node;
+};
+
+const validatorAcceptsNull = (validator: KindedValidator): boolean =>
+    acceptsNullBy(validator, {
+        kindOf: effectiveKind,
+        membersOf: (node) => (unwrapOptional(node)._meta as ValidatorMeta | undefined)?.members,
+        nullableOf: (node) => (unwrapOptional(node)._meta as ValidatorMeta | undefined)?.column?.notNull === false,
     });
 
 /** Structural slice of `@lunora/codegen`'s `ValidatorIR` — kept local so `shared/` stays dependency-free. */
 interface NullableIr {
+    /** Column modifiers; `.nullable()` sets `notNull: false`. */
+    readonly column?: { readonly notNull: boolean };
     readonly inner?: NullableIr;
     readonly kind: string;
     /** A literal's value as source text. */
@@ -61,7 +84,14 @@ const irKind = (ir: NullableIr): string => {
 };
 
 /** For codegen's `ValidatorIR`, as `lunora migrate generate` reads the schema. */
-const irAcceptsNull = (ir: NullableIr): boolean => acceptsNullBy(ir, irKind, (node) => (node.kind === "optional" && node.inner ? node.inner : node).members);
+const irUnwrapOptional = (ir: NullableIr): NullableIr => (ir.kind === "optional" && ir.inner ? irUnwrapOptional(ir.inner) : ir);
+
+const irAcceptsNull = (ir: NullableIr): boolean =>
+    acceptsNullBy(ir, {
+        kindOf: irKind,
+        membersOf: (node) => irUnwrapOptional(node).members,
+        nullableOf: (node) => irUnwrapOptional(node).column?.notNull === false,
+    });
 
 export type { NullableIr };
 export { irAcceptsNull, validatorAcceptsNull };

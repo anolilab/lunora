@@ -5034,7 +5034,7 @@ const serializeSqlValue: (value: unknown) => unknown;
 ### `serverInList` (const)
 
 ```ts
-const serverInList: (engine: "mysql" | "postgres") => (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
+const serverInList: (engine: "mysql" | "postgres") => (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
 ```
 
 ### `shapeRoutingKey` (const)

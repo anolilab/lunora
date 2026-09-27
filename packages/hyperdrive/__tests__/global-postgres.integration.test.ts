@@ -620,6 +620,10 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
     describe("values every engine must treat alike", () => {
         it.each(
             backendParityCases({
+                ddl: async (statement) => {
+                    await harness.query(statement);
+                },
+                engine: "postgres",
                 setup: async (schema) => {
                     await runSqlGlobalTableMigrations(harness.exec, schema, postgresDialect);
 
