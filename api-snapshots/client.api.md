@@ -178,24 +178,6 @@ interface ClientQueryRef<T = unknown> {
 }
 ```
 
-### `ClientServiceWorker` (class)
-
-```ts
-class ClientServiceWorker {
-    #private;
-    readonly swUrl: string;
-    readonly scope: string;
-    constructor(options: ClientSwOptions);
-    get status(): ServiceWorkerStatus;
-    get registration(): ServiceWorkerRegistration | undefined;
-    get active(): boolean;
-    register(): Promise<boolean>;
-    unregister(): Promise<boolean>;
-    postMessage(message: unknown): void;
-    onMessage(handler: (event: MessageEvent) => void): () => void;
-}
-```
-
 ### `ClientShapeSubscribeMessage` (interface)
 
 ```ts
@@ -217,26 +199,6 @@ interface ClientShapeSubscribeMessage {
 interface ClientShapeUnsubscribeMessage {
     id: string;
     type: "shape_unsubscribe";
-}
-```
-
-### `ClientSwOptions` (interface)
-
-```ts
-interface ClientSwOptions {
-    onStatusChange?: (status: ServiceWorkerStatus) => void;
-    scope?: string;
-    swUrl: string;
-}
-```
-
-### `ClientToSwMessage` (interface)
-
-```ts
-interface ClientToSwMessage {
-    correlationId?: string;
-    payload?: unknown;
-    type: string;
 }
 ```
 
@@ -1275,12 +1237,6 @@ interface ServerPokeStartMessage {
 }
 ```
 
-### `ServiceWorkerStatus` (type)
-
-```ts
-type ServiceWorkerStatus = "unsupported" | "unregistered" | "registering" | "active" | "error";
-```
-
 ### `ShardTrafficEntry` (interface)
 
 ```ts
@@ -1406,16 +1362,6 @@ interface SubscriptionState {
     serverEpoch?: string;
     readonly shardKey?: string;
     readonly wireArgs: Record<string, unknown>;
-}
-```
-
-### `SwToClientMessage` (interface)
-
-```ts
-interface SwToClientMessage {
-    correlationId?: string;
-    payload?: unknown;
-    type: string;
 }
 ```
 
@@ -1646,12 +1592,6 @@ const createMutatorRunner: <TArgs>(handle: MutatorHandle<TArgs>, sinks: MutatorR
 const createReconnect: (options?: ReconnectOptions, random?: () => number) => ReconnectCalculator;
 ```
 
-### `createReply` (const)
-
-```ts
-const createReply: (original: ClientToSwMessage, payload?: unknown) => SwToClientMessage;
-```
-
 ### `createSnapshotPrecondition` (const)
 
 ```ts
@@ -1762,12 +1702,6 @@ const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) 
 
 ```ts
 const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
-```
-
-### `sendToSw` (const)
-
-```ts
-const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectResponse?: boolean) => Promise<unknown>;
 ```
 
 ## `@lunora/client/auth`

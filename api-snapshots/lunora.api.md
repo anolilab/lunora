@@ -1467,23 +1467,11 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `ClientServiceWorker` (class)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `ClientShapeSubscribeMessage` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ClientShapeUnsubscribeMessage` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `ClientSwOptions` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `ClientToSwMessage` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1759,10 +1747,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `ServiceWorkerStatus` (type)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `ShardTrafficEntry` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1808,10 +1792,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `SubscriptionState` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `SwToClientMessage` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1927,10 +1907,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `createReply` (const)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `createSnapshotPrecondition` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1992,10 +1968,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `reconcileOptimistic` (const)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `sendToSw` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

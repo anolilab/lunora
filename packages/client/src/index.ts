@@ -64,10 +64,6 @@ export type { StreamHandle, StreamIterable } from "./stream";
 export { createStream, DEFAULT_MAX_BUFFER } from "./stream";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
-export type { ClientSwOptions, ServiceWorkerStatus } from "./sw/client-sw";
-export { ClientServiceWorker } from "./sw/client-sw";
-export type { ClientToSwMessage, SwToClientMessage } from "./sw/message-bridge";
-export { createReply, sendToSw } from "./sw/message-bridge";
 export type {
     ArgsOf,
     AuthCapabilities,
