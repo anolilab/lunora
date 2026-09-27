@@ -361,5 +361,5 @@ class SessionDO {
     }
 }
 
-export { SESSION_DO_TTL_DEFAULT, SESSION_DO_TTL_MAX, SessionDO };
+export { SESSION_DO_TTL_DEFAULT, SessionDO };
 export type { SessionRecord };

@@ -13914,7 +13914,6 @@ export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkPatchArgs,
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,

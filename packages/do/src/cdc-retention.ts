@@ -486,4 +486,3 @@ class CdcRetentionRunner {
 }
 
 export { cdcArchiveBucket, CdcRetentionRunner };
-export type { CdcRetentionHost };

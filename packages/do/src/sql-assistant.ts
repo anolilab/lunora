@@ -38,7 +38,7 @@ import { classifyStatement } from "../../../shared/sql-readonly";
  * Pinned rather than "latest" because a retired model-id makes `binding.run`
  * throw, which would silently degrade every request.
  */
-export const DEFAULT_SQL_ASSISTANT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_SQL_ASSISTANT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 /** Cap the operator's natural-language prompt so it cannot blow the token budget. */
 const PROMPT_CAP = 500;
@@ -94,7 +94,7 @@ export interface SchemaFact {
 }
 
 /** Parsed `aiGenerateSql` payload. */
-export interface GenerateSqlArgs {
+interface GenerateSqlArgs {
     /** The error the failing statement produced. Only meaningful with `failedSql`. */
     failedError?: string;
     /** The failing statement, when asking for a repair rather than a fresh draft. */
@@ -106,17 +106,17 @@ export interface GenerateSqlArgs {
 }
 
 /** Why the assistant produced nothing. A closed union so a typo'd sentinel is a compile error. */
-export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
+type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
 
 /** One structured filter clause the `filter` task produces — the same shape the data browser already validates. */
-export interface AssistantFilterClause {
+interface AssistantFilterClause {
     column: string;
     operator: string;
     value: unknown;
 }
 
 /** A chart configuration the `chart` task produces. */
-export interface AssistantChartConfig {
+interface AssistantChartConfig {
     kind: "area" | "bar" | "line";
     /** Column plotted on the x axis. */
     x: string;
@@ -125,34 +125,34 @@ export interface AssistantChartConfig {
 }
 
 /** The arm returned when no usable statement was produced. */
-export interface GenerateSqlDegraded {
+interface GenerateSqlDegraded {
     degraded: true;
     reason: GenerateSqlDegradedReason;
 }
 
 /** The arm returned when a validated, read-only statement was produced. */
-export interface GenerateSqlOk {
+interface GenerateSqlOk {
     degraded: false;
     /** A single read-only statement that PASSES the same gate `runSql` enforces. */
     sql: string;
 }
 
-export type GenerateSqlResult = GenerateSqlDegraded | GenerateSqlOk;
+type GenerateSqlResult = GenerateSqlDegraded | GenerateSqlOk;
 
 /** The arm returned when a validated filter set was produced. */
-export interface GenerateFilterOk {
+interface GenerateFilterOk {
     clauses: AssistantFilterClause[];
     degraded: false;
 }
 
 /** The arm returned when a validated chart config was produced. */
-export interface GenerateChartOk {
+interface GenerateChartOk {
     chart: AssistantChartConfig;
     degraded: false;
 }
 
-export type GenerateFilterResult = GenerateFilterOk | GenerateSqlDegraded;
-export type GenerateChartResult = GenerateChartOk | GenerateSqlDegraded;
+type GenerateFilterResult = GenerateFilterOk | GenerateSqlDegraded;
+type GenerateChartResult = GenerateChartOk | GenerateSqlDegraded;
 
 /** Operators the data browser's filter builder accepts. A response naming anything else is rejected. */
 const FILTER_OPERATORS = new Set(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
