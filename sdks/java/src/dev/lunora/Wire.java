@@ -566,9 +566,9 @@ public final class Wire {
     }
 
     /**
-     * A signed zero stored as {@code +0}, as {@code Set.prototype.add} and {@code Map.prototype.set}
-     * do on INSERT — so a lone {@code -0} member or key re-encodes (and keys, per §3's bare {@code
-     * -0} token) as {@code 0} in the reference, not only when it collides.
+     * A signed zero stored as {@code +0}, as {@code Set.prototype.add} and {@code
+     * Map.prototype.set} do on INSERT — so a lone {@code -0} member or key re-encodes (and keys,
+     * per §3's bare {@code -0} token) as {@code 0} in the reference, not only when it collides.
      */
     private static Object positiveZero(Object value) {
         return value instanceof Double number && number == 0.0 ? (Object) 0.0 : value;

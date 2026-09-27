@@ -427,7 +427,8 @@ fn decode_at(value: &Value, depth: usize) -> WireResult<WireValue> {
 /// bare `-0` token) as `0` in the reference, not only when it collides.
 fn positive_zero(value: WireValue) -> WireValue {
     match value {
-        WireValue::Number(number) if number == 0.0 => WireValue::Number(0.0),
+        // `+ 0.0` clears the sign of a zero and changes every other number not at all.
+        WireValue::Number(number) => WireValue::Number(number + 0.0),
         other => other,
     }
 }

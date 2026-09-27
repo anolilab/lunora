@@ -470,10 +470,7 @@ extension Wire {
     /// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
     /// bare `-0` token) as `0` in the reference, not only when it collides.
     private static func positiveZero(_ value: Any) -> Any {
-        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-           number.doubleValue == 0, number.doubleValue.sign == .minus {
-            return 0.0
-        }
+        // `as? Double` reads a bridged NSNumber too; a Bool is never a -0.
         if let double = value as? Double, double == 0, double.sign == .minus { return 0.0 }
 
         return value
