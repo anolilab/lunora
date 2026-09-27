@@ -478,5 +478,5 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown, 
     }
 };
 
-export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, resolveRange, TIMESTAMP_WINDOW_MS };
+export { BIGINT_RANGE, constraintsOf, FALLBACK_EMAIL_DOMAIN, generateValue, isTimestampField, NUMBER_RANGE, resolveRange };
 export type { Constraints };
