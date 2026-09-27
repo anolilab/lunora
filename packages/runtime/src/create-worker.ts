@@ -429,12 +429,13 @@ type StorageDownloadFunction = (
  * `method` and `contentType` are forwarded to the underlying signer and let the
  * caller mint a presigned PUT URL for large-blob uploads that bypass the
  * worker's body-size cap (the importer uses this for Convex storage blobs
- * above the 1 MiB limit).
+ * above the 1 MiB limit). `origin` is the origin the admin request reached
+ * the worker on — the base to sign against when no `publicBaseUrl` is set.
  * Structurally compatible with `@lunora/storage`'s `Storage["getSignedUrl"]`.
  */
 type StorageSignedUrlFunction = (
     key: string,
-    options?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT" },
+    options?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string },
 ) => Promise<string> | string;
 
 /** One `.global()` table plus its row count. Mirrors `@lunora/d1`'s `GlobalTableInfo`. */

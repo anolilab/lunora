@@ -57,7 +57,7 @@ describe("emitApp — storage bucket factory", () => {
         // signing under another's name lets a URL cross buckets.
         expect(output).toContain('this.makeStorage(env, declaration, defaultBucket, "default", origin)');
         expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name, origin);");
-        expect(output).toContain("buckets[name] = this.makeStorage(env, declaration, bucket, name);");
+        expect(output).toContain("return this.makeStorage(env, declaration, bindings[bucketName] ?? defaultBucket, bucketName, origin);");
     });
 
     // A fixed `publicBaseUrl` binds signed URLs to one host (the HMAC covers it),
@@ -72,6 +72,21 @@ describe("emitApp — storage bucket factory", () => {
         expect(output).toContain("publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,");
         expect(output).toContain("storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin)");
         expect(output).toContain("options.storage = (rawEnv: unknown, origin?: string) => this.resolveStorage(rawEnv as Env, origin);");
+    });
+
+    // The studio's "copy URL" and the importer's large-blob PUT go through
+    // `storageSignedUrl`. It used to exist only when a `publicBaseUrl` was
+    // declared, so an app relying on the origin fallback above lost both. The
+    // admin route hands over the origin its request reached the worker on, and
+    // the signer uses it when no base is declared; only the secret gates it.
+    it("signs studio URLs against the admin request origin when no publicBaseUrl is declared", () => {
+        expect.assertions(3);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain("const hasSigning = Boolean(declaration.signingSecret?.(env));");
+        expect(output).not.toContain("declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env)");
+        expect(output).toContain("pick(opts?.bucket, opts?.origin).getSignedUrl(");
     });
 
     // The shard hands the origin only to a synchronous mutation/action dispatch.
@@ -95,7 +110,7 @@ describe("emitApp — storage bucket factory", () => {
 
         const output = emitApp(baseOptions);
 
-        expect(output).toContain("Object.hasOwn(buckets, wanted)");
+        expect(output).toContain("Object.hasOwn(bindings, wanted)");
         expect(output).not.toContain('buckets[name !== undefined && name !== "" ? name : "default"]');
     });
 });

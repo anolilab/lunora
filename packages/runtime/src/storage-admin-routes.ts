@@ -311,7 +311,10 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const method = methodRaw as "GET" | "PUT" | undefined;
         const contentType = queryParameter(url, "contentType");
-        const signedUrl = await storageSignedUrl(key, { bucket: requireKnownBucket(url), contentType, expiresInSeconds, method });
+        // The origin this request reached the worker on, read off the request URL (never
+        // a client header): a signer with no declared base signs against it, the host
+        // the signed-URL route then verifies.
+        const signedUrl = await storageSignedUrl(key, { bucket: requireKnownBucket(url), contentType, expiresInSeconds, method, origin: url.origin });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };

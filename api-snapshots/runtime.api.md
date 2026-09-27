@@ -3224,6 +3224,7 @@ type StorageSignedUrlFunction = (key: string, options?: {
     contentType?: string;
     expiresInSeconds?: number;
     method?: "GET" | "PUT";
+    origin?: string;
 }) => Promise<string> | string;
 ```
 
