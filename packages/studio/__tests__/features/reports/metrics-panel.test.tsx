@@ -363,4 +363,23 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
         expect(screen.getByTestId<HTMLButtonElement>("mt-aggregate").disabled).toBe(false);
     });
+
+    it("hides a finished aggregate once the shard selection changes", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+        await screen.findByTestId("mt-aggregate-view");
+
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-2" } });
+
+        expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
+
+        // Back to the shard it was run for: it is that shard's answer again.
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "" } });
+
+        expect(screen.getByTestId("mt-aggregate-view")).not.toBeNull();
+    });
 });

@@ -6,7 +6,6 @@ import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import useMirroredRef from "../../hooks/use-mirrored-ref";
 import useOpenTrace from "../../hooks/use-open-trace";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
@@ -132,12 +131,11 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
     // Cross-shard aggregate: per-shard results for the shards we know about
     // (root + current + recently-visited). `null` = aggregate view not loaded.
-    const [shardResults, setShardResults] = useState<null | ShardMetricsResult[]>(null);
+    // Tagged with the shard in the input when the fan-out started: the set it
+    // covers includes that shard, so the results are shown only while the input
+    // still holds it — not under a shard chosen mid-flight or afterwards.
+    const [aggregated, setAggregated] = useState<null | { results: ShardMetricsResult[]; shard: string }>(null);
     const [aggregating, setAggregating] = useState<boolean>(false);
-    // The fan-out covers the shard in the input when it started. If the operator
-    // changes it mid-flight, the results describe a set that is no longer the one
-    // on screen, so they are dropped rather than rendered under the new shard.
-    const shardKeyRef = useMirroredRef(shardKey);
 
     const aggregateAll = async (): Promise<void> => {
         setAggregating(true);
@@ -159,8 +157,8 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 }),
             );
 
-            if (mountedRef.current && shardKeyRef.current === startedFor) {
-                setShardResults(results);
+            if (mountedRef.current) {
+                setAggregated({ results, shard: startedFor });
             }
         } finally {
             if (mountedRef.current) {
@@ -169,6 +167,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         }
     };
 
+    const shardResults = aggregated?.shard === shardKey ? aggregated.results : null;
     const aggregate = shardResults === null ? null : aggregateMetrics(shardResults);
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
@@ -208,7 +207,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     };
 
     const clearAggregate = (): void => {
-        setShardResults(null);
+        setAggregated(null);
     };
 
     const switchToOverview = (): void => {
