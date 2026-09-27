@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
 
 /**
  * R2 storage E2E — verifies the signed-URL flow against Miniflare's R2 stub.
@@ -39,6 +40,10 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
         throw new Error("no signed url");
     }
 
+    // No storage base is configured anywhere: the action signs against the
+    // origin this request reached the worker on, and the PUT below verifies it.
+    expect(new URL(url).origin).toBe(new URL(BASE_URL).origin);
+
     // Put bytes at the signed URL — Miniflare validates the signature.
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const putResponse = await user.request.fetch(url, {
@@ -64,6 +69,8 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
     if (!getUrl) {
         throw new Error("no signed get url");
     }
+
+    expect(new URL(getUrl).origin).toBe(new URL(BASE_URL).origin);
 
     const fetched = await user.request.get(getUrl);
 
@@ -95,6 +102,9 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
     if (!url) {
         throw new Error("no signed url");
     }
+
+    // Signed against the request origin, not a configured base.
+    expect(new URL(url).origin).toBe(new URL(BASE_URL).origin);
 
     // Wait well past the 1s expiry. The signed `exp` is a whole-second boundary
     // (`floor(now)+1`), so a 1.3s wait can land *on* the boundary and read as

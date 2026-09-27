@@ -52,8 +52,6 @@ interface Env extends Record<string, unknown> {
     LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
-    /** Public base URL R2 objects resolve against — used to mint signed URLs. */
-    PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
@@ -176,7 +174,10 @@ const app = defineApp<Env>()
     .storage({
         bucket: (env) => env.FILES,
         buckets: { avatars: (env) => env.AVATARS },
-        publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
+        // No `publicBaseUrl`: actions sign object URLs against the origin the
+        // request reached the worker on, which is also the host `verifySignedUrl`
+        // checks below. A fixed base binds every URL to one host and breaks the
+        // rest (a placeholder one breaks all of them).
         signingSecret: (env) => env.STORAGE_SECRET,
     })
     .scheduler({ namespace: (env) => env.SCHEDULER })
@@ -301,8 +302,8 @@ const handleTestReset = async (env: Env): Promise<Response> => {
 };
 
 const handleTestSign = async (request: Request, env: Env): Promise<Response> => {
-    if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
-        return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
+    if (!env.STORAGE_SECRET) {
+        return Response.json({ error: "STORAGE_SECRET must be configured", url: null }, { status: 500 });
     }
 
     const body = (await request.json().catch(() => null)) as {
@@ -317,7 +318,9 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
     }
 
     const signed = await buildSignedUrl({
-        baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // Signed against this request's own origin, exactly as the actions sign:
+        // `handleStorageAsset` verifies the host the URL comes back on.
+        baseUrl: new URL(request.url).origin,
         // PUT-only pin, forwarded so a harness upload can send a real
         // `content-type`: the PUT handler compares the header against the
         // signed value unconditionally, so an unpinned URL only accepts a body
@@ -427,10 +430,9 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
 };
 
 /**
- * Serve `@lunora/storage` signed URLs. The signer mints a URL under
- * `PUBLIC_STORAGE_BASE_URL` carrying the object key plus expiry/method/signature
- * query params; in production that base is a CDN/Worker route, but in dev the
- * Worker shares its origin, so the signed URL lands back here. We verify the
+ * Serve `@lunora/storage` signed URLs. The signer mints a URL under the origin
+ * the minting request reached this Worker on, carrying the object key plus
+ * expiry/method/signature query params, so the signed URL lands back here. We verify the
  * HMAC + expiry, then stream the R2 body (GET) or store the uploaded bytes
  * (PUT). The `avatars/` prefix is the only key namespace the playground signs,
  * and it can't collide with the `/_lunora`, `/api/auth`, `/test` routes the

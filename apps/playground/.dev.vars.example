@@ -14,7 +14,16 @@ AUTH_SECRET="replace-with-openssl-rand-hex-32"
 AUTH_URL="http://localhost:5173"
 
 # Signing secret for R2 signed URLs (@lunora/storage). Any strong random value.
+# There is no storage base URL to set: actions sign against the origin the
+# request reached the worker on, so the same config works on any port or host.
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
+
+# The origin the SchedulerDO dispatches jobs back into, and the one
+# `.global({ origin })` fans reverse cross-shard relations across. The DO reads
+# it off its own env only (a caller-supplied target would be an SSRF vector), so
+# it cannot follow the request like the storage base does. wrangler.jsonc ships
+# it empty; set the deployed worker's public URL there before deploying.
+LUNORA_ORIGIN_URL="http://localhost:5173"
 
 # Admin token gating the studio's /_lunora/admin/* endpoints. The @lunora/vite
 # dev route reads this same value and auto-injects it into the studio served
@@ -29,14 +38,10 @@ LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
 #
 # LUNORA_E2E gates the worker's `/test/reset`, `/test/sign`, `/test/schedule`
 # and `/test/job-status` helpers, which every spec calls; without it they 404.
-# LUNORA_ORIGIN_URL is the origin the SchedulerDO dispatches jobs back into, and
-# PUBLIC_STORAGE_BASE_URL is the base the R2 signed URLs are minted against —
-# both must be this dev server. `mail-reset.spec.ts` reads the captured mail
-# over the admin RPC with the exact token below, so LUNORA_ADMIN_TOKEN has to
-# be that value too for that one spec. NEVER set LUNORA_E2E in production.
+# LUNORA_ORIGIN_URL (above) must be this dev server. `mail-reset.spec.ts` reads
+# the captured mail over the admin RPC with the exact token below, so
+# LUNORA_ADMIN_TOKEN has to be that value too for that one spec. NEVER set LUNORA_E2E in production.
 # LUNORA_E2E="true"
-# LUNORA_ORIGIN_URL="http://localhost:5173"
-# PUBLIC_STORAGE_BASE_URL="http://localhost:5173"
 # MAIL_FROM="Lunora Dev <noreply@lunora.test>"
 # LUNORA_MAIL_CAPTURE="1"
 # LUNORA_ADMIN_TOKEN="e2e-deterministic-admin-token"
