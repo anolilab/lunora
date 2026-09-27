@@ -516,20 +516,5 @@ const evaluateSchemaDrift = (options: {
     return decide(true, reason);
 };
 
-// The snapshot format, its diff, and the serializer moved to
-// `shared/schema-snapshot.ts` so `@lunora/studio` can render the SAME diff the
-// deploy gate blocks on. Re-exported here so every existing import site
-// (`run-codegen.ts`, the CLI gate, the tests) is unchanged.
-export type {
-    DriftChange,
-    DriftRemediation,
-    FieldSnapshot,
-    IndexSnapshot,
-    RelationSnapshot,
-    SchemaDrift,
-    SchemaSnapshot,
-    TableSnapshot,
-} from "../../../shared/schema-snapshot";
-export { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 export type { SchemaDriftDecision };
 export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError };
