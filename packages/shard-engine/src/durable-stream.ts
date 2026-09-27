@@ -201,15 +201,14 @@ const readStreamChunks = (sql: SqlExec, runKey: string, sinceSeq: number): Durab
  * Mark a run finished. `errorCode`/`error` are written only for the `error`
  * status.
  *
- * A run whose row is already gone gets its chunks dropped instead.
- * {@link trimStreamRuns} deletes on `startedAt + ttlMs` regardless of status, so
- * a generator that outlives its procedure's `ttlMs` reaches this terminal under
- * a key the sweep has already emptied — and everything it appended afterwards is
- * unreachable by every FUTURE sweep too, because the sweep's chunk delete is
- * scoped by `run_key IN (SELECT … FROM __stream_runs …)`. Recording the terminal
- * would resurrect a run past its own retention; reclaiming the chunks is the
- * honest half, and it is what keeps the next claim under that key from
- * inheriting them through `appendStreamChunk`'s `INSERT OR IGNORE`.
+ * A run whose row is already gone gets its chunks dropped instead. The
+ * runner's sweep spares a run it is producing, but a {@link trimStreamRuns}
+ * caller that does not pass it can still take the row mid-run — and everything
+ * appended afterwards is unreachable by every FUTURE sweep, which finds expired
+ * runs through `__stream_runs`. Recording the terminal would resurrect a run
+ * past its own retention; reclaiming the chunks is the honest half, and it is
+ * what keeps the next claim under that key from inheriting them through
+ * `appendStreamChunk`'s `INSERT OR IGNORE`.
  */
 const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: { code: string; message: string }): void => {
     if (readStreamRun(sql, runKey) === undefined) {
@@ -232,21 +231,37 @@ const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "err
 };
 
 /**
- * Drop every run (and its chunks) whose OWN retention window has elapsed.
+ * Drop every run (and its chunks) whose OWN retention window has elapsed —
+ * except the runs in `live`, which are still producing on this instance.
  *
  * Each run stores the `ttlMs` of the procedure that created it, so the comparison
  * is per row. A shard mixing a 24h chat transcript with a 60s progress stream
  * must not lose the former because the latter happened to trigger the sweep.
+ *
+ * `ttlMs` is retention for a TRANSCRIPT, measured from `startedAt`, and a
+ * generation may run past it. Trimming a still-producing run deleted the prefix
+ * a reconnecting consumer resumes from: it asked for everything after chunk
+ * `k` and silently got only what the producer appended after the sweep. The
+ * caller passes the keys it is producing; a `running` row NOT among them has no
+ * producer (a Durable Object runs one instance at a time, so a producer on a
+ * previous instance died with it) and is abandoned, so it is trimmed like a
+ * finished one.
+ *
+ * Deletes key by key rather than with one `NOT IN (…)`: the live set is
+ * unbounded and workerd's SQLite caps bound parameters at 100.
+ * ponytail: one statement pair per expired run; batch it if a sweep ever finds thousands.
  */
-const trimStreamRuns = (sql: SqlExec, now: number): void => {
-    runDrizzle(
+const trimStreamRuns = (sql: SqlExec, now: number, live: ReadonlySet<string>): void => {
+    const expired = runDrizzle<{ run_key: string }>(
         sql,
-        dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key IN (
-            SELECT run_key FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at + ttl_ms < ${now}
-        )`,
-    );
+        dsql`SELECT run_key FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at + ttl_ms < ${now}`,
+    ).toArray();
 
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at + ttl_ms < ${now}`);
+    for (const { run_key: runKey } of expired) {
+        if (!live.has(runKey)) {
+            deleteStreamRun(sql, runKey);
+        }
+    }
 };
 
 export {

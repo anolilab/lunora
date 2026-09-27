@@ -49,9 +49,9 @@ describe(decideDurableAttach, () => {
         it("still joins a live producer whose row a TTL sweep removed", () => {
             expect.assertions(2);
 
-            // `trimStreamRuns` deletes on `startedAt + ttlMs` regardless of
-            // status, so a generator outliving its procedure's `ttlMs` keeps
-            // producing under a key with no row. The producer IS the run —
+            // A `trimStreamRuns` not told which runs are live deletes on
+            // `startedAt + ttlMs` alone, so a generator can keep producing
+            // under a key with no row. The producer IS the run —
             // failing its consumers here would break a resume that used to work.
             expect(decideDurableAttach(undefined, { live: LIVE, resuming: true })).toBe("attach");
             expect(decideDurableAttach(undefined, { generation: GENERATION, live: LIVE, resuming: true })).toBe("attach");
@@ -239,6 +239,72 @@ describe("durableStreamRunner.attach", () => {
         expect(readStreamRun(harness.sql, "kept")).toBeDefined();
     });
 
+    it("spares a run still producing past its ttlMs, so a resume replays every chunk after its position", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+
+        try {
+            vi.setSystemTime(GENERATION);
+
+            // An abandoned `running` row past its retention: no producer on this
+            // instance, so the sweep must still take it.
+            claimStreamRun(harness.sql, "abandoned", GENERATION - 100_000, 1);
+            appendStreamChunk(harness.sql, "abandoned", 1, JSON.stringify("orphan"));
+
+            const runner = new DurableStreamRunner({ sql: () => harness.sql });
+            const first = recordingSink();
+            const pending: ((value: string | undefined) => void)[] = [];
+            const answer = async function* (): AsyncGenerator<string> {
+                while (true) {
+                    // eslint-disable-next-line no-await-in-loop -- the test hands out one chunk at a time
+                    const next = await new Promise<string | undefined>((resolve) => {
+                        pending.push(resolve);
+                    });
+
+                    if (next === undefined) {
+                        return;
+                    }
+
+                    yield next;
+                }
+            };
+            const push = async (value: string | undefined): Promise<void> => {
+                await vi.waitFor(() => {
+                    if (pending.length === 0) {
+                        throw new Error("producer not waiting yet");
+                    }
+                });
+                pending.shift()?.(value);
+            };
+
+            const producing = runner.attach({ iterator: () => answer(), runKey: "run-a", sinceChunk: 0, sink: first.sink, ttlMs: 60_000 });
+
+            await push("one");
+            await push("two");
+            await push("three");
+
+            // The generation runs past its 60 s ttlMs and past the sweep's hourly
+            // gate; the next attach (a tab rejoining at the head) runs the sweep.
+            vi.setSystemTime(GENERATION + 2 * 3_600_000);
+            await runner.attach({ generation: GENERATION, iterator: () => answer(), runKey: "run-a", sinceChunk: 3, sink: recordingSink().sink });
+
+            // A second tab that dropped after chunk 1 resumes from there.
+            const resumed = recordingSink();
+
+            await runner.attach({ generation: GENERATION, iterator: () => answer(), runKey: "run-a", sinceChunk: 1, sink: resumed.sink });
+            await push("four");
+            await push(undefined);
+            await producing;
+
+            expect(chunksOf(resumed.events).map((event) => event.data)).toStrictEqual(["two", "three", "four"]);
+            expect(readStreamRun(harness.sql, "run-a")?.status).toBe("complete");
+            expect(readStreamRun(harness.sql, "abandoned")).toBeUndefined();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("starts a fresh run and stamps every chunk with the run's generation", async () => {
         expect.assertions(4);
 
@@ -327,16 +393,15 @@ describe("durableStreamRunner.attach", () => {
             yield "tail";
         };
 
-        // A short retention with a generator that outlives it: the sweep deletes
-        // on `startedAt + ttlMs` regardless of status, so the row goes while the
-        // producer is still running.
+        // A short retention with a generator that outlives it, and a sweep not
+        // told the run is live: the row goes while the producer is still running.
         const producing = runner.attach({ iterator: () => answer(), runKey: "run-a", sinceChunk: 0, sink: first.sink, ttlMs: 50 });
 
         await waitForFirstChunk(first.events);
 
         const generation = chunksOf(first.events)[0]?.generation;
 
-        trimStreamRuns(harness.sql, Date.now() + 60_000);
+        trimStreamRuns(harness.sql, Date.now() + 60_000, new Set());
 
         expect(readStreamRun(harness.sql, "run-a")).toBeUndefined();
 
@@ -381,7 +446,7 @@ describe("durableStreamRunner.attach", () => {
 
         await waitForFirstChunk(first.events);
 
-        trimStreamRuns(harness.sql, Date.now() + 60_000);
+        trimStreamRuns(harness.sql, Date.now() + 60_000, new Set());
 
         expect(readStreamRun(harness.sql, "run-a")).toBeUndefined();
 

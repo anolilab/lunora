@@ -92,11 +92,11 @@ type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-term
  * behavior.
  *
  * `context.live` carries the producing run's own stamp rather than a bare
- * boolean because the row and the producer can disagree: {@link trimStreamRuns}
- * deletes on `startedAt + ttlMs` regardless of status, so a generator that
- * outlives its procedure's `ttlMs` keeps producing under a key whose row is
- * gone. A live producer is always attachable — it is the run, row or no row —
- * and its in-memory stamp is what a resume is checked against in that window.
+ * boolean because the row and the producer can disagree: a {@link trimStreamRuns}
+ * that is not told which runs are live deletes on `startedAt + ttlMs` alone, so
+ * a generator can keep producing under a key whose row is gone. A live producer
+ * is always attachable — it is the run, row or no row — and its in-memory stamp
+ * is what a resume is checked against in that window.
  */
 const decideDurableAttach = (
     run: DurableStreamRun | undefined,
@@ -396,7 +396,7 @@ class DurableStreamRunner {
         this.lastTrimAt = now;
 
         try {
-            trimStreamRuns(sql, now);
+            trimStreamRuns(sql, now, new Set(this.runs.keys()));
         } catch {
             // Best-effort GC (pre-migration shard, stub sql handle) must never
             // fail the stream that triggered it.

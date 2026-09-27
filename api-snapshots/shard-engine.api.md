@@ -5159,7 +5159,7 @@ const trimScheduleOutbox: (sql: SqlExec, olderThanTs: number) => void;
 ### `trimStreamRuns` (const)
 
 ```ts
-const trimStreamRuns: (sql: SqlExec, now: number) => void;
+const trimStreamRuns: (sql: SqlExec, now: number, live: ReadonlySet<string>) => void;
 ```
 
 ### `tryRowToDocument` (const)
