@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.317...@lunora/cli@1.0.0-alpha.318) (2026-09-27)
+
+### Code Refactoring
+
+* **cli:** remove unused exports and the cfonts dependency ([#888](https://github.com/anolilab/lunora/issues/888)) ([1e63016](https://github.com/anolilab/lunora/commit/1e630160580382f11ee16b14f2563348b5cdf041))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.168
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.234
+* **@lunora/config:** upgraded to 1.0.0-alpha.277
+* **@lunora/d1:** upgraded to 1.0.0-alpha.147
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.192
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.160
+* **@lunora/seed:** upgraded to 1.0.0-alpha.165
+* **@lunora/testing:** upgraded to 1.0.0-alpha.206
+
 ## @lunora/cli [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.316...@lunora/cli@1.0.0-alpha.317) (2026-09-27)
 
 ### Bug Fixes
