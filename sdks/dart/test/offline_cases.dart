@@ -1341,6 +1341,57 @@ Future<void> caseTransientRefusalOnAHealthySocketIsRetried() async {
   }
 }
 
+/// A retry is an ordinary flush pass, judged against the token held when it
+/// fires: with no subject the write is stamped with the token's digest, so a
+/// retry that fires after the token was cleared holds it rather than sending it
+/// with no bearer, and the same token set again replays it with that token.
+Future<void> caseRetryFlushIsGatedOnTheToken() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final bearers = <String?>[];
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      bearers.add(headers['authorization']);
+
+      return bearers.length == 1
+          ? const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}')
+          : const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      authToken: 'token-a',
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+    final pending = Settled(client.mutation('messages:send', mutationId: 'm-retry-gate'));
+
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    client.authToken = null;
+    await _settle();
+    timers.fire();
+    await _settle();
+    equals(bearers.length, 1, 'held: the retry sends nothing once the token is gone');
+    equals(client.pendingWrites, 1, 'the write is still queued');
+
+    client.authToken = 'token-a';
+    await _settle();
+    await pending.done;
+    equals(pending.error, null, 'the same token replays the write');
+    equals(canonical(bearers), canonical(<Object?>['Bearer token-a', 'Bearer token-a']), 'every send carries token-a');
+
+    client.close();
+  });
+}
+
 /// The retry timer dies with the socket and with the client.
 Future<void> caseRetryTimerIsCancelledOnDisconnectAndClose() async {
   covers('offline_flush_replays_and_confirms_optimistic');

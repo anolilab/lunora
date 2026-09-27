@@ -294,7 +294,10 @@ that pass with it, so a token swapped mid-flush applies from the next pass; with
 no identity set, a new or cleared token evicts the previous session as an
 identity change does; a record persisted with a `null` stamp by an earlier build
 is rejected once a token is held. Six of the eight never flush on a token change
-(⁹), so there the app's next flush is what the gate judges. Go, Rust and Java
+(⁹), so there the app's next flush is what the gate judges; the retry python
+and dart schedule after a transient refusal is an ordinary pass, gated and
+token-snapshotted like any other (a token cleared while it is armed holds the
+write rather than sending it with no bearer). Go, Rust and Java
 turned the token into an accessor pair for the eviction (`SetAuthToken`,
 `set_auth_token`, `authToken(String)`). The digest walks UTF-16 code units: Java
 and Kotlin assert two lone-surrogate digests inline, which the shared fixture
