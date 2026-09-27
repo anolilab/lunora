@@ -9,7 +9,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { useAuthCapabilities } from "../../hooks/use-auth-capabilities";
+import useAuthCapabilities from "../../hooks/use-auth-capabilities";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
