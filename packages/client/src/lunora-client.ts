@@ -542,8 +542,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * because it cannot see the cookie.
      *
      * Single use, and only valid on the client that issued it. A replay refused
-     * for its credential (`UNAUTHENTICATED` / `TOKEN_EXPIRED` / `UNAUTHORIZED`)
-     * fires {@link LunoraClient.onTokenExpired} once per credential, and only
+     * for its credential (`UNAUTHENTICATED` / `TOKEN_EXPIRED`) fires {@link LunoraClient.onTokenExpired} once per credential, and only
      * while that credential is still the current one. Omit for normal calls,
      * which always send the live token.
      */
@@ -5155,6 +5154,7 @@ class LunoraClient {
                 optimisticConfirms,
                 options.precondition,
                 options.mutationId,
+                replay?.stamp,
             );
 
         if (socketDown || midReconnect || queuedAhead) {
@@ -5167,7 +5167,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
-                ...replay,
+                ...replay?.flags,
                 mutationId,
                 onCommitCursor: (cursor) => {
                     commitCursor = cursor;
@@ -5193,7 +5193,7 @@ class LunoraClient {
                 return enqueue();
             }
 
-            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.authToken);
+            this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.flags.authToken);
 
             throw error;
         }
@@ -5254,10 +5254,13 @@ class LunoraClient {
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
         precondition: (() => boolean) | undefined,
         callerMutationId: string | undefined,
+        replayStamp: null | string | undefined,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         // Bind the issuing identity at enqueue time so the write can only replay
-        // under the same identity (see flushOfflineQueue).
-        const issuingIdentity = this.identityFingerprint();
+        // under the same identity (see flushOfflineQueue). A durable replay going
+        // back into the queue keeps the identity its verdict judged: whoever signed
+        // in since must not inherit it as their own.
+        const issuingIdentity = replayStamp === undefined ? this.identityFingerprint() : replayStamp;
 
         if (this.outbox) {
             this.outboxMutationCounter += 1;
@@ -9320,10 +9323,13 @@ class LunoraClient {
 
     /**
      * Redeem a {@link ReplayCredential} (single use) into the request flags it
-     * pins: the judged bearer, and the subject a cookie replay names. Throws for a
-     * credential this client did not issue or already redeemed.
+     * pins (the judged bearer, and the subject a cookie replay names) and the
+     * identity stamp it was judged for. Throws for a credential this client did
+     * not issue or already redeemed.
      */
-    private takeReplayCredential(credential: ReplayCredential | undefined): { authToken: string | null; expectSubject?: null | string } | undefined {
+    private takeReplayCredential(
+        credential: ReplayCredential | undefined,
+    ): { flags: { authToken: string | null; expectSubject?: null | string }; stamp: null | string | undefined } | undefined {
         if (credential === undefined) {
             return undefined;
         }
@@ -9336,7 +9342,7 @@ class LunoraClient {
 
         this.replayCredentials.delete(credential);
 
-        return { authToken: judged.authToken, ...replayExpectation(judged.stamp, judged.authToken) };
+        return { flags: { authToken: judged.authToken, ...replayExpectation(judged.stamp, judged.authToken) }, stamp: judged.stamp };
     }
 
     /**

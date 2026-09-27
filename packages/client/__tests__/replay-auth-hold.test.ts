@@ -89,8 +89,8 @@ const createMockWebSocket = (): typeof WebSocket => {
     return WS as unknown as typeof WebSocket;
 };
 
-const unauthorizedResponse = (): Response =>
-    Response.json({ error: { code: "UNAUTHORIZED", message: "token expired" } }, { headers: { "content-type": "application/json" }, status: 401 });
+const unauthenticatedResponse = (): Response =>
+    Response.json({ error: { code: "UNAUTHENTICATED", message: "token expired" } }, { headers: { "content-type": "application/json" }, status: 401 });
 
 const okResponse = (): Response => Response.json({ result: { ok: true } }, { headers: { "content-type": "application/json" }, status: 200 });
 
@@ -100,7 +100,7 @@ describe("durable replay under an expired bearer", () => {
 
         sockets.length = 0;
 
-        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthorizedResponse());
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthenticatedResponse());
         const persistence = createInMemoryPersistence();
         const client = new LunoraClient({
             fetch: fetchImpl as unknown as typeof fetch,
@@ -155,6 +155,55 @@ describe("durable replay under an expired bearer", () => {
         expect(fetchImpl.mock.calls.at(-1)?.[1].headers).toMatchObject({
             authorization: "Bearer refreshed-jwt" /* gitleaks:allow -- test fixture, not a real credential */,
         });
+
+        client.close();
+    });
+
+    // `UNAUTHORIZED` is the app's own "you may not do this" (`throw new
+    // LunoraError("UNAUTHORIZED", "Sign in to post")`): a verdict on the write,
+    // which no refresh changes. Holding it stranded the write, and asked an app
+    // that may hold no token at all to refresh one.
+    it("settles a write the app refused UNAUTHORIZED instead of holding it for a refresh", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
+            Response.json({ error: { code: "UNAUTHORIZED", message: "you are not playing in this game" } }, { status: 401 }),
+        );
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const settled: { code?: string; status: string }[] = [];
+        const expired = vi.fn<() => void>();
+
+        client.onMutationSettled((event) => {
+            settled.push({ code: (event.error as { code?: string } | undefined)?.code, status: event.status });
+        });
+        client.onTokenExpired(expired);
+        client.setAuthToken("jwt", "user-1");
+        client.subscribe(fnRef("games.get"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("games.move"), { to: "e4" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(settled).toStrictEqual([{ code: "UNAUTHORIZED", status: "rejected" }]);
+        await expect(outcome).resolves.toBe("rejected:UNAUTHORIZED");
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(expired).not.toHaveBeenCalled();
+        await expect(persistence.load()).resolves.toHaveLength(0);
 
         client.close();
     });

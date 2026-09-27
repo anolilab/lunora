@@ -31,6 +31,7 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
         // honest "composed with no baseline" answer.
         currentBaseline: () => undefined,
         currentIdentity: () => null,
+        getAuthToken: () => null,
         mutation: mutationMock,
         // Mirrors `LunoraClient.replayIdentityVerdict`. Both stamp and current are
         // the signed-out sentinel here, so every replay is a "match", carrying the

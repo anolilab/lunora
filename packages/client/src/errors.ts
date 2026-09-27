@@ -118,8 +118,14 @@ const getRetryAfterMs = (error: unknown): number | undefined => {
  * transient codes they schedule no timed retry — nothing
  * changes until the credential does, and re-sending the same stale bearer on a
  * backoff can only earn the same 401.
+ *
+ * `UNAUTHORIZED` is deliberately not one of them. It is the app's own verdict
+ * on the write (`throw new LunoraError("UNAUTHORIZED", "Sign in to post")`, "you
+ * are not playing in this game"), which no refresh changes, and it is what an
+ * unreadable `401` body is classified as. Holding it stranded the write and asked
+ * an app that may hold no token at all to refresh one.
  */
-const AUTH_REPLAY_ERROR_CODES: ReadonlySet<string> = new Set(["TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"]);
+const AUTH_REPLAY_ERROR_CODES: ReadonlySet<string> = new Set(["TOKEN_EXPIRED", "UNAUTHENTICATED"]);
 
 /**
  * Whether a durable replay's failure refused the credential rather than the

@@ -282,4 +282,29 @@ describe("lunoraClient outbox delegation", () => {
         expect(result).toStrictEqual({ chunks: 3, imported: 0, queued: 3 });
         expect(fetches).toBe(0);
     });
+
+    // A durable replay that lands on a dropped socket goes back into the outbox.
+    // It was judged as the user who queued it, so that is who it stays stamped as:
+    // re-stamping it with whoever signed in since would make that user's session
+    // replay it as their own.
+    it("re-queues a replay under the identity its verdict judged, not the one signed in now", async () => {
+        expect.assertions(2);
+
+        const { enqueued, sink } = recordingSink();
+        const client = makeClient(sink, "client-fixed");
+
+        client.setAuthToken("token-a", "user-a");
+
+        const judged = client.replayIdentityVerdict("subj:user-a");
+        const replayCredential = judged.verdict === "match" ? judged.credential : undefined;
+
+        client.setAuthToken("token-b", "user-b");
+
+        await client.mutation(fnRef("messages:send"), { text: "a's" }, { mutationId: "client-fixed:9", replayBaseline: null, replayCredential });
+
+        expect(enqueued).toHaveLength(1);
+        expect(enqueued[0]?.identity).toBe("subj:user-a");
+
+        client.close();
+    });
 });

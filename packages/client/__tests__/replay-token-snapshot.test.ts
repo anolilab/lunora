@@ -161,7 +161,7 @@ describe("offline flush pins the bearer it gated on", () => {
                 // stale token it carried is refused.
                 client.setAuthToken("token-a2", "user-a");
 
-                return json({ error: { code: "UNAUTHORIZED", message: "token expired" } }, 401);
+                return json({ error: { code: "UNAUTHENTICATED", message: "token expired" } }, 401);
             }
 
             return json({ result: { ok: true } });

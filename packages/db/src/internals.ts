@@ -388,6 +388,27 @@ export const makeDiffEmit =
     };
 
 /**
+ * `error` as the executor's terminal verdict. Carries the server's
+ * machine-readable `code` through so an `onWriteRejected` consumer can branch
+ * on it (CONFLICT vs FORBIDDEN vs …) exactly like the client's
+ * `MutationSettledEvent`, rather than a message-only error.
+ */
+export const toNonRetriable = (error: unknown): NonRetriableError => {
+    if (error instanceof NonRetriableError) {
+        return error;
+    }
+
+    const nonRetriable = new NonRetriableError(error instanceof Error ? error.message : String(error));
+    const { code } = error as { code?: unknown };
+
+    if (typeof code === "string") {
+        (nonRetriable as Error & { code?: string }).code = code;
+    }
+
+    return nonRetriable;
+};
+
+/**
  * Run a Lunora mutation under the outbox's retry policy.
  *
  * The retryable/permanent split keys on whether the failure carries a server
@@ -401,6 +422,8 @@ export const makeDiffEmit =
  * `error instanceof TypeError` alone would wrongly drop the latter. Two coded
  * failures are not verdicts on the write and are rethrown as-is too: the worker's
  * `IDENTITY_MISMATCH`, and a refused credential ({@link isAuthReplayFailure}).
+ * The caller decides what those mean: `defineCollections` holds the write for a
+ * fresh credential, and a bound mutator (never retried) settles it.
  */
 export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
     try {
@@ -423,19 +446,33 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
         }
 
         if (typeof (error as { code?: unknown }).code === "string") {
-            const nonRetriable = new NonRetriableError(error instanceof Error ? error.message : String(error));
-
-            // Carry the server's machine-readable `code` through to the executor so
-            // an `onWriteRejected` consumer can branch on it (CONFLICT vs FORBIDDEN
-            // vs …) exactly like the client's `MutationSettledEvent` — otherwise the
-            // verdict would be flattened to a message-only error.
-            (nonRetriable as Error & { code?: string }).code = (error as { code: string }).code;
-
-            throw nonRetriable;
+            throw toNonRetriable(error);
         }
 
         throw error;
     }
+};
+
+/**
+ * The terminal verdict the offline executor reaches on `error`, or `undefined`
+ * for a failure it retries. Besides a `NonRetriableError`, the executor's own
+ * retry policy gives up on an `AbortError` and on any message naming `400`,
+ * `401`, `403` or `422` (an unreadable `401` body arrives as one), and drops the
+ * write without a word. Mirrored here so every write it drops is reported and
+ * rolled back like any other rejection.
+ */
+export const terminalVerdict = (error: unknown): NonRetriableError | undefined => {
+    if (error instanceof NonRetriableError) {
+        return error;
+    }
+
+    const failure = error instanceof Error ? error : new Error(String(error));
+
+    if (failure.name === "AbortError" || ["400", "401", "403", "422"].some((status) => failure.message.includes(status))) {
+        return toNonRetriable(error);
+    }
+
+    return undefined;
 };
 
 /**
