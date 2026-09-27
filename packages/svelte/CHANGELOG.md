@@ -1,3 +1,12 @@
+## @lunora/svelte [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.183...@lunora/svelte@1.0.0-alpha.184) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.150
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.87
+
 ## @lunora/svelte [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.182...@lunora/svelte@1.0.0-alpha.183) (2026-09-27)
 
 
