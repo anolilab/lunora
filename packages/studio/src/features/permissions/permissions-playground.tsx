@@ -73,6 +73,10 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     // The last prefill nonce applied, so a given matrix "Probe this" click seeds
     // the form at most once even though `prefill` stays referentially set.
     const appliedNonce = useRef<number>(-1);
+    // Bumped by every run and every prefill: a prefill selects another function
+    // and clears the outcome, so a probe still in flight for the previous one
+    // must not paint its verdict back in.
+    const probeSeq = useRef(0);
 
     useEffect(() => {
         if (functionsProp !== undefined) {
@@ -112,6 +116,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         }
 
         appliedNonce.current = prefill.nonce;
+        probeSeq.current += 1;
         const target = prefill.functionPath;
 
         queueMicrotask(() => {
@@ -140,6 +145,9 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
             return;
         }
 
+        probeSeq.current += 1;
+        const seq = probeSeq.current;
+
         setArgsError(null);
         setRunning(true);
 
@@ -147,7 +155,9 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         try {
             const result = await probe({ args: parsedArgs, functionPath: effectivePath, shardKey: shardKey.trim(), userId: runAsUserId.trim() });
 
-            setOutcome(result);
+            if (seq === probeSeq.current) {
+                setOutcome(result);
+            }
         } finally {
             setRunning(false);
         }

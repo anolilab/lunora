@@ -1,6 +1,6 @@
 import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -129,5 +129,92 @@ describe("workflowInstanceHistory", () => {
         await screen.findByTestId("workflow-instance-i1");
 
         expect(screen.queryByTestId("workflow-instance-pause-i1")).toBeNull();
+    });
+});
+
+describe("workflowInstanceHistory after switching workflow", () => {
+    it("keeps the current workflow's instances when the previous workflow's list lands late", async () => {
+        expect.assertions(2);
+
+        const pending = new Map<string, (instances: WorkflowInstanceSummary[]) => void>();
+        const loadInstances = async ({ name }: { name: string }): Promise<WorkflowInstanceSummary[]> =>
+            new Promise((resolve) => {
+                pending.set(name, resolve);
+            });
+
+        const { rerender } = render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
+
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="refunds" />));
+
+        await act(async () => {
+            pending.get("refunds")?.([{ id: "refund-1", status: "complete" }]);
+            await Promise.resolve();
+        });
+        await act(async () => {
+            pending.get("orders")?.([{ id: "order-1", status: "running" }]);
+            await Promise.resolve();
+        });
+
+        expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();
+        expect(screen.queryByTestId("workflow-instance-order-1")).toBeNull();
+    });
+
+    it("drops an instance's step timeline that lands after switching workflow", async () => {
+        expect.assertions(1);
+
+        let finishDetail: (detail: WorkflowInstanceDetail) => void = () => {};
+        const loadDetail = async (): Promise<WorkflowInstanceDetail> =>
+            new Promise((resolve) => {
+                finishDetail = resolve;
+            });
+        const loadInstances = async (): Promise<WorkflowInstanceSummary[]> => INSTANCES;
+
+        const { rerender } = render(
+            withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={loadInstances} workflowName="orders" />),
+        );
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-steps-i1"));
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={loadInstances} workflowName="refunds" />));
+        await screen.findByTestId("workflow-instance-i1");
+
+        await act(async () => {
+            finishDetail(DETAIL);
+            await Promise.resolve();
+        });
+
+        // `i1`'s steps belong to `orders`; the panel now shows `refunds`.
+        expect(screen.queryByTestId("workflow-instance-detail")).toBeNull();
+    });
+
+    it("does not reload the previous workflow's list when an action started there finishes", async () => {
+        expect.assertions(2);
+
+        let finishAction: () => void = () => {};
+        const runAction = async (): Promise<{ status: WorkflowInstanceStatus }> =>
+            new Promise((resolve) => {
+                finishAction = () => {
+                    resolve({ status: "paused" });
+                };
+            });
+        const loadInstances = async ({ name }: { name: string }): Promise<WorkflowInstanceSummary[]> =>
+            name === "orders" ? [{ id: "order-1", status: "running" }] : [{ id: "refund-1", status: "complete" }];
+
+        const { rerender } = render(
+            withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="orders" />),
+        );
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-pause-order-1"));
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="refunds" />));
+        await screen.findByTestId("workflow-instance-refund-1");
+
+        await act(async () => {
+            finishAction();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();
+        expect(screen.queryByTestId("workflow-instance-order-1")).toBeNull();
     });
 });
