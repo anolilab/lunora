@@ -85,5 +85,5 @@ const emitContainerLifecycle = (container: string, instance: string, event: Cont
     return envelope;
 };
 
-export type { ContainerLifecycle, ContainerLifecycleEvent };
-export { buildContainerLifecycleEvent, emitContainerLifecycle, LUNORA_EVENT_SOURCE };
+export type { ContainerLifecycleEvent };
+export { buildContainerLifecycleEvent, emitContainerLifecycle };
