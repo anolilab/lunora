@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { postgresDialect } from "../src/global-dialect";
+import backendParityCases from "./_helpers/backend-parity-cases";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
 import rlsSearchCases from "./_helpers/rls-search-cases";
@@ -613,6 +614,28 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 await run();
             },
             60_000,
+        );
+    });
+
+    describe("values every engine must treat alike", () => {
+        it.each(
+            backendParityCases({
+                query: async (statement) => await harness.query(statement),
+                engine: "postgres",
+                setup: async (schema) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, postgresDialect);
+
+                    return createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema });
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            120_000,
         );
     });
 

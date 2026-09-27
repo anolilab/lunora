@@ -4295,12 +4295,6 @@ const listReactorStates: (sql: SqlExec) => {
 const listTables: (sql: SqlExec) => TableInfo[];
 ```
 
-### `literalInList` (const)
-
-```ts
-const literalInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
-```
-
 ### `markUnvouchableReads` (const)
 
 ```ts
@@ -5035,6 +5029,12 @@ const selectShapeRows: (sql: SqlExec, table: string, effectiveWhere: WhereInput 
 
 ```ts
 const serializeSqlValue: (value: unknown) => unknown;
+```
+
+### `serverInList` (const)
+
+```ts
+const serverInList: (engine: "mysql" | "postgres") => (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
 ```
 
 ### `shapeRoutingKey` (const)

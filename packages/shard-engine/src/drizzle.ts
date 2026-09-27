@@ -85,6 +85,30 @@ const isJsonSafe = (value: unknown): boolean => {
     return typeof value === "string" && value.isWellFormed();
 };
 
+/**
+ * A list made only of bytes, as the JSON array of hex strings SQLite's `unhex()`
+ * turns back into the same BLOBs — or `undefined` when any item is not bytes.
+ *
+ * Bytes have no JSON form, so a wide `in` over a `v.bytes()` column had no
+ * bounded rendering and was refused outright. Hex does: `unhex(value)` over each
+ * `json_each` element is the exact BLOB, so the membership test is the one a
+ * literal list would run. A MIXED list keeps the refusal, because it has no
+ * single element form both halves could be decoded from.
+ */
+const bytesAsHexJson = (items: ReadonlyArray<unknown>): string | undefined => {
+    const hex: string[] = [];
+
+    for (const item of items) {
+        if (!(item instanceof Uint8Array)) {
+            return undefined;
+        }
+
+        hex.push(Array.from(item, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+    }
+
+    return JSON.stringify(hex);
+};
+
 /** The SQL engine a render targets. */
 export type SqlEngine = "mysql" | "postgres" | "sqlite";
 
@@ -165,9 +189,10 @@ export const unionAll = (branches: ReadonlyArray<SQL>): SQL => {
  *
  * A list JSON cannot carry losslessly (see {@link isJsonSafe}) has no bounded
  * form, so an over-budget one throws rather than emitting a statement that is
- * certain to fail to prepare. In practice that is a `Uint8Array` set on the
- * sql-store path; the alternative — falling back to a placeholder per item —
- * trades a clear error for `SQLITE_ERROR: too many SQL variables`.
+ * certain to fail to prepare — except a list made only of bytes, which travels
+ * as hex (see {@link bytesAsHexJson}). The alternative — falling back to a
+ * placeholder per item — trades a clear error for
+ * `SQLITE_ERROR: too many SQL variables`.
  * @param reference the column or expression tested for membership
  * @param items already serialized to their bound storage form
  * @param negated `true` renders `NOT IN`
@@ -176,6 +201,11 @@ export const unionAll = (branches: ReadonlyArray<SQL>): SQL => {
 export const sqliteInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget = IN_LIST_PARAM_BUDGET): SQL => {
     const keyword = negated ? sql` NOT IN ` : sql` IN `;
     const jsonSafe = items.every((item) => isJsonSafe(item));
+    const hexList = items.length > budget && !jsonSafe ? bytesAsHexJson(items) : undefined;
+
+    if (hexList !== undefined) {
+        return sql`${reference}${keyword}(SELECT unhex(${sql.identifier("value")}) FROM json_each(${hexList}))`;
+    }
 
     if (items.length > budget && !jsonSafe) {
         throw new LunoraError(
@@ -194,4 +224,4 @@ export const sqliteInList = (reference: SQL, items: ReadonlyArray<unknown>, nega
     return sql`${reference}${keyword}(SELECT ${sql.identifier("value")} FROM json_each(${JSON.stringify(items)}))`;
 };
 
-export { isJsonSafe, WORKERD_SQLITE_LIMITS };
+export { bytesAsHexJson, isJsonSafe, WORKERD_SQLITE_LIMITS };

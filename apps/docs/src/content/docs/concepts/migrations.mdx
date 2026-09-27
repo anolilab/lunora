@@ -120,6 +120,36 @@ per environment, before the deploy that depends on them:
 wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
 ```
 
+### Relaxing NOT NULL on a D1 table
+
+A required field whose validator accepts `null` — `v.any()`, `v.null()`,
+`v.literal(null)`, or a `v.union(…)` with one of those as a member — is
+provisioned as a nullable column. Tables created before that rule carry
+`NOT NULL` on such a column, and an insert of `null` fails there with a raw
+constraint error. `lunora migrate generate` reports it as a
+`nullability change … NOT NULL → NULL`.
+
+On a Hyperdrive (Postgres or MySQL) backend the runtime drops the constraint
+itself on its next start. SQLite cannot drop a column constraint in place, so a
+D1 table needs a one-off rebuild. Read the table's current definition, then
+apply a file like this once per environment:
+
+```bash
+wrangler d1 execute <DB> --remote --command="SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notes'"
+```
+
+```sql
+-- The statement printed above, renamed, with NOT NULL removed from the affected column.
+CREATE TABLE "notes__rebuild" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "_version" INTEGER, "note" TEXT, "title" TEXT NOT NULL);
+INSERT INTO "notes__rebuild" SELECT * FROM "notes";
+DROP TABLE "notes";
+ALTER TABLE "notes__rebuild" RENAME TO "notes";
+```
+
+Keep the column order exactly as printed, or `SELECT *` copies values into the
+wrong columns. Dropping the old table drops its indexes; the runtime re-creates
+every index the schema declares on its next request.
+
 <Callout type="warn">
     A hand-edited migration file that is only committed and deployed runs nowhere. The runtime will silently add a fresh empty column where your file intended a
     backfilled one, and the deploy stays green.

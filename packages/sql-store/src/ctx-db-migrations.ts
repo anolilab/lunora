@@ -22,6 +22,7 @@ import { aggregateTableName, rankTableName, renderSql, sortColumnName } from "@l
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
@@ -105,6 +106,10 @@ const assertIndexableUniqueIndexes = (tableName: string, definition: SchemaLike[
     }
 };
 
+/** Does `validator`'s column get `NOT NULL`? Shared with {@link relaxNullAcceptingColumns}, which repairs tables provisioned before null-accepting kinds were exempt. */
+const requiresNotNull = (validator: ValidatorLike): boolean =>
+    validator._meta?.column?.notNull === true && validator.kind !== "optional" && !validatorAcceptsNull(validator);
+
 /** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
 const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
     const fieldColumns: SQL[] = [];
@@ -116,8 +121,11 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
         }
 
         // Required, non-optional fields get NOT NULL; optional ones stay nullable
-        // so an insert that omits them can't trip a constraint.
-        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
+        // so an insert that omits them can't trip a constraint. So do the kinds
+        // that accept null while keeping the default `notNull` flag — `v.any()`,
+        // `v.null()`, `v.literal(null)`, a union with one of those as a member:
+        // NOT NULL there refused the value the validator had just accepted.
+        const notNull = requiresNotNull(validator) ? " NOT NULL" : "";
 
         fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect, fullValueFields.has(field))}${notNull}`)}`);
     }
@@ -855,6 +863,114 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
 };
 
 /**
+ * `table.column` pairs {@link relaxNullAcceptingColumns} already reported in
+ * this isolate. Provisioning runs once per ctx-db — once per request on a
+ * Hyperdrive binding — so an unconditional warning would repeat on every one.
+ */
+const reportedRelaxations = new Set<string>();
+
+/** Warn once per isolate for `key`. The only channel a provisioning pass has. */
+const warnOnce = (key: string, message: string): void => {
+    if (reportedRelaxations.has(key)) {
+        return;
+    }
+
+    reportedRelaxations.add(key);
+    // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
+    console.warn(`[@lunora/sql-store] ${message}`);
+};
+
+/**
+ * The one-off statement that relaxes a MySQL column to NULL while keeping the
+ * declaration it has TODAY. `MODIFY COLUMN` replaces the whole definition, so it
+ * is rebuilt from `information_schema` rather than from the current DDL: a
+ * legacy column may carry a case-folding collation, or `LONGTEXT` where a
+ * `.unique()` column is now `VARCHAR(768)`, and restating today's DDL would
+ * change how it compares or fail on rows longer than the new type.
+ */
+const mysqlRelaxStatement = (tableName: string, field: string, row: Record<string, unknown>): string => {
+    const charset = typeof row["charset"] === "string" ? ` CHARACTER SET ${row["charset"]} COLLATE ${String(row["collation"])}` : "";
+
+    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${field}\` ${String(row["type"])}${charset} NULL`;
+};
+
+/**
+ * Drop `NOT NULL` from the columns of an existing table whose validator accepts
+ * null — the constraint every table provisioned before those kinds were exempt
+ * still carries, so `insert({ note: null })` kept raising a raw constraint error
+ * there after the DDL was fixed.
+ *
+ * Only Postgres is changed in place: `ALTER COLUMN … DROP NOT NULL` touches the
+ * catalog and nothing else, and is a no-op once done. MySQL is NOT — its only
+ * way to relax a column is `MODIFY COLUMN`, which restates the whole definition
+ * and can rebuild the table, so running it from a cold start would block writes
+ * and could change the column's collation or type. Such a column is reported
+ * instead, once per isolate, with the exact statement to run (see
+ * {@link mysqlRelaxStatement}). SQLite cannot drop a column constraint without a
+ * rebuild at all: a D1 table keeps it until it is rebuilt by hand (the global
+ * tables migration guide carries the recipe), and `lunora migrate generate`
+ * reports the nullability change so the step is not missed.
+ *
+ * Best-effort by design. A failure here is logged and provisioning carries on:
+ * the table still serves every write that does not store `null` in such a
+ * column, where rejecting the whole provisioning pass would fail every request,
+ * on every isolate, until an operator intervened.
+ */
+const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    if (dialect.name === "sqlite") {
+        return;
+    }
+
+    // Exactly the columns the fixed DDL leaves nullable where the old rule did not.
+    const candidates = Object.keys(definition.shape).filter((field) => {
+        const validator = definition.shape[field] as ValidatorLike;
+
+        return validator._meta?.column?.notNull === true && validator.kind !== "optional" && validatorAcceptsNull(validator);
+    });
+
+    if (candidates.length === 0) {
+        return;
+    }
+
+    try {
+        // Postgres needs only the names; MySQL also the declaration the report restates.
+        const selected =
+            dialect.name === "postgres"
+                ? sql`column_name AS ${sql.identifier("name")}`
+                : sql`column_name AS ${sql.identifier("name")}, column_type AS ${sql.identifier("type")}, character_set_name AS ${sql.identifier("charset")}, collation_name AS ${sql.identifier("collation")}`;
+        const schemaScope = dialect.name === "postgres" ? sql`table_schema = ANY (current_schemas(false))` : sql`table_schema = DATABASE()`;
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${selected} FROM information_schema.columns WHERE ${schemaScope} AND table_name = ${tableName} AND is_nullable = 'NO' AND column_name IN (${sql.join(
+                candidates.map((field) => sql`${field}`),
+                sql`, `,
+            )})`,
+        );
+
+        for (const row of rows) {
+            const field = String(row["name"]);
+
+            if (dialect.name === "postgres") {
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
+                await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ALTER COLUMN ${sql.identifier(field)} DROP NOT NULL`);
+                continue;
+            }
+
+            warnOnce(
+                `${tableName}.${field}`,
+                `"${tableName}"."${field}" accepts null in the schema but its column is NOT NULL, so writing null there fails. Relaxing it on MySQL can rebuild the table, so it is not done at startup; run this once, in a maintenance window: ${mysqlRelaxStatement(tableName, field, row)};`,
+            );
+        }
+    } catch (error) {
+        warnOnce(
+            `${tableName}:relax-failed`,
+            `could not relax NOT NULL on the null-accepting columns of "${tableName}" (${candidates.join(", ")}): ${error instanceof Error ? error.message : String(error)}. Writing null to them fails until the constraint is dropped by hand.`,
+        );
+    }
+};
+
+/**
  * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
  * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
  * declared field, then its secondary and `.unique()` indexes. This is the D1
@@ -880,6 +996,8 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
         await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must carry every declared column before its indexes reference them.
         await alterGlobalTableDrift(exec, tableName, definition, dialect);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the same connection.
+        await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
         await createGlobalTableIndexes(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.

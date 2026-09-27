@@ -156,6 +156,16 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Data migration not found";
     };
+    readonly MIGRATION_DRIFT: {
+        readonly hint: readonly [
+            "An applied SQL migration is never re-run, so the runner stopped before applying anything.",
+            "",
+            "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
+            "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran."
+        ];
+        readonly status: 409;
+        readonly title: "Migration drift";
+    };
     readonly UNKNOWN_TABLE: {
         readonly status: 404;
         readonly title: "Unknown table";

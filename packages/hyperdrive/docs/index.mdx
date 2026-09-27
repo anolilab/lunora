@@ -377,6 +377,38 @@ const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 
 </Tabs>
 
+### Tables provisioned by an earlier version
+
+The store creates missing tables and adds missing columns on its own, but it
+does not rewrite a column that already exists. Two gaps can remain on a table
+provisioned before a release changed the column it would declare:
+
+- **A field that accepts `null` but whose column is `NOT NULL`.** Required
+  `v.any()`, `v.null()`, `v.literal(null)` and unions with a nullable member
+  used to be provisioned `NOT NULL`, so storing `null` there fails. Postgres
+  drops the constraint itself at startup (a catalog-only change). MySQL does not:
+  its only way to relax a column is `MODIFY COLUMN`, which restates the whole
+  column and can rebuild the table. The store logs one warning per column with
+  the exact statement to run instead, built from the column's current type and
+  collation, for example:
+
+    ```sql
+    ALTER TABLE `notes` MODIFY COLUMN `note` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL;
+    ```
+
+    Run it once per table in a maintenance window.
+
+- **MySQL collation.** Text columns are now declared `utf8mb4_0900_bin`, which
+  compares byte for byte like SQLite and Postgres. A column created earlier keeps
+  the server default (usually `utf8mb4_0900_ai_ci`, case- and
+  accent-insensitive). Convert a table with
+  `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`.
+  Until then, an `in` filter too long for one statement's placeholders compares
+  under the column's own collation on `utf8mb4_0900_ai_ci` and `_bin` columns.
+  On any other legacy collation (`utf8mb4_general_ci`, `utf8mb4_unicode_ci`)
+  MySQL refuses such a filter with "Illegal mix of collations" instead of
+  answering it — convert the table.
+
 ### Full-text search
 
 `.searchIndex()` works on a Hyperdrive-backed `.global()` table exactly as it

@@ -171,20 +171,113 @@ describe("migrationRunner", () => {
         expect(database.executed.some((e) => e.sql.startsWith("CREATE TABLE b"))).toBe(true);
     });
 
-    it("skips already-applied migrations", async () => {
+    it("skips already-applied migrations by version", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const database = createSqliteDatabase(sqlite);
+
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }]).run();
+
+            const result = await new MigrationRunner(database, [
+                { name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 },
+                { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
+            ]).run();
+
+            expect(result.applied.map((m) => m.version)).toEqual([2]);
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            expect(sqlite.prepare("SELECT version FROM __drizzle_migrations ORDER BY id").all()).toEqual([{ version: 1 }, { version: 2 }]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("treats a line-ending or BOM difference as the same migration", async () => {
         expect.assertions(2);
 
-        const initialSql = "CREATE TABLE a (id INTEGER);";
-        const database = await createDatabase([initialSql]);
-        const runner = new MigrationRunner(database, [
-            { name: "init", sql: initialSql, version: 1 },
-            { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
-        ]);
+        const sqlite = new DatabaseSync(":memory:");
 
-        const result = await runner.run();
+        try {
+            const database = createSqliteDatabase(sqlite);
 
-        expect(result.applied.map((m) => m.version)).toEqual([2]);
-        expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);\n", version: 1 }]).run();
+
+            // The same file from a CRLF checkout, with a BOM an editor added.
+            const result = await new MigrationRunner(database, [{ name: "init", sql: "\uFEFFCREATE TABLE a (id INTEGER);\r\n\r\n", version: 1 }]).run();
+
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            expect(result.applied).toEqual([]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("accepts a hash recorded from the raw text by an earlier build", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const text = "CREATE TABLE a (id INTEGER);\r\n";
+
+            sqlite.exec("CREATE TABLE a (id INTEGER)");
+            sqlite.exec(
+                "CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)",
+            );
+            sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at, version) VALUES (?, 1, 1)").run(await sha256Hex(text));
+
+            const result = await new MigrationRunner(createSqliteDatabase(sqlite), [{ name: "init", sql: text, version: 1 }]).run();
+
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("upgrades a pre-version tracking table from two runners at once", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            sqlite.exec("CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC)");
+
+            const migrations = [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }];
+            const outcomes = await Promise.allSettled([
+                new MigrationRunner(createSqliteDatabase(sqlite), migrations).run(),
+                new MigrationRunner(createSqliteDatabase(sqlite), migrations).run(),
+            ]);
+
+            expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+            expect(sqlite.prepare("SELECT version FROM __drizzle_migrations").all()).toEqual([{ version: 1 }]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("refuses an applied version whose SQL changed, before applying anything", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const database = createSqliteDatabase(sqlite);
+
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }]).run();
+
+            const edited = new MigrationRunner(database, [
+                { name: "init", sql: "CREATE TABLE a (id INTEGER); -- reworded", version: 1 },
+                { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
+            ]);
+
+            await expect(edited.run()).rejects.toMatchObject({ code: "MIGRATION_DRIFT" });
+            // v2 was pending, and still did not run: the refusal comes first.
+            expect(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'b'").all()).toEqual([]);
+        } finally {
+            sqlite.close();
+        }
     });
 
     it("rejects duplicate versions at construction time", async () => {
@@ -212,6 +305,21 @@ describe("migrationRunner", () => {
                 new MigrationRunner(database, [
                     { name: "first", sql: identicalSql, version: 1 },
                     { name: "copy_paste", sql: identicalSql, version: 2 },
+                ]),
+        ).toThrow(IDENTICAL_SQL_RE);
+    });
+
+    it("rejects two migrations whose SQL differs only in line endings or trailing newlines", async () => {
+        expect.assertions(1);
+
+        const database = await createDatabase();
+
+        // They hash alike, so a tracking row for one could be read as the other's.
+        expect(
+            () =>
+                new MigrationRunner(database, [
+                    { name: "bump", sql: "UPDATE counter SET value = value + 1;", version: 1 },
+                    { name: "bump_again", sql: "UPDATE counter SET value = value + 1;\r\n", version: 2 },
                 ]),
         ).toThrow(IDENTICAL_SQL_RE);
     });

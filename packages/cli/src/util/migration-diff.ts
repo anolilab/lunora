@@ -174,6 +174,9 @@ const shapeForm = (column: ColumnSnapshot): string | undefined =>
     // the original key position, so the form stays order-stable.
     column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
 
+/** Where the D1 table-rebuild recipe for dropping a `NOT NULL` lives. */
+const RELAX_NOT_NULL_DOCS = "https://lunora.sh/docs/concepts/migrations#relaxing-not-null-on-a-d1-table";
+
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
 const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
     const previousShape = shapeForm(old);
@@ -199,11 +202,15 @@ const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSn
     }
 
     if (old.nullable !== column.nullable) {
+        // SQLite cannot drop a column constraint in place, so relaxing one means a
+        // table rebuild; the guide carries the recipe.
+        const remedy = column.nullable ? `rebuild the table — ${RELAX_NOT_NULL_DOCS}` : "write SQL manually";
+
         unsupported.push({
             kind: "columnTypeChange",
             summary: `nullability change on ${tableName}.${columnName}: ${
                 old.nullable ? "NULL" : "NOT NULL"
-            } → ${column.nullable ? "NULL" : "NOT NULL"} (write SQL manually)`,
+            } → ${column.nullable ? "NULL" : "NOT NULL"} (${remedy})`,
         });
     }
 };
