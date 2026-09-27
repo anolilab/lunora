@@ -92,7 +92,9 @@ const severalWideListsCase = (target: BackendParityTarget) => async (): Promise<
 
     // Seven lists of 10,000: each small enough to stay literal on its own, 70,000
     // placeholders together — past both engines' 65,535 cap.
-    const lists = Array.from({ length: 7 }, (_, list) => {return { label: { in: [...DECOY_LABELS.slice(list * 10_000, list * 10_000 + 9999), "hit"] } }});
+    const lists = Array.from({ length: 7 }, (_, list) => {
+        return { label: { in: [...DECOY_LABELS.slice(list * 10_000, list * 10_000 + 9999), "hit"] } };
+    });
     const result = await writer.findMany("wide", { where: { AND: lists } });
 
     expect(result.page.map((row) => row["label"])).toStrictEqual(["hit"]);
