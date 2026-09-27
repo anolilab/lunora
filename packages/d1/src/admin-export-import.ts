@@ -426,4 +426,4 @@ const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, 
 };
 
 export { exportGlobalRows, importGlobalRows, selectGlobalTables };
-export type { D1ExecLike, ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };
+export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };
