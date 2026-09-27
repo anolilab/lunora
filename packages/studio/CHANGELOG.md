@@ -1,3 +1,9 @@
+## @lunora/studio [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.227...@lunora/studio@1.0.0-alpha.228) (2026-09-27)
+
+### Bug Fixes
+
+* **studio:** guard more panels against results that outlive a selection change ([#862](https://github.com/anolilab/lunora/issues/862)) ([341c3a3](https://github.com/anolilab/lunora/commit/341c3a3a2dce28f6e4337e8f2aace8943c616e29))
+
 ## @lunora/studio [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.226...@lunora/studio@1.0.0-alpha.227) (2026-09-27)
 
 
