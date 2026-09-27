@@ -8,6 +8,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -79,10 +80,13 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     const client = useLunora();
     const t = useT();
     const shardKey = initialShardKey ?? "";
+    const shardKeyRef = useMirroredRef(shardKey);
 
     const [current, setCurrent] = useState<null | string>(null);
     const [time, setTime] = useState<string>("");
-    const [preview, setPreview] = useState<null | string>(null);
+    // Tagged with the shard it was asked for: a bookmark names a point in ONE
+    // shard's history, so it is only shown while that shard is the one in view.
+    const [preview, setPreview] = useState<null | { bookmark: string; shard: string }>(null);
     const [bookmark, setBookmark] = useState<string>("");
     const [restart, setRestart] = useState<boolean>(false);
     const [restored, setRestored] = useState<null | PitrRestoreResult>(null);
@@ -174,25 +178,41 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
             return;
         }
 
+        const asked = shardKey;
+
         fireAndForget(
             (async (): Promise<void> => {
                 setBusy(true);
                 setError(null);
 
-                try {
-                    const result = (await client.query(GET_BOOKMARK, { time: resolvedTime.epochMs }, callOptions(shardKey))) as PitrBookmarkResult;
+                let next: { error: string } | { result: PitrBookmarkResult };
 
-                    setPreview(result.forTime ?? null);
-                    setCurrent(result.current);
+                try {
+                    next = { result: (await client.query(GET_BOOKMARK, { time: resolvedTime.epochMs }, callOptions(asked))) as PitrBookmarkResult };
                 } catch (error_) {
+                    next = { error: errorMessage(error_) };
+                }
+
+                // The shard changed while this was in flight: its re-read owns
+                // `current`, `error` and `busy` now.
+                if (shardKeyRef.current !== asked) {
+                    return;
+                }
+
+                if ("result" in next) {
+                    setPreview(next.result.forTime === undefined ? null : { bookmark: next.result.forTime, shard: asked });
+                    setCurrent(next.result.current);
+                } else {
                     setPreview(null);
-                    setError(errorMessage(error_));
+                    setError(next.error);
                 }
 
                 setBusy(false);
             })(),
         );
     };
+
+    const shownPreview = preview?.shard === shardKey ? preview.bookmark : null;
 
     const runRestore = (args: { bookmark?: string; restart?: boolean; time?: number }): void => {
         fireAndForget(
@@ -296,9 +316,9 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                         </Button>
                     </div>
                     <ResolvedTimeHint text={time} />
-                    {preview !== null && (
+                    {shownPreview !== null && (
                         <p className="font-mono text-xs break-all text-muted-foreground" data-testid="pitr-preview-bookmark">
-                            {t("Bookmark for that time")}: {preview}
+                            {t("Bookmark for that time")}: {shownPreview}
                         </p>
                     )}
                 </div>
