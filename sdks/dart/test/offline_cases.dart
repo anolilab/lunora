@@ -1340,3 +1340,64 @@ Future<void> caseRetryTimerIsCancelledOnDisconnectAndClose() async {
     equals(timers.live.length, 0, 'close cancels it');
   });
 }
+
+/// A retry that fires while another flush of its shard is running is folded into
+/// that flush. When the socket drops before that flush finishes, the retry's
+/// "already waited out the window" mark must go with the timer — or the next
+/// reconnect's flush skips a rate-limit window the server set in the meantime.
+Future<void> caseCancelledRetryDoesNotSkipTheRateLimitWindow() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final held = Completer<void>();
+    var posts = 0;
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      posts += 1;
+
+      if (posts == 1) {
+        return const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+      }
+
+      if (posts == 2) {
+        await held.future;
+
+        return const LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":60000}}}');
+      }
+
+      return const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+
+    unawaited(client.mutation('messages:send', mutationId: 'm-window').then((_) {}, onError: (_) {}));
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    final running = client.flushOfflineQueue();
+
+    await _settle();
+    equals(posts, 2, 'a second flush is waiting on its post');
+
+    timers.fire();
+    client.setConnected(false);
+    held.complete();
+    await running;
+    await _settle();
+
+    client.setConnected(true);
+    await _settle();
+    equals(posts, 2, 'the reconnect waits out the 60 s window the 429 set');
+
+    client.close();
+  });
+}

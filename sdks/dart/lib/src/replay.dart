@@ -79,9 +79,12 @@ class OfflineReplayer {
   /// Drop every scheduled re-flush: the client closed, or this shard's socket
   /// went down and its reconnect flushes anyway.
   void cancelRetries({String? shardKey, bool all = false}) {
-    for (final shard in all ? _retryTimers.keys.toList() : <String>[shardKey ?? '']) {
+    for (final shard in all ? <String>{..._retryTimers.keys, ..._retryDue} : <String>{shardKey ?? ''}) {
       _retryTimers.remove(shard)?.cancel();
       _retryAttempts.remove(shard);
+      // A fired retry folded into a flush still running carries this mark; it
+      // goes with the timer, or the reconnect's flush would skip a live window.
+      _retryDue.remove(shard);
     }
   }
 
