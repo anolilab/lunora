@@ -625,7 +625,7 @@ const createLunora: (client: LunoraClient) => {
 ```ts
 const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
     onError?: SubscriptionErrorCallback;
-}) => Ref<T>;
+}) => Ref<T | undefined>;
 ```
 
 ### `provideLunora` (const)

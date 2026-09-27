@@ -654,6 +654,14 @@ const useDataBrowser = ({
     const search = useDebounced(filterInput.trim(), 300, debounceResetKey);
     const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
 
+    // Which view is on screen: `debounceResetKey` moves on every re-seed (table
+    // switch or applied view), `shardEdits` on every manual shard change — a
+    // counter rather than the shard value, so editing A → B → A still counts as
+    // leaving A. Work that outlives a switch compares both before writing state
+    // that describes the view it started in.
+    const viewIdentityRef = useMirroredRef(debounceResetKey);
+    const shardEdits = useRef(0);
+
     // `changeShard` clears the staged buffer when the input changes, but writes
     // target `debouncedShard`, which settles up to 400ms later. An edit staged
     // inside that window was made against the old shard's rows; clear again when
@@ -928,6 +936,7 @@ const useDataBrowser = ({
     // shard would otherwise land on a same-id row of another — a silent
     // overwrite. Reset exactly what a URL re-seed resets for a shard change.
     const changeShard = (value: string): void => {
+        shardEdits.current += 1;
         setShardKey(value);
         stagedEdits.clear();
         setEditingCell(null);
@@ -1035,6 +1044,14 @@ const useDataBrowser = ({
             return 0;
         }
 
+        // A drain outlives a table/shard switch. Its outcome line and offset reset
+        // describe the view it started in, so they apply only while that view is
+        // still the one on screen — otherwise "3 rows deleted." lands under the
+        // next table and bounces it back to its first page.
+        const startedIn = debounceResetKey;
+        const startedAtEdit = shardEdits.current;
+        const stillCurrent = (): boolean => viewIdentityRef.current === startedIn && shardEdits.current === startedAtEdit;
+
         setWriteError(null);
         setWriteNotice(null);
 
@@ -1067,6 +1084,10 @@ const useDataBrowser = ({
                 },
             });
 
+            if (!stillCurrent()) {
+                return written;
+            }
+
             bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
             if (drained.outcome === "cap-hit") {
@@ -1077,6 +1098,10 @@ const useDataBrowser = ({
 
             return written;
         } catch (error) {
+            if (!stillCurrent()) {
+                return written;
+            }
+
             // A throw loses the failing batch's own committed count, so this is a
             // lower bound — hence "at least". The rows before the failure are already
             // on disk, so silence here would be the worse lie.
@@ -1089,8 +1114,10 @@ const useDataBrowser = ({
             // Also on the failure path: a partial batch is committed server-side, so
             // reporting an error over a grid still showing pre-write values is worse
             // than refreshing under the message.
-            setOffset(0);
-            pageQuery.refetch();
+            if (stillCurrent()) {
+                setOffset(0);
+                pageQuery.refetch();
+            }
         }
     };
 

@@ -247,6 +247,7 @@ class LunoraClient {
 
     if (!connected) {
       _connectedShards.remove(shard);
+      _replayer.cancelRetries(shardKey: shardKey);
 
       return;
     }
@@ -325,6 +326,7 @@ class LunoraClient {
   void close() {
     _closed = true;
     _connectedShards.clear();
+    _replayer.cancelRetries(all: true);
     _send = null;
     _subscriptions.clear();
     _shapeRegistry.clear();

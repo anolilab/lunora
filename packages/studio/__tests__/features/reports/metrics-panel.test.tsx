@@ -316,4 +316,70 @@ describe("metricsPanel", () => {
 
         sessionStorage.clear();
     });
+
+    it("drops an aggregate whose shard selection changed while it was in flight", async () => {
+        expect.assertions(2);
+
+        const held: (() => void)[] = [];
+        let hold = false;
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.getMetrics) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+                const snapshot = { ...METRICS, shard: shard === "" ? "__root__" : shard };
+
+                if (!hold) {
+                    return snapshot;
+                }
+
+                return new Promise((resolve) => {
+                    held.push(() => {
+                        resolve(snapshot);
+                    });
+                });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mt-stats");
+
+        hold = true;
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-1" } });
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-2" } });
+
+        await act(async () => {
+            for (const release of held) {
+                release();
+            }
+        });
+
+        // The fan-out covered root + room-1; room-2 is on screen now.
+        expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
+        expect(screen.getByTestId<HTMLButtonElement>("mt-aggregate").disabled).toBe(false);
+    });
+
+    it("hides a finished aggregate once the shard selection changes", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+        await screen.findByTestId("mt-aggregate-view");
+
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-2" } });
+
+        expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
+
+        // Back to the shard it was run for: it is that shard's answer again.
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "" } });
+
+        expect(screen.getByTestId("mt-aggregate-view")).not.toBeNull();
+    });
 });

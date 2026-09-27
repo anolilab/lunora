@@ -241,9 +241,19 @@ import type { Preloaded } from "@lunora/react/server";
 
 export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> }) {
     const post = usePreloadedQuery(preloaded); // server value first, then live
+
+    // `undefined` after a sign-out or user switch, until the new identity's subscription answers.
+    if (!post) {
+        return <p>Loading…</p>;
+    }
+
     return <h1>{post.title}</h1>;
 }
 ```
+
+`usePreloadedQuery` returns `T | undefined`. The preloaded value was read for whoever was
+signed in when the page loaded, so after a sign-out or user switch it is dropped and the hook
+returns `undefined` until the live value arrives: guard before reading fields.
 
 ### Providers
 

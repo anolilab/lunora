@@ -35,26 +35,30 @@ import { onMounted } from "./solid-compat";
  * After a sign-out or user switch retires that identity
  * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (mounted
  * then or later) stops using it and returns `undefined` until the live value
- * arrives — matching `@lunora/react`'s `usePreloadedQuery`.
+ * arrives — matching `@lunora/react`'s `usePreloadedQuery`, hence the
+ * `Accessor<T | undefined>` type.
  */
-const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Accessor<T> => {
+const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Accessor<T | undefined> => {
     const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
 
     // Seed synchronously: the signal already holds the SSR value before the
-    // first render reads it, so there is no `undefined`/loading window.
-    const [data, setData] = createSignal<T>(client.identityEpoch() === 0 ? value : (undefined as T));
+    // first render reads it, so there is no loading window until an identity
+    // is retired.
+    const [data, setData] = createSignal<T | undefined>(client.identityEpoch() === 0 ? value : undefined);
 
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
     onMounted(() => {
-        const offIdentity = client.onIdentityChange(() => setData(() => undefined as T));
+        const offIdentity = client.onIdentityChange(() => {
+            setData(() => undefined);
+        });
 
         // Mount is deferred: an identity retired after the seed was taken but
         // before this listener existed must still blank it.
         if (client.identityEpoch() !== 0) {
-            setData(() => undefined as T);
+            setData(() => undefined);
         }
 
         const unsubscribe = client.subscribe(functionRef, args, (next) => setData(() => next as T), { onError: options.onError, shardKey });

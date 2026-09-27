@@ -401,6 +401,16 @@ def _decode_error(value: list, depth: int) -> WireError:
     return WireError(value[2], value[3], dict(props), cause)
 
 
+def _positive_zero(value: Any) -> Any:
+    """Store a signed zero as ``+0``, as ``Set.prototype.add`` / ``Map.prototype.set`` do.
+
+    Both normalise ``-0`` to ``+0`` on INSERT, so a lone ``-0`` member or key
+    re-encodes (and keys, per §3's bare ``-0`` token) as ``0`` in the reference.
+    """
+
+    return 0 if isinstance(value, float) and value == 0 else value
+
+
 def _decode_set(value: list, depth: int) -> WireSet:
     """Decode a ``set`` tag, collapsing duplicates the way a real ``Set`` does.
 
@@ -414,7 +424,7 @@ def _decode_set(value: list, depth: int) -> WireSet:
     seen: set[str] = set()
 
     for entry in _payload_list(value, "set"):
-        item = decode_wire(entry, depth + 1)
+        item = _positive_zero(decode_wire(entry, depth + 1))
         identity = _map_key_identity(item)
 
         if identity is not None:
@@ -443,7 +453,7 @@ def _decode_map(value: list, depth: int) -> WireMap:
         if not isinstance(entry, list) or len(entry) != 2:
             raise WireFormatError("wire-codec: malformed map entry")
 
-        key = decode_wire(entry[0], depth + 1)
+        key = _positive_zero(decode_wire(entry[0], depth + 1))
         item = decode_wire(entry[1], depth + 1)
         identity = _map_key_identity(key)
 

@@ -125,7 +125,7 @@ const PRELOADED_FOR_A: Preloaded<{ text: string }[]> = {
 };
 
 const PreloadedView = (): ReactElement => {
-    const rows = usePreloadedQuery(PRELOADED_FOR_A) as { text: string }[] | undefined;
+    const rows = usePreloadedQuery(PRELOADED_FOR_A);
 
     return <div>{rows === undefined ? "(none)" : rows.map((row) => row.text).join(",")}</div>;
 };

@@ -690,7 +690,7 @@ const getLunoraClient: () => LunoraClient;
 ```ts
 const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, options?: {
     onError?: SubscriptionErrorCallback;
-}) => Readable<T>;
+}) => Readable<T | undefined>;
 ```
 
 ### `infiniteQuery` (function)

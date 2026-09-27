@@ -763,7 +763,7 @@ const createVoiceAgent: (options: CreateVoiceAgentOptions) => CreateVoiceAgentRe
 ```ts
 const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
     onError?: SubscriptionErrorCallback;
-}) => Accessor<T>;
+}) => Accessor<T | undefined>;
 ```
 
 ### `useLunora` (const)

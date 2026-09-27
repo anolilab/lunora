@@ -29,11 +29,12 @@ import { useLunora } from "./lunora-provider";
  * The preloaded value was read for whoever was signed in when the page loaded.
  * After a sign-out or user switch retires an identity, every `usePreloadedQuery`
  * on the client (mounted then or later) stops using it and returns `undefined`
- * until the live value arrives. A token preloaded after the switch (a client-side
- * navigation that preloads again) is ignored too and costs a loading flash: the
- * hook cannot tell which identity a token was read under.
+ * until the live value arrives — hence the `T | undefined` return type. A token
+ * preloaded after the switch (a client-side navigation that preloads again) is
+ * ignored too and costs a loading flash: the hook cannot tell which identity a
+ * token was read under.
  */
-const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
+const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T | undefined {
     const client = useLunora();
     const queryClient = useQueryClient();
 
@@ -95,7 +96,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     // Lunora query result (document deleted, access revoked): a live push of
     // `null` must pass through, not resurrect the stale preloaded value.
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional: a live null push must pass through, not fall back to the stale preloaded value
-    return (data === undefined ? value : data) as T;
+    return data === undefined ? value : data;
 };
 
 /**
@@ -109,7 +110,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
  * It carries React's Rules-of-Hooks contract (it calls hooks internally), so
  * call it like a hook — at the top level of a component, unconditionally.
  */
-const hydratePreloaded = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T {
+const hydratePreloaded = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T | undefined {
     // react-doctor-disable-next-line react-doctor/rules-of-hooks -- `hydratePreloaded` is a deliberate hook alias (documented above): it carries React's Rules-of-Hooks contract and must be called like a hook. The lowercase name is the framework-neutral public primitive every adapter exposes; renaming it to `use*` would break the cross-adapter API.
     return usePreloadedQuery(preloaded, options);
 };

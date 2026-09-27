@@ -538,7 +538,7 @@ Object? _decodeMap(List<Object?> value, int depth) {
       throw const WireFormatException('malformed map entry tag');
     }
 
-    final key = decodeWire(item[0], depth + 1);
+    final key = _positiveZero(decodeWire(item[0], depth + 1));
     final entry = MapEntry(key, decodeWire(item[1], depth + 1));
     final identity = _mapKeyIdentity(key);
 
@@ -576,7 +576,7 @@ WireSet _decodeSet(List<Object?> raw, int depth) {
   final seen = <String>{};
 
   for (final entry in raw) {
-    final item = decodeWire(entry, depth + 1);
+    final item = _positiveZero(decodeWire(entry, depth + 1));
     final identity = _mapKeyIdentity(item);
 
     if (identity != null && !seen.add(identity)) {
@@ -588,6 +588,11 @@ WireSet _decodeSet(List<Object?> raw, int depth) {
 
   return WireSet(items);
 }
+
+/// A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+/// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+/// bare `-0` token) as `0` in the reference, not only when it collides.
+Object? _positiveZero(Object? value) => value is double && value == 0 ? 0 : value;
 
 /// A map key's collapse identity, or `null` when it never collapses.
 ///
