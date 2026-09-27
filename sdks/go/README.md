@@ -39,7 +39,7 @@ retries and socket library:
 
 ```go
 client := lunora.NewClient("https://my-app.example.com", myPoster)
-client.AuthToken = "…"
+client.SetAuthToken("…")
 // ClientID is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -77,7 +77,7 @@ does not decode fails with `WIRE_DECODE_FAILED` (for `Submit`, alongside the
 committed outcome). An error envelope whose `data` does not decode is still
 that coded error, with `Data` nil.
 
-`client.String()`/`GoString()` redact `AuthToken`, so `%v`, `%+v`, `%#v` and
+`client.String()`/`GoString()` redact the auth token, so `%v`, `%+v`, `%#v` and
 `%s` of a `*Client` never print the bearer token.
 
 ## Optimistic updates and offline writes
@@ -137,7 +137,8 @@ A replay failure is classified by ONE rule on the single-call and batch paths:
 a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue, and so do the refused-credential
 codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — the write is held
-until a fresh token replays it; every other code — a coded 5xx included — is
+until the app sets a fresh token and calls `FlushOfflineQueue` again, since Go
+never flushes on its own; every other code — a coded 5xx included — is
 terminal), a reply with no envelope by its status (re-queued). A
 413 is `PAYLOAD_TOO_LARGE` with or without an envelope: a batch splits and
 retries, a lone write still refused settles terminally. A write the server
@@ -151,11 +152,30 @@ never re-queues a write that already committed.
 
 `client.SetIdentity` records an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another. Changing
-it FROM a set identity to a different one (or to nil) evicts the previous
-session: every subscription drops its resume cursor and epoch (query callbacks
-see the value re-folded over no server base), and every shape view is emptied,
-its callback receiving `[]`. A first sign-in and a same-value set evict nothing.
+replays, so a restart cannot push one user's queued writes as another. Left
+nil, a write is stamped `{"tokenDigest": …}` with a digest of the auth token
+instead (`lunora.TokenDigest`, the reference client's, never the token itself),
+and signed out only when there is no token either — so a write queued under one
+token is never sent with another. Under a different token it is rejected
+`OFFLINE_IDENTITY_CHANGED`; with no token at all it is held, unsettled and still
+persisted, until one is set. A flush sends each write with the token its
+identity was checked against, so a token set mid-flush applies from the next
+flush, never to the rest of the current one. Setting an identity is what lets a
+token refresh keep the queue. A record persisted by an earlier build with a
+signed-out (`null`) stamp is rejected the same way once a token is held, since
+it then says nothing about whose write it was. The identity may be any string:
+a token stamp is its own variant (`Identity.TokenDigest`), so no identity,
+however it is spelled, can match a token's writes, nor a token stamp an
+identity's. `lunora.ReplayIdentityVerdict` is the gate: `ReplayMatch` sends,
+`ReplayUnknown` holds, `ReplayMismatch` rejects.
+
+Changing the identity FROM a set value to a different one (or to nil) evicts the
+previous session: every subscription drops its resume cursor and epoch (query
+callbacks see the value re-folded over no server base), and every shape view is
+emptied, its callback receiving `[]`. A first sign-in and a same-value set evict
+nothing. With no identity set, `SetAuthToken` with a different token (or `""`)
+evicts the same way, since the token's digest is then the identity. Neither
+setter flushes: after either, call `FlushOfflineQueue` as on a reconnect.
 
 `OfflineQueue` is deliberately not internally locked: the client that owns it
 already holds a mutex over its subscription registry, and no queue method settles

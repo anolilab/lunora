@@ -668,14 +668,14 @@ func TestOfflineQueueIdentityGate(t *testing.T) {
 			stamped = SignedOut()
 		}
 
-		var current *string
+		current := SignedOut()
 
 		if text, ok := spec["current"].(string); ok {
-			current = &text
+			current = IdentityOf(text)
 		}
 
-		if got := IdentityAllowsReplay(stamped, current); got != replays {
-			t.Fatalf("%s: IdentityAllowsReplay = %v, want %v", name, got, replays)
+		if got := ReplayIdentityVerdict(stamped, current, "") == ReplayMatch; got != replays {
+			t.Fatalf("%s: ReplayIdentityVerdict matches = %v, want %v", name, got, replays)
 		}
 	}
 }

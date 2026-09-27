@@ -99,12 +99,10 @@ func (e SubscriptionError) Error() string {
 type Client struct {
 	// BaseURL is the deployment origin, e.g. https://app.example.com.
 	BaseURL string
-	// AuthToken, when set, rides every RPC as `authorization: Bearer …`.
-	AuthToken string
 	// Post performs the HTTP round-trip.
 	Post HTTPPoster
 
-	// mu guards clientID, identity, subscriptions, nextID, and send.
+	// mu guards clientID, identity, authToken, subscriptions, nextID, and send.
 	//
 	// Not optional in Go. The normal topology is a socket read loop calling
 	// HandleFrame on one goroutine while application code calls Subscribe on
@@ -133,9 +131,13 @@ type Client struct {
 	// identity is an opaque, stable, NON-SECRET stamp for whoever is signed in —
 	// a user id, not a bearer token. It is persisted alongside every queued write
 	// and re-checked before that write replays, so a restart cannot push one
-	// user's queued writes as another. nil means signed out, which is itself an
-	// identity a write can be stamped with. See Identity/SetIdentity.
-	identity      *string
+	// user's queued writes as another. Left nil, a write is stamped with a digest
+	// of authToken instead (SignedOut with no token either), so a new token is a
+	// new identity. See Identity/SetIdentity.
+	identity *string
+	// authToken, when set, rides every RPC as `authorization: Bearer …`. See
+	// AuthToken/SetAuthToken.
+	authToken     string
 	send          FrameSender
 	subscriptions map[string]*subscription
 	shapes        map[string]*shapeSubscription
@@ -242,7 +244,7 @@ func NewClient(baseURL string, post HTTPPoster) *Client {
 // line or an error message leaked the bearer token with it.
 func (c *Client) String() string {
 	token := "unset"
-	if c.AuthToken != "" {
+	if c.AuthToken() != "" {
 		token = "[redacted]"
 	}
 
@@ -292,7 +294,8 @@ func (c *Client) Identity() *string {
 // its cursor, epoch and server value, each shape view is emptied and its
 // callback told so with an empty row set, and the next resubscribe is cold. A
 // first sign-in (from nil) and a re-assertion of the same identity evict
-// nothing.
+// nothing. With no identity set, SetAuthToken evicts the same way when a new
+// token changes the digest.
 func (c *Client) SetIdentity(identity *string) {
 	var deferred []func()
 
@@ -301,29 +304,88 @@ func (c *Client) SetIdentity(identity *string) {
 	c.identity = identity
 
 	if previous != nil && (identity == nil || *identity != *previous) {
-		for _, entry := range c.subscriptions {
-			entry.cursor = nil
-			entry.epoch = nil
-			entry.state.ServerBase = nil
-			entry.state.ServerCursor = nil
-			NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), &deferred)
-		}
-
-		for _, shape := range c.shapes {
-			shape.rows = map[string]any{}
-			shape.order = nil
-			shape.checkpoint = nil
-			shape.epoch = nil
-
-			if onRows := shape.onRows; onRows != nil {
-				deferred = append(deferred, func() { onRows([]any{}) })
-			}
-		}
+		c.evictSessionLocked(&deferred)
 	}
 
 	c.mu.Unlock()
 
 	runDeferred(deferred)
+}
+
+// AuthToken returns the bearer token every RPC carries; "" means none.
+func (c *Client) AuthToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.authToken
+}
+
+// SetAuthToken replaces the bearer token; the next request picks it up.
+// Accessors rather than an exported field for the same reason as SetIdentity,
+// and because a token change can be a change of user.
+//
+// With no identity set the token's digest IS the identity (see
+// identityFingerprintLocked), so a different token — or clearing it — retires
+// the previous one's session exactly as SetIdentity changing from a set value
+// does. With an identity set the digest is not consulted, and a token refresh
+// is not a change of user. It never flushes: the app that sets a token calls
+// FlushOfflineQueue, as it does on every reconnect.
+func (c *Client) SetAuthToken(token string) {
+	var deferred []func()
+
+	c.mu.Lock()
+	previous := c.identityFingerprintLocked()
+	c.authToken = token
+
+	if !previous.signedOut() && !previous.Equal(c.identityFingerprintLocked()) {
+		c.evictSessionLocked(&deferred)
+	}
+
+	c.mu.Unlock()
+
+	runDeferred(deferred)
+}
+
+// identityFingerprintLocked is who a write queued now belongs to: the identity
+// when set, else TokenStamp of the bearer token, else SignedOut — the
+// reference's identityFingerprint. Without the digest branch every write made
+// with no identity was stamped SignedOut and matched any token, so a flush after
+// an account switch sent the previous user's writes with the new user's
+// credential. Call with mu held.
+func (c *Client) identityFingerprintLocked() Identity {
+	if c.identity != nil {
+		return IdentityOf(*c.identity)
+	}
+
+	if c.authToken != "" {
+		return TokenStamp(c.authToken)
+	}
+
+	return SignedOut()
+}
+
+// evictSessionLocked drops every resume cursor and shape row; call with mu
+// held. The callbacks are appended to deferred for the caller to run once it
+// has released the lock.
+func (c *Client) evictSessionLocked(deferred *[]func()) {
+	for _, entry := range c.subscriptions {
+		entry.cursor = nil
+		entry.epoch = nil
+		entry.state.ServerBase = nil
+		entry.state.ServerCursor = nil
+		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)
+	}
+
+	for _, shape := range c.shapes {
+		shape.rows = map[string]any{}
+		shape.order = nil
+		shape.checkpoint = nil
+		shape.epoch = nil
+
+		if onRows := shape.onRows; onRows != nil {
+			*deferred = append(*deferred, func() { onRows([]any{}) })
+		}
+	}
 }
 
 // AttachSocket registers the sender used for subscription frames. Call it once
@@ -564,7 +626,7 @@ func (c *Client) Action(functionPath string, args any, shardKey string) (any, er
 }
 
 func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID string) (any, error) {
-	value, _, err := c.rpcFull(functionPath, args, shardKey, mutationID, "")
+	value, _, err := c.rpcFull(functionPath, args, shardKey, mutationID, "", c.AuthToken())
 
 	return value, err
 }
@@ -572,7 +634,10 @@ func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID 
 // rpcFull performs one round-trip and returns the echoed commit cursor with the
 // result. clientID overrides Client.ClientID, so a replayed write namespaces
 // server-side under the id that ISSUED it rather than whatever this session has.
-func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutationID string, clientID string) (any, *int64, error) {
+// token is the bearer to send ("" for none): a replay passes the token its
+// identity gate judged the pass against, so a token swapped mid-flush cannot
+// carry the rest of it.
+func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutationID string, clientID string, token string) (any, *int64, error) {
 	if c.Post == nil {
 		return nil, nil, fmt.Errorf("lunora: no HTTPPoster configured")
 	}
@@ -588,8 +653,8 @@ func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutatio
 	}
 
 	headers := map[string]string{"content-type": "application/json"}
-	if c.AuthToken != "" {
-		headers["authorization"] = "Bearer " + c.AuthToken
+	if token != "" {
+		headers["authorization"] = "Bearer " + token
 	}
 
 	if mutationID != "" {
@@ -623,8 +688,8 @@ func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutatio
 // No x-lunora-mutation-id on the request: a batch is ONE transport hop carrying
 // independent calls, so each entry carries its own idempotency key and client id
 // in the body. A single outer header would name one write and de-duplicate the
-// whole chunk against it.
-func (c *Client) rpcBatch(calls []map[string]any) (int, map[string]any, error) {
+// whole chunk against it. token as for rpcFull.
+func (c *Client) rpcBatch(calls []map[string]any, token string) (int, map[string]any, error) {
 	if c.Post == nil {
 		return 0, nil, fmt.Errorf("lunora: no HTTPPoster configured")
 	}
@@ -635,8 +700,8 @@ func (c *Client) rpcBatch(calls []map[string]any) (int, map[string]any, error) {
 	}
 
 	headers := map[string]string{"content-type": "application/json"}
-	if c.AuthToken != "" {
-		headers["authorization"] = "Bearer " + c.AuthToken
+	if token != "" {
+		headers["authorization"] = "Bearer " + token
 	}
 
 	status, raw, err := c.Post(joinURL(c.BaseURL, RPCBatchPath), headers, payload)
