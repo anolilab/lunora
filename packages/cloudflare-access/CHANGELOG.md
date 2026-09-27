@@ -1,3 +1,27 @@
+## @lunora/cloudflare-access [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.148...@lunora/cloudflare-access@1.0.0-alpha.149) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an HTTP call whose resolved identity carries a past exp or
+expiresAtMs now fails with 401 TOKEN_EXPIRED instead of running as that user.
+createAccessResolver returns an expired-but-genuine Access JWT's identity
+(with its past exp) instead of null; mapClaims now also sees those claims.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **runtime:** answer a lapsed credential with TOKEN_EXPIRED over HTTP ([#859](https://github.com/anolilab/lunora/issues/859)) ([5b50ddd](https://github.com/anolilab/lunora/commit/5b50dddc74f70f4a7ffe23bb29efe1090a41dd37))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/cloudflare-access [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.147...@lunora/cloudflare-access@1.0.0-alpha.148) (2026-09-26)
 
 
