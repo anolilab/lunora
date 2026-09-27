@@ -453,5 +453,4 @@ const graphComponent = (): GraphComponentFunctions => {
     };
 };
 
-export type { GraphComponentFunctions };
 export { graphComponent, graphTables, normalizeEntityName };

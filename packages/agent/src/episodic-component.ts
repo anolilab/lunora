@@ -185,5 +185,4 @@ const episodicComponent = (): EpisodicComponentFunctions => {
     };
 };
 
-export type { EpisodicComponentFunctions };
 export { episodeTables, episodicComponent };

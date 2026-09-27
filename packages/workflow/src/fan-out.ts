@@ -724,7 +724,7 @@ const signalBranchParentSafe = async (
     }
 };
 
-export type { BranchMarker, BranchOutcome, FanOutDeps, WorkflowBindingResolver };
+export type { BranchOutcome, FanOutDeps, WorkflowBindingResolver };
 export {
     branch,
     createParallel,

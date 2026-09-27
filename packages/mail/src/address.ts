@@ -137,4 +137,4 @@ const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | s
     }
 };
 
-export { assertSafeAddresses, assertSafeHeaderValue, MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, toAddress, toAddressList };
+export { assertSafeAddresses, assertSafeHeaderValue, toAddress, toAddressList };
