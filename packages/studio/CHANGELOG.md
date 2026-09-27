@@ -1,3 +1,17 @@
+## @lunora/studio [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.233...@lunora/studio@1.0.0-alpha.234) (2026-09-27)
+
+### Code Refactoring
+
+* **studio:** remove dead types, components and helpers ([#873](https://github.com/anolilab/lunora/issues/873)) ([8d06856](https://github.com/anolilab/lunora/commit/8d06856ff20a7e671df6d93ebd9ec4cfe64f6e66))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.166
+* **@lunora/client:** upgraded to 1.0.0-alpha.155
+* **@lunora/react:** upgraded to 1.0.0-alpha.162
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.158
+
 ## @lunora/studio [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.232...@lunora/studio@1.0.0-alpha.233) (2026-09-27)
 
 
