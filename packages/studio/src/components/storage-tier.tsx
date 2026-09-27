@@ -40,8 +40,6 @@ const BADGE_BASE_STYLE: CSSProperties = {
     textTransform: "uppercase",
 };
 const DOT_BASE_STYLE: CSSProperties = { borderRadius: "50%", display: "inline-block", height: 7, width: 7 };
-const HINT_STYLE: CSSProperties = { color: "var(--muted-foreground)", fontSize: 12, lineHeight: 1.5, margin: "4px 0 0" };
-const HEADER_STYLE: CSSProperties = { margin: "0 0 12px" };
 
 /** Build a tier's metadata, precomputing its colour-dependent styles once. */
 const makeTier = (color: string, label: string, title: string, hint: string): TierMeta => {
@@ -73,8 +71,7 @@ const TIER_META: Record<StorageTier, TierMeta> = {
 
 /**
  * A small pill that names a table's storage tier, colour-coded and with a
- * tooltip. Pure presentational; pair it with {@link StorageTierHint} for the
- * one-line explanation.
+ * tooltip. Pure presentational.
  */
 const StorageTierBadge = ({ tier }: { readonly tier: StorageTier }): ReactElement => {
     const meta = TIER_META[tier];
@@ -87,24 +84,5 @@ const StorageTierBadge = ({ tier }: { readonly tier: StorageTier }): ReactElemen
     );
 };
 
-/** The one-line, plain-language explanation of where a tier's rows live. */
-const StorageTierHint = ({ tier }: { readonly tier: StorageTier }): ReactElement => (
-    <p data-testid={`storage-tier-hint-${tier}`} style={HINT_STYLE}>
-        {TIER_META[tier].hint}
-    </p>
-);
-
-/**
- * Panel header that names a tier and explains it in one line — the badge over
- * the hint. Drop this at the top of a tier-scoped panel so the operator always
- * knows which storage tier they're looking at.
- */
-const StorageTierHeader = ({ tier }: { readonly tier: StorageTier }): ReactElement => (
-    <header data-testid={`storage-tier-header-${tier}`} style={HEADER_STYLE}>
-        <StorageTierBadge tier={tier} />
-        <StorageTierHint tier={tier} />
-    </header>
-);
-
-export { StorageTierBadge, StorageTierHeader, StorageTierHint, TIER_META };
+export { StorageTierBadge, TIER_META };
 export type { StorageTier };

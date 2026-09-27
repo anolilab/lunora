@@ -138,38 +138,6 @@ export const computeLatencyPercentiles = (snapshot: ShardMetrics): { p90: number
     return { p90: weightedPercentile(90), p95: weightedPercentile(95) };
 };
 
-/* -------------------------------------------------------------------------- */
-/* Trend deltas                                                                */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The change in a scalar metric relative to a baseline. `delta` is the
- * absolute difference (`current - baseline`); `pct` is the percentage change
- * (`delta / baseline * 100`), or `null` when baseline is zero (division by
- * zero). `direction` encodes whether this metric increasing is `"good"`,
- * `"bad"`, or `"neutral"` — used by the panel to pick badge colours.
- */
-export interface MetricDelta {
-    delta: number;
-    direction: "bad" | "good" | "neutral";
-    pct: null | number;
-}
-
-/**
- * Compute the delta of a scalar metric between a `baseline` and `current`
- * snapshot value.
- * @param baseline The earlier snapshot's value.
- * @param current The current snapshot's value.
- * @param direction Whether an increase is `"good"`, `"bad"`, or `"neutral"`.
- */
-export const computeDelta = (baseline: number, current: number, direction: MetricDelta["direction"] = "neutral"): MetricDelta => {
-    const delta = current - baseline;
-    // eslint-disable-next-line unicorn/no-null -- pct is null when baseline is 0 (undefined percentage)
-    const pct = baseline === 0 ? null : (delta / baseline) * 100;
-
-    return { delta, direction, pct };
-};
-
 /**
  * Enrich {@link QueryStatEntry} rows with derived fields. Splits the entry
  * from the wire shape (which the DO emits) into a display-ready record that

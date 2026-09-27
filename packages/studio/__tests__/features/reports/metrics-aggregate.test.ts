@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ShardMetricsResult } from "../../../src/features/reports/metrics-aggregate";
-import {
-    aggregateMetrics,
-    computeDelta,
-    computeLatencyPercentiles,
-    enrichQueryStats,
-    shardsToAggregate,
-} from "../../../src/features/reports/metrics-aggregate";
+import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "../../../src/features/reports/metrics-aggregate";
 import type { MetricsSnapshot, QueryStatEntry, ShardMetrics } from "../../../src/lib/admin";
 
 const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => {
@@ -117,44 +111,6 @@ describe("shardsToAggregate", () => {
         expect.assertions(1);
 
         expect(shardsToAggregate("  room-1  ", ["room-1"])).toEqual(["", "room-1"]);
-    });
-});
-
-describe("computeDelta", () => {
-    it("computes absolute delta and percentage", () => {
-        expect.assertions(2);
-
-        const d = computeDelta(100, 120, "bad");
-
-        expect(d.delta).toBe(20);
-        expect(d.pct).toBeCloseTo(20, 5);
-    });
-
-    it("returns null pct when baseline is zero", () => {
-        expect.assertions(1);
-
-        expect(computeDelta(0, 50).pct).toBeNull();
-    });
-
-    it("defaults direction to neutral", () => {
-        expect.assertions(1);
-
-        expect(computeDelta(10, 20).direction).toBe("neutral");
-    });
-
-    it("preserves the provided direction", () => {
-        expect.assertions(1);
-
-        expect(computeDelta(10, 5, "good").direction).toBe("good");
-    });
-
-    it("handles negative deltas (decrease)", () => {
-        expect.assertions(2);
-
-        const d = computeDelta(200, 150, "good");
-
-        expect(d.delta).toBe(-50);
-        expect(d.pct).toBeCloseTo(-25, 5);
     });
 });
 
