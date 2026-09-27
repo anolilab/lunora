@@ -139,4 +139,4 @@ const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpc
 };
 
 export { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc };
-export type { DurableObjectJurisdiction, PostShardRpcOptions, ShardNamespaceLike, ShardStubLike };
+export type { DurableObjectJurisdiction, ShardNamespaceLike, ShardStubLike };

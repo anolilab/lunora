@@ -599,23 +599,14 @@ const readQueryMetrics = (sql: SqlExec): QueryStatEntry[] => {
 };
 
 export {
-    ensureQueryBucketsTable,
-    ensureQueryMetricsTable,
-    hashStatement,
-    LATENCY_BUCKET_EDGES,
-    latencyBucketIndex,
     normalizeSql,
-    percentileFrom,
     pruneQueryBuckets,
-    QUERY_BUCKET_MS,
     QUERY_BUCKET_RETENTION,
-    QUERY_BUCKETS_TABLE,
     QUERY_METRICS_MAX_SQL_LEN,
     QUERY_METRICS_MAX_STATEMENTS,
     QUERY_METRICS_TABLE,
     readQueryInsights,
     readQueryMetrics,
-    recordQueryBucket,
     recordQueryMetric,
 };
 export type { QueryInsightBucket, QueryInsightEntry, QueryInsightsResult, QueryStatEntry };

@@ -79,4 +79,4 @@ const errorResult = (message: string): ToolResult => {
     return { content: [{ text: message, type: "text" }], isError: true };
 };
 
-export { errorResult, jsonResultReplacer, ok, okStructured, toJsonSafe };
+export { errorResult, ok, okStructured };

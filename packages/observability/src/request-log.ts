@@ -1044,8 +1044,3 @@ export type {
     RequestOutcome,
 };
 export { type ContextLogLevel } from "../../../shared/log-event";
-
-// Re-exported straight from their source module (they're also imported above for
-// local use in `ErrorIssue`/`ReadIssuesOptions`); `export…from` keeps the single
-// source of truth per `unicorn/prefer-export-from`.
-export type { IssueSeverity, IssueStatus } from "./issue-state";

@@ -224,7 +224,6 @@ export {
     AUTH_METRICS_BUCKET_MS,
     AUTH_METRICS_BUCKET_RETENTION,
     AUTH_METRICS_BUCKETS_TABLE,
-    AUTH_METRICS_ROW_KEY,
     AUTH_METRICS_TABLE,
     ensureAuthMetricsTables,
     readAuthMetrics,

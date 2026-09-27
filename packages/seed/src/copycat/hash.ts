@@ -145,4 +145,4 @@ const setHashKey = (key: number | string | Uint32Array): void => {
 
 /* eslint-enable no-bitwise */
 
-export { hashInput, setHashKey, stableStringify };
+export { hashInput, setHashKey };

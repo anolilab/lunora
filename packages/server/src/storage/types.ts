@@ -100,5 +100,3 @@ export interface DefineStorageRuleInput<Context = unknown> {
 export interface StorageRulesOptions {
     readonly roles?: ReadonlyArray<Role>;
 }
-
-export type { Permission, Role } from "../rls/types";

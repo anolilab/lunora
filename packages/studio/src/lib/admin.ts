@@ -487,9 +487,6 @@ export interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
 }
 
-/** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */
-export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
-
 /**
  * One static schema advisory served by `__lunora_admin__:getAdvisories` — the
  * advisor's own `Finding`. These are codegen-time lints baked into the deployed
@@ -1132,19 +1129,6 @@ export interface IssuesResult {
 }
 
 /**
- * Filters accepted by `__lunora_admin__:getIssues`, mirroring `@lunora/do`'s
- * `ReadIssuesOptions`. All AND-combined and bound server-side; `outcome` is
- * forced to `error` server-side.
- */
-export interface IssuesQuery {
-    functionPathPrefix?: string;
-    limit?: number;
-    shardKey?: string;
-    status?: IssueStatus;
-    userId?: string;
-}
-
-/**
  * One span of a folded trace returned by `__lunora_admin__:getTraces`, mirroring
  * `@lunora/do`'s `TraceSpan` (produced by its pure `foldTraces`). Already
  * flattened for rendering: `depth` is the span's nesting level under the trace
@@ -1580,26 +1564,6 @@ export interface SchemaVersionSummary {
  */
 export interface SchemaVersionDetail {
     version?: SchemaVersionSummary & { snapshotJson: string };
-}
-
-/**
- * Payload of a `__lunora_admin__:lintSql` call, mirroring `@lunora/do`'s
- * `SqlLintResult`: diagnostics to render in the editor plus the query plan the
- * statement would use. Optional on the wire — a worker predating the RPC simply
- * rejects the call, and the editor keeps its client-side diagnostics.
- */
-export interface SqlLintResult {
-    diagnostics: SqlLintDiagnostic[];
-    plan: string[];
-}
-
-/** One server-produced editor diagnostic; `offset`/`length` index into the linted query. */
-export interface SqlLintDiagnostic {
-    length?: number;
-    message: string;
-    offset?: number;
-    severity: "error" | "warning";
-    source: "gate" | "plan" | "syntax";
 }
 
 /**
