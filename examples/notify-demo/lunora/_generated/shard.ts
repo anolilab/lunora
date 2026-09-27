@@ -877,10 +877,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `bucket` IS stamped: it hands back a sub-facade this wrapper does not
             // reach, so the selection is the last point at which the read can be seen.
             //
-            // The request origin rides along only on the synchronous dispatch
-            // (`options.identity` unset): a deferred caller runs outside the
-            // dispatch that owns the field, the same hazard `getCurrentIp` has.
-            const requestOrigin = options.identity === undefined ? this.getCurrentOrigin() : undefined;
+            // The request origin is the storage base fallback for mutations and
+            // actions on the synchronous dispatch only. A deferred caller
+            // (`options.identity` set) runs outside the dispatch that owns the
+            // field, the same hazard `getCurrentIp` has. A query never gets it: a
+            // live query re-runs with no request behind it, and the reactive
+            // cache does not key on the host, so a query that signs URLs needs a
+            // declared `publicBaseUrl` either way.
+            const requestOrigin = contextKind !== "query" && options.identity === undefined ? this.getCurrentOrigin() : undefined;
             const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env, requestOrigin) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
                 "bucket",
                 "download",

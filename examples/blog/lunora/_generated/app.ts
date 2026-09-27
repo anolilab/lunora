@@ -30,7 +30,7 @@ interface StorageDeclaration<Env> {
     bucket: Selector<Env, R2BucketLike>;
     /** Extra named buckets, reached via `ctx.storage.bucket("name")` and the studio's bucket picker. */
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
-    /** Public base URL signed/public object URLs resolve against. Omit it and `ctx.storage` in an action or HTTP handler signs against the origin the request reached the worker on — no per-environment value to ship. */
+    /** Public base URL signed/public object URLs resolve against. Omit it and `ctx.storage` in a mutation, action or HTTP handler signs against the origin the request reached the worker on — no per-environment value to ship. Queries get no such fallback (a live query re-runs with no request behind it), so a query that signs URLs needs this set. */
     publicBaseUrl?: Selector<Env, string>;
     /** R2 S3-API credentials (`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }`) enabling `ctx.storage.getPresignedUrl` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed `getSignedUrl` path. */
     s3?: Selector<Env, R2S3Credentials>;
