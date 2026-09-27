@@ -1,3 +1,63 @@
+## @lunora/db [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.150...@lunora/db@1.0.0-alpha.151) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **db:** `LunoraClient.replayIdentityVerdict()` returns a
+`ReplayIdentityVerdict` object (`{ verdict }`, plus `credential` on a match)
+instead of a bare string, and `MutationCallOptions.replayIdentity` is replaced
+by `replayCredential`, which takes the credential from that verdict.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(db): park a credential-refused outbox write until the token changes
+
+A durable outbox write the worker refused for its credential was rethrown as a
+plain retriable error. The offline executor has no retry limit and its drain
+tick resets every backoff once a second, so the write was re-sent with the same
+refused token about once a second forever, and the executor's FIFO scheduler
+held every write queued behind it. Three things made that worse:
+
+- `UNAUTHORIZED` counted as a credential refusal. It is the app's own verdict
+  on the write ("Sign in to post", "you are not playing in this game"), so an
+  app with no token at all looped the same way and was told to refresh one.
+  Only `TOKEN_EXPIRED` and `UNAUTHENTICATED` are credential refusals now. That
+  set is shared with the client's own offline queue, which therefore settles
+  an `UNAUTHORIZED` replay as rejected instead of holding it for a refresh
+  that cannot change the answer.
+- A 401 with an unreadable body surfaces with "401" in its message, which the
+  executor's own retry policy stops on without a `NonRetriableError`. The
+  write was dropped with no `onWriteRejected` and no rollback. Every failure
+  the executor gives up on now goes through the report-and-rollback path.
+- A durable replay that fell back into the client's queue (socket down after
+  the ordering barrier, or a polling request that never reached the origin)
+  was re-stamped with whoever was signed in by then. It keeps the identity
+  its verdict judged.
+
+A credential-refused write in `defineCollections` is now parked on the token
+it was refused with. While that token is current, each executor attempt defers
+without sending. When the token changes, the write is judged and sent again.
+A second refusal after the change, or no change within 60 seconds, rejects it:
+`onWriteRejected` receives the refusal's code and the optimistic row rolls
+back.
+
+A write through `bindMutators` is direct and never retried, so a credential
+refusal there is final: it now reaches `onWriteRejected` as a coded
+`NonRetriableError`, the same shape as every other coded verdict, instead of
+the raw client error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **db:** replay an outbox write with the token its verdict judged ([#854](https://github.com/anolilab/lunora/issues/854)) ([118b0fa](https://github.com/anolilab/lunora/commit/118b0fa281997d39906629271f4c48e9b7cc646d))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/db [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.149...@lunora/db@1.0.0-alpha.150) (2026-09-27)
 
 
