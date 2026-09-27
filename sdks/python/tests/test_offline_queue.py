@@ -448,9 +448,23 @@ class TestTokenDigestIdentity(unittest.TestCase):
                 self.assertEqual(replay_identity_verdict(stamped, current, token), verdict)
 
     def test_the_digest_matches_the_reference_client(self):
+        covers("offline_unset_identity_stamps_token_digest")
+
         for spec in FIXTURES["tokenIdentity"]["digests"]:
             with self.subTest(spec["token"]):
                 self.assertEqual(token_digest(spec["token"]), spec["digest"])
+
+        switch = FIXTURES["tokenIdentity"]["accountSwitch"]
+        client, posts, settled = self._client(switch["queuedUnder"])
+        client.auth_token = switch["flushedUnder"]
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, [], "the previous token's write is never sent with the next one")
+        self.assertEqual(settled[0].error.code, FIXTURES["identityGate"]["code"])
+
+        client, posts, settled = self._client(switch["queuedUnder"])
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, [f"Bearer {switch['queuedUnder']}"])
+        self.assertEqual(settled[0].status, "committed")
 
     def test_a_write_queued_under_one_token_never_travels_with_another(self):
         client, posts, settled = self._client("token-a")

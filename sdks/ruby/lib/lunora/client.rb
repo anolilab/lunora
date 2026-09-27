@@ -268,13 +268,40 @@ module Lunora
   # lock RELEASED: +Mutex+ is not reentrant, so a callback that subscribes or a
   # sender that unsubscribes on a write failure would otherwise deadlock.
   class Client
-    attr_accessor :auth_token
+    # The bearer token every RPC carries; the next call picks up a new one.
+    #
+    # Nothing flushes on its own when it changes: call +flush_offline_queue+
+    # after setting it, as on a reconnect. That flush is identity-gated, so it
+    # cannot send one user's write with the next user's credential — with
+    # +identity+ unset the token's digest is the identity, and a write queued
+    # under another token is rejected OFFLINE_IDENTITY_CHANGED.
+    def auth_token = @mutex.synchronize { @auth_token }
+
+    # With +identity+ unset the token's digest IS the identity, so a new or
+    # cleared token retires the previous session exactly as +identity=+ does
+    # when it changes from a set value. With an identity set the digest is not
+    # consulted, and a token refresh is not a change of user.
+    def auth_token=(value)
+      deferred = []
+
+      @mutex.synchronize do
+        previous = identity_fingerprint
+        @auth_token = value
+        evict_identity_session(deferred) unless previous.nil? || previous == identity_fingerprint
+      end
+
+      run_callbacks(deferred)
+    end
 
     # An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
     # not a bearer token. It is persisted alongside every queued write and
     # re-checked before that write replays, so a restart cannot push one user's
-    # queued writes as another. nil means signed out, which is itself an identity
-    # a write can be stamped with.
+    # queued writes as another. Left nil, a write is stamped with a digest of
+    # +auth_token+ instead (+Lunora.token_stamp+; nil with no token either), so
+    # a new token is a new identity: a token refresh rejects the writes queued
+    # under the old one and evicts its session. Set this to keep them across a
+    # refresh. Any string is accepted: a token write is stamped with a
+    # TokenStamp, which no identity string can equal.
     #
     # Read and written under the same mutex the flush snapshots it under, rather
     # than through +attr_accessor+: a consumer setting it from a sign-in handler
@@ -654,8 +681,12 @@ module Lunora
     def flush_offline_queue(shard_key = nil)
       report = FlushReport.empty
 
-      queue, current_identity, remaining = @mutex.synchronize do
-        [@offline_queue, @identity, @flush_not_before - Lunora.monotonic_now]
+      # The token is snapshotted beside the identity it gates on, and every
+      # request of this pass is sent with it — never the one held when the
+      # request goes out, or a token swapped mid-flush would carry the rest of
+      # the pass under the identity the gate judged against the old one.
+      queue, current_identity, current_token, remaining = @mutex.synchronize do
+        [@offline_queue, identity_fingerprint, @auth_token, @flush_not_before - Lunora.monotonic_now]
       end
 
       # A server that answered "not now" gets waited out. Without this the
@@ -678,10 +709,12 @@ module Lunora
       drained = @mutex.synchronize { queue.drain { |item| Lunora.same_shard?(item.shard_key, shard_key) } }
       return report if drained.empty?
 
-      begin
-        gated = gate_identity(queue, drained, current_identity, report)
+      held = []
 
-        replay(queue, encodable(queue, gated, report), report)
+      begin
+        gated = gate_identity(queue, drained, current_identity, current_token, report, held)
+
+        replay(queue, encodable(queue, gated, report), report, current_token)
       ensure
         # A drained write lives only in this frame until it is settled or
         # re-queued. Should anything unexpected raise out of the replay, put
@@ -690,6 +723,7 @@ module Lunora
         handled = (report.committed + report.rejected + report.requeued).to_h { |id| [id, true] }
         stranded = drained.reject { |item| handled.key?(item.id) }
         @mutex.synchronize { queue.requeue(stranded) } unless stranded.empty?
+        restore_order(queue, drained, report) unless held.empty?
       end
     end
 
@@ -1014,12 +1048,14 @@ module Lunora
       [Lunora.parse_rpc_response(body, status), Lunora.parse_commit_cursor(body)]
     end
 
-    # The bare round-trip, returning the poster's [status, body] unread.
-    def post_rpc(function_path, args, shard_key, mutation_id, client_id = nil)
+    # The bare round-trip, returning the poster's [status, body] unread. +token+
+    # is the bearer to send: the one held now, unless a replay passes the token
+    # its identity gate judged the pass against.
+    def post_rpc(function_path, args, shard_key, mutation_id, client_id = nil, token = @auth_token)
       raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
 
       headers = { "content-type" => "application/json" }
-      headers["authorization"] = "Bearer #{@auth_token}" if @auth_token
+      headers["authorization"] = "Bearer #{token}" if token
 
       if mutation_id
         headers["x-lunora-mutation-id"] = mutation_id
@@ -1066,19 +1102,54 @@ module Lunora
       @mutex.synchronize { queue.drain_conflict(failed.map(&:id)) }
     end
 
-    # Partition already-drained writes by the identity gate, rejecting the ones
-    # stamped under another identity.
+    # Partition already-drained writes by the identity gate: the sendable ones
+    # are returned, the ones stamped under another identity are rejected, and
+    # the ones whose owner cannot be told (nobody signed in) are appended to
+    # +held+ and reported requeued — neither sent nor dropped.
     #
     # Gated against ONE identity snapshot: a flush is a single authenticated
     # burst, so every write in it necessarily runs under one identity.
-    def gate_identity(queue, drained, current_identity, report)
+    def gate_identity(queue, drained, current_identity, current_token, report, held)
       drained.select do |item|
-        next true if Lunora.identity_allows_replay?(item.identity, current_identity)
+        verdict = Lunora.replay_identity_verdict(item.identity, current_identity, current_token)
+        next true if verdict == :match
 
-        settle_terminal(queue, item, OfflineError.new(OFFLINE_IDENTITY_CHANGED,
-                                                      "offline mutation skipped: auth identity changed before replay"), report)
+        if verdict == :unknown
+          held << item
+          report.requeued << item.id
+        else
+          settle_terminal(queue, item, OfflineError.new(OFFLINE_IDENTITY_CHANGED,
+                                                        "offline mutation skipped: auth identity changed before replay"), report)
+        end
         false
       end
+    end
+
+    # Put every drained write that did not settle back at the front in its
+    # original order. Needed only when a write was held: the replay re-queues
+    # its own leftovers ahead of it, and a held write must keep its place in line.
+    def restore_order(queue, drained, report)
+      settled = (report.committed + report.rejected).to_h { |id| [id, true] }
+      back = drained.reject { |item| settled.key?(item.id) }
+      wanted = back.to_h { |item| [item.id, true] }
+
+      @mutex.synchronize do
+        queue.drain { |item| wanted.key?(item.id) }
+        queue.requeue(back)
+      end
+    end
+
+    # Who a write queued now belongs to; call with the lock held.
+    #
+    # +identity+ when set, else +Lunora.token_stamp+ of the bearer token, else
+    # nil — the reference's +identityFingerprint+. Without the token branch
+    # every write made with no identity was stamped nil and matched any token,
+    # so a flush after an account switch sent the previous user's writes with
+    # the new user's credential.
+    def identity_fingerprint
+      return @identity unless @identity.nil?
+
+      @auth_token.nil? ? nil : Lunora.token_stamp(@auth_token)
     end
 
     # Partition already-gated writes into the encodable ones (returned) and
@@ -1106,8 +1177,8 @@ module Lunora
     # A lone write rides the single-call path, which is the proven one. Two or
     # more coalesce into batch round trips — the flaky-reconnect win, where N
     # queued writes cost a handful of hops instead of N.
-    def replay(queue, sendable, report)
-      return replay_sequential(queue, sendable, report) if sendable.length <= 1
+    def replay(queue, sendable, report, token)
+      return replay_sequential(queue, sendable, report, token) if sendable.length <= 1
 
       to_requeue = []
       chunks = chunk_batches(sendable)
@@ -1115,7 +1186,7 @@ module Lunora
       chunks.each_with_index do |chunk, chunk_index|
         # Chunks replay sequentially, which is what preserves FIFO across a
         # flush longer than one batch.
-        requeue, stop = replay_batched(queue, chunk, report)
+        requeue, stop = replay_batched(queue, chunk, report, token)
         to_requeue.concat(requeue)
 
         next unless stop
@@ -1178,12 +1249,12 @@ module Lunora
     end
 
     # Replay writes one at a time. FIFO is preserved by the loop itself.
-    def replay_sequential(queue, sendable, report)
+    def replay_sequential(queue, sendable, report, token)
       sendable.each_with_index do |item, index|
         body = nil
 
         begin
-          status, body = post_rpc(item.function_path, item.args, item.shard_key, item.id, item.client_id)
+          status, body = post_rpc(item.function_path, item.args, item.shard_key, item.id, item.client_id, token)
           value = Lunora.parse_rpc_response(body, status)
         rescue StandardError => e
           # The server committed it; only the result is unreadable, and a replay
@@ -1226,10 +1297,10 @@ module Lunora
     # should STOP because the whole chunk failed at the transport level.
     # Re-queuing is the caller's, once and in order, so a write cannot land twice
     # in the queue.
-    def replay_batched(queue, items, report)
+    def replay_batched(queue, items, report, token)
       status, body =
         begin
-          rpc_batch(batch_calls(items))
+          rpc_batch(batch_calls(items), token)
         rescue StandardError
           # Transport failure — nothing committed, so retry everything.
           nil
@@ -1262,10 +1333,10 @@ module Lunora
       # write still refused falls through and settles with the verdict.
       if too_large && items.length > 1
         middle = items.length / 2
-        left, stop = replay_batched(queue, items[0...middle], report)
+        left, stop = replay_batched(queue, items[0...middle], report, token)
         return [left + items[middle..], true] if stop
 
-        right, stop = replay_batched(queue, items[middle..], report)
+        right, stop = replay_batched(queue, items[middle..], report, token)
         return [left + right, stop]
       end
 
@@ -1307,12 +1378,12 @@ module Lunora
     # transport hop carrying independent calls, so each entry carries its own key
     # in the body, and a single outer header would de-duplicate the whole chunk
     # against one write. Returns [status, body], a body that is not a JSON object
-    # read as +{}+.
-    def rpc_batch(calls)
+    # read as +{}+. +token+ as for +post_rpc+, always the pass's snapshot.
+    def rpc_batch(calls, token)
       raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
 
       headers = { "content-type" => "application/json" }
-      headers["authorization"] = "Bearer #{@auth_token}" if @auth_token
+      headers["authorization"] = "Bearer #{token}" if token
 
       status, body = @http_post.call(join_url(RPC_BATCH_PATH), headers, JSON.generate({ "calls" => calls }))
       [status, body.is_a?(Hash) ? body : {}]
@@ -1528,7 +1599,7 @@ module Lunora
         id: options.mutation_id,
         # Bound at enqueue time, so the write can only ever replay as whoever
         # made it.
-        identity: @identity,
+        identity: identity_fingerprint,
         live_awaiter: true,
         on_settled: options.on_settled,
         precondition: options.precondition,

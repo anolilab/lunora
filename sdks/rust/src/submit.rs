@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
-    identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, AUTH_REPLAY_ERROR_CODES,
+    random_id, replay_identity_verdict, same_shard, Discarded, Precondition, QueuedMutation, ReplayVerdict, SettledHandler, AUTH_REPLAY_ERROR_CODES,
     CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES,
     MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
@@ -209,7 +209,14 @@ impl Client {
             });
         }
 
-        match self.rpc_raw(&options.function_path, &options.args, options.shard_key.as_deref(), Some(&write_id), None) {
+        match self.rpc_raw(
+            &options.function_path,
+            &options.args,
+            options.shard_key.as_deref(),
+            Some(&write_id),
+            None,
+            self.auth_token(),
+        ) {
             Ok((result, commit_cursor)) => {
                 // Confirmed against the write's COMMITTED cursor, so the overlay
                 // drops when (or once) a frame at that cursor lands — never on
@@ -302,15 +309,30 @@ impl Client {
         }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated
-        // burst, so every write in it necessarily runs under one identity.
-        let current = self.identity().map(str::to_string);
+        // burst, so every write in it runs under one identity — and is SENT with
+        // the token snapshotted beside it, never whichever is held when its
+        // request goes out. A write whose owner cannot be told (nobody signed in)
+        // is HELD: back on the queue in its place, still persisted, unsettled —
+        // the reference's "unknown" verdict.
+        let current = self.identity_fingerprint();
+        let token = self.auth_token().map(str::to_string);
+        let order: HashMap<String, usize> = drained.iter().enumerate().map(|(index, entry)| (entry.id.clone(), index)).collect();
+        let mut held = Vec::new();
         let mut sendable = Vec::with_capacity(drained.len());
 
         for entry in drained {
-            if identity_allows_replay(&entry.identity, current.as_deref()) {
-                sendable.push(entry);
+            match replay_identity_verdict(&entry.identity, &current, token.as_deref()) {
+                ReplayVerdict::Match => {
+                    sendable.push(entry);
 
-                continue;
+                    continue;
+                }
+                ReplayVerdict::Unknown => {
+                    held.push(entry);
+
+                    continue;
+                }
+                ReplayVerdict::Mismatch => {}
             }
 
             self.offline_queue.unpersist(&entry.id);
@@ -323,8 +345,17 @@ impl Client {
         }
 
         let encodable = self.encodable_or_settle_terminal(sendable, &mut report);
+        let mut leftover = self.replay(encodable, &mut report, token.as_deref());
 
-        self.replay(encodable, &mut report);
+        // Every write that did not settle goes back to the FRONT once, in the
+        // order it was drained, so a held write keeps its place in line.
+        leftover.append(&mut held);
+        leftover.sort_by_key(|entry| order.get(&entry.id).copied());
+
+        if !leftover.is_empty() {
+            report.requeued.extend(leftover.iter().map(|item| item.id.clone()));
+            self.offline_queue.requeue(leftover);
+        }
 
         report
     }
@@ -363,14 +394,14 @@ impl Client {
         encodable
     }
 
-    fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
+    /// Replays the gated writes with `token`, returning the ones to re-queue, in
+    /// order. Re-queuing is the caller's, once, beside the held writes.
+    fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> Vec<QueuedMutation> {
         // A lone write rides the single-call path, which is the proven one. Two
         // or more coalesce into batch round trips — the flaky-reconnect win,
         // where N queued writes cost a handful of hops instead of N.
         if sendable.len() < 2 {
-            self.replay_sequential(sendable, report);
-
-            return;
+            return self.replay_sequential(sendable, report, token);
         }
 
         let mut to_requeue: Vec<QueuedMutation> = Vec::new();
@@ -388,20 +419,18 @@ impl Client {
 
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
-            let (requeue, stop) = self.replay_batched(chunk, report);
+            let (requeue, stop) = self.replay_batched(chunk, report, token);
 
             to_requeue.extend(requeue);
             stopped = stop;
         }
 
-        if !to_requeue.is_empty() {
-            report.requeued.extend(to_requeue.iter().map(|item| item.id.clone()));
-            self.offline_queue.requeue(to_requeue);
-        }
+        to_requeue
     }
 
     /// Replays writes one at a time. FIFO is preserved by the loop itself.
-    fn replay_sequential(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
+    /// Returns the write that failed transiently and every one after it.
+    fn replay_sequential(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> Vec<QueuedMutation> {
         let mut pending = sendable.into_iter();
 
         while let Some(entry) = pending.next() {
@@ -411,6 +440,7 @@ impl Client {
                 entry.shard_key.as_deref(),
                 Some(&entry.id),
                 entry.client_id.as_deref(),
+                token,
             );
 
             match outcome {
@@ -426,10 +456,8 @@ impl Client {
                     let mut requeue = vec![entry];
 
                     requeue.extend(pending);
-                    report.requeued.extend(requeue.iter().map(|item| item.id.clone()));
-                    self.offline_queue.requeue(requeue);
 
-                    return;
+                    return requeue;
                 }
                 Err(error) => {
                     self.offline_queue.unpersist(&entry.id);
@@ -445,6 +473,8 @@ impl Client {
                 }
             }
         }
+
+        Vec::new()
     }
 
     /// Replays one chunk over `POST /_lunora/rpc-batch`.
@@ -457,7 +487,7 @@ impl Client {
     /// Returns the writes to put back and whether the caller should STOP because
     /// the whole chunk failed at the transport level. Re-queuing is the
     /// caller's, once and in order, so a write cannot land twice in the queue.
-    fn replay_batched(&mut self, items: Vec<QueuedMutation>, report: &mut FlushReport) -> (Vec<QueuedMutation>, bool) {
+    fn replay_batched(&mut self, items: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> (Vec<QueuedMutation>, bool) {
         let mut calls = Vec::with_capacity(items.len());
 
         for (index, item) in items.iter().enumerate() {
@@ -488,7 +518,7 @@ impl Client {
             calls.push(call);
         }
 
-        let Ok((status, body)) = self.rpc_batch(calls) else {
+        let Ok((status, body)) = self.rpc_batch(calls, token) else {
             // Transport failure — nothing committed, so retry everything.
             return (items, true);
         };
@@ -517,7 +547,7 @@ impl Client {
         if error.code == CODE_PAYLOAD_TOO_LARGE && items.len() > 1 {
             let mut left = items;
             let right = left.split_off(left.len() / 2);
-            let (mut requeue, stop) = self.replay_batched(left, report);
+            let (mut requeue, stop) = self.replay_batched(left, report, token);
 
             if stop {
                 // The left half stopped the flush, so the right half is put back
@@ -527,7 +557,7 @@ impl Client {
                 return (requeue, true);
             }
 
-            let (right_requeue, stop) = self.replay_batched(right, report);
+            let (right_requeue, stop) = self.replay_batched(right, report, token);
 
             requeue.extend(right_requeue);
 
@@ -738,7 +768,7 @@ impl Client {
     fn enqueue_write(&mut self, options: SubmitOptions, write_id: String, layers: Vec<(String, u64)>) {
         // Bound at enqueue time, so the write can only ever replay as whoever
         // made it.
-        let identity = Identity::stamp(self.identity().map(str::to_string));
+        let identity = self.identity_fingerprint();
         // Never a substitute value: a record persisted as `args: null` hydrates
         // after a restart as a write that replays SUCCESSFULLY with empty args,
         // which is corruption rather than failure. The queue reports the failed

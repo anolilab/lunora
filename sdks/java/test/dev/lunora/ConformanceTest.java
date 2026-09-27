@@ -1496,7 +1496,7 @@ public final class ConformanceTest {
         String token = "lunora-secret-7f3a9c";
         Client client = new Client("https://app.example", null);
 
-        client.authToken = token;
+        client.authToken(token);
 
         for (String printed : List.of(client.toString(), String.valueOf(client))) {
             check(!printed.contains(token), "the token leaked into " + printed);

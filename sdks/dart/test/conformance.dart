@@ -104,6 +104,7 @@ Future<void> main() async {
   await run(caseRateLimitedReplayRequeuesAndDefers);
   await run(caseRateLimitedBatchSlotIsTransient);
   await run(caseTransientRefusalOnAHealthySocketIsRetried);
+  await run(caseRetryFlushIsGatedOnTheToken);
   await run(caseRetryTimerIsCancelledOnDisconnectAndClose);
   await run(caseCancelledRetryDoesNotSkipTheRateLimitWindow);
   await run(caseEmptyShardKeyRoutesToDefault);

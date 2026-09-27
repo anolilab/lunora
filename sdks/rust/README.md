@@ -30,7 +30,7 @@ retries and socket library:
 
 ```rust
 let mut client = Client::new("https://my-app.example.com", Some(my_poster));
-client.auth_token = Some("…".into()); // redacted from the client's `{:?}`
+client.set_auth_token(Some("…".into())); // redacted from the client's `{:?}`
 client.set_identity(Some(current_user_id));
 // `client_id` is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
@@ -117,7 +117,10 @@ One rule classifies a failed replay, whether the write went out alone or in a
 batch: a CODED envelope is classified by its code alone, whatever the HTTP
 status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`,
 `TOO_MANY_REQUESTS` and the refused credentials `UNAUTHORIZED`, `TOKEN_EXPIRED`
-and `UNAUTHENTICATED` (held for the next token) re-queue, every other code (a
+and `UNAUTHENTICATED` (held for the next token: this client never flushes on its
+own, so call `flush_offline_queue` after `set_auth_token`, as on a reconnect; the
+identity gate below keeps that flush from sending one user's write with another's
+token) re-queue, every other code (a
 coded 500, or a server's own `WIRE_DECODE_FAILED`, included) settles `rejected` —
 and a reply with no envelope re-queues, except a 413. An envelope whose `data`
 does not decode is still that coded error, with `data` dropped (`None`), on
@@ -141,9 +144,25 @@ the same thing: `Ok` with status `Committed`, a `Null` value and
 The identity is an opaque, **non-secret** stamp — a user id, not a bearer token
 — set with `client.set_identity(…)`. It is persisted with every queued write and
 re-checked before that write replays, so a restart cannot push one user's queued
-writes as another. Changing it FROM a set identity (another user, or signed out)
-evicts the previous session: every query and shape resubscribes cold, and every
-shape view is emptied and its `on_rows` told so with `[]`.
+writes as another. Left `None`, a write is stamped `Identity::Token` with a
+digest of the bearer token instead (`token_digest`, the reference client's, never
+the token itself; persisted as `{"tokenDigest": …}`), and `SignedOut` only when
+there is no token either — so a write queued under one token is never sent with
+another. Under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`; with
+no token at all it is held, unsettled and still persisted, until one is set. A
+flush sends every request of a pass with the token its identity was checked
+against. Setting an identity is what lets a token refresh keep the queue. A
+record persisted by an earlier build with a `null` stamp is rejected the same way
+once a token is held, since `null` then said nothing about whose write it was.
+The identity may be any string: a token stamp is its own variant, so no identity,
+however it is spelled, can match a token's writes, nor a token stamp an
+identity's. Changing it FROM a set identity (another user, or signed out) evicts
+the previous session: every query and shape resubscribes cold, and every shape
+view is emptied and its `on_rows` told so with `[]`. A first sign-in and
+re-setting the same value evict nothing. With no identity set,
+`set_auth_token` with a different token (or `None`) evicts the same way, since
+the token's digest is then the identity. `&str` cannot hold a lone surrogate, so
+the digest's UTF-16 walk sees exactly the code units JavaScript's string would.
 
 ### Two shapes the borrow checker chose
 

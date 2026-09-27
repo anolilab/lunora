@@ -370,7 +370,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
-    async def _run_refused_once(self, refusals: list):
+    async def _run_refused_once(self, refusals: list, identity="user-a", auth_token=None):
         """Connect with one queued write the server refuses with each of ``refusals``, then accepts.
 
         Returns ``(client, clock, posts, run, socket, settled)``. Time is a fake clock: the
@@ -388,11 +388,13 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
         posts = []
 
-        def post(_url, _headers, _body):
+        def post(_url, headers, _body):
             posts.append(clock.now)
+            self.bearers.append(headers.get("authorization"))
             return refusals[len(posts) - 1] if len(posts) <= len(refusals) else (200, {"result": None})
 
-        client = LunoraClient("http://example.invalid", identity="user-a", http_post=post)
+        self.bearers = []
+        client = LunoraClient("http://example.invalid", identity=identity, auth_token=auth_token, http_post=post)
         client._call_later = clock.call_later
         client.offline_queue = OfflineQueue(queue_before_first_connect=True)
         settled = []
@@ -423,6 +425,32 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settled[0].status, "committed")
         self.assertEqual(len(posts), 2)
         self.assertEqual(clock.timers, [], "a committed write schedules nothing more")
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_retry_flush_is_gated_on_the_token_like_any_other(self):
+        """A retry is an ordinary flush pass: it judges the write against the token held NOW.
+
+        With no identity the write is stamped with token-a's digest. The token is
+        cleared while the retry is armed (which flushes nothing by itself), so the
+        retry cannot tell whose write it is and holds it rather than sending it
+        with no bearer; the same token set again replays it with that token.
+        """
+
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+        client, clock, posts, run, socket, settled = await self._run_refused_once([unavailable], identity=None, auth_token="token-a")
+
+        client.auth_token = None
+        clock.advance(clock.delays[0])
+        await asyncio.sleep(0.05)
+        self.assertEqual((len(posts), settled), (1, []), "held: the retry sends nothing")
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        client.auth_token = "token-a"
+        await _wait_for(lambda: settled)
+        self.assertEqual(settled[0].status, "committed")
+        self.assertEqual(self.bearers, ["Bearer token-a", "Bearer token-a"])
 
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)

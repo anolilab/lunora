@@ -245,8 +245,13 @@ extension LunoraClient {
     @discardableResult
     public func flushOfflineQueue(shardKey: String? = nil) -> LunoraFlushReport {
         var report = LunoraFlushReport()
-        let (queue, current, remaining) = withLock {
-            (storedOfflineQueue, storedIdentity, storedFlushNotBefore - ProcessInfo.processInfo.systemUptime)
+        let (queue, current, token, remaining) = withLock {
+            (
+                storedOfflineQueue,
+                identityFingerprintLocked(),
+                storedAuthToken,
+                storedFlushNotBefore - ProcessInfo.processInfo.systemUptime
+            )
         }
 
         // A server that answered "not now" gets waited out. Without this the
@@ -291,14 +296,26 @@ extension LunoraClient {
         if drained.isEmpty { return report }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated
-        // burst, so every write in it necessarily runs under one identity.
+        // burst, so every write in it runs under one identity — and is SENT with
+        // the token snapshotted beside it, never the one held when its request
+        // goes out, or a token swapped mid-flush would carry the rest of the pass.
+        // A write whose owner cannot be told (nobody signed in) is HELD: back on
+        // the queue, still persisted, unsettled.
         var sendable: [LunoraQueuedMutation] = []
+        var held: [LunoraQueuedMutation] = []
 
         for entry in drained {
-            if entry.identity.allowsReplay(under: current) {
+            switch entry.identity.replayVerdict(current: current, token: token) {
+            case .match:
                 sendable.append(entry)
 
                 continue
+            case .unknown:
+                held.append(entry)
+
+                continue
+            case .mismatch:
+                break
             }
 
             withLock { queue.unpersist(entry.id) }
@@ -314,7 +331,21 @@ extension LunoraClient {
 
         let encodable = encodableOrSettleTerminal(queue, sendable, &report)
 
-        replay(queue, encodable, &report)
+        replay(queue, encodable, &report, bearer: token)
+
+        guard !held.isEmpty else { return report }
+
+        // Held writes keep their place in line: everything this pass put back
+        // goes to the front in the order it was drained.
+        let position = Dictionary(drained.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let requeued = Set(report.requeued)
+
+        withLock {
+            let back = queue.drain { requeued.contains($0.id) } + held
+
+            queue.requeue(back.sorted { position[$0.id, default: 0] < position[$1.id, default: 0] })
+        }
+        report.requeued.append(contentsOf: held.map(\.id))
 
         return report
     }
@@ -360,12 +391,19 @@ extension LunoraClient {
         return encodable
     }
 
-    private func replay(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+    /// `bearer` is the token the pass's identity gate was judged against; every
+    /// request of the pass carries it.
+    private func replay(
+        _ queue: LunoraOfflineQueue,
+        _ sendable: [LunoraQueuedMutation],
+        _ report: inout LunoraFlushReport,
+        bearer: String?
+    ) {
         // A lone write rides the single-call path, which is the proven one. Two
         // or more coalesce into batch round trips — the flaky-reconnect win,
         // where N queued writes cost a handful of hops instead of N.
         guard sendable.count > 1 else {
-            replaySequential(queue, sendable, &report)
+            replaySequential(queue, sendable, &report, bearer: bearer)
 
             return
         }
@@ -376,7 +414,7 @@ extension LunoraClient {
         for (index, chunk) in chunks.enumerated() {
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
-            let outcome = replayBatched(queue, chunk, &report)
+            let outcome = replayBatched(queue, chunk, &report, bearer: bearer)
 
             toRequeue.append(contentsOf: outcome.requeue)
 
@@ -399,7 +437,12 @@ extension LunoraClient {
     }
 
     /// Replays writes one at a time. FIFO is preserved by the loop itself.
-    private func replaySequential(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+    private func replaySequential(
+        _ queue: LunoraOfflineQueue,
+        _ sendable: [LunoraQueuedMutation],
+        _ report: inout LunoraFlushReport,
+        bearer: String?
+    ) {
         for (index, entry) in sendable.enumerated() {
             do {
                 let reply = try rpcFull(
@@ -407,7 +450,8 @@ extension LunoraClient {
                     args: entry.args,
                     shardKey: entry.shardKey,
                     mutationID: entry.id,
-                    issuingClientID: entry.clientID
+                    issuingClientID: entry.clientID,
+                    bearer: .some(bearer)
                 )
 
                 // The outcome — including an unreadable result, which is still a
@@ -458,7 +502,8 @@ extension LunoraClient {
     private func replayBatched(
         _ queue: LunoraOfflineQueue,
         _ items: [LunoraQueuedMutation],
-        _ report: inout LunoraFlushReport
+        _ report: inout LunoraFlushReport,
+        bearer: String?
     ) -> (requeue: [LunoraQueuedMutation], stop: Bool) {
         var calls: [Any] = []
 
@@ -491,7 +536,7 @@ extension LunoraClient {
         let reply: (status: Int, body: [String: Any])
 
         do {
-            reply = try rpcBatch(calls)
+            reply = try rpcBatch(calls, bearer: .some(bearer))
         } catch {
             // Transport failure (or no poster at all) — nothing committed, so
             // retry everything.
@@ -523,11 +568,11 @@ extension LunoraClient {
         // write still refused falls through and settles terminally below.
         if error.code == LunoraOfflineCode.payloadTooLarge, items.count > 1 {
             let middle = items.count / 2
-            let left = replayBatched(queue, Array(items[..<middle]), &report)
+            let left = replayBatched(queue, Array(items[..<middle]), &report, bearer: bearer)
 
             if left.stop { return (left.requeue + Array(items[middle...]), true) }
 
-            let right = replayBatched(queue, Array(items[middle...]), &report)
+            let right = replayBatched(queue, Array(items[middle...]), &report, bearer: bearer)
 
             return (left.requeue + right.requeue, right.stop)
         }
@@ -552,7 +597,7 @@ extension LunoraClient {
     ///
     /// The args dominate and are the only part that can be large; the constant
     /// covers the entry's fixed keys and the comma joining it to the next one.
-    /// Encoding twice (here and in ``replayBatched(_:_:_:)``) is deliberate — the
+    /// Encoding twice (here and in ``replayBatched(_:_:_:bearer:)``) is deliberate — the
     /// flush is the slow path, and carrying the encoded form through the chunker
     /// would put a second representation of every queued write in memory.
     private static func entryBytes(_ item: LunoraQueuedMutation) -> Int {
@@ -567,7 +612,7 @@ extension LunoraClient {
     /// budget and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying
     /// bytes or long text are one request the server refuses whole. A single write
     /// over the budget still forms its own chunk — splitting cannot help it, and
-    /// ``replayBatched(_:_:_:)`` settles it on the answer.
+    /// ``replayBatched(_:_:_:bearer:)`` settles it on the answer.
     private static func chunkBatches(_ items: [LunoraQueuedMutation]) -> [[LunoraQueuedMutation]] {
         var chunks: [[LunoraQueuedMutation]] = []
         var current: [LunoraQueuedMutation] = []
@@ -860,7 +905,7 @@ extension LunoraClient {
         )
 
         entry.clientID = storedClientID
-        entry.identity = LunoraIdentity.stamp(storedIdentity)
+        entry.identity = identityFingerprintLocked()
         entry.liveAwaiter = true
         entry.precondition = options.precondition
         entry.handles = handles

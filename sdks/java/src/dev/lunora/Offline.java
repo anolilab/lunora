@@ -29,11 +29,12 @@ import java.util.function.Supplier;
  * <p><b>Divergences from {@code @lunora/client}</b>, all recorded in {@code sdks/README.md}: the
  * persistence adapter is SYNCHRONOUS (the browser client's is async because IndexedDB is; a
  * consumer here injects whatever it likes and owns its own threading, exactly as it does for the
- * HTTP poster and the frame sender); the identity stamp is an opaque string the CONSUMER sets
- * ({@code Client.identity}) rather than a fingerprint derived from an auth token, because these
- * SDKs do not manage auth sessions and a derived stamp would mean persisting a hash of a bearer
- * token in the consumer's storage; and there is no multi-tab leader election, because there are no
- * tabs.
+ * HTTP poster and the frame sender); the identity stamp is the consumer's own {@code
+ * Client.identity} when set (a stable, non-secret subject such as a user id), stored as given
+ * rather than under the reference's {@code subj:} namespace, and with none set a {@link
+ * Identity#tokenStamp} of the bearer token's digest, so a different token is a different identity —
+ * typed rather than the reference's bare digest string, so no identity string can equal it; and
+ * there is no multi-tab leader election, because there are no tabs.
  */
 public final class Offline {
     private Offline() {}
@@ -170,32 +171,97 @@ public final class Offline {
      * <p>Three states, not two, and the third is load-bearing. {@code absent()} is a record that
      * carries no stamp at all — written before stamping existed — and replays ambiently under
      * whatever identity is current. {@code signedOut()} is a write made with nobody signed in,
-     * which must replay signed out. {@code of(subject)} names the subject. Collapsing the first two
-     * would either strand every old record or silently push one user's queued writes as another.
+     * which must replay signed out. {@code of(subject)} names the subject. {@code
+     * tokenStamp(token)} is a write made with no subject set, stamped with the token's {@link
+     * #tokenDigest}. Collapsing the first two would either strand every old record or silently push
+     * one user's queued writes as another.
+     *
+     * <p>A subject and a token digest are separate components, so an identity spelled like a digest
+     * never equals a token stamp, in either direction.
      */
-    public record Identity(boolean present, String subject) {
+    public record Identity(boolean present, String subject, String tokenDigest) {
         public static Identity absent() {
-            return new Identity(false, null);
+            return new Identity(false, null, null);
         }
 
         public static Identity signedOut() {
-            return new Identity(true, null);
+            return new Identity(true, null, null);
         }
 
         public static Identity of(String subject) {
-            return new Identity(true, subject);
+            return new Identity(true, subject, null);
+        }
+
+        /** The stamp a write made with {@code token} and no identity carries. */
+        public static Identity tokenStamp(String token) {
+            return new Identity(true, null, Offline.tokenDigest(token));
+        }
+
+        /** True for the signed-out stamp: nobody named, no token held. */
+        public boolean isSignedOut() {
+            return present && subject == null && tokenDigest == null;
         }
     }
 
     /**
-     * Whether a write stamped {@code stamped} may replay under {@code current} (null = signed out).
+     * The reference client's {@code hashToken}: who a bearer token stamps a write as.
+     *
+     * <p>A digest, not the token, because the stamp is persisted and a queue store should not
+     * become somewhere a credential sits at rest. FNV-1a and djb2 side by side over UTF-16 code
+     * UNITS ({@code charAt}, which is exactly JavaScript's {@code charCodeAt} walk, lone surrogates
+     * included), each base36 and prefixed by the length in code units.
      */
-    public static boolean identityAllowsReplay(Identity stamped, String current) {
-        if (stamped == null || !stamped.present()) {
-            return true;
+    public static String tokenDigest(String token) {
+        int fnv = 0x811C9DC5;
+        int djb2 = 5381;
+
+        for (int index = 0; index < token.length(); index++) {
+            char code = token.charAt(index);
+
+            fnv = (fnv ^ code) * 0x01000193;
+            djb2 = djb2 * 33 + code;
         }
 
-        return stamped.subject() == null ? current == null : stamped.subject().equals(current);
+        return Integer.toString(token.length(), 36)
+                + ":"
+                + Long.toString(Integer.toUnsignedLong(fnv), 36)
+                + ":"
+                + Long.toString(Integer.toUnsignedLong(djb2), 36);
+    }
+
+    /** What the identity gate decides for one queued write. */
+    public enum ReplayVerdict {
+        /** The same identity, or a token stamp of the token held now: send it. */
+        MATCH,
+        /** Nobody is signed in, so whose write it is cannot be told: hold it, queued. */
+        UNKNOWN,
+        /** Someone else is signed in: reject it {@link #OFFLINE_IDENTITY_CHANGED}. */
+        MISMATCH
+    }
+
+    /**
+     * The verdict for a write stamped {@code stamped}, given the identity in effect now ({@code
+     * current}: the explicit identity, else a token stamp, else signed out) and the bearer {@code
+     * token} held now. Mirrors the reference's {@code replayIdentityVerdict}.
+     *
+     * <p>A record with no stamp at all predates stamping and replays ambiently. A token stamp
+     * matches only a token stamp of the very token held now; an identity only the same identity.
+     */
+    public static ReplayVerdict replayIdentityVerdict(
+            Identity stamped, Identity current, String token) {
+        if (stamped == null || !stamped.present() || stamped.equals(current)) {
+            return ReplayVerdict.MATCH;
+        }
+
+        if (stamped.tokenDigest() != null
+                && token != null
+                && stamped.equals(Identity.tokenStamp(token))) {
+            return ReplayVerdict.MATCH;
+        }
+
+        return current == null || current.isSignedOut()
+                ? ReplayVerdict.UNKNOWN
+                : ReplayVerdict.MISMATCH;
     }
 
     /**
@@ -325,7 +391,11 @@ public final class Offline {
             }
 
             if (identity != null && identity.present()) {
-                record.put("identity", identity.subject());
+                record.put(
+                        "identity",
+                        identity.tokenDigest() != null
+                                ? Map.of("tokenDigest", identity.tokenDigest())
+                                : identity.subject());
             }
 
             if (shardKey != null) {
@@ -344,7 +414,8 @@ public final class Offline {
          *
          * <p>The restored entry carries no resolve/reject: the caller that submitted it did not
          * survive the restart. A missing {@code identity} key restores as absent (a legacy record)
-         * while a stored null restores as signed out — the distinction the identity gate turns on.
+         * while a stored null restores as signed out — the distinction the identity gate turns on —
+         * and a stored {@code {"tokenDigest": …}} restores as a token stamp.
          *
          * <p>Throws {@link Wire.WireFormatException} when the stored args are not wire values.
          * Never substitutes: a record hydrated as empty args replays SUCCESSFULLY with the wrong
@@ -360,12 +431,18 @@ public final class Offline {
                             record.get("id") instanceof String id ? id : "");
 
             entry.clientId = record.get("clientId") instanceof String id ? id : null;
-            entry.identity =
-                    record.containsKey("identity")
-                            ? (record.get("identity") instanceof String subject
-                                    ? Identity.of(subject)
-                                    : Identity.signedOut())
-                            : Identity.absent();
+            Object stamp = record.get("identity");
+
+            if (!record.containsKey("identity")) {
+                entry.identity = Identity.absent();
+            } else if (stamp instanceof String subject) {
+                entry.identity = Identity.of(subject);
+            } else if (stamp instanceof Map<?, ?> token
+                    && token.get("tokenDigest") instanceof String digest) {
+                entry.identity = new Identity(true, null, digest);
+            } else {
+                entry.identity = Identity.signedOut();
+            }
 
             return entry;
         }

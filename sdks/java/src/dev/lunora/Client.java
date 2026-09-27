@@ -138,8 +138,12 @@ public final class Client {
     private final String baseUrl;
     private final HttpPoster poster;
 
-    /** Volatile so an app thread can rotate the token while a socket reader is mid-frame. */
-    public volatile String authToken;
+    /**
+     * Volatile so an app thread can rotate the token while a socket reader is mid-frame. Behind a
+     * setter because, with no identity set, changing it is a change of user: see {@link
+     * #authToken(String)}.
+     */
+    private volatile String authToken;
 
     /**
      * Guards every field below, and the {@code cursor}/{@code epoch}/row state hanging off {@link
@@ -292,8 +296,11 @@ public final class Client {
     /**
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id, not a bearer token.
      * It is persisted alongside every queued write and re-checked before that write replays, so a
-     * restart cannot push one user's queued writes as another. Null means signed out, which is
-     * itself an identity a write can be stamped with.
+     * restart cannot push one user's queued writes as another. Left null, a write is stamped with a
+     * digest of {@link #authToken()} instead ({@link Offline.Identity#tokenStamp}; signed out with
+     * no token either), so a new token is a new identity: a token refresh rejects the writes queued
+     * under the old one and evicts its session. Set this to keep them across a refresh. Any string
+     * is accepted: a token stamp is typed, so no identity string can equal it.
      *
      * <p>Behind a setter because changing it is not just a store: see {@link #identity(String)}.
      */
@@ -327,25 +334,78 @@ public final class Client {
                 return;
             }
 
-            for (Subscription subscription : subscriptions.values()) {
-                subscription.cursor = null;
-                subscription.epoch = null;
-            }
+            evictSession(deliveries);
+        }
 
-            for (Shape shape : shapes.values()) {
-                shape.rows.clear();
-                shape.order.clear();
-                shape.checkpoint = null;
-                shape.epoch = null;
+        for (Delivery delivery : deliveries) {
+            delivery.onRows().accept(delivery.rows());
+        }
+    }
 
-                if (shape.onRows != null) {
-                    deliveries.add(new Delivery(shape.onRows, new ArrayList<>()));
-                }
+    /** The bearer token every RPC carries; the next call picks up a new one. */
+    public String authToken() {
+        return authToken;
+    }
+
+    /**
+     * Sets the bearer token. With {@link #identity()} unset the token's digest IS the identity, so
+     * a different token (or clearing it) evicts the previous session exactly as changing a set
+     * identity does. With an identity set the digest is not consulted, and a token refresh is not a
+     * change of user.
+     *
+     * <p>This client never flushes on its own, so nothing is replayed here: call {@link
+     * #flushOfflineQueue} after setting a fresh token, as after a reconnect. On an account switch
+     * set the new identity first.
+     */
+    public void authToken(String next) {
+        List<Delivery> deliveries = new ArrayList<>();
+
+        synchronized (lock) {
+            Offline.Identity previous = identityFingerprint();
+
+            authToken = next;
+
+            if (!previous.isSignedOut() && !previous.equals(identityFingerprint())) {
+                evictSession(deliveries);
             }
         }
 
         for (Delivery delivery : deliveries) {
             delivery.onRows().accept(delivery.rows());
+        }
+    }
+
+    /**
+     * Who a write queued now belongs to: the identity when set, else a token stamp of the bearer,
+     * else signed out — the reference's {@code identityFingerprint}. Read under {@link #lock}.
+     */
+    Offline.Identity identityFingerprint() {
+        String subject = identity;
+        String token = authToken;
+
+        if (subject != null) {
+            return Offline.Identity.of(subject);
+        }
+
+        return token == null ? Offline.Identity.signedOut() : Offline.Identity.tokenStamp(token);
+    }
+
+    /** Drops every resume cursor and shape row; call with {@link #lock} held. */
+    private void evictSession(List<Delivery> deliveries) {
+        for (Subscription subscription : subscriptions.values()) {
+            subscription.cursor = null;
+            subscription.epoch = null;
+        }
+
+        for (Shape shape : shapes.values()) {
+            shape.rows.clear();
+            shape.order.clear();
+            shape.checkpoint = null;
+            shape.epoch = null;
+
+            if (shape.onRows != null) {
+                deliveries.add(new Delivery(shape.onRows, new ArrayList<>()));
+            }
         }
     }
 
@@ -609,7 +669,7 @@ public final class Client {
     }
 
     private Object rpc(String functionPath, Object args, String shardKey, String mutationId) {
-        return rpcFull(functionPath, args, shardKey, mutationId, null).result();
+        return rpcFull(functionPath, args, shardKey, mutationId, null, authToken).result();
     }
 
     /** One RPC round-trip: the decoded result plus the commit cursor the response echoed. */
@@ -620,14 +680,17 @@ public final class Client {
      *
      * <p>The cursor is what gates an optimistic overlay's removal, so it has to survive the call
      * rather than be discarded by {@link #parseRpcResponse}. {@code clientId} overrides this
-     * session's, so a replayed write namespaces server-side under the id that ISSUED it.
+     * session's, so a replayed write namespaces server-side under the id that ISSUED it. {@code
+     * token} is the bearer to send: a replay passes the token its identity gate judged the pass
+     * against, so a token swapped mid-flush cannot carry the rest of it.
      */
     RpcReply rpcFull(
             String functionPath,
             Object args,
             String shardKey,
             String mutationId,
-            String issuingClientId) {
+            String issuingClientId,
+            String token) {
         if (poster == null) {
             throw new ApiException("INTERNAL", "no HTTP poster configured", null, false);
         }
@@ -636,8 +699,8 @@ public final class Client {
 
         headers.put("content-type", "application/json");
 
-        if (authToken != null) {
-            headers.put("authorization", "Bearer " + authToken);
+        if (token != null) {
+            headers.put("authorization", "Bearer " + token);
         }
 
         if (mutationId != null) {
@@ -676,9 +739,10 @@ public final class Client {
      *
      * <p>No {@code x-lunora-mutation-id} on the request: a batch is ONE transport hop carrying
      * independent calls, so each entry carries its own idempotency key and client id in the body. A
-     * single outer header would name one write and de-duplicate the whole chunk against it.
+     * single outer header would name one write and de-duplicate the whole chunk against it. {@code
+     * token} as for {@link #rpcFull}.
      */
-    BatchReply rpcBatch(List<Object> calls) {
+    BatchReply rpcBatch(List<Object> calls, String token) {
         if (poster == null) {
             throw new ApiException("INTERNAL", "no HTTP poster configured", null, false);
         }
@@ -687,8 +751,8 @@ public final class Client {
 
         headers.put("content-type", "application/json");
 
-        if (authToken != null) {
-            headers.put("authorization", "Bearer " + authToken);
+        if (token != null) {
+            headers.put("authorization", "Bearer " + token);
         }
 
         Map<String, Object> envelope = new LinkedHashMap<>();

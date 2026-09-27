@@ -757,9 +757,11 @@ Future<void> caseIdentityChangeDiscardsQueuedWrites() async {
 
 /// The identity stamp is a digest, not the token: an app's queue file must not
 /// become somewhere a bearer token sits at rest. The values are the reference
-/// client's, read from the shared fixture python asserts too, so no port can
+/// client's, read from the shared fixture every port asserts, so none can
 /// drift from it silently.
-void caseTokenDigestMatchesTheReferenceClient() {
+Future<void> caseTokenDigestMatchesTheReferenceClient() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
   for (final raw in _scenario('tokenIdentity')['digests']! as List<Object?>) {
     final spec = raw! as Map<String, Object?>;
     final token = spec['token']! as String;
@@ -773,6 +775,39 @@ void caseTokenDigestMatchesTheReferenceClient() {
     'subj:user_1',
     'a subject wins over the token, so a refresh keeps the queue',
   );
+
+  // The account switch: with no subject, a write queued under one token is
+  // never sent with another, and replays under the one it was queued with.
+  final tokenSwitch = _scenario('tokenIdentity')['accountSwitch']! as Map<String, Object?>;
+  final queuedUnder = tokenSwitch['queuedUnder']! as String;
+
+  for (final flushedUnder in <String>[tokenSwitch['flushedUnder']! as String, queuedUnder]) {
+    final poster = Poster(result: 'null');
+    final client = LunoraClient(url: 'https://app.example', post: poster.call, authToken: queuedUnder)
+      ..attachSocket((_) {})
+      ..setConnected(true)
+      ..setConnected(false);
+    final pending = client.mutation('messages:send');
+
+    client
+      ..authToken = flushedUnder
+      ..setConnected(true);
+
+    if (flushedUnder == queuedUnder) {
+      await pending;
+      equals(canonical(poster.headers.map((headers) => headers['authorization']).toList()), canonical(<Object?>['Bearer $queuedUnder']),
+          'the same token replays the write');
+    } else {
+      try {
+        await pending;
+        failures.add('a write queued under another token should reject');
+      } on LunoraApiException catch (error) {
+        equals(error.code, offlineIdentityChanged, 'the discarded write names why');
+      }
+
+      equals(poster.paths.length, 0, 'the previous token\'s write is never sent with the next one');
+    }
+  }
 }
 
 /// A reconnect that lands WHILE a flush is running must not be dropped: the
@@ -1304,6 +1339,57 @@ Future<void> caseTransientRefusalOnAHealthySocketIsRetried() async {
       client.close();
     });
   }
+}
+
+/// A retry is an ordinary flush pass, judged against the token held when it
+/// fires: with no subject the write is stamped with the token's digest, so a
+/// retry that fires after the token was cleared holds it rather than sending it
+/// with no bearer, and the same token set again replays it with that token.
+Future<void> caseRetryFlushIsGatedOnTheToken() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final bearers = <String?>[];
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      bearers.add(headers['authorization']);
+
+      return bearers.length == 1
+          ? const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}')
+          : const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      authToken: 'token-a',
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+    final pending = Settled(client.mutation('messages:send', mutationId: 'm-retry-gate'));
+
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    client.authToken = null;
+    await _settle();
+    timers.fire();
+    await _settle();
+    equals(bearers.length, 1, 'held: the retry sends nothing once the token is gone');
+    equals(client.pendingWrites, 1, 'the write is still queued');
+
+    client.authToken = 'token-a';
+    await _settle();
+    await pending.done;
+    equals(pending.error, null, 'the same token replays the write');
+    equals(canonical(bearers), canonical(<Object?>['Bearer token-a', 'Bearer token-a']), 'every send carries token-a');
+
+    client.close();
+  });
 }
 
 /// The retry timer dies with the socket and with the client.

@@ -125,6 +125,7 @@ final class ConformanceTests: XCTestCase {
             case "auth_token_redacted_when_printed": caseAuthTokenRedactedWhenPrinted()
             case "offline_write_held_for_credential_replays_after_token_refresh":
                 try caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh()
+            case "offline_unset_identity_stamps_token_digest": try caseOfflineUnsetIdentityStampsTokenDigest()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }

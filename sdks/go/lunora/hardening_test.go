@@ -465,7 +465,7 @@ func TestAWriteHeldForItsCredentialReplaysUnderTheRefreshedToken(t *testing.T) {
 	}
 
 	client.SetIdentity(&identity)
-	client.AuthToken = staleToken
+	client.SetAuthToken(staleToken)
 
 	for _, id := range fixtureStrings(scenario["queued"]) {
 		client.OfflineQueue().Enqueue(&QueuedMutation{
@@ -505,7 +505,7 @@ func TestAWriteHeldForItsCredentialReplaysUnderTheRefreshedToken(t *testing.T) {
 	}
 
 	// A refresh: new token, same identity.
-	client.AuthToken = freshToken
+	client.SetAuthToken(freshToken)
 	client.SetIdentity(&identity)
 
 	expect("afterRefresh", client.FlushOfflineQueue(""))
@@ -962,7 +962,7 @@ func TestTheAuthTokenIsRedactedWhenPrinted(t *testing.T) {
 	const token = "lunora-secret-7f3a9c"
 
 	client := NewClient("https://app.example", nil)
-	client.AuthToken = token
+	client.SetAuthToken(token)
 
 	holder := struct{ Client *Client }{client}
 
