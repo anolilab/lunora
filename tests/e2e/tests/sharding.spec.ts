@@ -1,5 +1,6 @@
-import type { Dialog } from "@playwright/test";
+import type { APIRequestContext, Dialog } from "@playwright/test";
 
+import type { TestUser } from "../fixtures/lunora.js";
 import { expect, test } from "../fixtures/lunora.js";
 
 /**
@@ -11,35 +12,55 @@ import { expect, test } from "../fixtures/lunora.js";
  * routing math, but they can't catch a regression where the *client* mints
  * the wrong shard hint or the *server* falls back to a single DO. This test
  * round-trips through the full pipe.
+ *
+ * The server derives no shard from a function's args — the caller names it
+ * with `shardKey`, and a call without one lands in the default `__root__`
+ * shard. So every assertion here reads a row back from a NAMED shard and
+ * checks it is absent from `__root__`: a list that omits `shardKey` would pass
+ * just as well with every shard collapsed into the root DO.
  */
+
+const ROOT_SHARD = "__root__";
+
+interface MessageRow {
+    channelId: string;
+    text: string;
+}
+
+/** One RPC, optionally routed to a shard. Throws on a transport-level failure. */
+const rpc = async (request: APIRequestContext, functionPath: string, args: Record<string, unknown>, shardKey?: string): Promise<unknown> => {
+    const response = await request.post(`/_lunora/rpc`, {
+        data: { args, functionPath, ...(shardKey === undefined ? {} : { shardKey }) },
+    });
+
+    if (!response.ok()) {
+        throw new Error(`rpc ${functionPath} failed (${response.status()})`);
+    }
+
+    return ((await response.json()) as { result: unknown }).result;
+};
+
+/** `messages:list` for `channelId`, read from the DO `shardKey` names. */
+const listIn = async (user: TestUser, channelId: string, shardKey: string): Promise<MessageRow[]> =>
+    (await rpc(user.request, "messages:list", { channelId, limit: 200 }, shardKey)) as MessageRow[];
+
+/** A fresh channel. `channels` is not sharded, so it needs no `shardKey`. */
+const createChannel = async (user: TestUser, name: string): Promise<string> =>
+    // `channels:create` / `messages:send` are deterministic mutations: the client
+    // stamps `createdAt` (Date.now() in a handler would be non-deterministic), so
+    // direct RPC callers must supply it too. `id` is optional (server mints it).
+    (await rpc(user.request, "channels:create", { createdAt: Date.now(), name })) as string;
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
-test("messages.list(channelA) doesn't see channel B's messages, and vice versa", async ({ user }) => {
+test("each channel's messages live in its own shard — not in the other channel's, not in __root__", async ({ user }) => {
     // Drive sharding via RPC directly — clicking through the UI 100 times is
     // slow and adds no extra coverage versus the network round-trip. The
     // better-auth session cookie travels with `user.request`.
-    const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
-        const response = await user.request.post(`/_lunora/rpc`, {
-            data: { args, functionPath },
-        });
-
-        if (!response.ok()) {
-            throw new Error(`rpc ${functionPath} failed (${response.status()})`);
-        }
-
-        const body = (await response.json()) as { result: unknown };
-
-        return body.result;
-    };
-
-    // `channels:create` / `messages:send` are deterministic mutations: the client
-    // stamps `createdAt` (Date.now() in a handler would be non-deterministic), so
-    // direct RPC callers must supply it too. `id` is optional (server mints it).
-    const channelA = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-A" })) as string;
-    const channelB = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-B" })) as string;
+    const channelA = await createChannel(user, "shard-A");
+    const channelB = await createChannel(user, "shard-B");
 
     expect(channelA).not.toBe(channelB);
 
@@ -49,58 +70,82 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
     const SEND_COUNT = 12;
 
     for (let index = 0; index < SEND_COUNT; index += 1) {
-        await rpc("messages:send", { channelId: channelA, createdAt: Date.now(), text: `A-${index}` });
-        await rpc("messages:send", { channelId: channelB, createdAt: Date.now(), text: `B-${index}` });
+        await rpc(user.request, "messages:send", { channelId: channelA, createdAt: Date.now(), text: `A-${index}` }, channelA);
+        await rpc(user.request, "messages:send", { channelId: channelB, createdAt: Date.now(), text: `B-${index}` }, channelB);
     }
 
-    const listA = (await rpc("messages:list", { channelId: channelA, limit: 200 })) as { channelId: string; text: string }[];
-    const listB = (await rpc("messages:list", { channelId: channelB, limit: 200 })) as { channelId: string; text: string }[];
+    const listA = await listIn(user, channelA, channelA);
+    const listB = await listIn(user, channelB, channelB);
 
     expect(listA).toHaveLength(SEND_COUNT);
     expect(listB).toHaveLength(SEND_COUNT);
 
-    expect(listA.every((row) => row.channelId === channelA)).toBe(true);
-    expect(listA.every((row) => row.text.startsWith("A-"))).toBe(true);
+    expect(listA.every((row) => row.channelId === channelA && row.text.startsWith("A-"))).toBe(true);
+    expect(listB.every((row) => row.channelId === channelB && row.text.startsWith("B-"))).toBe(true);
 
-    expect(listB.every((row) => row.channelId === channelB)).toBe(true);
-    expect(listB.every((row) => row.text.startsWith("B-"))).toBe(true);
+    // The rows are in their own DO and nowhere else: not in the root shard, and
+    // not in the other channel's shard.
+    expect(await listIn(user, channelA, ROOT_SHARD)).toHaveLength(0);
+    expect(await listIn(user, channelB, ROOT_SHARD)).toHaveLength(0);
+    expect(await listIn(user, channelA, channelB)).toHaveLength(0);
+    expect(await listIn(user, channelB, channelA)).toHaveLength(0);
 });
 
 test("both channels run independently — a thrown error in A doesn't kill B", async ({ user }) => {
-    const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
-        const response = await user.request.post(`/_lunora/rpc`, {
-            data: { args, functionPath },
-        });
-
-        const body = (await response.json()) as { error?: { code: string }; result?: unknown };
-
-        return body.result ?? body.error;
-    };
-
-    const channelA = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-iso-A" })) as string;
-    const channelB = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-iso-B" })) as string;
+    const channelA = await createChannel(user, "shard-iso-A");
+    const channelB = await createChannel(user, "shard-iso-B");
 
     // Force a failed write on channel A: a wrong-typed `text` fails arg
     // validation with a 4xx. (Sending to a *non-existent* channel id wouldn't
     // error — `shardBy` mints a shard on demand.) The point is resilience: a
     // rejected request must not poison the worker so B's writes still land.
     const bogusResponse = await user.request.post(`/_lunora/rpc`, {
-        data: { args: { channelId: channelA, createdAt: Date.now(), text: 123 }, functionPath: "messages:send" },
+        data: { args: { channelId: channelA, createdAt: Date.now(), text: 123 }, functionPath: "messages:send", shardKey: channelA },
     });
 
     // We don't care which error code — only that B still works after.
     expect(bogusResponse.status()).toBeGreaterThanOrEqual(400);
 
-    await rpc("messages:send", { channelId: channelB, createdAt: Date.now(), text: "post-error" });
+    await rpc(user.request, "messages:send", { channelId: channelB, createdAt: Date.now(), text: "post-error" }, channelB);
 
-    const listB = (await rpc("messages:list", { channelId: channelB, limit: 10 })) as { text: string }[];
+    expect((await listIn(user, channelB, channelB)).map((row) => row.text)).toContain("post-error");
+    expect(await listIn(user, channelB, ROOT_SHARD)).toHaveLength(0);
 
-    expect(listB.some((row) => row.text === "post-error")).toBe(true);
+    // sanity: A is empty in its own shard
+    expect(await listIn(user, channelA, channelA)).toHaveLength(0);
+});
 
-    // sanity: A is empty
-    const listA = (await rpc("messages:list", { channelId: channelA, limit: 10 })) as unknown[];
+test("the playground UI writes a channel's messages to that channel's shard, and renders rows written there", async ({ signedInPage: page, user }) => {
+    await page.goto("/");
 
-    expect(listA).toHaveLength(0);
+    const name = `ui-shard-${Date.now()}`;
+
+    page.once("dialog", async (dialog: Dialog) => dialog.accept(name));
+    await page.getByRole("button", { name: "+ New channel" }).click();
+    await page.getByRole("button", { name }).click();
+
+    // The header reads "<channelId> …" once a channel is active.
+    await expect(page.locator("main h2")).not.toHaveText(/Select a channel/u);
+
+    const channelId = ((await page.locator("main h2").textContent()) ?? "").trim().split(" ")[0] ?? "";
+
+    expect(channelId).not.toBe("");
+
+    // UI → shard: the optimistic write is delivered to the channel's own DO.
+    const fromUi = `from-ui-${Date.now()}`;
+
+    await page.getByPlaceholder("Type a message…").fill(fromUi);
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(async () => (await listIn(user, channelId, channelId)).map((row) => row.text), { timeout: 10_000 }).toContain(fromUi);
+    expect((await listIn(user, channelId, ROOT_SHARD)).map((row) => row.text)).not.toContain(fromUi);
+
+    // Shard → UI: a row written straight into the channel's shard shows up, so
+    // the UI's subscription reads that DO too — not the root one.
+    const fromShard = `from-shard-${Date.now()}`;
+
+    await rpc(user.request, "messages:send", { channelId, createdAt: Date.now(), text: fromShard }, channelId);
+    await expect(page.getByText(fromShard)).toBeVisible({ timeout: 5000 });
 });
 
 test("two clients on the same shard converge in both directions over WS", async ({ browser, makeUser, user }) => {

@@ -202,6 +202,13 @@ const QUERY_CACHE_DEBOUNCE_MS = 250;
 const SOCKET_STABLE_MS = 5000;
 
 /**
+ * How long a non-default shard's socket stays open after the last thing using
+ * it lets go. Long enough that re-pointing a subscription away from a shard and
+ * straight back (A→B→A) reuses the socket instead of reconnecting.
+ */
+const IDLE_SHARD_CLOSE_MS = 5000;
+
+/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -613,6 +620,13 @@ interface ShardConnection {
     identityQuestion?: number;
 
     /**
+     * Armed (non-default shards only) when the last user of this shard lets go;
+     * closes the connection if nothing has picked it up again by the time it
+     * fires. See {@link LunoraClient.releaseIdleShard}.
+     */
+    idleTimer?: ReturnType<typeof setTimeout>;
+
+    /**
      * Wall-clock time (`Date.now()`) of the most recently received frame on
      * this connection's socket — ANY frame, including the plain-string
      * `lunora-pong` keepalive reply, which never reaches `handleServerMessage`'s
@@ -628,7 +642,7 @@ interface ShardConnection {
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
-    pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
+    pendingUnsubscribes: { durable?: true; id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see {@link file://./polling-fallback.ts}). */
     readonly polling: PollingFallback;
     reconnect: ReconnectCalculator;
@@ -1340,6 +1354,14 @@ class LunoraClient {
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
 
+    /**
+     * Shards whose socket was closed for being idle after it had connected (see
+     * {@link LunoraClient.releaseIdleShard}). The connection record is gone, but the write
+     * gate still needs to know the shard was reached — see `connectionGateState`.
+     * Consumed when the shard's connection is recreated.
+     */
+    private readonly idleClosedShards = new Set<string>();
+
     /** Default `connect`-envelope context applied to a shard with no explicit override. */
     private readonly defaultConnectionContext: Record<string, unknown> | undefined;
 
@@ -1681,6 +1703,8 @@ class LunoraClient {
         this.offlineQueue = new OfflineQueue(options.offlineQueue, {
             onEvict: (entry, error) => {
                 this.emitItemSettled(entry, "rejected", error);
+                // The evicted write may have been what held its shard's socket open.
+                this.releaseIdleShard(entry.shardKey);
             },
             onSizeChange: (size) => {
                 this.pendingChangeListeners.emit(size);
@@ -2350,6 +2374,10 @@ class LunoraClient {
         }
 
         this.refreshConnectionContext(key);
+
+        if (context === undefined) {
+            this.releaseIdleShard(options.shardKey);
+        }
     }
 
     /**
@@ -2418,6 +2446,7 @@ class LunoraClient {
             }
 
             this.refreshConnectionContext(key);
+            this.releaseIdleShard(options.shardKey);
         };
     }
 
@@ -2506,6 +2535,8 @@ class LunoraClient {
             if (conn) {
                 sendOn(conn, { topic, type: "whisper_unsubscribe" });
             }
+
+            this.releaseIdleShard(options.shardKey);
         };
     }
 
@@ -2543,6 +2574,9 @@ class LunoraClient {
             // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
             sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
         }
+
+        // A send-only whisper may be all that opened this shard: let it idle out.
+        this.releaseIdleShard(options.shardKey);
     }
 
     /**
@@ -4241,6 +4275,7 @@ class LunoraClient {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
+                this.releaseIdleShard(subscriptionState.shardKey);
             }
         };
     }
@@ -4326,6 +4361,7 @@ class LunoraClient {
         return () => {
             this.shapeSubscriptions.delete(id);
             this.sendOrQueueUnsubscribe(state.shardKey, id, "shape_unsubscribe");
+            this.releaseIdleShard(state.shardKey);
         };
     }
 
@@ -4429,7 +4465,7 @@ class LunoraClient {
             // having sent nothing and queued nothing, and the consumer's
             // `for await` hung forever with no error and no completion. Failing
             // it names the limitation instead.
-            this.streams.delete(id);
+            this.forgetStream(id);
             handle.fail(
                 new LunoraError(
                     "STREAM_DISCONNECTED",
@@ -4458,7 +4494,7 @@ class LunoraClient {
 
                 if (droppedStream) {
                     droppedStream.handle.fail(new LunoraError("STREAM_QUEUE_OVERFLOW", "stream-start frame evicted while socket was unreachable"));
-                    this.streams.delete(droppedId as string);
+                    this.forgetStream(droppedId as string);
                 }
             }
 
@@ -4691,6 +4727,80 @@ class LunoraClient {
     }
 
     /**
+     * Whether anything still needs `key`'s socket: a live or shape
+     * subscription, a stream, a whisper topic, a connection context (presence
+     * rides its `connect` envelope), or a write queued for or flushing to it.
+     */
+    private shardInUse(key: string): boolean {
+        const onShard = (shardKey: string | undefined): boolean => connectionKey(shardKey) === key;
+
+        return (
+            this.subscriptions.all().some((state) => onShard(state.shardKey)) ||
+            [...this.shapeSubscriptions.values()].some((state) => onShard(state.shardKey)) ||
+            [...this.streams.values()].some((stream) => onShard(stream.shardKey)) ||
+            this.whisperHandlers.has(key) ||
+            this.connectionContexts.has(key) ||
+            this.connectionContextHolders.has(key) ||
+            this.offlineFlushes.has(key) ||
+            this.offlineQueue.hasPending((item) => onShard(item.shardKey)) ||
+            // A durable stream's cancel queued while the socket was down: that run
+            // outlives the socket, so only a reconnect can stop it. (A queued
+            // plain unsubscribe needs no delivery — the server dropped the
+            // subscription with the socket.)
+            (this.connections.get(key)?.pendingUnsubscribes.some((pending) => pending.durable === true) ?? false)
+        );
+    }
+
+    /**
+     * Close a non-default shard's socket once nothing uses it, after
+     * {@link IDLE_SHARD_CLOSE_MS} so a quick leave-and-return reuses it. The
+     * connection record is dropped; the shard is remembered in
+     * {@link idleClosedShards}, so writes to it keep the gating a connected shard
+     * gets — sent over HTTP, and queued if the network is down (a queued write
+     * reopens the socket to flush). A later subscription reconnects it.
+     * Every release path calls this; the timer re-checks, so a shard picked up
+     * again in the meantime stays open.
+     */
+    private releaseIdleShard(shardKey: string | undefined): void {
+        const key = connectionKey(shardKey);
+        const conn = this.connections.get(key);
+
+        // The default shard is the client's home connection — never idled out.
+        if (this.closed || key === "" || conn === undefined) {
+            return;
+        }
+
+        clearTimeout(conn.idleTimer);
+
+        conn.idleTimer = setTimeout(() => {
+            conn.idleTimer = undefined;
+
+            if (this.closed || this.connections.get(key) !== conn || this.shardInUse(key)) {
+                return;
+            }
+
+            if (conn.wasEverConnected) {
+                this.idleClosedShards.add(key);
+            }
+
+            this.teardownConnection(conn);
+            this.connections.delete(key);
+            this.emitConnectionStatus();
+        }, IDLE_SHARD_CLOSE_MS);
+    }
+
+    /** Forget a finished or cancelled stream; it may have been what held its shard open. */
+    private forgetStream(id: string): void {
+        const stream = this.streams.get(id);
+
+        this.streams.delete(id);
+
+        if (stream) {
+            this.releaseIdleShard(stream.shardKey);
+        }
+    }
+
+    /**
      * Tear down one {@link ShardConnection}'s live state: clear its reconnect/
      * connect timers, stop its heartbeat, and close its socket (if any).
      * Shared by `close()` (terminal) and the cross-tab `onStopBeingLeader`
@@ -4725,22 +4835,31 @@ class LunoraClient {
         // Every consumer these frames belonged to was just failed above, and the
         // socket they were waiting on is going away — drop them rather than
         // leaving them attached to a connection record the caller may reuse.
-        // Queued unsubscribes go the same way: the server drops a socket's
-        // subscriptions when it closes, so there is nothing left to tell it.
+        // Queued unsubscribes go the same way. The server drops a socket's live
+        // subscriptions when it closes, so those need no message — but a queued
+        // cancel for a DURABLE stream is lost here, and that run keeps producing.
+        // This is why an idle close never runs while any are queued
+        // (`shardInUse`); on `close()` and cross-tab demotion they are dropped.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
         this.clearResubscribeQueue(conn);
         this.clearConnectionTimers(conn);
+        clearTimeout(conn.idleTimer);
+        conn.idleTimer = undefined;
         this.stopHeartbeat(conn);
 
-        if (conn.socket) {
+        const { socket } = conn;
+
+        if (socket) {
+            // Released BEFORE closing, so a `close` event dispatched synchronously
+            // trips the identity guard instead of arming a reconnect.
+            conn.socket = undefined;
+
             try {
-                conn.socket.close();
+                socket.close();
             } catch {
                 /* ignore */
             }
-
-            conn.socket = undefined;
         }
 
         conn.wsState = "closed";
@@ -5130,15 +5249,18 @@ class LunoraClient {
         // dropped shard only queues writes destined for it. A follower tab
         // has no `ShardConnection` of its own — `connectionGateState` derives
         // the same triple from the mirrored leader status instead.
-        const { hasSocket, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
+        const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
         const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
         // While polling reaches the origin, a reconnect attempt is always armed
         // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
-        // the upgrade is refused. HTTP works, so neither may queue the write.
-        const midReconnect = wsState === "connecting" && connectedGate && !polling;
-        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !polling;
+        // the upgrade is refused. HTTP works, so neither may queue the write. A
+        // shard whose idle socket was closed is tried over HTTP first too: it is
+        // not offline, it just has no socket (see `connectionGateState`).
+        const httpFirst = polling || idleClosed;
+        const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
+        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -5201,12 +5323,12 @@ class LunoraClient {
 
             return { committed: true, value: result };
         } catch (error) {
-            // Polling sent this write over HTTP instead of queueing it, and the
-            // request never reached the origin: the network dropped after the last
-            // poll. Queue it under the same key, as it would have been had the
-            // drop been noticed first. A `TypeError` from an arg the codec cannot
+            // Polling (or an idle-closed shard) sent this write over HTTP instead
+            // of queueing it, and the request never reached the origin: the
+            // network is down. Queue it under the same key, as it would have been
+            // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
-            if (polling && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
+            if (httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
                 return enqueue();
             }
 
@@ -5373,6 +5495,8 @@ class LunoraClient {
                     }
 
                     reject(error instanceof Error ? error : new Error(String(error)));
+                    // A dropped write may have been what held its shard's socket open.
+                    this.releaseIdleShard(shardKey);
                 },
                 resolve,
                 shardKey,
@@ -5383,6 +5507,10 @@ class LunoraClient {
             // own to iterate) knows to flush it once the mirrored leader
             // status turns `"connected"` — see `flushAllOfflineQueues`.
             this.queuedOfflineShardKeys.add(shardKey);
+            // A queued write flushes when its shard's socket opens, so make sure
+            // one is coming: a shard never subscribed to (or whose idle socket was
+            // closed) has no connection that would ever reconnect on its own.
+            this.ensureSocket(shardKey);
 
             // `enqueue` assigns `entry.id` when absent; stamp the captured
             // identity against it for the flush-time check.
@@ -6169,8 +6297,20 @@ class LunoraClient {
      * (the leader's mirrored `"polling"` on a follower). Writes then go straight
      * over HTTP, as they do while connected, instead of queueing for a socket
      * that may never open.
+     *
+     * `idleClosed` is `true` for a shard whose socket this client closed because
+     * nothing used it (see {@link releaseIdleShard}). It was connected, so it
+     * stays queue-eligible (`wasEverConnected`), but its socket is not "down":
+     * a write is tried over HTTP first, as it went while the socket was open,
+     * and queued only if the network turns out to be unreachable.
      */
-    private connectionGateState(shardKey: string | undefined): { hasSocket: boolean; polling: boolean; wasEverConnected: boolean; wsState: WSState } {
+    private connectionGateState(shardKey: string | undefined): {
+        hasSocket: boolean;
+        idleClosed: boolean;
+        polling: boolean;
+        wasEverConnected: boolean;
+        wsState: WSState;
+    } {
         if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
             let wsState: WSState = "idle";
 
@@ -6180,15 +6320,17 @@ class LunoraClient {
                 wsState = "connecting";
             }
 
-            return { hasSocket: false, polling: this.leaderStatus === "polling", wasEverConnected: this.leaderWasEverConnected, wsState };
+            return { hasSocket: false, idleClosed: false, polling: this.leaderStatus === "polling", wasEverConnected: this.leaderWasEverConnected, wsState };
         }
 
         const conn = this.getConnection(shardKey);
+        const idleClosed = conn === undefined && this.idleClosedShards.has(connectionKey(shardKey));
 
         return {
             hasSocket: conn?.socket !== undefined,
+            idleClosed,
             polling: conn?.polling.isPolling() ?? false,
-            wasEverConnected: conn?.wasEverConnected ?? false,
+            wasEverConnected: conn?.wasEverConnected ?? idleClosed,
             wsState: conn?.wsState ?? "idle",
         };
     }
@@ -6229,7 +6371,9 @@ class LunoraClient {
                 shardKey,
                 socket: undefined,
                 stableTimer: undefined,
-                wasEverConnected: false,
+                // A shard reopened after an idle close was connected before: its
+                // writes stay queue-eligible while it reconnects.
+                wasEverConnected: this.idleClosedShards.delete(key),
                 wsState: "idle",
             };
 
@@ -6977,9 +7121,17 @@ class LunoraClient {
                     // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
                     conn.pendingUnsubscribes = [];
 
-                    for (const { id, type } of pending) {
-                        sendOn(conn, { id, type });
+                    for (const { durable, id, type } of pending) {
+                        // A durable stream's cancel that fails to send is kept for
+                        // the next reconnect: its run outlives the socket and only
+                        // this frame stops it. A plain unsubscribe needs no retry.
+                        if (!sendOn(conn, { id, type }) && durable === true) {
+                            conn.pendingUnsubscribes.push({ durable, id, type });
+                        }
                     }
+
+                    // Delivering them may leave nothing holding the shard open.
+                    this.releaseIdleShard(shardKey);
                 }
 
                 // Flush stream-start frames queued while we were (re)connecting.
@@ -7056,11 +7208,11 @@ class LunoraClient {
             // already flushes ahead of `pendingStreams` on open, so the teardown
             // lands before any resume that races it.
             if (!sendOn(conn, { id, type: "unsubscribe" }) && stream?.durable === true && stream.started) {
-                conn.pendingUnsubscribes.push({ id, type: "unsubscribe" });
+                conn.pendingUnsubscribes.push({ durable: true, id, type: "unsubscribe" });
             }
         }
 
-        this.streams.delete(id);
+        this.forgetStream(id);
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -7143,7 +7295,7 @@ class LunoraClient {
             }
 
             stream.handle.fail(new LunoraError("STREAM_DISCONNECTED", "stream terminated: WebSocket disconnected"));
-            this.streams.delete(id);
+            this.forgetStream(id);
         }
 
         if (this.WebSocketImpl === undefined) {
@@ -7544,7 +7696,7 @@ class LunoraClient {
 
         if (stream && id !== undefined) {
             stream.handle.fail(buildStreamError(message));
-            this.streams.delete(id);
+            this.forgetStream(id);
 
             return;
         }
@@ -8131,7 +8283,7 @@ class LunoraClient {
 
         if (stream) {
             stream.handle.complete();
-            this.streams.delete(id);
+            this.forgetStream(id);
 
             return;
         }
@@ -8884,6 +9036,8 @@ class LunoraClient {
         // one has already replaced it and must stay visible to the barrier.
         if (this.offlineFlushes.get(key) === flush) {
             this.offlineFlushes.delete(key);
+            // A drained queue may have been the last thing holding the shard open.
+            this.releaseIdleShard(shardKey);
         }
     }
 

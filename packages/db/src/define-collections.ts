@@ -6,7 +6,7 @@ import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnostic } from "@tanstack/offline-transactions";
 import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
-import { lunoraCollectionOptions } from "./collection-options";
+import { lunoraCollectionOptions, scopedShardKey } from "./collection-options";
 import type { OutboxMutationMetadata, Row, WriteProvenance } from "./internals";
 import {
     assertSecureRandom,
@@ -71,17 +71,26 @@ export interface CollectionDef<TList extends FunctionReference, TInput = never> 
      * `loading` on error, and forwards the error here if supplied.
      */
     onError?: (error: SubscriptionError) => void;
-    /** A field that scopes the list (e.g. a shard key); makes the collection re-pointable via `scope`. */
+
+    /**
+     * The table's `.shardBy(...)` column; makes the collection re-pointable via
+     * `scope`. Unless `shardKey` pins a shard, its value is the shard key:
+     * `scope({ channelId })` subscribes to that channel's shard, and each
+     * `insert` goes to the shard its own row's value names, captured when queued
+     * so an offline write replays there even after the app re-scopes. Scope args
+     * or an inserted row without the field throw.
+     */
     scopeBy?: string;
 
     /**
-     * Routes the `list` subscription (and the confirmed-mutation watermark its
-     * frames advance the checkpoint gate from) to a specific shard's DO — so a
-     * sharded collection's overlay gate compares against that shard's mutator
-     * sequence line, not the default ("") watermark bucket. `insert` writes are
-     * routed with it too, and to the shard that was set when the write was
-     * queued: subscriptions and the writes they observe have to land on the same
-     * Durable Object, and the server derives no shard from a mutation's args.
+     * Pins the `list` subscription (and the confirmed-mutation watermark its
+     * frames advance the checkpoint gate from) to one shard's DO — so a sharded
+     * collection's overlay gate compares against that shard's mutator sequence
+     * line, not the default ("") watermark bucket. `insert` writes are routed
+     * with it too: subscriptions and the writes they observe have to land on the
+     * same Durable Object, and the server derives no shard from a mutation's args.
+     * Takes precedence over `scopeBy`; leave it unset when the shard should
+     * follow the scope.
      */
     shardKey?: string;
 }
@@ -414,6 +423,11 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         if (insert) {
             mutationFns[name] = async ({ idempotencyKey, transaction }) => {
                 const meta = transaction.metadata as WriteProvenance | undefined;
+                // A scope-following write stamped with no shard was queued by an
+                // older build, which sent every such write to the default shard.
+                // Its row still names its real shard; its baseline, though, is the
+                // default shard's cursor, which means nothing on that shard.
+                const unrouted = meta !== undefined && meta.shardKey === undefined && definition.shardKey === undefined && definition.scopeBy !== undefined;
 
                 for (const [mutationIndex, mutation] of transaction.mutations.entries()) {
                     const row = mutation.modified as unknown as Row;
@@ -443,12 +457,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                                 // `null` pins "composed with no baseline"; omitting the
                                 // option entirely would sample the current cursor instead.
                                 // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: meta?.baselineSeq ?? null,
+                                replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
                                 // Sent with the bearer the verdict judged; under a cookie
                                 // session the worker also refuses the write if the cookie
                                 // now belongs to someone else.
                                 replayCredential,
-                                shardKey: meta?.shardKey,
+                                shardKey: unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey,
                             });
 
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
@@ -589,6 +603,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // `crypto.randomUUID` is undefined and a bare call would throw,
             // breaking every `db.actions.*` invocation.
             const id = safeRandomUUID();
+            const row = insert.optimistic(input, id);
+            // The shard the row lives in: an explicit `shardKey`, else — on a
+            // `scopeBy` collection — the row's own scoped value (NOT the current
+            // scope: a row for another channel belongs to that channel's shard).
+            const shardKey =
+                definition.shardKey ?? (definition.scopeBy === undefined ? undefined : scopedShardKey(definition.scopeBy, row, "the inserted row"));
             // Built from `createOfflineTransaction` rather than the executor's
             // `createOfflineAction`, which takes no `metadata`: the identity and
             // shard have to be captured HERE, while the issuing session is still
@@ -597,13 +617,13 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             // Captured HERE, with identity and shard, because this is the composing
             // moment — see `WriteProvenance.baselineSeq`.
             const metadata: WriteProvenance = {
-                baselineSeq: client.currentBaseline(definition.shardKey),
+                baselineSeq: client.currentBaseline(shardKey),
                 identity: client.currentIdentity(),
-                shardKey: definition.shardKey,
+                shardKey,
             };
             const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });
             const transaction = offline.mutate(() => {
-                collection.insert(insert.optimistic(input, id));
+                collection.insert(row);
             });
 
             // Commit explicitly (not via `autoCommit`, whose upstream failure
