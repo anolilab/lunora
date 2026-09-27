@@ -211,5 +211,5 @@ const findDanglingReferences = (sql: SqlExec, storageColumns: Record<string, str
     return accumulator;
 };
 
-export { DANGLING_RESULT_CAP, DANGLING_SCAN_CAP, findDanglingReferences };
+export { DANGLING_RESULT_CAP, findDanglingReferences };
 export type { DanglingReference, DanglingReferenceResult };

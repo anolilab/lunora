@@ -181,7 +181,7 @@ const resolveSpanOptions = (options: LogFields | SpanOptions | undefined): SpanO
 // local use in `MetricsDeps`/`TracerDeps` etc.) — `export…from` keeps the
 // single source of truth per `unicorn/prefer-export-from`.
 export type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-export type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
+export type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
 
 /**
  * Structural shape of the `ctx.trace` span factory (see the server
