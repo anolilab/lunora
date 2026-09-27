@@ -277,6 +277,28 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
+    it("leaves nothing behind when a job is cancelled mid-dispatch and the attempt fails", async () => {
+        expect.hasAssertions();
+
+        const stub = newStub("cancel-mid-dispatch");
+
+        await seedDue(stub, 1, "cancelled");
+
+        await runInDurableObject(stub, async (instance, state) => {
+            instance.setDispatchOk(false);
+            instance.setCancelDuringDispatch(true);
+
+            await instance.alarm();
+
+            // The failed attempt used to re-arm the job through the retry path,
+            // resurrecting it after `/cancel` answered `{ cancelled: true }`.
+            const rows = await state.storage.list({ prefix: "" });
+
+            expect([...rows.keys()].filter((key) => key.endsWith(":cancelled-0"))).toStrictEqual([]);
+            expect(instance.dispatched).toHaveLength(1);
+        });
+    });
+
     it("re-claims an expired lease at the key it is indexed under, leaving one entry", async () => {
         expect.hasAssertions();
 
