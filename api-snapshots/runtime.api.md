@@ -2283,7 +2283,7 @@ interface WorkerOptions {
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
     shardRegion?: (shardKey: string) => RegionHint | undefined;
-    storage?: (env: unknown) => unknown;
+    storage?: (env: unknown, origin?: string) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
     storageDownload?: StorageDownloadFunction;

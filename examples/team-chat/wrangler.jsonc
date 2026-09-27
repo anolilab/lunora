@@ -15,13 +15,10 @@
         // every message shard.
         { "binding": "DB", "database_name": "lunora-example-team-chat", "database_id": "<replace-with-d1-create-id>" },
     ],
+    // No storage base URL: the worker serves `/files/*` itself, and `.storage()`
+    // without a `publicBaseUrl` signs object URLs against the origin each request
+    // arrived on — the dev server, a preview and the deploy alike.
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "lunora-example-team-chat-files" }],
-    "vars": {
-        // Bare origin (no path) that signed object URLs resolve against. The
-        // worker serves `/files/*` itself, so this is its own origin — point it
-        // at the deployed worker (or an R2 custom domain) in production.
-        "PUBLIC_STORAGE_BASE_URL": "http://localhost:5173",
-    },
-    // `AUTH_SECRET` is a secret, not a var: it lives in `.dev.vars` locally and
-    // is pushed with `wrangler secret put AUTH_SECRET` for production.
+    // `AUTH_SECRET` and `STORAGE_SECRET` are secrets, not vars: they live in
+    // `.dev.vars` locally and are pushed with `wrangler secret put` for production.
 }

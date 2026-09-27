@@ -54,9 +54,23 @@ describe("emitApp — storage bucket factory", () => {
         // Default bucket signs as `"default"`; named buckets sign as their key —
         // `bucketName` is bound into the signed-URL HMAC canonical, so a bucket
         // signing under another's name lets a URL cross buckets.
-        expect(output).toContain('this.makeStorage(env, declaration, defaultBucket, "default")');
-        expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name);");
+        expect(output).toContain('this.makeStorage(env, declaration, defaultBucket, "default", origin)');
+        expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name, origin);");
         expect(output).toContain("buckets[name] = this.makeStorage(env, declaration, bucket, name);");
+    });
+
+    // A fixed `publicBaseUrl` binds signed URLs to one host (the HMAC covers it),
+    // so a value that is right in dev is wrong on every deploy. Undeclared, the
+    // base is the origin the request reached the worker on — on both the shard
+    // and the HTTP-action path. A declared one still wins.
+    it("falls back to the request origin when no publicBaseUrl is declared", () => {
+        expect.assertions(3);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain("publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,");
+        expect(output).toContain("storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin)");
+        expect(output).toContain("options.storage = (rawEnv: unknown, origin?: string) => this.resolveStorage(rawEnv as Env, origin);");
     });
 
     // `buckets` is a plain object literal, so `buckets[name] ?? fallbackStorage`

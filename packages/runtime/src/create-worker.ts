@@ -1440,8 +1440,11 @@ interface WorkerOptions {
      *
      * Distinct from the `storage*` options below, which are the admin-gated
      * studio file-browser ops, not the app surface.
+     *
+     * `origin` is the origin the request reached the worker on — the fallback
+     * base for signed object URLs when no `publicBaseUrl` is configured.
      */
-    storage?: (env: unknown) => unknown;
+    storage?: (env: unknown, origin?: string) => unknown;
 
     /**
      * Names of the storage buckets the studio's file browser offers in its bucket
@@ -2168,6 +2171,12 @@ const resolveForwardContext = async (
     if (clientIp) {
         headers["x-lunora-client-ip"] = clientIp;
     }
+
+    // The origin this request reached the worker on, read off the request URL
+    // (never a client header). A `.storage()` with no `publicBaseUrl` signs
+    // object URLs against it, so an action's URLs point back at the host that
+    // asked for them — in dev, in a preview and in production alike.
+    headers["x-lunora-origin"] = new URL(request.url).origin;
 
     if (!resolveIdentity) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -4170,7 +4179,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // where an action does, so this needs no shard hop. Absent (rather
             // than a throwing stub) when the app declared no `.storage()`, which
             // is what makes the optional `storage` on `HttpActionCtx` honest.
-            ...(options.storage === undefined ? {} : { storage: asBucketStorage(options.storage(env)) }),
+            ...(options.storage === undefined ? {} : { storage: asBucketStorage(options.storage(env, new URL(request.url).origin)) }),
         };
     };
 

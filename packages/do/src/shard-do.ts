@@ -845,6 +845,9 @@ interface RequestScope {
     mutationId: string | undefined;
     mutatorClass: ClientMutationClass | undefined;
 
+    /** The request's origin; in the scope for the same reason `ip` is. */
+    origin: string | undefined;
+
     /**
      * The propagated tail-bias toggle, travelling with `traceparent` below for
      * the same reason and with the same hazard: `buildCtx` hands both to
@@ -1890,6 +1893,16 @@ abstract class ShardDO {
      * the other per-request fields.
      */
     private currentRequestIp: string | undefined;
+
+    /**
+     * The origin the current `/rpc` request reached the worker on, forwarded by
+     * the runtime as `x-lunora-origin` (read off the request URL there, never a
+     * client header). `buildCtx` hands it to the storage factory as the fallback
+     * base for signed object URLs, so a `.storage()` with no `publicBaseUrl`
+     * signs against the host that asked. Cleared with the other per-request
+     * fields.
+     */
+    private currentRequestOrigin: string | undefined;
 
     /**
      * The caller's CDC baseline — the changelog cursor its view of the data was at
@@ -3481,6 +3494,16 @@ abstract class ShardDO {
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
+    }
+
+    /**
+     * The origin the current request reached the worker on, or `undefined` when
+     * none was forwarded (an alarm, a subscription re-run, a server-side
+     * `createShardClient` call). Like {@link ShardDO.getCurrentIp} it is
+     * per-dispatch state, so only the synchronous `/rpc` path may read it.
+     */
+    protected getCurrentOrigin(): string | undefined {
+        return this.currentRequestOrigin;
     }
 
     /**
@@ -7516,6 +7539,7 @@ abstract class ShardDO {
             ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
             mutatorClass: this.currentMutatorClass,
+            origin: this.currentRequestOrigin,
             sampleErrors: this.currentRequestSampleErrors,
             system: this.currentRequestSystem,
             trace: this.currentRequestTrace,
@@ -7540,6 +7564,7 @@ abstract class ShardDO {
         this.currentRequestClientSeq = scope.clientSeq;
         this.currentRequestIdentity = scope.identity;
         this.currentRequestIp = scope.ip;
+        this.currentRequestOrigin = scope.origin;
         this.currentRequestMutationId = scope.mutationId;
         this.currentMutatorClass = scope.mutatorClass;
         this.currentRequestSampleErrors = scope.sampleErrors;
@@ -9319,6 +9344,7 @@ abstract class ShardDO {
         this.currentRequestClientSeq = undefined;
         this.currentRequestBaselineSeq = undefined;
         this.currentRequestIp = undefined;
+        this.currentRequestOrigin = undefined;
         this.currentRequestMutationId = undefined;
         this.currentMutatorClass = undefined;
         this.mutationBookkeeping = undefined;
@@ -12489,6 +12515,7 @@ abstract class ShardDO {
         // handlers/middleware can key on it (e.g. rate-limit unauthenticated
         // traffic by IP).
         this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
+        this.currentRequestOrigin = request.headers.get("x-lunora-origin") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
         // The runtime's tail-bias toggle, read ONCE here. Two consumers: the
@@ -12570,6 +12597,7 @@ abstract class ShardDO {
         this.mutationBookkeeping = undefined;
         this.currentRequestIdentity = undefined;
         this.currentRequestIp = undefined;
+        this.currentRequestOrigin = undefined;
         this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;

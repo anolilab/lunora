@@ -80,7 +80,8 @@ export interface ShardDOConfig {
     observability?: (env: Record<string, unknown>) => TelemetrySink | undefined;
     /** `unknown` because `@lunora/scheduler`'s `Scheduler` is not assignable to `SchedulerLike`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;
+    /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
+    storage?: (env: Record<string, unknown>, origin?: string) => unknown;
     d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
@@ -945,7 +946,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // them would forfeit resumes for a dependency that cannot move the result.
             // `bucket` IS stamped: it hands back a sub-facade this wrapper does not
             // reach, so the selection is the last point at which the read can be seen.
-            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+            //
+            // The request origin rides along only on the synchronous dispatch
+            // (`options.identity` unset): a deferred caller runs outside the
+            // dispatch that owns the field, the same hazard `getCurrentIp` has.
+            const requestOrigin = options.identity === undefined ? this.getCurrentOrigin() : undefined;
+            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env, requestOrigin) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
                 "bucket",
                 "download",
                 "getMetadata",
