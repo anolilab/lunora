@@ -79,7 +79,6 @@ import {
     foldAggregateTally,
     hasTrigger,
     isPushableWhere,
-    literalInList,
     matchesRankStaticWhere,
     matchesStaticWhere,
     mergeWhere,
@@ -103,6 +102,7 @@ import {
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
+    serverInList,
     softDeleteScope,
     sortColumnName,
     stripReservedPatchFields,
@@ -579,6 +579,21 @@ const bindList = (values: ReadonlyArray<unknown>): SQL =>
         sql`, `,
     );
 
+/**
+ * A rank-table value in a form every driver binds as the BLOB it came from. A
+ * `v.bytes()` sort key is read back as `number[]` from the D1 binding and as an
+ * `ArrayBuffer` from a decoded cursor; bound as-is, drizzle expands the array
+ * into a value list and node:sqlite refuses the buffer. Sort columns hold no
+ * other array — `sqliteEncode` stores arrays as JSON text.
+ */
+const bindableRankValue = (value: unknown): unknown => {
+    if (value instanceof ArrayBuffer) {
+        return new Uint8Array(value);
+    }
+
+    return Array.isArray(value) ? Uint8Array.from(value as number[]) : value;
+};
+
 const buildRankBeforeBranches = (
     engine: SqlDialect["name"],
     index: RankIndexDefinitionLike,
@@ -598,7 +613,9 @@ const buildRankBeforeBranches = (
         // `__id__` tiebreak closes the tuple and is never NULL.
         const isSortPivot = pivot < sortColumns.length && column !== undefined && sortKey !== undefined;
         const direction = sortKey?.direction === "desc" ? "desc" : "asc";
-        const pivotCondition = isSortPivot ? rankPivotConditionSql(column, own[column], direction, false) : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
+        const pivotCondition = isSortPivot
+            ? rankPivotConditionSql(column, bindableRankValue(own[column]), direction, false)
+            : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
 
         if (pivotCondition === undefined) {
             continue;
@@ -606,7 +623,7 @@ const buildRankBeforeBranches = (
 
         const conditions: SQL[] = sortColumns
             .slice(0, pivot)
-            .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, own[prefixColumn]));
+            .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, bindableRankValue(own[prefixColumn])));
 
         conditions.push(pivotCondition);
 
@@ -640,7 +657,7 @@ const buildRankCursorSeek = (
     for (const [pivot, col] of columns.entries()) {
         // Shared with the DO twin — see `rankPivotConditionSql` for why a bare
         // `>`/`<` at the pivot drops every row once a sort column holds NULL.
-        const pivotCondition = rankPivotConditionSql(col.column, decoded[pivot], col.direction, true);
+        const pivotCondition = rankPivotConditionSql(col.column, bindableRankValue(decoded[pivot]), col.direction, true);
 
         if (pivotCondition === undefined) {
             continue;
@@ -655,7 +672,7 @@ const buildRankCursorSeek = (
                 continue;
             }
 
-            conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, decoded[prefix]));
+            conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, bindableRankValue(decoded[prefix])));
         }
 
         conditions.push(pivotCondition);
@@ -762,7 +779,13 @@ const hydrateRankRows = async (
  * did, and only the rank pagination test caught it.
  */
 const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
-    const json = JSON.stringify(cursorValues);
+    // A `v.bytes()` sort key is a BLOB, which reaches here in whatever shape the
+    // driver hands back (`number[]` from the D1 binding, a view elsewhere) and
+    // has no JSON form: the array was later bound as a list, the view stringified
+    // to `{}`, and either way the next page restarted from the first. Normalised
+    // to an `ArrayBuffer` and wire-tagged, `decodeCursor` restores it.
+    const values = cursorValues.map((value) => sqliteDecode(value, "bytes"));
+    const json = JSON.stringify(needsWireEncoding(values) ? encodeWire(values) : values);
     const bytes = new TextEncoder().encode(json);
     let binary = "";
 
@@ -1444,8 +1467,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // The compiler defaults `inList` to SQLite's bounded `json_each` form,
         // because D1 is the same Workerd build as a Durable Object and caps a
         // statement at 100 bound parameters. The other two engines bind
-        // thousands and have no `json_each`, so they take the literal list.
-        ...(dialect.name === "sqlite" ? {} : { inList: literalInList }),
+        // thousands and have no `json_each`, so they take a literal list up to
+        // a bound and one array/JSON parameter past it.
+        ...(dialect.name === "sqlite" ? {} : { inList: serverInList(dialect.name) }),
     };
 
     /** One `WhereSqlStrategy` per table definition — see {@link whereSqlStrategyFor}. Definitions come from `defineSchema` and never mutate, so the entry is valid for the ctx-db's life. */

@@ -19,7 +19,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
-import { WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { isJsonSafe, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import type { WhereFragments } from "./where-fragments";
 import { drizzleFragments } from "./where-fragments";
 import type { FieldOperators, WhereInput } from "./where-types";
@@ -220,15 +220,64 @@ const compileInList = <T>(
     return strategy.inList ? strategy.inList(reference, serialized, negated) : fragments.inList(reference, serialized, negated, IN_LIST_DEFAULT_BUDGET);
 };
 
-/** The `IN` / `NOT IN` rendering a dialect with no bounded list form uses: one bound placeholder per item. */
-const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
-    const list = sql.join(
-        items.map((item) => sql`${item}`),
-        sql`, `,
-    );
+/**
+ * Longest list Postgres and MySQL get as a literal `IN (?, ?, …)`.
+ *
+ * Both engines cap one statement at 65,535 bound parameters, so a literal list
+ * past that failed outright — "bind message has … parameter formats but 0
+ * parameters" on Postgres, "too many placeholders" on MySQL — where D1 took the
+ * same filter as one `json_each` parameter. Well under the cap, so a few wide
+ * lists in one `where` still fit beside each other.
+ */
+const SERVER_IN_LIST_LITERAL_MAX = 10_000;
 
-    return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
-};
+/**
+ * The `IN` / `NOT IN` rendering for Postgres and MySQL: one placeholder per
+ * item up to {@link SERVER_IN_LIST_LITERAL_MAX}, and past it the whole list as
+ * ONE bound parameter, the way SQLite's `json_each` form carries it.
+ *
+ * Postgres binds it as an array: `= ANY($1)` is the membership test Postgres
+ * rewrites a literal `IN` list into anyway, and `<> ALL($1)` its complement
+ * with the same NULL semantics as `NOT IN`.
+ *
+ * MySQL has no array parameter, so the list travels as a JSON array and is
+ * tested with `MEMBER OF`. JSON cannot carry every value (see `isJsonSafe`), so
+ * such a list is refused rather than bound as something else, and a `NOT IN`
+ * list holding NULL keeps SQL's rule — it matches no row — which
+ * `NOT … MEMBER OF` alone would not.
+ */
+const serverInList =
+    (engine: "mysql" | "postgres") =>
+    (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
+        if (items.length <= SERVER_IN_LIST_LITERAL_MAX) {
+            const list = sql.join(
+                items.map((item) => sql`${item}`),
+                sql`, `,
+            );
+
+            return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
+        }
+
+        if (engine === "postgres") {
+            return negated ? sql`${reference} <> ALL(${sql.param(items)})` : sql`${reference} = ANY(${sql.param(items)})`;
+        }
+
+        if (!items.every((item) => isJsonSafe(item))) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `an "in" list of ${String(items.length)} values holds a value JSON cannot carry (bytes, a non-finite number, or malformed text), so it cannot be bound as one parameter on MySQL. Narrow the list to ${String(SERVER_IN_LIST_LITERAL_MAX)} values or fewer.`,
+            );
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL in the bound list, not a JS absence
+        if (negated && items.includes(null)) {
+            return sql`1 = 0`;
+        }
+
+        const members = sql`${reference} MEMBER OF (CAST(${JSON.stringify(items)} AS JSON))`;
+
+        return negated ? sql`NOT (${members})` : members;
+    };
 
 const compileFieldOperators = <T>(field: string, reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const record = operators as Record<string, unknown>;
@@ -493,5 +542,5 @@ export const compileWhereSql = <T = SQL>(
     return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) }, fragments);
 };
 
-export { literalInList };
+export { serverInList };
 export type { WhereSqlStrategy };

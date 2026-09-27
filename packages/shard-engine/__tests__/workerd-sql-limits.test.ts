@@ -1,3 +1,6 @@
+import { Buffer } from "node:buffer";
+import { DatabaseSync } from "node:sqlite";
+
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -7,6 +10,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import { runSql } from "../src/do-exec";
 import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "../src/drizzle";
 import { buildSeekBeforeWhere, buildSeekWhere } from "../src/query-args";
+import { rawText, textFragments } from "../src/where-fragments";
 import { compileWhereSql } from "../src/where-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -197,6 +201,40 @@ describe("bound-parameter cap", () => {
 
         expect(params).toStrictEqual(items);
         expect(text).not.toContain("json_each");
+    });
+
+    it.each([
+        ["in", false],
+        ["notIn", true],
+    ])("carries a wide `%s` of bytes as one hex parameter that matches the same BLOBs", (operator, negated) => {
+        expect.assertions(4);
+
+        const items = Array.from({ length: 60 }, (_, index) => new Uint8Array([index, 255]));
+        const { params, sql: text } = renderSql("sqlite", compileWhereSql({ blob: { [operator]: items } }, strategy)!);
+        const asText = compileWhereSql(
+            { blob: { [operator]: items } },
+            { fieldRef: (field) => rawText(`"${field}"`), serialize: (value: unknown) => value },
+            textFragments,
+        );
+
+        expect(text).toBe(`"blob"${negated ? " NOT IN " : " IN "}(SELECT unhex("value") FROM json_each(?))`);
+        // The Durable Object's text builder emits the same statement.
+        expect({ params: asText?.params, sql: asText?.text }).toStrictEqual({ params, sql: text });
+
+        const database = new DatabaseSync(":memory:");
+
+        try {
+            database.exec("CREATE TABLE b (blob BLOB)");
+            database.prepare("INSERT INTO b VALUES (?), (?), (NULL)").run(new Uint8Array([7, 255]), new Uint8Array([200]));
+
+            const rows = database.prepare(`SELECT hex(blob) AS h FROM b WHERE ${text}`).all(...(params as never[]));
+
+            // `[7, 255]` is in the list, `[200]` is not, and NULL matches neither form.
+            expect(rows).toEqual(negated ? [{ h: "C8" }] : [{ h: "07FF" }]);
+            expect(params).toStrictEqual([JSON.stringify(items.map((item) => Buffer.from(item).toString("hex")))]);
+        } finally {
+            database.close();
+        }
     });
 
     it("refuses an over-budget list it can neither bind as one parameter nor fit as placeholders", () => {

@@ -173,8 +173,42 @@ const untypedStorageForm = (value: unknown, kind: string | undefined): string | 
     return typeof value === "boolean" ? WIRE_PREFIX + JSON.stringify(value) : undefined;
 };
 
+/** A stored BLOB, in whichever shape the driver handed it back, as the `ArrayBuffer` `v.bytes()` validates. */
+const decodeBytes = (raw: unknown): unknown => {
+    if (raw instanceof ArrayBuffer) {
+        return raw;
+    }
+
+    if (ArrayBuffer.isView(raw)) {
+        // Copy through an owned Uint8Array rather than `raw.buffer.slice(...)`:
+        // both narrow to the view's own window — a Buffer is a view over a
+        // shared pool, so an unsliced `.buffer` would leak unrelated pool
+        // bytes — but `.slice()` on the BUFFER preserves its species, handing
+        // back a SharedArrayBuffer for a shared-memory-backed view. `v.bytes()`
+        // validates `instanceof ArrayBuffer`, so that would still fail.
+        return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength).slice().buffer;
+    }
+
+    // The D1 binding's BLOB shape. Passing it through handed callers a
+    // `number[]` their own validator rejects, so a read-modify-write threw and
+    // a keyset cursor over the column never advanced.
+    return Array.isArray(raw) ? Uint8Array.from(raw as number[]).buffer : raw;
+};
+
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown, kind?: string): unknown => {
+    // Postgres TEXT cannot hold U+0000 at all and raised a raw driver error
+    // ("invalid byte sequence … 0x00") for a value SQLite and MySQL stored. A
+    // `.global()` table may move between those engines, so the value is refused
+    // the same way on every one of them, before it reaches any. A NUL nested in
+    // an object or array is unaffected: it is stored as JSON's `\u0000` escape.
+    if (typeof value === "string" && value.includes("\0")) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            "a .global() table cannot store or match a string containing a NUL character (U+0000): Postgres cannot hold one, so no engine accepts it",
+        );
+    }
+
     const untyped = untypedStorageForm(value, kind);
 
     if (untyped !== undefined) {
@@ -315,9 +349,12 @@ export const effectiveColumnKind = (validator: ValidatorLike): string | undefine
  * - `bigint`: decimal string → `BigInt`.
  * - `bytes`: normalizes any driver return shape to a genuine `ArrayBuffer` — a
  *   view (`Uint8Array`/`Buffer`/…) is sliced to its own byte window, a plain
- *   `ArrayBuffer` passes through. Required because `v.bytes()` validates
+ *   `ArrayBuffer` passes through, and an array of byte values is packed into a
+ *   fresh buffer. Required because `v.bytes()` validates
  *   `value instanceof ArrayBuffer` and different backends return different BLOB
- *   shapes (workerd D1 `ArrayBuffer`, node:sqlite `Uint8Array`, pg/mysql2 `Buffer`).
+ *   shapes: the D1 binding `Array<number>`, workerd's raw SQLite `ArrayBuffer`,
+ *   node:sqlite `Uint8Array`, pg/mysql2 `Buffer`. The D1 one is the shape only a
+ *   real binding produces, so the array case has its test in the workerd suite.
  * - `object`/`array`/`record`/`geoPoint`: JSON string → parsed value. `geoPoint`
  *   belongs here because {@link sqliteEncode} keys off the runtime JS type and
  *   stores the `{ lat, lng }` object as JSON in a TEXT column; without the case
@@ -410,21 +447,7 @@ export const sqliteDecode = (raw: unknown, kind: string | undefined): unknown =>
             return raw === 0 || raw === 1 ? raw === 1 : raw;
         }
         case "bytes": {
-            if (raw instanceof ArrayBuffer) {
-                return raw;
-            }
-
-            if (ArrayBuffer.isView(raw)) {
-                // Copy through an owned Uint8Array rather than `raw.buffer.slice(...)`:
-                // both narrow to the view's own window — a Buffer is a view over a
-                // shared pool, so an unsliced `.buffer` would leak unrelated pool
-                // bytes — but `.slice()` on the BUFFER preserves its species, handing
-                // back a SharedArrayBuffer for a shared-memory-backed view. `v.bytes()`
-                // validates `instanceof ArrayBuffer`, so that would still fail.
-                return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength).slice().buffer;
-            }
-
-            return raw;
+            return decodeBytes(raw);
         }
         default: {
             return raw;

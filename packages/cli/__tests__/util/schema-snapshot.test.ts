@@ -1,7 +1,7 @@
 import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
 import { describe, expect, it } from "vitest";
 
-import { renderCreateTable } from "../../src/util/migration-diff";
+import { diffSnapshots, renderCreateTable } from "../../src/util/migration-diff";
 import schemaIrToSnapshot from "../../src/util/schema-snapshot";
 
 const field = (kind: string, column?: { notNull: boolean }): ValidatorIR => (column ? { column, kind } : { kind });
@@ -60,6 +60,45 @@ describe("schemaIrToSnapshot", () => {
         const snapshot = schemaIrToSnapshot(schema({ title: { inner: field("string", { notNull: true }), kind: "optional" } }));
 
         expect(snapshot.tables["posts"]?.columns["title"]?.nullable).toBe(true);
+    });
+
+    it("emits no NOT NULL for a required kind that accepts null", () => {
+        expect.assertions(2);
+
+        const required = { notNull: true };
+        const snapshot = schemaIrToSnapshot(
+            schema({
+                anything: field("any", required),
+                literalNull: { column: required, kind: "literal", literalValue: "null" },
+                note: { column: required, kind: "union", members: [field("string"), field("null")] },
+                onlyNull: field("null", required),
+                // Neither member accepts null, so the constraint stays.
+                either: { column: required, kind: "union", members: [field("string"), field("number")] },
+            }),
+        );
+        const table = snapshot.tables["posts"]!;
+
+        expect(Object.fromEntries(Object.entries(table.columns).map(([name, column]) => [name, column.nullable]))).toStrictEqual({
+            anything: true,
+            either: false,
+            literalNull: true,
+            note: true,
+            onlyNull: true,
+        });
+        expect(renderCreateTable(table)).toContain('"either" TEXT NOT NULL');
+    });
+
+    it("points a relaxed column on an existing table at the rebuild recipe", () => {
+        expect.assertions(1);
+
+        const before = schemaIrToSnapshot(schema({ note: field("string", { notNull: true }) }));
+        const after = schemaIrToSnapshot(schema({ note: { column: { notNull: true }, kind: "union", members: [field("string"), field("null")] } }));
+
+        expect(diffSnapshots(before, after).unsupported.map((entry) => entry.summary)).toContainEqual(
+            expect.stringMatching(
+                /nullability change on posts\.note: NOT NULL → NULL \(rebuild the table — https:\/\/lunora\.sh\/docs\/concepts\/migrations#relaxing-not-null-on-a-d1-table\)/u,
+            ),
+        );
     });
 
     it("marks `v.optional(v.string().nullable())` nullable", () => {

@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
+import backendParityCases from "./_helpers/backend-parity-cases";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
 import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
 import rlsSearchCases from "./_helpers/rls-search-cases";
@@ -107,6 +108,28 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness.query("DROP TABLE IF EXISTS `__rank_todos_bySeq`");
         await harness.query("DROP TABLE IF EXISTS `__cdc_log`");
         await harness.query("DROP TABLE IF EXISTS `__cdc_sweep`");
+        await harness.query("DROP TABLE IF EXISTS `nullables`");
+        await harness.query("DROP TABLE IF EXISTS `wide`");
+    });
+
+    describe("values every engine must treat alike", () => {
+        it.each(
+            backendParityCases({
+                setup: async (schema) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);
+
+                    return writerFor(schema);
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            TEST_TIMEOUT * 4,
+        );
     });
 
     afterAll(async () => {

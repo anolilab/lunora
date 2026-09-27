@@ -10,6 +10,7 @@
 import type { FieldSnapshot, SchemaIR, ValidatorIR } from "@lunora/codegen";
 import { buildSchemaSnapshot, isD1GlobalTable } from "@lunora/codegen";
 
+import { irAcceptsNull } from "../../../../shared/accepts-null";
 import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff";
 import { validatorKindToSqlType } from "./migration-diff";
 
@@ -37,9 +38,13 @@ const sqlTypeOf = (validator: ValidatorIR): ColumnSnapshot["sqlType"] =>
  * modifier attaches to whichever node the chain was applied to). Absent only for
  * a field the structural snapshot did not record, where `v.optional` is all
  * there is to go on.
+ *
+ * A kind that accepts null without `.nullable()` — `v.any()`, `v.null()`,
+ * `v.literal(null)`, a union with one of those as a member — is nullable too,
+ * by the one rule the runtime provisioner reads (`shared/accepts-null.ts`).
  */
 const isNullable = (validator: ValidatorIR, field: FieldSnapshot | undefined): boolean => {
-    if (validator.kind === "optional") {
+    if (validator.kind === "optional" || irAcceptsNull(validator)) {
         return true;
     }
 

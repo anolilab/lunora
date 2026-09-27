@@ -22,6 +22,7 @@ import { aggregateTableName, rankTableName, renderSql, sortColumnName } from "@l
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import type { SqlDialect } from "./dialect";
 import type { SqlCtxExec } from "./sql-exec";
 import { columnRefSql, createIndexIfNotExists, OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryBatch, queryRun, tableColumns } from "./sql-exec";
@@ -105,6 +106,10 @@ const assertIndexableUniqueIndexes = (tableName: string, definition: SchemaLike[
     }
 };
 
+/** Does `validator`'s column get `NOT NULL`? Shared with {@link relaxNullAcceptingColumns}, which repairs tables provisioned before null-accepting kinds were exempt. */
+const requiresNotNull = (validator: ValidatorLike): boolean =>
+    validator._meta?.column?.notNull === true && validator.kind !== "optional" && !validatorAcceptsNull(validator);
+
 /** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
 const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
     const fieldColumns: SQL[] = [];
@@ -116,8 +121,11 @@ const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables
         }
 
         // Required, non-optional fields get NOT NULL; optional ones stay nullable
-        // so an insert that omits them can't trip a constraint.
-        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
+        // so an insert that omits them can't trip a constraint. So do the kinds
+        // that accept null while keeping the default `notNull` flag — `v.any()`,
+        // `v.null()`, `v.literal(null)`, a union with one of those as a member:
+        // NOT NULL there refused the value the validator had just accepted.
+        const notNull = requiresNotNull(validator) ? " NOT NULL" : "";
 
         fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect, fullValueFields.has(field))}${notNull}`)}`);
     }
@@ -855,6 +863,60 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
 };
 
 /**
+ * Drop `NOT NULL` from the columns of an existing table whose validator accepts
+ * null — the constraint every table provisioned before those kinds were exempt
+ * still carries, so `insert({ note: null })` kept raising a raw constraint error
+ * there after the DDL was fixed.
+ *
+ * Postgres and MySQL only. Each can relax a column in place, and the catalog
+ * probe that gates it is one `information_schema` read, made only for a table
+ * that declares such a column at all. SQLite cannot drop a column constraint
+ * without rebuilding the table, which is not something to do unasked on every
+ * cold start: a D1 table keeps the constraint until it is rebuilt by hand (see
+ * the global-tables migration guide), and `lunora migrate generate` reports the
+ * nullability change so the step is not missed.
+ */
+const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+    if (dialect.name === "sqlite") {
+        return;
+    }
+
+    // Exactly the columns the fixed DDL leaves nullable where the old rule did not.
+    const candidates = Object.entries(definition.shape).filter(
+        ([, validator]) => validator._meta?.column?.notNull === true && validator.kind !== "optional" && validatorAcceptsNull(validator),
+    );
+
+    if (candidates.length === 0) {
+        return;
+    }
+
+    const schemaScope = dialect.name === "postgres" ? sql`table_schema = ANY (current_schemas(false))` : sql`table_schema = DATABASE()`;
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT column_name AS ${sql.identifier("name")} FROM information_schema.columns WHERE ${schemaScope} AND table_name = ${tableName} AND is_nullable = 'NO' AND column_name IN (${sql.join(
+            candidates.map(([field]) => sql`${field}`),
+            sql`, `,
+        )})`,
+    );
+    const constrained = new Set(rows.map((row) => String(row["name"])));
+
+    for (const [field, validator] of candidates) {
+        if (!constrained.has(field)) {
+            continue;
+        }
+
+        const alter =
+            dialect.name === "postgres"
+                ? sql`ALTER TABLE ${sql.identifier(tableName)} ALTER COLUMN ${sql.identifier(field)} DROP NOT NULL`
+                : sql`ALTER TABLE ${sql.identifier(tableName)} MODIFY COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect, fullValueIndexedFields(definition).has(field)))} NULL`;
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
+        await queryRun(exec, dialect, alter);
+    }
+};
+
+/**
  * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
  * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
  * declared field, then its secondary and `.unique()` indexes. This is the D1
@@ -880,6 +942,8 @@ const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike,
         await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; the table must carry every declared column before its indexes reference them.
         await alterGlobalTableDrift(exec, tableName, definition, dialect);
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the same connection.
+        await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
         await createGlobalTableIndexes(exec, tableName, definition, dialect);
         // eslint-disable-next-line no-await-in-loop -- runs on the same connection, after the columns exist.

@@ -37,7 +37,7 @@ import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { isJsonSafe, sqliteInList } from "./drizzle";
+import { bytesAsHexJson, isJsonSafe, sqliteInList } from "./drizzle";
 
 /** A rendered SQL fragment: text, plus the values its `?` placeholders bind, in order. */
 interface TextFragment {
@@ -137,10 +137,17 @@ const textFragments: WhereFragments<TextFragment> = {
     inList: (reference, items, negated, budget) => {
         const keyword = negated ? " NOT IN " : " IN ";
 
+        const jsonSafe = items.every((item) => isJsonSafe(item));
+        const hexList = items.length > budget && !jsonSafe ? bytesAsHexJson(items) : undefined;
+
+        if (hexList !== undefined) {
+            return joinText(reference, keyword, '(SELECT unhex("value") FROM json_each(', bound(hexList), "))");
+        }
+
         // Refuses exactly what `sqliteInList` refuses, with the same message: a
         // list too wide to bind as placeholders whose values JSON cannot carry
         // has no bounded form, and silently truncating it would drop matches.
-        if (items.length > budget && !items.every((item) => isJsonSafe(item))) {
+        if (items.length > budget && !jsonSafe) {
             throw new LunoraError(
                 "BAD_REQUEST",
                 `an "in" list of ${String(items.length)} values holds a value JSON cannot carry (bytes, a non-finite number, or malformed text), so it cannot be bound as one parameter — and ${String(items.length)} placeholders exceed SQLite's per-statement cap of 100 on Durable Objects and D1. Narrow the list to ${String(budget)} values or fewer.`,
