@@ -120,5 +120,4 @@ const describeAdminTokenSource = (source: AdminTokenSource | undefined): string 
     return source === "env" ? ADMIN_TOKEN_KEY : DEV_VARS_FILE;
 };
 
-export type { AdminTokenSource, ResolveAdminTokenInputs, ResolvedAdminToken };
-export { describeAdminTokenSource, isLoopbackTarget, resolveAdminBearer, targetsRemoteWorker };
+export { describeAdminTokenSource, resolveAdminBearer, targetsRemoteWorker };

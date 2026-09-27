@@ -640,7 +640,6 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     return { ok: true };
 };
 
-export type { ConfirmOutcome };
 export {
     applyDeps,
     applyItemResources,

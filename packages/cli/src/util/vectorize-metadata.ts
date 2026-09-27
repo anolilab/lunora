@@ -147,5 +147,5 @@ const ensureVectorMetadataIndexes = async (inputs: {
     return results;
 };
 
-export type { VectorMetadataIndex, VectorMetadataResult, VectorMetadataType };
+export type { VectorMetadataIndex };
 export { createMetadataIndexArgs, ensureVectorMetadataIndexes, metadataTypeFor };

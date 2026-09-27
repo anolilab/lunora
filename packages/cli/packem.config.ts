@@ -29,7 +29,7 @@ export default defineConfig({
     validation: {
         dependencies: {
             unused: {
-                exclude: ["@bomb.sh/tab", "cfonts", "react-reconciler"],
+                exclude: ["@bomb.sh/tab", "react-reconciler"],
             },
             hoisted: {
                 exclude: ["@visulima/interactive-manager", "@visulima/is-ansi-color-supported"],

@@ -150,4 +150,4 @@ const readImportSourceMapping = async (cwd: string, source: "firebase" | "supaba
 };
 
 export type { ImportSourceMapping, TableMapping };
-export { mappingFileFor, parseImportSourceMapping, readImportSourceMapping };
+export { mappingFileFor, readImportSourceMapping };

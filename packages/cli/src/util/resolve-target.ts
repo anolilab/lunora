@@ -87,5 +87,4 @@ const resolveProductionWorkerUrl = ({ cwd, prod, url }: ResolveProductionWorkerU
     return link.workerUrl;
 };
 
-export type { ResolveProductionWorkerUrlInputs, ResolveWorkerUrlInputs };
 export { resolveProductionWorkerUrl, resolveWorkerUrl };

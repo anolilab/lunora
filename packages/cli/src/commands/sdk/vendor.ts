@@ -316,4 +316,3 @@ const writeStamp = (outputDirectory: string, language: string, result: VendorRes
 };
 
 export { STAMP_FILE, vendorTransport, writeStamp };
-export type { VendorResult };

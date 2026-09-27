@@ -213,5 +213,4 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
     };
 };
 
-export type { R2DestinationOptions };
 export { createR2Destination, temporaryFileName };

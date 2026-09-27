@@ -55,4 +55,4 @@ const promptDatabaseName = async (text: TextPrompt, projectName: string): Promis
 const withAuthDatabaseName = (manifest: RegistryManifest, name: string): RegistryManifest =>
     setBindingField(manifest, "d1_databases", { key: "binding", value: DB_BINDING }, "database_name", name);
 
-export { AUTH_DB_PROMPT, deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName };
+export { deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName };

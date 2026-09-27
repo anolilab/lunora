@@ -138,5 +138,5 @@ const probeHealth = async ({
     return result;
 };
 
-export type { HealthFetch, HealthProbeInputs, HealthProbeResult };
+export type { HealthFetch };
 export { HEALTH_PATH, HEALTH_READY_PATH, joinHealthUrl, probeHealth };

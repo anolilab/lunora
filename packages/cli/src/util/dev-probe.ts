@@ -95,4 +95,4 @@ const defaultProbe = async (origin: string, signal?: AbortSignal): Promise<boole
 };
 
 export type { ReadinessProbe };
-export { ATTEMPT_TIMEOUT_MS, DEFAULT_READY_TIMEOUT_MS, defaultProbe, POLL_INTERVAL_MS, READY_TIMEOUT_ENV, resolveReadyTimeoutMs };
+export { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs };

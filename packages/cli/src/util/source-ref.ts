@@ -370,7 +370,6 @@ export {
     resolvePinnedRepoRef,
     resolvePinnedSourceRef,
     resolveSourceRef,
-    resolveTagVersion,
     resolveTagVersions,
     resolveVersionRef,
 };

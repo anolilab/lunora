@@ -127,9 +127,6 @@ catalogs:
     '@visulima/tui-kit':
       specifier: 1.0.10
       version: 1.0.10
-    cfonts:
-      specifier: ^3.3.1
-      version: 3.3.1
     giget:
       specifier: 3.3.1
       version: 3.3.1
@@ -2887,9 +2884,6 @@ importers:
       adm-zip:
         specifier: '>=0.6.0'
         version: 0.6.0
-      cfonts:
-        specifier: catalog:cli
-        version: 3.3.1
       csv-parse:
         specifier: catalog:prod
         version: 7.0.2
@@ -38474,6 +38468,7 @@ snapshots:
     dependencies:
       supports-color: 8.1.1
       window-size: 1.1.1
+    optional: true
 
   chai@6.2.2: {}
 
@@ -39305,6 +39300,7 @@ snapshots:
   define-property@1.0.0:
     dependencies:
       is-descriptor: 1.0.4
+    optional: true
 
   defu@6.1.7: {}
 
@@ -42056,6 +42052,7 @@ snapshots:
   is-accessor-descriptor@1.0.2:
     dependencies:
       hasown: 2.0.4
+    optional: true
 
   is-alphabetical@2.0.1: {}
 
@@ -42113,6 +42110,7 @@ snapshots:
   is-data-descriptor@1.0.1:
     dependencies:
       hasown: 2.0.4
+    optional: true
 
   is-data-view@1.0.2:
     dependencies:
@@ -42131,6 +42129,7 @@ snapshots:
     dependencies:
       is-accessor-descriptor: 1.0.2
       is-data-descriptor: 1.0.1
+    optional: true
 
   is-docker@2.2.1: {}
 
@@ -42193,6 +42192,7 @@ snapshots:
   is-number@3.0.0:
     dependencies:
       kind-of: 3.2.2
+    optional: true
 
   is-number@7.0.0: {}
 
@@ -42554,6 +42554,7 @@ snapshots:
   kind-of@3.2.2:
     dependencies:
       is-buffer: 1.1.6
+    optional: true
 
   kind-of@6.0.3: {}
 
@@ -48712,6 +48713,7 @@ snapshots:
     dependencies:
       define-property: 1.0.0
       is-number: 3.0.0
+    optional: true
 
   winston-transport@4.9.0:
     dependencies:

@@ -85,5 +85,5 @@ const buildRegistryIndex = (root: string): { items: IndexItem[] } => {
     return { items };
 };
 
-export type { CatalogItem, IndexItem };
-export { buildRegistryIndex, collectCatalog, listItemDirectories };
+export type { CatalogItem };
+export { buildRegistryIndex, collectCatalog };

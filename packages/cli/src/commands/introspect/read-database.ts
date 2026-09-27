@@ -215,4 +215,4 @@ const readDatabase = async (execute: SqlExecutor, dialect: SqlDialect, schema: s
 };
 
 export type { SqlExecutor };
-export { assembleIndexes, groupByTable, readDatabase, resolveType };
+export { readDatabase, resolveType };

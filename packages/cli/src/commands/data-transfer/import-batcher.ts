@@ -181,5 +181,5 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     return { flush, push, totals };
 };
 
-export type { AdminImportResponse, ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals };
-export { createImportBatcher, PARTIAL_IMPORT_STATUS };
+export type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals };
+export { createImportBatcher };

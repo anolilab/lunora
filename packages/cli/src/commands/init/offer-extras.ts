@@ -338,4 +338,4 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<boolean> => {
 };
 
 export { offerRegistryExtras, parseFeatureList, STACK_FEATURE_OPTIONS };
-export type { FeatureApply, OfferDeps, OfferTransformManifest, StackFeature };
+export type { FeatureApply, OfferDeps, StackFeature };

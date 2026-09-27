@@ -160,4 +160,4 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
     },
 ];
 
-export { DEFAULT_LOG_LINES, devTools, MAX_LOG_LINES };
+export { devTools, MAX_LOG_LINES };

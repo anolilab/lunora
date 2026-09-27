@@ -760,5 +760,5 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     return { body, code: 0, data, inserted: insertedTotal };
 };
 
-export type { ImportCommandData, ImportCommandOptions, ImportCommandResult, ImportSummary };
+export type { ImportCommandData, ImportCommandOptions, ImportCommandResult };
 export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand };

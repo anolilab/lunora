@@ -306,5 +306,4 @@ const runMcpInstall = (options: McpInstallOptions): McpInstallResult => {
     return { code: written.some((entry) => entry.action === "invalid") ? 1 : 0, written };
 };
 
-export type { McpInstallOptions, McpInstallResult, McpServerPlan };
 export { DEFAULT_DOCS_MCP_URL, DOCS_SERVER_NAME, LOCAL_SERVER_NAME, runMcpInstall, runMcpInstallList };
