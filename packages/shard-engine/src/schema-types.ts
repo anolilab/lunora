@@ -219,13 +219,6 @@ export interface WithInput {
     _count?: Record<string, true>;
 }
 
-export interface ApplyOnDeleteOptions {
-    database: DatabaseWriterLike;
-    relation: RelationDefinitionLike;
-    row: Record<string, unknown>;
-    tableName: string;
-}
-
 /**
  * The remaining per-REQUEST budget for capped-relation fan-out reads, shared by
  * every `with` level of one read.

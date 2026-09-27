@@ -326,6 +326,7 @@ export {
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";
+export type { ApplyOnDeleteOptions } from "./relations";
 export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
     OwnerRelayFrame,
@@ -359,7 +360,6 @@ export type {
     AggregateOp,
     AggregateOptions,
     AggregateResult,
-    ApplyOnDeleteOptions,
     BroadcastDelta,
     ColumnMetaLike,
     CrossShardReadArgs,
