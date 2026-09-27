@@ -1,3 +1,25 @@
+## @lunora/shard-engine [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.94...@lunora/shard-engine@1.0.0-alpha.95) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `trimStreamRuns(sql, now)` is now
+`trimStreamRuns(sql, now, live)`; pass the keys of runs still producing
+(an empty set keeps the old behaviour).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **do:** stale seeds, re-snapshot refusals, replica freshness, live-run ttl trim ([#872](https://github.com/anolilab/lunora/issues/872)) ([dee5c2e](https://github.com/anolilab/lunora/commit/dee5c2eee5ff81dc635c374ca9729a9eb9d1ed28))
+* **sql-store:** make .global() values and D1 migrations behave alike on every engine ([#879](https://github.com/anolilab/lunora/issues/879)) ([119c979](https://github.com/anolilab/lunora/commit/119c9792baec2b2772d971d219d65c7e699d04b9))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+
 ## @lunora/shard-engine [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.93...@lunora/shard-engine@1.0.0-alpha.94) (2026-09-27)
 
 
