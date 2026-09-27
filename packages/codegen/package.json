@@ -82,7 +82,6 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "prettier": "catalog:lint",

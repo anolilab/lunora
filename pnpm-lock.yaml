@@ -3119,9 +3119,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
-      drizzle-orm:
-        specifier: catalog:drizzle
-        version: 0.45.2(@cloudflare/workers-types@5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.5)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)(postgres@3.4.9)(sql.js@1.14.1)
       esbuild:
         specifier: catalog:build
         version: 0.28.2
