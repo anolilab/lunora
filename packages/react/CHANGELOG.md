@@ -1,3 +1,16 @@
+## @lunora/react [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.162...@lunora/react@1.0.0-alpha.163) (2026-09-27)
+
+### Code Refactoring
+
+* **react:** remove dead code from framework bindings ([#880](https://github.com/anolilab/lunora/issues/880)) ([7c7c33b](https://github.com/anolilab/lunora/commit/7c7c33b550489ff4d93e536647535ab316662f22))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.156
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.89
+
 ## @lunora/react [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.161...@lunora/react@1.0.0-alpha.162) (2026-09-27)
 
 
