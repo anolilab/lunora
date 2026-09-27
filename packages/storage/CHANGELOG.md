@@ -1,3 +1,9 @@
+## @lunora/storage [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.86...@lunora/storage@1.0.0-alpha.87) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** drop the placeholder storage base url ([#867](https://github.com/anolilab/lunora/issues/867)) ([252abce](https://github.com/anolilab/lunora/commit/252abce0c92d6d355fe52bffeb1157e200fb97ff))
+
 ## @lunora/storage [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.85...@lunora/storage@1.0.0-alpha.86) (2026-09-27)
 
 
