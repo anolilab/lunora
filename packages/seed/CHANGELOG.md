@@ -1,3 +1,15 @@
+## @lunora/seed [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.162...@lunora/seed@1.0.0-alpha.163) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in server, observability, seed, replica ([#874](https://github.com/anolilab/lunora/issues/874)) ([73418de](https://github.com/anolilab/lunora/commit/73418de0b561cdf3ed7d1eba0d77831b7a0751d5))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.155
+* **@lunora/testing:** upgraded to 1.0.0-alpha.204
+
 ## @lunora/seed [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.161...@lunora/seed@1.0.0-alpha.162) (2026-09-27)
 
 
