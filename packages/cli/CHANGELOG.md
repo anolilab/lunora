@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.316...@lunora/cli@1.0.0-alpha.317) (2026-09-27)
+
+### Bug Fixes
+
+* **sql-store:** make .global() values and D1 migrations behave alike on every engine ([#879](https://github.com/anolilab/lunora/issues/879)) ([119c979](https://github.com/anolilab/lunora/commit/119c9792baec2b2772d971d219d65c7e699d04b9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.167
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.233
+* **@lunora/config:** upgraded to 1.0.0-alpha.276
+* **@lunora/container:** upgraded to 1.0.0-alpha.62
+* **@lunora/d1:** upgraded to 1.0.0-alpha.146
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.191
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.159
+* **@lunora/seed:** upgraded to 1.0.0-alpha.164
+* **@lunora/testing:** upgraded to 1.0.0-alpha.205
+
 ## @lunora/cli [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.315...@lunora/cli@1.0.0-alpha.316) (2026-09-27)
 
 
