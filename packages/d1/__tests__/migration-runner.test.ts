@@ -194,6 +194,69 @@ describe("migrationRunner", () => {
         }
     });
 
+    it("treats a line-ending or BOM difference as the same migration", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const database = createSqliteDatabase(sqlite);
+
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);\n", version: 1 }]).run();
+
+            // The same file from a CRLF checkout, with a BOM an editor added.
+            const result = await new MigrationRunner(database, [{ name: "init", sql: "\uFEFFCREATE TABLE a (id INTEGER);\r\n\r\n", version: 1 }]).run();
+
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            expect(result.applied).toEqual([]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("accepts a hash recorded from the raw text by an earlier build", async () => {
+        expect.assertions(1);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const text = "CREATE TABLE a (id INTEGER);\r\n";
+
+            sqlite.exec("CREATE TABLE a (id INTEGER)");
+            sqlite.exec(
+                "CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)",
+            );
+            sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at, version) VALUES (?, 1, 1)").run(await sha256Hex(text));
+
+            const result = await new MigrationRunner(createSqliteDatabase(sqlite), [{ name: "init", sql: text, version: 1 }]).run();
+
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("upgrades a pre-version tracking table from two runners at once", async () => {
+        expect.assertions(2);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            sqlite.exec("CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC)");
+
+            const migrations = [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }];
+            const outcomes = await Promise.allSettled([
+                new MigrationRunner(createSqliteDatabase(sqlite), migrations).run(),
+                new MigrationRunner(createSqliteDatabase(sqlite), migrations).run(),
+            ]);
+
+            expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+            expect(sqlite.prepare("SELECT version FROM __drizzle_migrations").all()).toEqual([{ version: 1 }]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
     it("refuses an applied version whose SQL changed, before applying anything", async () => {
         expect.assertions(2);
 

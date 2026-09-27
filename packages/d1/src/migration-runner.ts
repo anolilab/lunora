@@ -306,15 +306,48 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
 };
 
 /**
- * SHA-256 of the migration SQL, hex-encoded. Available natively in both the
- * Workers runtime (`crypto.subtle`) and Node 22+, so no platform shim needed.
+ * SHA-256 of `text`, hex-encoded. Available natively in both the Workers runtime
+ * (`crypto.subtle`) and Node 22+, so no platform shim needed.
  */
-const hashMigration = async (text: string): Promise<string> => {
+const sha256Hex = async (text: string): Promise<string> => {
     const bytes = new TextEncoder().encode(text);
     const digest = await crypto.subtle.digest("SHA-256", bytes);
 
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
+
+/** A leading byte-order mark. */
+const BOM_RE = /^\uFEFF/u;
+
+/** `text` without the newlines it ends with. A loop, not `/\n+$/`, which backtracks quadratically on a long run. */
+const trimTrailingNewlines = (text: string): string => {
+    let end = text.length;
+
+    while (end > 0 && text[end - 1] === "\n") {
+        end -= 1;
+    }
+
+    return text.slice(0, end);
+};
+
+/**
+ * The hashes a migration's SQL is recognised by.
+ *
+ * `normalized` is what a run records: the text with a byte-order mark removed,
+ * CRLF folded to LF and trailing newlines dropped. The raw text differs across a
+ * Windows and a Unix checkout of the same file, so hashing it raw made every
+ * cross-OS deploy refuse an unchanged migration as drift. `raw` is still
+ * accepted when reading, because an earlier build recorded that form.
+ */
+const hashMigration = async (text: string): Promise<{ normalized: string; raw: string }> => {
+    const normalized = trimTrailingNewlines(text.replace(BOM_RE, "").replaceAll("\r\n", "\n"));
+
+    return { normalized: await sha256Hex(normalized), raw: await sha256Hex(text) };
+};
+
+/** Does a recorded hash identify this migration's text, in either form? */
+const recognises = (recorded: string, hashes: { normalized: string; raw: string } | undefined): boolean =>
+    recorded === hashes?.normalized || recorded === hashes?.raw;
 
 /**
  * Sequentially applies pending migrations against a D1 database via the
@@ -354,6 +387,7 @@ class MigrationRunner {
         const hashes = await Promise.all(this.migrations.map(async (migration) => hashMigration(migration.sql)));
         const recorded = await this.readTrackingRows(hashes);
         const recordedHashByVersion = new Map(recorded.filter((row) => row.version !== null).map((row) => [row.version as number, row.hash]));
+        const current = (index: number): string => String(hashes[index]?.normalized);
 
         // Every refusal is decided before the first migration runs, so a drift
         // late in the list cannot leave the earlier ones applied and the run
@@ -361,10 +395,10 @@ class MigrationRunner {
         const pending = this.migrations.filter((migration, index) => {
             const recordedHash = recordedHashByVersion.get(migration.version);
 
-            if (recordedHash !== undefined && recordedHash !== hashes[index]) {
+            if (recordedHash !== undefined && !recognises(recordedHash, hashes[index])) {
                 throw new LunoraError(
                     "MIGRATION_DRIFT",
-                    `Migration "${migration.name}" (v${String(migration.version)}) was already applied from different SQL (recorded sha256 ${recordedHash}, now ${String(hashes[index])}). An applied migration is never re-run: revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new text as applied: UPDATE ${TRACKING_TABLE_NAME} SET hash = '${String(hashes[index])}' WHERE version = ${String(migration.version)};`,
+                    `Migration "${migration.name}" (v${String(migration.version)}) was already applied from different SQL (recorded sha256 ${recordedHash}, now ${current(index)}). An applied migration is never re-run: revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new text as applied: UPDATE ${TRACKING_TABLE_NAME} SET hash = '${current(index)}' WHERE version = ${String(migration.version)};`,
                 );
             }
 
@@ -383,7 +417,7 @@ class MigrationRunner {
         const skipped: { name: string; version: number }[] = [];
 
         for (const [index, migration] of this.migrations.entries()) {
-            const hash = hashes[index] as string;
+            const hash = current(index);
 
             if (!pending.includes(migration)) {
                 skipped.push({ name: migration.name, version: migration.version });
@@ -407,19 +441,35 @@ class MigrationRunner {
         return { applied, skipped };
     }
 
+    /** Does the tracking table carry the `version` column yet? One catalog read. */
+    private async hasVersionColumn(): Promise<boolean> {
+        const rows = await this.client.drizzle.all<{ name: string }>(
+            sql.raw(`SELECT name FROM pragma_table_info('${TRACKING_TABLE_NAME}') WHERE name = 'version'`),
+        );
+
+        return rows.length > 0;
+    }
+
     /**
      * Create the tracking table, or bring one written before `version` existed
-     * up to the current shape. Idempotent: the column probe is one catalog read.
+     * up to the current shape.
+     *
+     * Two runners can upgrade the same table at once (parallel deploys): both
+     * see no column, and the second `ADD COLUMN` fails with "duplicate column
+     * name". That failure is only accepted once a re-read shows the column
+     * really is there — any other failure of the `ALTER` still surfaces.
      */
     private async ensureTrackingTable(): Promise<void> {
         await this.client.drizzle.run(sql.raw(TRACKING_TABLE_DDL));
 
-        const versionColumn = await this.client.drizzle.all<{ name: string }>(
-            sql.raw(`SELECT name FROM pragma_table_info('${TRACKING_TABLE_NAME}') WHERE name = 'version'`),
-        );
-
-        if (versionColumn.length === 0) {
-            await this.client.drizzle.run(sql.raw(`ALTER TABLE ${TRACKING_TABLE_NAME} ADD COLUMN version INTEGER`));
+        if (!(await this.hasVersionColumn())) {
+            try {
+                await this.client.drizzle.run(sql.raw(`ALTER TABLE ${TRACKING_TABLE_NAME} ADD COLUMN version INTEGER`));
+            } catch (error) {
+                if (!(await this.hasVersionColumn())) {
+                    throw error;
+                }
+            }
         }
 
         await this.client.drizzle.run(sql.raw(TRACKING_VERSION_INDEX));
@@ -431,10 +481,16 @@ class MigrationRunner {
      * such a row has. A row whose hash matches no current migration stays
      * unversioned, and {@link run} refuses to guess around it.
      */
-    private async readTrackingRows(hashes: ReadonlyArray<string>): Promise<TrackingRow[]> {
+    private async readTrackingRows(hashes: ReadonlyArray<{ normalized: string; raw: string }>): Promise<TrackingRow[]> {
         const select = sql.raw(`SELECT id, hash, version FROM ${TRACKING_TABLE_NAME} ORDER BY id`);
         const rows = await this.client.drizzle.all<TrackingRow>(select);
-        const versionByHash = new Map(this.migrations.map((migration, index) => [hashes[index] as string, migration.version]));
+        // Both forms: a row an earlier build wrote recorded the raw text's hash.
+        const versionByHash = new Map(
+            this.migrations.flatMap((migration, index): [string, number][] => [
+                [String(hashes[index]?.raw), migration.version],
+                [String(hashes[index]?.normalized), migration.version],
+            ]),
+        );
         const taken = new Set(rows.map((row) => row.version).filter((version) => version !== null));
         let backfilled = false;
 
