@@ -93,7 +93,7 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * `true` when `column` names PII, judged two ways: the whole column (normalized)
- * matches a {@link PII_FIELD_NAMES} entry exactly, or one of its words matches a
+ * matches a {@link PII_FIELD_NAME_LIST} entry exactly, or one of its words matches a
  * single-word entry.
  *
  * Token-based rather than a substring match, which would match a PII fragment
@@ -104,7 +104,7 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
  *
  * Still conservative in the other direction (not a full NLP classifier): a
  * genuinely unusual PII column name that shares no word with
- * {@link PII_FIELD_NAMES} slips through, and that false negative is the cheaper
+ * {@link PII_FIELD_NAME_LIST} slips through, and that false negative is the cheaper
  * mistake here.
  *
  * This is the package's ONE PII-naming policy. Every lint that asks "is this
@@ -112,9 +112,6 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
  * from is how eight listed names silently stopped being covered once before.
  */
 export const isPiiColumn = (column: string): boolean => NORMALIZED_PII_NAMES.has(normalize(column)) || tokenize(column).some((token) => PII_TOKENS.has(token));
-
-/** The PII column names {@link isPiiColumn} matches against. */
-export const PII_FIELD_NAMES: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST);
 
 /**
  * `true` when `identifier` names one of `phrases`, matched on WORD boundaries.
@@ -170,7 +167,7 @@ export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id
 
 /**
  * A table's declared columns that are ownership/tenancy- or PII-named, per
- * {@link OWNERSHIP_FIELD_NAMES} / {@link PII_FIELD_NAMES}. The low-FP gate
+ * {@link OWNERSHIP_FIELD_NAMES} / {@link PII_FIELD_NAME_LIST}. The low-FP gate
  * `public_table_rls_optout_confusion` uses this to tell a genuinely public
  * lookup table (e.g. `emojis`, `countries`, no such columns) apart from a
  * `.public()` table that actually carries data an RLS opt-out would expose.
