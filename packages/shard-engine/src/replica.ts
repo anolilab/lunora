@@ -61,6 +61,12 @@ const PULL_PAGE_SIZE = 1000;
  * Bounds the work a single read can do: a replica far enough behind that ten
  * pages don't close the gap is better served by sending the read to the owner
  * while it keeps catching up in the background.
+ *
+ * A read with no `minSeq` is only `fresh` once a pull came back short of a full
+ * page — the owner had nothing more — because that is the only moment the
+ * replica provably matched its owner, and so the only moment `syncedAtMs` may
+ * record. A replica still paging through a backlog when the budget runs out is
+ * `stale`, and the read goes to the owner.
  */
 const MAX_PULL_ROUNDS = 10;
 
@@ -577,7 +583,7 @@ class ShardReplica {
             const exhausted = page.changes.length < PULL_PAGE_SIZE;
 
             // eslint-disable-next-line no-await-in-loop -- see above: pages must be applied in commit order.
-            state = await this.applyPage(page);
+            state = await this.applyPage(page, state, exhausted);
 
             if (exhausted || this.isFreshEnough(state, minSeq)) {
                 return this.isFreshEnough(state, minSeq) ? "fresh" : "stale";
@@ -592,13 +598,18 @@ class ShardReplica {
      * are one step from the follower's point of view: a crash between them
      * re-applies the page, which is safe because every replay is an upsert or a
      * delete by id.
+     *
+     * `syncedAtMs` is when the replica last provably matched its owner — now for
+     * the page that drained the log (`exhausted`), `from`'s for a full page with
+     * more behind it. Stamping now on a partial page made the staleness window
+     * vouch for a replica still thousands of changes behind.
      */
-    private async applyPage(page: ReplicaPullResult): Promise<ReplicaState> {
+    private async applyPage(page: ReplicaPullResult, from: ReplicaState, exhausted: boolean): Promise<ReplicaState> {
         if (page.changes.length > 0) {
             await this.host.applyChanges(page.changes);
         }
 
-        const state: ReplicaState = { appliedSeq: page.cursor, epoch: page.epoch, syncedAtMs: Date.now() };
+        const state: ReplicaState = { appliedSeq: page.cursor, epoch: page.epoch, syncedAtMs: exhausted ? Date.now() : from.syncedAtMs };
 
         writeReplicaState(this.host.sql(), state);
 

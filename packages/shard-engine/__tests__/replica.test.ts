@@ -304,6 +304,42 @@ describe("read replicas", () => {
         expect(applied.map((entry) => entry.seq)).toStrictEqual([1]);
     });
 
+    it("is not fresh after one page of a multi-page backlog: it pages until the log is drained", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const replica = createReplicaLink(host);
+
+        await replica?.ensureFresh();
+
+        // Idle while the owner took 2,500 writes: three pages, the last one short.
+        owner.changes = Array.from({ length: 2500 }, (_, index) => change(index + 1, `r${String(index + 1)}`));
+        vi.advanceTimersByTime(60_000);
+
+        await expect(replica?.ensureFresh()).resolves.toBe("fresh");
+        expect(applied.at(-1)?.seq).toBe(2500);
+    });
+
+    it("reports stale, not fresh, when the backlog outlasts the pull budget", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const replica = createReplicaLink(host);
+
+        await replica?.ensureFresh();
+
+        // Ten full pages (the budget) and more behind them: the replica never
+        // saw the end of the log, so the staleness window cannot vouch for it
+        // and the read goes to the owner.
+        owner.changes = Array.from({ length: 10_500 }, (_, index) => change(index + 1, `r${String(index + 1)}`));
+        vi.advanceTimersByTime(60_000);
+
+        await expect(replica?.ensureFresh()).resolves.toBe("stale");
+        expect(applied.at(-1)?.seq).toBe(10_000);
+    });
+
     it("refuses to follow a shard that has no changelog", async () => {
         expect.assertions(3);
 
