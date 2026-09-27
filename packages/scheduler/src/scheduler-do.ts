@@ -1079,6 +1079,13 @@ class SchedulerDO {
             });
         }
 
+        // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
+        // the id may since belong to a NEW job whose header the cleanup below
+        // would delete. Write nothing, whatever the outcome.
+        if (this.cancelledLeases.has(record.id)) {
+            return ok;
+        }
+
         if (ok) {
             // The job was kicked (2xx). It must never re-fire, so the time-index
             // claim stays deleted regardless of what happens next. Clear the

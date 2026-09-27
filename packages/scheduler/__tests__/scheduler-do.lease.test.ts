@@ -402,6 +402,36 @@ describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
         expect(scheduler.started).toStrictEqual(["job-0"]);
     });
 
+    it.each([
+        ["fails", false],
+        ["succeeds", true],
+    ])("leaves a new job that reused the id alone when the cancelled attempt %s", async (_label, ok) => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-0" }));
+        // The id is free again while the old attempt is still in flight.
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.fresh", id: "job-0", scheduledFor: at + 60_000 }));
+
+        scheduler.release("job-0", ok);
+        await drain;
+
+        expect(state.storageMap.get("id:job-0")).toMatchObject({ functionPath: "jobs.fresh" });
+        expect(state.storageMap.has("retry:job-0")).toBe(false);
+        expect(indexedAt(state.storageMap, "job-0")).toBe(at + 60_000);
+    });
+
     it("releases a pooled job's slot when its cancelled attempt fails, without re-arming it", async () => {
         expect.hasAssertions();
 
