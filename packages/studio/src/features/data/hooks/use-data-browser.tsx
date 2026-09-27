@@ -654,11 +654,13 @@ const useDataBrowser = ({
     const search = useDebounced(filterInput.trim(), 300, debounceResetKey);
     const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
 
-    // Which view is on screen: moves on every re-seed (table switch or applied
-    // view) and every manual shard change. Work that outlives a switch compares
-    // against it before writing state that describes the view it started in.
-    const viewIdentity = `${debounceResetKey}\u0000${shardKey}`;
-    const viewIdentityRef = useMirroredRef(viewIdentity);
+    // Which view is on screen: `debounceResetKey` moves on every re-seed (table
+    // switch or applied view), `shardEdits` on every manual shard change — a
+    // counter rather than the shard value, so editing A → B → A still counts as
+    // leaving A. Work that outlives a switch compares both before writing state
+    // that describes the view it started in.
+    const viewIdentityRef = useMirroredRef(debounceResetKey);
+    const shardEdits = useRef(0);
 
     // `changeShard` clears the staged buffer when the input changes, but writes
     // target `debouncedShard`, which settles up to 400ms later. An edit staged
@@ -934,6 +936,7 @@ const useDataBrowser = ({
     // shard would otherwise land on a same-id row of another — a silent
     // overwrite. Reset exactly what a URL re-seed resets for a shard change.
     const changeShard = (value: string): void => {
+        shardEdits.current += 1;
         setShardKey(value);
         stagedEdits.clear();
         setEditingCell(null);
@@ -1045,8 +1048,9 @@ const useDataBrowser = ({
         // describe the view it started in, so they apply only while that view is
         // still the one on screen — otherwise "3 rows deleted." lands under the
         // next table and bounces it back to its first page.
-        const startedIn = viewIdentity;
-        const stillCurrent = (): boolean => viewIdentityRef.current === startedIn;
+        const startedIn = debounceResetKey;
+        const startedAtEdit = shardEdits.current;
+        const stillCurrent = (): boolean => viewIdentityRef.current === startedIn && shardEdits.current === startedAtEdit;
 
         setWriteError(null);
         setWriteNotice(null);
