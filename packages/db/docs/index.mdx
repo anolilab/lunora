@@ -311,7 +311,14 @@ lunora run cleanup:purgeRootMessages --shard __root__   # repeat until it delete
 (`__root__` is the default shard unless your worker sets `defaultShardKey`.)
 
 Offline writes an older build queued, and that replay after the upgrade, go to
-the shard their row names, not the default shard.
+the shard their row names, not the default shard. Idempotency is per shard, so
+if such a write had in fact committed on the default shard before its tab died
+(sent, never acknowledged), the replay writes it again in its row's shard. For
+an `insert` binding that forwards the row's `_id` (the documented `toArgs`),
+both copies share that `_id`: the default shard's copy is one of the rows the
+steps above export, and the import skips it because the row's shard already
+holds that `_id`. A custom mutation with other side effects should be
+idempotent on its own arguments if it can be replayed across the upgrade.
 
 ## When collections load
 
@@ -384,8 +391,9 @@ table) or `shape` (partial replication). The `checkpoints` registry resolves
 optimistic-overlay drops against the server's confirmed watermarks; it's what
 `bindMutators` uses below. On a `scopeBy` collection it follows the scope — safe
 to destructure once, as above, before anything is scoped — and `bindMutators`
-must then be given the same `scopeBy`, so its pushes reach the shard those
-checkpoints gate on (it throws at bind time otherwise).
+must then be given the same `scopeBy` (or pin one shard with `shardKey`), so its
+pushes reach the shard those checkpoints gate on (it throws at bind time
+otherwise).
 
 ## Custom mutators
 

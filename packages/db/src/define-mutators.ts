@@ -222,7 +222,8 @@ export interface BindMutatorsContext<TCollections extends CollectionMap = Collec
      * (the table's `.shardBy(...)` column) is the shard key, exactly as for a
      * `scopeBy` collection's inserts — so `sendMessage({ channelId, … })` lands
      * on that channel's shard. Required when `checkpoints` comes from a
-     * `scopeBy` collection; a call whose args lack the field throws.
+     * `scopeBy` collection, unless `shardKey` pins one shard; a call whose args
+     * lack the field throws.
      * {@link BindMutatorsContext.shardKey} takes precedence.
      */
     scopeBy?: string;
@@ -280,13 +281,15 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     // hard error rather than an infinite loop.
     const maxReissues = 32;
 
-    if (context.checkpoints && isScopeFollowingCheckpoints(context.checkpoints) && context.scopeBy === undefined) {
-        // Those checkpoints gate on whichever shard the collection is scoped to,
-        // so pushes routed any other way would never be echoed on them: every
-        // optimistic row would hang until the fallback window, then vanish.
+    if (context.checkpoints && isScopeFollowingCheckpoints(context.checkpoints) && context.scopeBy === undefined && context.shardKey === undefined) {
+        // Those checkpoints follow the collection's scope, and nothing here names
+        // a shard: every push would go to the default shard, which the scoped
+        // collection never syncs, so each optimistic row would hang until the
+        // fallback window, then vanish. A pinned `shardKey` is fine — each push
+        // is then gated on that shard's own registry (see `resolveCheckpoints`).
         throw new LunoraError(
             "BAD_REQUEST",
-            "bindMutators: `checkpoints` from a `scopeBy` collection needs the same `scopeBy` here, so each push reaches the shard it gates on",
+            "bindMutators: `checkpoints` from a `scopeBy` collection needs the same `scopeBy` (or a pinned `shardKey`) here, so each push reaches the shard it gates on",
         );
     }
 

@@ -150,6 +150,22 @@ describe("scope-following shape collection + scoped mutators", () => {
         expect(messages.get("m3")).toBeUndefined();
     });
 
+    it("settles a write at once when the collection's sync stops before the echo", async () => {
+        const { messages, pushes, send } = documentedSetup();
+        const transaction = send.sendMessage({ channelId: "general", id: "m4", text: "then unmounted" });
+
+        await vi.waitFor(() => {
+            expect(pushes).toHaveLength(1);
+        });
+
+        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+
+        // The last subscriber went away and TanStack tore the sync down: nothing will echo.
+        await messages.cleanup();
+
+        await expect(within(transaction.isPersisted.promise, 100)).resolves.toBe("settled");
+    });
+
     it("routes a mutator call to the shard its own args name, not the current scope", async () => {
         const { pushes, send } = documentedSetup();
 
@@ -160,6 +176,45 @@ describe("scope-following shape collection + scoped mutators", () => {
         });
 
         expect(pushes[0]?.shardKey).toBe("random");
+    });
+
+    it("accepts a pinned shardKey with a scope-following checkpoint registry, gating on that shard", async () => {
+        const { client, pushes, shapes } = makeClient();
+        const { checkpoints, config, scope } = lunoraCollectionOptions<{ _id: string; channelId: string; text: string }>({
+            client,
+            scopeBy: "channelId",
+            shape: { name: "messagesByChannel" },
+        });
+        const messages = createCollection(config);
+
+        messages.subscribeChanges(() => undefined);
+        scope({ channelId: "general" });
+
+        const send = bindMutators(
+            client,
+            { checkpoints, collections: { messages }, shardKey: "general" },
+            {
+                sendMessage: defineMutator<{ id: string; text: string }>({
+                    apply: (_context, { id, text }) => {
+                        messages.insert({ _id: id, channelId: "general", text });
+                    },
+                    serverRef: "mutators:sendMessage",
+                }),
+            },
+        );
+        const transaction = send.sendMessage({ id: "p1", text: "pinned" });
+
+        await vi.waitFor(() => {
+            expect(pushes).toHaveLength(1);
+        });
+
+        expect(pushes[0]?.shardKey).toBe("general");
+        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+
+        shapes.at(-1)?.onCheckpoint({ checkpoint: 1, mutationId: pushes[0]!.clientSeq, rowsFollow: true });
+        shapes.at(-1)?.onRows([{ _id: "p1", channelId: "general", text: "pinned" }]);
+
+        await expect(within(transaction.isPersisted.promise, 1000)).resolves.toBe("settled");
     });
 
     it("refuses to bind a scope-following checkpoint registry to mutators that do not follow the scope", () => {

@@ -723,6 +723,16 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         return registry;
     };
 
+    // This collection stopped feeding its registry. A caller-supplied registry
+    // is the caller's to manage and is never settled from here.
+    const detach = (): void => {
+        if (attached !== undefined && options.checkpoints === undefined) {
+            detachCheckpoints(attached);
+        }
+
+        attached = undefined;
+    };
+
     // A scope-following collection has no shard until it is scoped, so nothing
     // is marked attached yet: the default registry would never be advanced by it.
     if (!followsScope) {
@@ -896,6 +906,9 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
                 return () => {
                     emit = undefined;
                     onErrorHandler = undefined;
+                    // The subscription feeding the registry is going; a restart
+                    // re-attaches it (`openSubscription` resolves the registry).
+                    detach();
                     unsubscribe?.();
                     unsubscribe = undefined;
                     // Reset the diff base: TanStack drops its synced store on gc
@@ -919,9 +932,8 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         // Leaving a shard (or detaching): this collection no longer feeds its
         // registry, so writes still waiting on it are settled rather than held for
         // an echo nothing will deliver. Same-shard re-scopes keep it attached.
-        if (followsScope && attached !== undefined && (args === undefined || nextShard !== scopedShard)) {
-            detachCheckpoints(attached);
-            attached = undefined;
+        if (followsScope && (args === undefined || nextShard !== scopedShard)) {
+            detach();
         }
 
         // Remember the target so a later sync (re)start re-opens it — on its own shard.
