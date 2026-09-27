@@ -77,7 +77,7 @@ const documentedSetup = () => {
         },
     );
 
-    return { checkpoints, client, messages, pushes, send, shapes };
+    return { checkpoints, client, messages, pushes, scope, send, shapes };
 };
 
 /** Settle `promise`, or report that it was still pending after `ms`. */
@@ -130,6 +130,24 @@ describe("scope-following shape collection + scoped mutators", () => {
 
         await expect(within(general, 100)).resolves.toBe("settled");
         await expect(within(checkpoints.awaitMutationId(8), 50)).resolves.toBe("pending");
+    });
+
+    it("settles a write at once when the collection re-scopes away from its shard before the echo", async () => {
+        const { messages, pushes, scope, send } = documentedSetup();
+        const transaction = send.sendMessage({ channelId: "general", id: "m3", text: "then left" });
+
+        await vi.waitFor(() => {
+            expect(pushes).toHaveLength(1);
+        });
+
+        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+
+        // Nothing will echo on "general" any more: its subscription just closed.
+        scope({ channelId: "random" });
+
+        // Settled now, not after the fallback window.
+        await expect(within(transaction.isPersisted.promise, 100)).resolves.toBe("settled");
+        expect(messages.get("m3")).toBeUndefined();
     });
 
     it("routes a mutator call to the shard its own args name, not the current scope", async () => {

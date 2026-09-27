@@ -137,9 +137,13 @@ const identityByClient = new WeakMap<LunoraClient, string | null>();
  * time (not at first sync), because a lazily-syncing collection still means the
  * watermark stream exists and will confirm the write.
  *
+ * Counted, one per attached collection: a scope-following collection detaches
+ * when it moves off a shard (see {@link detachCheckpoints}), and the shard stays
+ * attached while any other collection still syncs it.
+ *
  * Package-internal: deliberately not re-exported from `index.ts`.
  */
-const attachedRegistries = new WeakSet<CheckpointRegistry>();
+const attachedRegistries = new WeakMap<CheckpointRegistry, number>();
 
 /**
  * Identity-switch reset hooks for registries built by
@@ -160,6 +164,26 @@ const attachedRegistries = new WeakSet<CheckpointRegistry>();
  * registry by hand would silently un-gate whatever is in flight.
  */
 const registryResets = new WeakMap<CheckpointRegistry, () => void>();
+
+/**
+ * One sync source stopped feeding `registry`. When it was the last, nothing will
+ * ever echo the writes still waiting on it, so they are settled now — through
+ * the same in-place rewind an identity switch uses — instead of each one waiting
+ * out the fallback window. The next source to attach starts it again from zero,
+ * which only makes a later write wait for its own echo.
+ */
+const detachCheckpoints = (registry: CheckpointRegistry): void => {
+    const remaining = (attachedRegistries.get(registry) ?? 0) - 1;
+
+    if (remaining > 0) {
+        attachedRegistries.set(registry, remaining);
+
+        return;
+    }
+
+    attachedRegistries.delete(registry);
+    registryResets.get(registry)?.();
+};
 
 /** Registries returned by a scope-following collection — see {@link followScopeCheckpoints}. */
 const scopeFollowingRegistries = new WeakSet<CheckpointRegistry>();
@@ -554,13 +578,13 @@ export const scopedShardKey = (scopeBy: string, source: Record<string, unknown>,
  */
 export const isScopeFollowingCheckpoints = (registry: CheckpointRegistry): boolean => scopeFollowingRegistries.has(registry);
 
-/** Mark `registry` as fed by a live sync source. */
+/** Mark `registry` as fed by one more live sync source. Call once per source; pair with {@link detachCheckpoints}. */
 export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
-    attachedRegistries.add(registry);
+    attachedRegistries.set(registry, (attachedRegistries.get(registry) ?? 0) + 1);
 };
 
 /** Whether any sync source will advance `registry`'s watermarks. */
-export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => attachedRegistries.has(registry);
+export const hasCheckpointsAttached = (registry: CheckpointRegistry): boolean => (attachedRegistries.get(registry) ?? 0) > 0;
 
 /**
  * A replication-shape sync source (the local-first partial-replication path).
@@ -681,14 +705,20 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // An identity switch is NOT such a case — {@link syncShardCheckpointIdentity}
     // rewinds each registry IN PLACE precisely so captures stay valid; see
     // {@link registryResets}.
+    // The registry this collection is counted as feeding (see `attachedRegistries`).
+    let attached: CheckpointRegistry | undefined;
+
     const resolveCheckpoints = (): CheckpointRegistry => {
         const registry = currentCheckpoints();
 
         // This collection's subscription is what advances the registry — record
         // that so `bindMutators` knows gating an overlay on it will actually
-        // settle. Re-marked on every resolve so a post-teardown replacement
-        // registry is covered too (a WeakSet add is idempotent).
-        markCheckpointsAttached(registry);
+        // settle. Re-checked on every resolve so a post-teardown replacement
+        // registry is covered too; counted once per registry.
+        if (registry !== attached) {
+            attached = registry;
+            markCheckpointsAttached(registry);
+        }
 
         return registry;
     };
@@ -885,6 +915,14 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
         // Validated before anything is torn down, so a bad call leaves the current scope intact.
         const nextShard = followsScope && args !== undefined ? scopedShardKey(options.scopeBy, args, "scope args") : scopedShard;
+
+        // Leaving a shard (or detaching): this collection no longer feeds its
+        // registry, so writes still waiting on it are settled rather than held for
+        // an echo nothing will deliver. Same-shard re-scopes keep it attached.
+        if (followsScope && attached !== undefined && (args === undefined || nextShard !== scopedShard)) {
+            detachCheckpoints(attached);
+            attached = undefined;
+        }
 
         // Remember the target so a later sync (re)start re-opens it — on its own shard.
         scopedArgs = args;
