@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.232...@lunora/codegen@1.0.0-alpha.233) (2026-09-27)
+
+### Code Refactoring
+
+* **codegen:** remove unused re-exports and drizzle-orm devDependency ([#877](https://github.com/anolilab/lunora/issues/877)) ([1e9a6d6](https://github.com/anolilab/lunora/commit/1e9a6d662bddbd48115ecc569984f046387d9b3b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.167
+* **@lunora/agent:** upgraded to 1.0.0-alpha.149
+* **@lunora/container:** upgraded to 1.0.0-alpha.62
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/queue:** upgraded to 1.0.0-alpha.75
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.94
+* **@lunora/values:** upgraded to 1.0.0-alpha.57
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.68
+* **@lunora/do:** upgraded to 1.0.0-alpha.176
+* **@lunora/server:** upgraded to 1.0.0-alpha.156
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+
 ## @lunora/codegen [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.231...@lunora/codegen@1.0.0-alpha.232) (2026-09-27)
 
 
