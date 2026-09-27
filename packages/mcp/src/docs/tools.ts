@@ -289,4 +289,4 @@ const docsTools = (index: DocsIndex): ReadonlyArray<McpTool> => [
     },
 ];
 
-export { DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, docsTools, MAX_ARGUMENT_LENGTH, MAX_LISTED_PAGES, MAX_SEARCH_LIMIT, normalizeDocUrl };
+export { DEFAULT_SEARCH_LIMIT, DOCS_TOOL_DEFINITIONS, docsTools, MAX_SEARCH_LIMIT, normalizeDocUrl };
