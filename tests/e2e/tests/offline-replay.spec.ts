@@ -97,7 +97,8 @@ test("multiple offline mutations replay in order and both tabs converge", async 
     // millisecond resolution, so two sends can tie; a tie is not a reorder, but
     // a later draft stamped strictly earlier is.
     const channelId = (await pageB.locator("main h2").textContent())?.trim().split(" ")[0];
-    const listed = await user.request.post("/_lunora/rpc", { data: { args: { channelId, limit: 50 }, functionPath: "messages:list" } });
+    // Read the channel's own shard (`messages` is `.shardBy("channelId")`), where the UI wrote them.
+    const listed = await user.request.post("/_lunora/rpc", { data: { args: { channelId, limit: 50 }, functionPath: "messages:list", shardKey: channelId } });
 
     expect(listed.ok()).toBe(true);
 

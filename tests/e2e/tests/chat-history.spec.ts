@@ -36,11 +36,12 @@ test("a message sent into a channel past the list window still reaches everyone"
     const channelId = (await pageA.locator("main h2").textContent())?.trim().split(" ")[0];
 
     // Fill the window: 50 earlier messages, split across both users to stay
-    // under the per-user send limit (30 a minute).
+    // under the per-user send limit (30 a minute). `messages` is `.shardBy("channelId")`,
+    // so each send names the channel's shard — the one the UI reads.
     for (const member of [user, other]) {
         for (let index = 0; index < 25; index += 1) {
             const response = await member.request.post("/_lunora/rpc", {
-                data: { args: { channelId, createdAt: Date.now(), text: `old-${index}` }, functionPath: "messages:send" },
+                data: { args: { channelId, createdAt: Date.now(), text: `old-${index}` }, functionPath: "messages:send", shardKey: channelId },
             });
 
             expect(response.ok()).toBe(true);
