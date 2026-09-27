@@ -417,11 +417,6 @@ fn decode_at(value: &Value, depth: usize) -> WireResult<WireValue> {
     })
 }
 
-/// A map key's collapse identity, or `None` when it never collapses.
-///
-/// The reference's `Map` compares keys by SameValueZero: primitives by value
-/// (`NaN` equal to itself), everything else by reference — so two structurally
-/// identical `Date`/bytes keys stay two entries there and must stay two here.
 /// A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
 /// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
 /// bare `-0` token) as `0` in the reference, not only when it collides.
@@ -433,6 +428,11 @@ fn positive_zero(value: WireValue) -> WireValue {
     }
 }
 
+/// A map key's collapse identity, or `None` when it never collapses.
+///
+/// The reference's `Map` compares keys by SameValueZero: primitives by value
+/// (`NaN` equal to itself), everything else by reference — so two structurally
+/// identical `Date`/bytes keys stay two entries there and must stay two here.
 fn map_key_identity(key: &WireValue) -> Option<String> {
     Some(match key {
         WireValue::Null => "null".to_owned(),
