@@ -361,7 +361,7 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * used as the x402 challenge `resource` — and USD `price`), and a `dispatch`
  * that runs the real shard forward, it returns a real `402` + `PAYMENT-REQUIRED`
  * challenge when the request is unpaid, or the dispatched response (with
- * `X-PAYMENT-RESPONSE` attached) once the client's `X-PAYMENT` is verified and
+ * `PAYMENT-RESPONSE` attached) once the client's `PAYMENT-SIGNATURE` is verified and
  * settled. `dispatch` runs only after payment is verified — an unpaid or
  * invalid request never reaches the shard.
  */
@@ -4756,7 +4756,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // x402 paid-procedure gate. A `.x402({ price })`-tagged function is
         // paywalled at the origin worker: an unpaid RPC gets a real 402 +
-        // PAYMENT-REQUIRED challenge; a verified + settled `X-PAYMENT` dispatches
+        // PAYMENT-REQUIRED challenge; a verified + settled `PAYMENT-SIGNATURE` dispatches
         // as normal. Verify/settle stay HERE, at the origin boundary — the shard
         // never sees payment state (plan 134 §Phase 2.4). Resolved off the
         // registered function's identity (`fn.x402`), like `fn.rls`; the helper
@@ -4883,7 +4883,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const groups = groupBatchCallsByShard(calls, defaultShard);
 
         // Paid (`.x402`) procedures are not allowed in a batch: one POST carries
-        // one `X-PAYMENT`, so a batch mixing free + paid (or several paid) calls
+        // one `PAYMENT-SIGNATURE`, so a batch mixing free + paid (or several paid) calls
         // can't be gated per-entry with a single 402 challenge. Refuse the whole
         // batch if any entry is paid — callers dispatch paid functions
         // individually over `/_lunora/rpc` (plan 134 §Phase 2.3).

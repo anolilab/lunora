@@ -1715,6 +1715,7 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 interface RestRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    x402?: unknown;
 }
 ```
 

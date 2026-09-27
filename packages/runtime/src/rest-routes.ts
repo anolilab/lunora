@@ -22,16 +22,38 @@ import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
+import { LunoraError } from "./errors";
 import { methodGuard } from "./method-guard";
 import { applyRestCache } from "./rest-cache";
 import { restEdgeCacheFor, VARY_KEY_PARAM } from "./rest-edge-cache";
 import { trustedClientIp } from "./trusted-client-ip";
 
-/** The bits of a registered function the REST router reads: its kind and its `.expose` tag. */
+/** The bits of a registered function the REST router reads: its kind, its `.expose` tag, and whether it is paid (`.x402`). */
 interface RestRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    x402?: unknown;
 }
+
+/**
+ * Refuse a public cache on a paid (`.x402`) route, at construction.
+ *
+ * The edge-cache lookup runs BEFORE the dispatch the paywall wraps, so a paid
+ * response stored as `public` would be served to every later caller for free —
+ * with the payer's settlement receipt attached. Recognising the payment header
+ * per request is a second lock that has already been outrun once by a protocol
+ * rename; the route tag is known here, before any request exists, so the
+ * contradiction is refused where it is declared. A `private` policy stays legal:
+ * it never reaches the shared store, and the payer's own browser may keep a copy.
+ */
+const assertPaidRouteNotShared = (functionPath: string, entry: RestRegistryEntry): void => {
+    if (entry.x402 !== undefined && entry.expose?.cache?.scope === "public") {
+        throw new LunoraError(
+            `REST route "${functionPath}" is paid (.x402) but declares \`cache: { scope: "public" }\`: a shared cache would replay the paid response to callers who never paid. Use \`scope: "private"\` or drop the cache policy.`,
+            { code: "MISCONFIGURED", status: 500 },
+        );
+    }
+};
 
 /** Registry map (structurally the generated `LUNORA_FUNCTIONS`, narrowed to what REST needs). */
 type RestRegistryLike = Record<string, RestRegistryEntry>;
@@ -160,10 +182,15 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
         // path/method contract with the OpenAPI emitter and deliberately carries
         // no response policy. `entry.functionPath` came out of this same map, so
         // the lookup cannot miss.
-        const cache = (functions[entry.functionPath] as RestRegistryEntry).expose?.cache;
+        const registered = functions[entry.functionPath] as RestRegistryEntry;
+
+        assertPaidRouteNotShared(entry.functionPath, registered);
+
+        const cache = registered.expose?.cache;
         // Built once per route: `undefined` when this route can never edge-cache,
         // so the whole path drops out of the handler for a procedure that declared
-        // no policy (or opted out with `edgeCache: null`).
+        // no policy (or opted out with `edgeCache: null`). A paid route never gets
+        // one: the assertion above leaves it no public policy to build one from.
         const edge = restEdgeCacheFor(cache, edgeCache);
 
         routes[entry.path] = async (request: Request, env: unknown, _url?: URL, context?: ExecutionContextLike): Promise<Response> => {
