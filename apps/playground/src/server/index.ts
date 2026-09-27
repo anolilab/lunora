@@ -9,7 +9,9 @@ import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
 import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
+import { createShardClient } from "lunorash/runtime";
 
+import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
@@ -65,6 +67,29 @@ interface Env extends Record<string, unknown> {
 const ROOT_SHARD_KEY = "__root__";
 
 /**
+ * Mirror a better-auth user into `users` — the `databaseHooks` callback.
+ *
+ * A hook gets better-auth's row, never a Lunora ctx, so this is a separate write
+ * over the shard client — an upsert keyed by the user id, safe to repeat. It
+ * runs AFTER better-auth committed the user, so it must not throw: the account
+ * already exists, and a throw here would fail the sign-up response for a user
+ * who can then sign in anyway. A failed mirror costs a display name, and the
+ * next profile update re-runs it.
+ */
+const mirrorUser =
+    (env: Env) =>
+    async (user: { email: string; id: string; name: string }): Promise<void> => {
+        try {
+            await createShardClient(env.SHARD)
+                .forShard(ROOT_SHARD_KEY)
+                .call(internal.users.mirrorAuthUser, { email: user.email, id: user.id, name: user.name });
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no ctx.log here: the hook runs inside better-auth, outside any Lunora dispatch
+            console.error("users:mirrorAuthUser failed", error);
+        }
+    };
+
+/**
  * Auth config the builder's `.auth()` lazily builds the runtime + migration
  * instances from — same plugins/secret so both describe the identical schema.
  * The full plugin set is what the studio's auth dashboard adapts to
@@ -95,6 +120,9 @@ const authOptions = (env: Env): LunoraAuthOptions => {
                 });
             },
         },
+        // Copy every created/updated user into the app's `.global()` `users`
+        // table, which the chat joins to render author names. See `mirrorUser`.
+        databaseHooks: { user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } } },
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
     };
