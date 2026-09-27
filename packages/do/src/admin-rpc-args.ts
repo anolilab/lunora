@@ -1573,10 +1573,7 @@ export {
     toWorkflowInstanceState,
 };
 export type {
-    CreateWorkflowInstanceArgs,
-    GetWorkflowInstanceStatusArgs,
     QueueBindingHandle,
-    RunAsArgs,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkPatchArgs,
@@ -1591,7 +1588,5 @@ export type {
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
-    SendQueueMessageArgs,
     WorkflowBindingHandle,
-    WorkflowInstanceHandle,
 };

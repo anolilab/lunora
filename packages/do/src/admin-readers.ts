@@ -317,12 +317,9 @@ const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record
 export {
     batchedTableLookup,
     readAdminAuditLog,
-    readAdminAuthMetrics,
-    readAdminCapturedMail,
     readAdminDurableSignal,
     readAdminFacetColumn,
     readAdminIssues,
-    readAdminQueueMessages,
     readAdminRequestLog,
     readAdminRunSql,
     readAdminStorageOrphans,
