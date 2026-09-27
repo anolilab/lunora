@@ -85,4 +85,4 @@ const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: un
 /** GET the SchedulerDO `path`, throwing a shaped `LunoraError` on any non-2xx. */
 const getDO = async <T>(options: LunoraSchedulerOptions, path: string): Promise<T> => requestDO<T>(options, path, { method: "GET" });
 
-export { assertSchedulerOptions, callDO, getDO, schedulerStub };
+export { assertSchedulerOptions, callDO, getDO };
