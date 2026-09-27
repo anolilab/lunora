@@ -837,7 +837,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ```ts
 const hydratePreloaded: <T>(preloaded: Preloaded<T>, options?: {
     onError?: SubscriptionErrorCallback;
-}) => T;
+}) => T | undefined;
 ```
 
 ### `isConflictError` (const)
@@ -1012,7 +1012,7 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ```ts
 const usePreloadedQuery: <T>(preloaded: Preloaded<T>, options?: {
     onError?: SubscriptionErrorCallback;
-}) => T;
+}) => T | undefined;
 ```
 
 ### `usePresence` (const)

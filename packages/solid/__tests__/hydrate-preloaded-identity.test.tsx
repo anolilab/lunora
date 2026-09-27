@@ -60,7 +60,7 @@ const createClient = (sockets: MockSocket[]): LunoraClient =>
 const mount = (client: LunoraClient): HTMLElement =>
     render(
         () => {
-            const data = hydratePreloaded(PRELOADED_FOR_A) as () => { text: string }[] | undefined;
+            const data = hydratePreloaded(PRELOADED_FOR_A);
 
             return (
                 <pre>
@@ -170,7 +170,7 @@ describe("hydratePreloaded across an identity change", () => {
         // taken but before the identity listener is registered.
         const { container } = render(
             () => {
-                const data = hydratePreloaded(PRELOADED_FOR_A) as () => { text: string }[] | undefined;
+                const data = hydratePreloaded(PRELOADED_FOR_A);
 
                 client.setAuthToken("jwt-B", "user-B");
 

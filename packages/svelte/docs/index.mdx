@@ -237,7 +237,8 @@ The preloaded value was read for whoever was signed in when the page loaded.
 After a sign-out or user switch retires that identity, every `hydratePreloaded`
 on the client — mounted then or later — stops using it and holds `undefined`
 until the live value arrives, so the previous user's rows are never shown to the
-next one. A same-user token refresh does not count as a switch.
+next one. A same-user token refresh does not count as a switch. The store is
+typed `Readable<T | undefined>` for that reason, like `query`.
 
 Pass `{ onError }` as the third argument (after the optional `client`) to observe
 a subscription-scoped error the server pushes after hydration (a session expiry,
@@ -255,7 +256,7 @@ rendering the SSR snapshot as if it were live.
 </script>
 
 <ul>
-    {#each $posts as p (p._id)}
+    {#each $posts ?? [] as p (p._id)}
         <li>{p.title}</li>
     {/each}
 </ul>

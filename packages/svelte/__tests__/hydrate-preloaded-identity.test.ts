@@ -59,7 +59,7 @@ const createClient = (sockets: MockSocket[]): LunoraClient =>
 
 /** Create the store and hold a subscriber on it, as a mounted component would. */
 const mount = (client: LunoraClient): { stop: () => void; store: Readable<{ text: string }[] | undefined> } => {
-    const store = hydratePreloaded(PRELOADED_FOR_A, client) as Readable<{ text: string }[] | undefined>;
+    const store = hydratePreloaded(PRELOADED_FOR_A, client);
     const stop = store.subscribe(() => undefined);
 
     return { stop, store };
