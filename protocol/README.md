@@ -139,7 +139,9 @@ Notes that a port MUST honour:
   scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
   string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
   a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
-  structurally identical non-scalar keys stay two entries.
+  structurally identical non-scalar keys stay two entries. Values of different
+  kinds never collapse: bytes holding `"a"` are not the string `"a"`, and none
+  of `1n`, `"1"` or `true` is the number `1`.
 - **A signed zero in a `set` or a map key is stored as `+0`.** `Set.prototype.add`
   and `Map.prototype.set` both normalise `-0` to `+0` on INSERT, not only when
   it collides with a `0` already held — so `[TAG, "set", [-0]]` re-encodes as

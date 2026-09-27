@@ -393,7 +393,10 @@ module Lunora
     # key. `(-0.0).to_f.to_s` is "-0.0", which split the two; `+ 0.0` is the
     # IEEE-754 identity that clears the sign of a zero and changes nothing else.
     when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f + 0.0}"
-    when ::String then "str:#{key}"
+    # A BINARY String is decoded bytes (a Uint8Array), which the reference
+    # compares by reference like every other non-scalar; comparing it by value
+    # merged bytes "a" into the text key "a" and dropped an entry.
+    when ::String then key.encoding == ::Encoding::BINARY ? nil : "str:#{key}"
     else key.equal?(UNDEFINED) ? "undefined" : nil
     end
   end
