@@ -2,7 +2,7 @@
 
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -57,8 +57,12 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     const registry = getSubscriptionRegistry(client);
     const identityEpoch = useSyncExternalStore(registry.subscribeIdentityEpoch, registry.identityEpoch, () => 0);
 
+    // Likewise bound to the client this hook mounted under: after a provider
+    // `client` swap the value belongs to the previous client, not the new one.
+    const [mountClient] = useState(client);
+
     const { args, functionPath, shardKey } = preloaded;
-    const value = identityEpoch === 0 ? preloaded.value : undefined;
+    const value = identityEpoch === 0 && client === mountClient ? preloaded.value : undefined;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
     // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
     // reference each render is fine — React Compiler auto-memoizes these

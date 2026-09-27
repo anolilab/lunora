@@ -77,4 +77,60 @@ describe("useSubscription — args change", () => {
 
         expect(screen.getByTestId("view").textContent).toBe("2=>loading|err=-");
     });
+
+    it.each([
+        ["a skip", "skip"],
+        ["args that never answered", "2"],
+    ])("does not bring back a retired result after %s", (_label, via) => {
+        expect.hasAssertions();
+
+        const Toggle = ({ id }: { id: string }): ReactElement => {
+            const { data } = useSubscription(REF, id === "skip" ? "skip" : { id });
+
+            return <div data-testid="view">{data ?? "loading"}</div>;
+        };
+        const mock = createMockClient();
+        const tree = (id: string): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <Toggle id={id} />
+            </LunoraProvider>
+        );
+        const view = render(tree("1"));
+
+        act(() => {
+            mock.emit("docs:get", "doc-1", isDocument("1"));
+        });
+
+        expect(screen.getByTestId("view").textContent).toBe("doc-1");
+
+        view.rerender(tree(via));
+        view.rerender(tree("1"));
+
+        expect(screen.getByTestId("view").textContent).toBe("loading");
+    });
+
+    it("keeps an absent shard key apart from an empty one", () => {
+        expect.hasAssertions();
+
+        const Sharded = ({ shardKey }: { shardKey: string | undefined }): ReactElement => {
+            const { data } = useSubscription(REF, { id: "1" }, { shardKey });
+
+            return <div data-testid="view">{data ?? "loading"}</div>;
+        };
+        const mock = createMockClient();
+        const tree = (shardKey: string | undefined): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <Sharded shardKey={shardKey} />
+            </LunoraProvider>
+        );
+        const view = render(tree(undefined));
+
+        act(() => {
+            mock.emit("docs:get", "root-shard", isDocument("1"));
+        });
+
+        view.rerender(tree(""));
+
+        expect(screen.getByTestId("view").textContent).toBe("loading");
+    });
 });

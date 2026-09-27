@@ -80,6 +80,10 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
             return;
         }
 
+        // The previous client's identity changes no longer concern this cache:
+        // left registered, a later sign-out on it would blank the new client's
+        // queries with nothing to refetch them.
+        getSubscriptionRegistry(previousClient.current).stopClearingOnIdentityChange(effectiveClient);
         previousClient.current = client;
         getSubscriptionRegistry(client).clearQueries(effectiveClient);
         // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget: a failed refetch lands on the query's own error state

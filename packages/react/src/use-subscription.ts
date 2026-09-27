@@ -37,7 +37,8 @@ const useSubscription = <F extends FunctionReference>(
     // current one. New args therefore read as "no data, no error" from their
     // first render instead of showing the previous args' result until the new
     // subscription answers, and no reset `setState` is needed.
-    const key = `${function_.__lunoraRef}\u0000${serialized}\u0000${options.shardKey ?? ""}`;
+    // eslint-disable-next-line unicorn/no-null -- `null` keeps an absent shard key distinct from `""`, as `lunoraQueryKey` does
+    const key = JSON.stringify([function_.__lunoraRef, serialized, options.shardKey ?? null]);
     const [state, setState] = useState<{ client: typeof client; key: string; result: UseSubscriptionResult<ReturnOf<F>> } | undefined>(undefined);
 
     // The subscribe effect keys off the serialized args, so an inline `onError`
@@ -110,6 +111,10 @@ const useSubscription = <F extends FunctionReference>(
         return () => {
             cancelled = true;
             unsubscribe();
+            // A retired subscription's result must not come back: after a skip,
+            // or a round trip through other args that never answered, the same
+            // key would match it again (and it may predate a sign-out).
+            setState(undefined);
         };
     }, [client, function_.__lunoraRef, key, serialized, options.shardKey, skipped]);
 

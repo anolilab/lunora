@@ -213,6 +213,15 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
+     * Stop clearing `queryClient` on this client's identity changes — for when
+     * a provider hands `queryClient` to a different client, whose own identity
+     * changes then govern it.
+     */
+    public stopClearingOnIdentityChange(queryClient: QueryClient): void {
+        this.identityWatched.delete(queryClient);
+    }
+
+    /**
      * How many identities the client has retired since this registry started
      * listening (see `listenForIdentityChange`). A preloaded value is
      * only good while this is `0`: it was rendered for whoever was signed in

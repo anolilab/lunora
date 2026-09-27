@@ -79,4 +79,25 @@ describe("usePresence — room change", () => {
 
         expect(screen.getByTestId("view").textContent).toBe('room-b:["bob"]|err=-');
     });
+
+    it("does not bring back a room's old list after a round trip through a room that never answered", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const tree = (roomId: string): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <View roomId={roomId} />
+            </LunoraProvider>
+        );
+        const view = render(tree("room-a"));
+
+        act(() => {
+            mock.emit("presence:listPresent", ["alice"], inRoom("room-a"));
+        });
+
+        view.rerender(tree("room-b"));
+        view.rerender(tree("room-a"));
+
+        expect(screen.getByTestId("view").textContent).toBe("room-a:loading|err=-");
+    });
 });

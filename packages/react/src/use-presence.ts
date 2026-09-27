@@ -102,7 +102,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // query + room + shard) and returned only while that room is current, so a
     // room change reads as "no members yet" from its first render instead of
     // listing the previous room's members until the new subscription answers.
-    const roomKey = `${listPresent.__lunoraRef}\u0000${roomId}\u0000${shardKey ?? ""}`;
+    // eslint-disable-next-line unicorn/no-null -- `null` keeps an absent shard key distinct from `""`, as `lunoraQueryKey` does
+    const roomKey = JSON.stringify([listPresent.__lunoraRef, roomId, shardKey ?? null]);
     const [listState, setListState] = useState<{
         client: typeof client;
         error: SubscriptionError | undefined;
@@ -241,6 +242,9 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         return () => {
             cancelled = true;
             unsubscribe();
+            // A retired subscription's list must not come back when the hook
+            // returns to this room before the next one answered.
+            setListState(undefined);
         };
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `onErrorRef` is a stable ref carrying the latest handler. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
     }, [client, listPresent.__lunoraRef, roomId, roomKey, shardKey]);
