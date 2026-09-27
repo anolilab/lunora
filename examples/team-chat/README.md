@@ -90,7 +90,8 @@ const { page } = await ctx.db.profiles.findMany({});
 ```
 
 **Signed URLs need somewhere to land.** `generateUploadUrl` mints a URL against
-`publicBaseUrl`; R2 is not on the internet, so something must verify the
+the origin the action's request arrived on (no `publicBaseUrl` is configured,
+so there is no per-environment value to ship); R2 is not on the internet, so something must verify the
 signature and move the bytes. That is the `/files/*` route in
 `src/server/index.ts` (`verifySignedUrl` → `PUT`/`GET` on the bucket). Storage
 keys are prefixed `files/` so the signed pathname matches that route.
@@ -117,7 +118,7 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
-    .storage({ bucket: (env) => env.FILES, publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL, signingSecret: (env) => env.STORAGE_SECRET })
+    .storage({ bucket: (env) => env.FILES, signingSecret: (env) => env.STORAGE_SECRET })
     .extend(() => ({ authorizeShard: ({ identity }) => Boolean(identity?.userId) }))
     .build();
 ```

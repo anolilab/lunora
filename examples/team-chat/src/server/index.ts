@@ -19,18 +19,6 @@ interface Env {
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 /**
- * Origin that signed object URLs resolve against.
- *
- * Derived per-request rather than shipped as a `var`. `buildSignedUrl` binds the
- * HOST into the HMAC and `verifySignedUrl` canonicalises against the inbound
- * host, so a hard-coded `http://localhost:5173` — which is what a deploy would
- * carry, since the deploy flow prompts for secrets but copies `vars` verbatim —
- * mints URLs that fail their own signature check on the deployed origin, 403ing
- * every attachment and avatar.
- */
-const storageOrigin = (request: Request): string => new URL(request.url).origin;
-
-/**
  * The composed worker.
  *
  * `defineApp()` is generated from this project's schema, so each declaration
@@ -47,14 +35,16 @@ const storageOrigin = (request: Request): string => new URL(request.url).origin;
  * - `.storage()` — the R2 bucket behind `ctx.storage`, plus the signing config the upload URLs need.
  * - `.extend()`  — anything the builder does not model; here, shard authorisation.
  */
-const app = defineApp<Env & { PUBLIC_STORAGE_BASE_URL: string }>()
+const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
+    // No `publicBaseUrl`: an action signs object URLs against the origin its
+    // request reached the worker on. `buildSignedUrl` binds the HOST into the
+    // HMAC and `verifySignedUrl` checks it against the inbound host, so a fixed
+    // base (a `localhost` one, say) mints URLs that fail on every other origin.
     .storage({
         bucket: (env) => env.FILES,
-        // Set per request in `fetch` below — see `storageOrigin`.
-        publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
         signingSecret: (env) => env.STORAGE_SECRET,
     })
     .extend(() => {
@@ -86,7 +76,7 @@ export const { ShardDO } = app;
  * The 403 is deliberately opaque: distinguishing "expired" from "bad signature"
  * would turn this into a signing oracle.
  */
-const handleStorageAsset = async (request: Request, env: Env & { PUBLIC_STORAGE_BASE_URL: string }): Promise<Response | null> => {
+const handleStorageAsset = async (request: Request, env: Env): Promise<Response | null> => {
     const url = new URL(request.url);
 
     if (!url.pathname.startsWith("/files/")) {
@@ -154,26 +144,19 @@ const handleStorageAsset = async (request: Request, env: Env & { PUBLIC_STORAGE_
 
 /**
  * This entry cannot `export default app` (the signed-asset route has to run
- * ahead of the worker and the origin has to be threaded onto `env`), so every
- * other handler `.build()` composes is forwarded by hand. `scheduled`, `queue`
+ * ahead of the worker), so every other handler `.build()` composes is
+ * forwarded by hand. `scheduled`, `queue`
  * and `email` appear the moment a `lunora/crons.ts`, a `defineQueue` or
  * `.onEmail(...)` is added, and `lunora deploy` provisions the matching trigger
  * from the same discovery — an entry exporting only `fetch` gets the trigger
  * without the handler and Cloudflare fires it into nothing.
- *
- * `scheduled`/`queue`/`email` take the raw `env`: `PUBLIC_STORAGE_BASE_URL` is
- * derived from the inbound request, and there is no request on those paths.
  */
 export default {
     email(message: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
         return app.email?.(message, env, context) ?? Promise.resolve();
     },
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
-        // The builder reads `publicBaseUrl` off `env`, so the request-derived
-        // origin is threaded in here rather than shipped in `wrangler.jsonc`.
-        const scoped = { ...env, PUBLIC_STORAGE_BASE_URL: storageOrigin(request) };
-
-        return (await handleStorageAsset(request, scoped)) ?? app.fetch(request, scoped, context);
+        return (await handleStorageAsset(request, env)) ?? app.fetch(request, env, context);
     },
     queue(batch: unknown, env: Env, context: ExecutionContextLike): Promise<void> {
         return app.queue?.(batch, env, context) ?? Promise.resolve();

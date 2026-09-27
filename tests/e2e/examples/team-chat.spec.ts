@@ -8,9 +8,10 @@ import { expect, test } from "@playwright/test";
  * chat app rather than a form: a message reaching the other person's open window
  * without a reload, and presence showing them as online.
  *
- * Attachments are not exercised — the upload goes to R2 through a signed URL,
- * and the interesting half of that (the key-prefix guard) is asserted in the
- * server-side suite where a forged key can actually be sent.
+ * Attachments get one round trip here — upload through the signed URL, then
+ * another member downloading it — because the URL's host is only right or
+ * wrong against a real origin. The key-prefix guard is asserted in the
+ * server-side suite, where a forged key can actually be sent.
  */
 const unique = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
@@ -27,7 +28,7 @@ const signUp = async (page: Page, name: string): Promise<void> => {
     await expect(page.getByLabel("New channel")).toBeVisible();
 };
 
-test("signs up, creates a channel, and delivers a message to another member live", async ({ browser, page }) => {
+test("signs up, creates a channel, and delivers a message and an attachment to another member", async ({ browser, page }) => {
     const channel = `room-${unique()}`;
 
     await signUp(page, `Ada${unique()}`);
@@ -58,6 +59,36 @@ test("signs up, creates a channel, and delivers a message to another member live
 
     // Both are in the channel, so presence must show two people.
     await expect(page.getByRole("list", { name: "Online now" }).getByRole("listitem")).toHaveCount(2);
+
+    // An attachment round trip. The browser PUTs the file to the signed URL the
+    // action minted, so that URL has to point back at the origin this page is
+    // on — the dev server here, the worker's own host on a deploy.
+    const contents = `attachment-${unique()}`;
+
+    await page.getByLabel("Attach a file").setInputFiles({ buffer: Buffer.from(contents), mimeType: "text/plain", name: "notes.txt" });
+    await page.getByLabel(`Message #${channel}`).fill("see attached");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    // The other member downloads it. The app opens the signed download URL in
+    // a new tab; record that URL instead and fetch it with Grace's session.
+    await grace.evaluate(() => {
+        globalThis.open = (url?: URL | string) => {
+            document.body.dataset["openedUrl"] = String(url);
+
+            return null;
+        };
+    });
+    await grace.getByRole("button", { name: /notes\.txt/ }).click();
+    await expect(grace.locator("body")).toHaveAttribute("data-opened-url", /\/files\//);
+
+    const signedUrl = (await grace.locator("body").getAttribute("data-opened-url")) ?? "";
+
+    expect(new URL(signedUrl).origin).toBe(new URL(grace.url()).origin);
+
+    const download = await grace.request.get(signedUrl);
+
+    expect(download.status()).toBe(200);
+    expect(await download.text()).toBe(contents);
 
     await other.close();
 });

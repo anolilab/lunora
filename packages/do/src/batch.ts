@@ -19,6 +19,7 @@ const SHARED_BATCH_HEADERS = [
     "x-lunora-identity",
     "x-d1-bookmark",
     "x-lunora-client-ip",
+    "x-lunora-origin",
     "x-lunora-system",
     "x-lunora-shard-binding",
 ] as const;

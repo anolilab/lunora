@@ -27,7 +27,7 @@ interface StorageDeclaration<Env> {
     bucket: Selector<Env, R2BucketLike>;
     /** Extra named buckets, reached via `ctx.storage.bucket("name")` and the studio's bucket picker. */
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
-    /** Public base URL signed/public object URLs resolve against. */
+    /** Public base URL signed/public object URLs resolve against. Omit it and `ctx.storage` in a mutation, action or HTTP handler signs against the origin the request reached the worker on — no per-environment value to ship. Queries get no such fallback (a live query re-runs with no request behind it), so a query that signs URLs needs this set. */
     publicBaseUrl?: Selector<Env, string>;
     /** R2 S3-API credentials (`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }`) enabling `ctx.storage.getPresignedUrl` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed `getSignedUrl` path. */
     s3?: Selector<Env, R2S3Credentials>;
@@ -225,7 +225,7 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
-            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>) => this.resolveStorage(rawEnv as Env) } : {}),
+            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin) } : {}),
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
@@ -272,19 +272,22 @@ class AppBuilder<Env extends object> {
      * against another sharing the secret — and multi-bucket verification fails
      * outright. Hence `"default"` for the bare `ctx.storage` bucket and the
      * `buckets` key for every other.
+     *
+     * `origin` is the request's own origin, the base when no `publicBaseUrl` is
+     * declared. The studio admin ops pass none, and sign only when one is.
      */
-    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string): Storage {
+    private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string, origin?: string): Storage {
         return createStorage({
             bucket,
             bucketName,
-            publicBaseUrl: declaration.publicBaseUrl?.(env),
+            publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,
             s3: declaration.s3?.(env),
             signingSecret: declaration.signingSecret?.(env),
         });
     }
 
     /** Resolve the storage capability (single or multi-bucket) for the DO side. */
-    private resolveStorage(env: Env): Storage | undefined {
+    private resolveStorage(env: Env, origin?: string): Storage | undefined {
         const declaration = this.storageDeclaration;
 
         if (!declaration) {
@@ -302,13 +305,13 @@ class AppBuilder<Env extends object> {
             .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
 
         if (extraEntries.length === 0) {
-            return this.makeStorage(env, declaration, defaultBucket, "default");
+            return this.makeStorage(env, declaration, defaultBucket, "default", origin);
         }
 
-        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default") };
+        const map: Record<string, Storage> = { default: this.makeStorage(env, declaration, defaultBucket, "default", origin) };
 
         for (const [name, bucket] of extraEntries) {
-            map[name] = this.makeStorage(env, declaration, bucket, name);
+            map[name] = this.makeStorage(env, declaration, bucket, name, origin);
         }
 
         return createBucketStorage(map, { default: "default" });
@@ -414,7 +417,7 @@ class AppBuilder<Env extends object> {
 
         if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
-            options.storage = (rawEnv: unknown) => this.resolveStorage(rawEnv as Env);
+            options.storage = (rawEnv: unknown, origin?: string) => this.resolveStorage(rawEnv as Env, origin);
         }
 
         options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;
