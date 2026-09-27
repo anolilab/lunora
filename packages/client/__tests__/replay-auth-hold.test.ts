@@ -1,3 +1,4 @@
+import { createWorker } from "@lunora/runtime";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
@@ -155,6 +156,82 @@ describe("durable replay under an expired bearer", () => {
         expect(fetchImpl.mock.calls.at(-1)?.[1].headers).toMatchObject({
             authorization: "Bearer refreshed-jwt" /* gitleaks:allow -- test fixture, not a real credential */,
         });
+
+        client.close();
+    });
+});
+
+describe("durable replay against a real worker under a lapsed bearer", () => {
+    it("is refused with TOKEN_EXPIRED before the shard runs it, held, and committed after setAuthToken", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const shardCalls: string[] = [];
+        // The resolver an app ships for its JWTs: it verifies the token and hands
+        // back the identity WITH its `exp`, lapsed or not.
+        const worker = createWorker({
+            resolveIdentity: (request) => {
+                const bearer = request.headers.get("authorization");
+
+                if (bearer === null) {
+                    return null;
+                }
+
+                return { exp: bearer === "Bearer stale-jwt" ? nowSeconds - 60 : nowSeconds + 3600, userId: "user-1" };
+            },
+            shardDO: {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            shardCalls.push(request.headers.get("authorization") ?? "");
+
+                            return okResponse();
+                        },
+                    };
+                },
+                idFromName: (name) => name,
+            },
+        });
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (url, init) =>
+            worker.fetch(new Request(url, init), {}, { passThroughOnException: () => undefined, waitUntil: () => undefined }),
+        );
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken("stale-jwt", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        // Refused at the worker: the lapsed credential never ran the write.
+        expect(shardCalls).toStrictEqual([]);
+        await expect(persistence.load()).resolves.toHaveLength(1);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        client.setAuthToken("fresh-jwt", "user-1");
+        await settle();
+
+        await expect(outcome).resolves.toBe("committed");
+        expect(shardCalls).toStrictEqual(["Bearer fresh-jwt"]);
+        await expect(persistence.load()).resolves.toHaveLength(0);
 
         client.close();
     });

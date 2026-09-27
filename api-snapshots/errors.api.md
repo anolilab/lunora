@@ -717,6 +717,11 @@ const ERROR_CATALOG: {
         readonly title: "Durable stream exceeded its chunk ceiling";
     };
     readonly TOKEN_EXPIRED: {
+        readonly hint: readonly [
+            "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",
+            "",
+            "It is a refusal of the credential, not of the call: `@lunora/client` holds a queued write, fires `onTokenExpired`, and re-sends it after `setAuthToken`. The worker can only tell expired from anonymous if your `resolveIdentity` returns the identity with its past `exp` (or `expiresAtMs`), or throws a `LunoraError` with this code. Returning `null` runs the call anonymous."
+        ];
         readonly status: 401;
         readonly title: "Authentication token expired";
     };

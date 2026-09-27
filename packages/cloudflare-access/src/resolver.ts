@@ -96,7 +96,9 @@ const toIdentity = (claims: AccessClaims, options?: CreateAccessResolverOptions)
  *
  * Behaviour is **fail-closed → anonymous** on both paths: no identity, or a token
  * that fails verification, resolves to `null` (the request proceeds
- * unauthenticated and RLS denies). Use {@link CreateAccessResolverOptions.onError}
+ * unauthenticated and RLS denies). The one exception is a correctly signed token
+ * whose only fault is a past `exp`: it resolves to its identity with that `exp`,
+ * which the runtime refuses with `TOKEN_EXPIRED` (HTTP 401, socket close 4001). Use {@link CreateAccessResolverOptions.onError}
  * to observe verification failures.
  *
  * Wire it in your worker entry:
@@ -139,7 +141,11 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
         // caller resolves anonymous, RLS denies, and `onError` never fires because
         // no verification was attempted. Fail closed to anonymous, but only after
         // both paths have had their turn.
-        const claims = jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions);
+        // An expired-but-genuine token resolves WITH its past `exp`, so the runtime
+        // answers `TOKEN_EXPIRED` (a client refreshes and re-sends) rather than
+        // running the request anonymous, where the app's own check would read
+        // as a verdict on the call.
+        const claims = jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions, true);
 
         return claims === undefined ? ANONYMOUS : toIdentity(claims, options);
     };
