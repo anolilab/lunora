@@ -1,3 +1,14 @@
+## @lunora/mcp [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.189...@lunora/mcp@1.0.0-alpha.190) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/mcp [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.188...@lunora/mcp@1.0.0-alpha.189) (2026-09-27)
 
 
