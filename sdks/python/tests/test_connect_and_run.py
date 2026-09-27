@@ -18,7 +18,10 @@ import contextlib
 import json
 import os
 import sys
+import threading
+import types
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -75,6 +78,39 @@ class _FakeWebsockets:
 
     async def __aexit__(self, *_: object) -> bool:
         return False
+
+
+class _FakeHandle:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class _FakeClock:
+    """A monotonic clock plus ``call_later`` that only move when told to."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.timers: list = []
+        self.delays: list = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def call_later(self, delay: float, callback) -> _FakeHandle:
+        handle = _FakeHandle()
+        self.delays.append(delay)
+        self.timers.append((self.now + delay, callback, handle))
+        return handle
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        due = [timer for timer in self.timers if timer[0] <= self.now + 1e-9 and not timer[2].cancelled]
+        self.timers = [timer for timer in self.timers if timer not in due and not timer[2].cancelled]
+        for _, callback, _ in due:
+            callback()
 
 
 async def _wait_for(predicate) -> None:
@@ -333,6 +369,196 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
 
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
+
+    async def _run_refused_once(self, refusals: list, identity="user-a", auth_token=None):
+        """Connect with one queued write the server refuses with each of ``refusals``, then accepts.
+
+        Returns ``(client, clock, posts, run, socket, settled)``. Time is a fake clock: the
+        client's timer and the rate-limit window both read it, so nothing here
+        waits in real time and every scheduled delay is observable.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        # The module's `time` binding, not `time.monotonic` itself: asyncio's
+        # own clock reads the latter, and freezing it freezes the event loop.
+        patcher = unittest.mock.patch("lunora.submit.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(clock.now)
+            self.bearers.append(headers.get("authorization"))
+            return refusals[len(posts) - 1] if len(posts) <= len(refusals) else (200, {"result": None})
+
+        self.bearers = []
+        client = LunoraClient("http://example.invalid", identity=identity, auth_token=auth_token, http_post=post)
+        client._call_later = clock.call_later
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: posts and clock.timers)
+
+        return client, clock, posts, run, socket, settled
+
+    async def test_a_hinted_rate_limit_is_retried_on_a_healthy_socket(self):
+        """A 429 leaves the socket open, so nothing reconnects to flush again.
+
+        The write must replay once the server's ``retryAfterMs`` has passed —
+        not before it, and not never, which is what parking it did.
+        """
+
+        limited = (429, {"error": {"code": "TOO_MANY_REQUESTS", "message": "slow down", "data": {"retryAfterMs": 100}}})
+        _client, clock, posts, run, socket, settled = await self._run_refused_once([limited])
+
+        self.assertEqual(clock.delays, [0.1])
+        clock.advance(0.099)
+        await asyncio.sleep(0)
+        self.assertEqual(len(posts), 1, "not before the hint")
+
+        clock.advance(0.001)
+        await _wait_for(lambda: settled)
+        self.assertEqual(settled[0].status, "committed")
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(clock.timers, [], "a committed write schedules nothing more")
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_retry_flush_is_gated_on_the_token_like_any_other(self):
+        """A retry is an ordinary flush pass: it judges the write against the token held NOW.
+
+        With no identity the write is stamped with token-a's digest. The token is
+        cleared while the retry is armed (which flushes nothing by itself), so the
+        retry cannot tell whose write it is and holds it rather than sending it
+        with no bearer; the same token set again replays it with that token.
+        """
+
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+        client, clock, posts, run, socket, settled = await self._run_refused_once([unavailable], identity=None, auth_token="token-a")
+
+        client.auth_token = None
+        clock.advance(clock.delays[0])
+        await asyncio.sleep(0.05)
+        self.assertEqual((len(posts), settled), (1, []), "held: the retry sends nothing")
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        client.auth_token = "token-a"
+        await _wait_for(lambda: settled)
+        self.assertEqual(settled[0].status, "committed")
+        self.assertEqual(self.bearers, ["Bearer token-a", "Bearer token-a"])
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_hintless_refusal_backs_off_with_jitter(self):
+        """No hint still needs a retry: a bounded, jittered, growing backoff."""
+
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+        _client, clock, posts, run, socket, settled = await self._run_refused_once([unavailable, unavailable])
+
+        clock.advance(clock.delays[0])
+        await _wait_for(lambda: len(clock.delays) == 2)
+        clock.advance(clock.delays[1])
+        await _wait_for(lambda: settled)
+        self.assertEqual(settled[0].status, "committed")
+
+        self.assertEqual(len(posts), 3)
+        self.assertTrue(0.5 <= clock.delays[0] <= 1.0, clock.delays)
+        self.assertTrue(1.0 <= clock.delays[1] <= 2.0, clock.delays)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_refusal_never_retries_in_a_hot_loop(self):
+        """Every retry waits for its timer: one pending timer, one post per firing."""
+
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+        client, clock, posts, run, _socket, settled = await self._run_refused_once([unavailable] * 50)
+
+        for fired in range(1, 9):
+            self.assertEqual(len(clock.timers), 1)
+            await asyncio.sleep(0.01)
+            self.assertEqual(len(posts), fired, "nothing posts until the timer fires")
+            clock.advance(clock.timers[0][0] - clock.now)
+            await _wait_for(lambda fired=fired: len(posts) == fired + 1 and clock.timers)
+
+        self.assertLessEqual(max(clock.delays), 60.0, "the backoff is bounded")
+        self.assertEqual(settled, [])
+
+        client.close()
+        await asyncio.wait_for(run, TIMEOUT)
+        self.assertTrue(all(handle.cancelled for _, _, handle in clock.timers), "the timer dies with the socket")
+
+    async def _retry_in_flight_when_the_run_ends(self, end: str):
+        """A retry flush still waiting on its post when the run ends.
+
+        The post is answered 503 only AFTER ``connect_and_run`` has returned, so
+        whatever that late answer arms has no socket under it any more.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.submit.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        release = threading.Event()
+        self.addCleanup(release.set)
+        posts = []
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+
+        def post(_url, _headers, _body):
+            posts.append(clock.now)
+            if len(posts) == 2:
+                release.wait(TIMEOUT)
+            return unavailable
+
+        client = LunoraClient("http://example.invalid", identity="user-a", http_post=post)
+        client._call_later = clock.call_later
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: posts and clock.timers)
+
+        clock.advance(clock.timers[0][0] - clock.now)
+        await _wait_for(lambda: len(posts) == 2)
+
+        if end == "socket":
+            socket.close()
+        else:
+            client.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        release.set()
+        await asyncio.sleep(0.1)
+
+        live = [timer for timer in clock.timers if not timer[2].cancelled]
+        self.assertEqual(live, [], "no retry timer outlives connect_and_run")
+        clock.advance(120.0)
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(posts), 2, "and nothing posts without a socket")
+
+        return client, settled
+
+    async def test_a_retry_in_flight_when_the_socket_drops_arms_nothing(self):
+        client, settled = await self._retry_in_flight_when_the_run_ends("socket")
+
+        self.assertEqual(settled, [])
+        self.assertEqual(client.pending_mutation_count, 1, "the write waits for the reconnect")
+
+    async def test_a_retry_in_flight_when_the_client_closes_arms_nothing(self):
+        client, settled = await self._retry_in_flight_when_the_run_ends("client")
+
+        self.assertEqual([event.status for event in settled], ["rejected"], "the in-flight write is settled, once")
+        self.assertEqual(settled[0].error.code, "CLIENT_CLOSED")
+        self.assertEqual(client.pending_mutation_count, 0, "and never requeued into the closed queue")
 
     async def test_frames_past_the_library_default_size_are_accepted(self):
         """``websockets`` closes on any message over 1 MiB (1009) unless told otherwise.

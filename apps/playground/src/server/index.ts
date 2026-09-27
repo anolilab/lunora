@@ -9,7 +9,9 @@ import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
 import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
+import { createShardClient } from "lunorash/runtime";
 
+import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
@@ -65,6 +67,49 @@ interface Env extends Record<string, unknown> {
 const ROOT_SHARD_KEY = "__root__";
 
 /**
+ * Mirror a better-auth user into `users` — the `databaseHooks` callback.
+ *
+ * A hook gets better-auth's row, never a Lunora ctx, so this is a separate write
+ * over the shard client — an upsert keyed by the user id, safe to repeat. It
+ * runs AFTER better-auth committed the user, so it must not throw: the account
+ * already exists, and a throw here would fail the sign-up response for a user
+ * who can then sign in anyway. A failed mirror costs a display name until the
+ * user's next sign-in, which re-runs it (see `mirrorOnSignIn`).
+ */
+const mirrorUser =
+    (env: Env) =>
+    async (user: { email: string; id: string; name: string }): Promise<void> => {
+        try {
+            await createShardClient(env.SHARD)
+                .forShard(ROOT_SHARD_KEY)
+                .call(internal.users.mirrorAuthUser, { email: user.email, id: user.id, name: user.name });
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no ctx.log here: the hook runs inside better-auth, outside any Lunora dispatch
+            console.error("users:mirrorAuthUser failed", error);
+        }
+    };
+
+/**
+ * Re-mirror the user on every new session.
+ *
+ * The user hooks fire only when the row is written, so an account created
+ * before they existed, or one whose mirror failed, would stay unnamed for good.
+ * A sign-in repairs both; the upsert makes the repeat free of side effects.
+ */
+const mirrorOnSignIn =
+    (env: Env) =>
+    async (
+        session: { userId: string },
+        context: { context: { internalAdapter: { findUserById: (id: string) => Promise<{ email: string; id: string; name: string } | null> } } } | null,
+    ): Promise<void> => {
+        const user = await context?.context.internalAdapter.findUserById(session.userId).catch(() => null);
+
+        if (user) {
+            await mirrorUser(env)(user);
+        }
+    };
+
+/**
  * Auth config the builder's `.auth()` lazily builds the runtime + migration
  * instances from — same plugins/secret so both describe the identical schema.
  * The full plugin set is what the studio's auth dashboard adapts to
@@ -94,6 +139,13 @@ const authOptions = (env: Env): LunoraAuthOptions => {
                     to: user.email,
                 });
             },
+        },
+        // Copy every created/updated user into the app's `.global()` `users`
+        // table, which the chat joins to render author names, and repair the
+        // copy on each sign-in. See `mirrorUser` and `mirrorOnSignIn`.
+        databaseHooks: {
+            session: { create: { after: mirrorOnSignIn(env) } },
+            user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } },
         },
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,

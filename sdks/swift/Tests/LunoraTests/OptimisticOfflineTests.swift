@@ -655,7 +655,7 @@ extension ConformanceTests {
             }
 
             XCTAssertEqual(
-                stamped.allowsReplay(under: spec["current"] as? String),
+                stamped.replayVerdict(current: .stamp(identity: spec["current"] as? String, token: nil), token: nil) == .match,
                 try XCTUnwrap(spec["replays"] as? Bool),
                 "identity gate: \(spec["name"] as? String ?? "?")"
             )
@@ -1533,7 +1533,7 @@ extension ConformanceTests {
         for id in ids(block["queued"]) {
             let write = entry(try XCTUnwrap(id))
 
-            write.identity = .stamp(identity)
+            write.identity = .subject(identity)
             client.offlineQueue.enqueue(write)
         }
 

@@ -999,6 +999,46 @@ private fun rpcUnreadableSuccessBodyRaisesSdkError() {
 
 private fun count(value: Any?): Int = (value as Number).toInt()
 
+/**
+ * With no identity set the token's digest is the identity, so a token change is a
+ * change of user for the session as it is for the queue. Only a change FROM a
+ * token evicts, as only a change from a set identity does.
+ */
+private fun tokenChangeWithoutAnIdentityEvictsPreviousSession() {
+    val case = fixture("ws-frames.json")["identityChange"] as Map<*, *>
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val transitions = listOf(
+        listOf("token-a", "token-b", null, true),
+        listOf("token-a", null, null, true),
+        listOf("token-a", "token-a", null, false),
+        listOf(null, "token-a", null, false),
+        listOf("token-a", "token-b", "user-a", false),
+    )
+
+    for ((before, after, identity, evictsRaw) in transitions) {
+        val evicts = evictsRaw as Boolean
+        val label = "$before -> $after (identity $identity)"
+        val client = Client("https://app.example", authToken = before as String?, identity = identity as String?)
+        val rows = mutableListOf<List<WireValue>>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), { })
+        client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { rows.add(it) })
+        client.handleFrame(Json.write(case["queryFrame"]))
+        deliver(client, shape["pokeSequence"])
+
+        client.authToken = after as String?
+
+        val frames = resent(client)
+        val query = frames.first { it["id"] == "sub_1" }["query"] as Map<*, *>
+        val shapeFrame = frames.first { it["id"] == "shape_1" }
+
+        check(query.containsKey("sinceSeq") != evicts, "$label: query resume cursor kept = ${!evicts}: $query")
+        check(shapeFrame.containsKey("sinceCheckpoint") != evicts, "$label: shape checkpoint kept = ${!evicts}: $shapeFrame")
+        check(rows.last().isEmpty() == evicts, "$label: shape rows emptied = $evicts")
+    }
+}
+
 /** `close()` ends an open pull stream: the loop yields what was delivered, then returns. */
 private fun subscriptionStreamEndsOnClose() {
     covers("subscription_stream_ends_on_close")
@@ -1113,6 +1153,7 @@ fun main() {
     rpcUnreadableSuccessBodyRaisesSdkError()
     subscriptionStreamEndsOnClose()
     identityChangeEvictsPreviousSession()
+    tokenChangeWithoutAnIdentityEvictsPreviousSession()
     authTokenRedactedWhenPrinted()
 
     // The optimistic-layer and offline-queue cases, in their own file so this one

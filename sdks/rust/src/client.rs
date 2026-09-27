@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
-use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
+use crate::offline::{random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
 use crate::submit::{args_key, matches};
@@ -417,7 +417,9 @@ pub const MAX_PENDING_POKES: usize = 64;
 pub struct Client {
     base_url: String,
     post: Option<HttpPoster>,
-    pub auth_token: Option<String>,
+    /// The bearer token every RPC carries. Set through [`Client::set_auth_token`],
+    /// which evicts the previous session when it changes who a write belongs to.
+    auth_token: Option<String>,
     /// Identifies this client to the shard. It rides every write that carries an
     /// idempotency key, because an anonymous caller has no server-minted user id
     /// to namespace its de-duplication rows by.
@@ -436,8 +438,9 @@ pub struct Client {
     /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
     /// not a bearer token. It is persisted alongside every queued write and
     /// re-checked before that write replays, so a restart cannot push one user's
-    /// queued writes as another. `None` means signed out, which is itself an
-    /// identity a write can be stamped with. Set through
+    /// queued writes as another. Left `None`, a write is stamped with a digest
+    /// of the bearer token instead ([`crate::offline::token_stamp`]; signed out
+    /// with no token either), so a new token is a new identity. Set through
     /// [`Client::set_identity`], which evicts the previous session on a change.
     identity: Option<String>,
     /// The durable write queue backing [`Client::submit`].
@@ -548,6 +551,47 @@ impl Client {
         self.identity.as_deref()
     }
 
+    /// The bearer token every RPC carries, as last set by
+    /// [`Client::set_auth_token`].
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
+
+    /// Sets the bearer token every RPC carries; the next call picks it up.
+    ///
+    /// With no [`Client::identity`] set the token's digest IS the identity, so a
+    /// new or cleared token retires the previous one's session exactly as a
+    /// change of identity does (see [`Client::set_identity`]), and a write queued
+    /// under the old token is rejected `OFFLINE_IDENTITY_CHANGED` by the next
+    /// flush rather than sent with the new one. Set an identity to keep them
+    /// across a refresh. With an identity set the digest is not consulted, and a
+    /// token refresh is not a change of user. This client never flushes on its
+    /// own: after a refresh, call [`Client::flush_offline_queue`], as on a
+    /// reconnect.
+    pub fn set_auth_token(&mut self, token: Option<String>) {
+        let previous = self.identity_fingerprint();
+
+        self.auth_token = token;
+
+        if previous != Identity::SignedOut && previous != self.identity_fingerprint() {
+            self.evict_session();
+        }
+    }
+
+    /// Who a write queued now belongs to: [`Client::identity`] when set, else a
+    /// [`token_stamp`] of the bearer token, else signed out — the reference's
+    /// `identityFingerprint`. Without the digest branch every write made with no
+    /// identity was stamped signed out and matched any token, so a flush after
+    /// an account switch sent the previous user's writes with the new user's
+    /// credential.
+    pub fn identity_fingerprint(&self) -> Identity {
+        match (&self.identity, &self.auth_token) {
+            (Some(subject), _) => Identity::Subject(subject.clone()),
+            (None, Some(token)) => token_stamp(token),
+            (None, None) => Identity::SignedOut,
+        }
+    }
+
     /// Sets the opaque, NON-SECRET stamp for whoever is signed in — a user id,
     /// not a bearer token; `None` is signed out.
     ///
@@ -558,14 +602,19 @@ impl Client {
     /// resuming from them under the new one splices a diff onto someone else's
     /// view. Every subscription resubscribes cold, and every shape view is
     /// emptied and its `on_rows` told so (`[]`). A first sign-in and a
-    /// re-assertion of the same identity evict nothing.
+    /// re-assertion of the same identity evict nothing. With no identity set,
+    /// [`Client::set_auth_token`] evicts the same way when a new token changes
+    /// the digest.
     pub fn set_identity(&mut self, identity: Option<String>) {
         let previous = std::mem::replace(&mut self.identity, identity);
 
-        if previous.is_none() || previous == self.identity {
-            return;
+        if previous.is_some() && previous != self.identity {
+            self.evict_session();
         }
+    }
 
+    /// Drops every resume cursor, epoch and shape row, telling each shape view.
+    fn evict_session(&mut self) {
         for entry in self.subscriptions.values_mut() {
             entry.cursor = None;
             entry.epoch = None;
@@ -645,7 +694,7 @@ impl Client {
     }
 
     fn rpc(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>, mutation_id: Option<&str>) -> Result<WireValue, ClientError> {
-        let (result, _commit_cursor) = self.rpc_raw(function_path, args, shard_key, mutation_id, None)?;
+        let (result, _commit_cursor) = self.rpc_raw(function_path, args, shard_key, mutation_id, None, self.auth_token())?;
 
         Ok(decode_wire(&result)?)
     }
@@ -657,7 +706,9 @@ impl Client {
     /// result is left for the caller to decode because a write whose result does
     /// not decode still COMMITTED: the write paths confirm it before they report
     /// the decode error. `client_id` overrides this session's, so a replayed
-    /// write namespaces server-side under the id that ISSUED it.
+    /// write namespaces server-side under the id that ISSUED it. `token` is the
+    /// bearer to send: a replay passes the one its identity gate judged the pass
+    /// against, never whichever is held when its request goes out.
     pub(crate) fn rpc_raw(
         &self,
         function_path: &str,
@@ -665,6 +716,7 @@ impl Client {
         shard_key: Option<&str>,
         mutation_id: Option<&str>,
         client_id: Option<&str>,
+        token: Option<&str>,
     ) -> Result<(Value, Option<i64>), ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
@@ -672,7 +724,7 @@ impl Client {
 
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        if let Some(token) = &self.auth_token {
+        if let Some(token) = token {
             headers.insert("authorization".to_string(), format!("Bearer {token}"));
         }
 
@@ -703,15 +755,15 @@ impl Client {
     /// No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
     /// carrying independent calls, so each entry carries its own idempotency key
     /// and client id in the body. A single outer header would name one write and
-    /// de-duplicate the whole chunk against it.
-    pub(crate) fn rpc_batch(&self, calls: Vec<Value>) -> Result<(u16, Value), ClientError> {
+    /// de-duplicate the whole chunk against it. `token` as for `rpc_raw`.
+    pub(crate) fn rpc_batch(&self, calls: Vec<Value>, token: Option<&str>) -> Result<(u16, Value), ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
         let mut headers = HashMap::new();
 
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        if let Some(token) = &self.auth_token {
+        if let Some(token) = token {
             headers.insert("authorization".to_string(), format!("Bearer {token}"));
         }
 

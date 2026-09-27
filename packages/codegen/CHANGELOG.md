@@ -1,3 +1,28 @@
+## @lunora/codegen [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.229...@lunora/codegen@1.0.0-alpha.230) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** generated SDK output changes. Swift models no longer carry
+quicktype's convenience helpers (init(data:), init(fromURL:), jsonData(),
+jsonString(), with(...)). A Rust function named `self`, `crate` or `super` is
+emitted as `self_`, `crate_`, `super_`. Results and `{}` arguments that are not
+plain objects are now untyped in Ruby (ids, numbers, arrays, records, null, and
+any model reaching a scalar union), in Dart (arrays, records, nullable objects
+and scalars), and in Go (scalar unions and models reaching one).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **codegen:** generate SDK surfaces that compile and decode every shape ([#865](https://github.com/anolilab/lunora/issues/865)) ([c09e078](https://github.com/anolilab/lunora/commit/c09e07875ffebd5409ab9d29f3b49375bf6062c1))
+* **examples:** storage origin, presence authz, message window, e2e specs ([#866](https://github.com/anolilab/lunora/issues/866)) ([86f9032](https://github.com/anolilab/lunora/commit/86f903253ed3017876443d30bf33100c766010df))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/codegen [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.228...@lunora/codegen@1.0.0-alpha.229) (2026-09-27)
 
 

@@ -400,7 +400,7 @@ class TestIdentityGate < Minitest::Test
     case_data["cases"].each do |spec|
       stamped = spec["stamped"] == "absent" ? Lunora::ABSENT_IDENTITY : spec["stamped"]
 
-      assert_equal spec["replays"], Lunora.identity_allows_replay?(stamped, spec["current"]), spec["name"]
+      assert_equal spec["replays"], Lunora.replay_identity_verdict(stamped, spec["current"], nil) == :match, spec["name"]
     end
   end
 

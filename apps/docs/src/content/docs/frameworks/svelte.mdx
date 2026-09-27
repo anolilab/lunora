@@ -157,7 +157,7 @@ export async function load({ fetch }) {
 </script>
 
 <ul>
-    {#each $posts as p (p._id)}
+    {#each $posts ?? [] as p (p._id)}
         <li>{p.title}</li>
     {/each}
 </ul>

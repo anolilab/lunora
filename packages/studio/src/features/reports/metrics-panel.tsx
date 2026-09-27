@@ -131,13 +131,17 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
     // Cross-shard aggregate: per-shard results for the shards we know about
     // (root + current + recently-visited). `null` = aggregate view not loaded.
-    const [shardResults, setShardResults] = useState<null | ShardMetricsResult[]>(null);
+    // Tagged with the shard in the input when the fan-out started: the set it
+    // covers includes that shard, so the results are shown only while the input
+    // still holds it — not under a shard chosen mid-flight or afterwards.
+    const [aggregated, setAggregated] = useState<null | { results: ShardMetricsResult[]; shard: string }>(null);
     const [aggregating, setAggregating] = useState<boolean>(false);
 
     const aggregateAll = async (): Promise<void> => {
         setAggregating(true);
 
-        const shards = shardsToAggregate(shardKey, loadRecentShards());
+        const startedFor = shardKey;
+        const shards = shardsToAggregate(startedFor, loadRecentShards());
 
         // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
@@ -154,7 +158,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             );
 
             if (mountedRef.current) {
-                setShardResults(results);
+                setAggregated({ results, shard: startedFor });
             }
         } finally {
             if (mountedRef.current) {
@@ -163,6 +167,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         }
     };
 
+    const shardResults = aggregated?.shard === shardKey ? aggregated.results : null;
     const aggregate = shardResults === null ? null : aggregateMetrics(shardResults);
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
@@ -202,7 +207,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     };
 
     const clearAggregate = (): void => {
-        setShardResults(null);
+        setAggregated(null);
     };
 
     const switchToOverview = (): void => {

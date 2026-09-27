@@ -18,10 +18,15 @@ package lunora
 //   - The persistence adapter is SYNCHRONOUS. The browser client's is async
 //     because IndexedDB is; a consumer here injects whatever it likes and owns its
 //     own concurrency, exactly as it does for the HTTP poster and frame sender.
-//   - The identity stamp is an opaque string the CONSUMER sets (Client.Identity),
-//     not a fingerprint derived from an auth token. These SDKs do not manage auth
-//     sessions, and a derived stamp would mean persisting a hash of a bearer token
-//     in the consumer's storage. Put a stable, non-secret subject there.
+//   - The identity stamp is the consumer's own Client.Identity when set (a
+//     stable, non-secret subject such as a user id), stored as given rather than
+//     under the reference's `subj:` namespace, so records persisted before token
+//     digests existed keep matching. With none set it is TokenStamp of the bearer
+//     token — {"tokenDigest": <digest>} in the record — so a different token is a
+//     different identity; with neither it is SignedOut. The token stamp is a
+//     distinct variant rather than the reference's bare string because the
+//     identity carries no `subj:` namespace: no identity string, however it is
+//     spelled, can equal it, so neither can be taken for the other.
 //   - There is no multi-tab leader election. There are no tabs.
 
 import (
@@ -29,8 +34,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 )
 
 const (
@@ -66,14 +73,19 @@ func (e OfflineError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Me
 
 // Identity stamps who made a queued write.
 //
-// Three states, not two, and the third is load-bearing. A write made while signed
-// out (Present, Subject nil) must replay signed out; a record written before
-// stamping existed (not Present) replays ambiently under whatever identity is
-// current. Collapsing them would either strand every old record or silently push
-// one user's queued writes as another.
+// Four states, and the differences are load-bearing. A write made while signed
+// out (Present, no Subject, no TokenDigest) must replay signed out; a record
+// written before stamping existed (not Present) replays ambiently under whatever
+// identity is current; a Subject names the consumer's user; a TokenDigest names
+// the bearer token the write was made with when no subject was set. Collapsing
+// any two would either strand old records or push one user's queued writes as
+// another's.
 type Identity struct {
 	Present bool
 	Subject *string
+	// TokenDigest is TokenDigest(token) for a token stamp, else "". Never set
+	// beside Subject, and never "" when set: a digest always carries its `:`s.
+	TokenDigest string
 }
 
 // AbsentIdentity is the stamp of a record that carries none.
@@ -85,18 +97,89 @@ func SignedOut() Identity { return Identity{Present: true} }
 // IdentityOf stamps a write with a subject.
 func IdentityOf(subject string) Identity { return Identity{Present: true, Subject: &subject} }
 
-// IdentityAllowsReplay reports whether a write stamped stamped may replay under
-// current (nil = signed out).
-func IdentityAllowsReplay(stamped Identity, current *string) bool {
-	if !stamped.Present {
-		return true
+// TokenStamp is the stamp a write made with token and no identity carries.
+//
+// Typed, not the digest string itself: an identity is any string the app
+// chooses, and one spelled like a digest must not match that token's writes.
+func TokenStamp(token string) Identity {
+	return Identity{Present: true, TokenDigest: TokenDigest(token)}
+}
+
+// Equal reports whether two stamps name the same identity.
+func (i Identity) Equal(other Identity) bool {
+	if i.Present != other.Present || i.TokenDigest != other.TokenDigest || (i.Subject == nil) != (other.Subject == nil) {
+		return false
 	}
 
-	if stamped.Subject == nil || current == nil {
-		return stamped.Subject == nil && current == nil
+	return i.Subject == nil || *i.Subject == *other.Subject
+}
+
+func (i Identity) signedOut() bool { return i.Present && i.Subject == nil && i.TokenDigest == "" }
+
+// TokenDigest is the reference client's hashToken: who a bearer token stamps a
+// write as.
+//
+// A digest, not the token, because the stamp is persisted and a queue store
+// should not become somewhere a credential sits at rest. FNV-1a and djb2 side by
+// side over UTF-16 code UNITS (JavaScript's charCodeAt walk), each base36 and
+// prefixed by the length in code units, so the two cannot encode to one string
+// through variable-width concatenation.
+//
+// A Go string is bytes, not code units, so it is decoded to runes and re-encoded
+// as UTF-16: a non-BMP rune becomes its surrogate pair, as in JavaScript. A Go
+// string cannot hold a lone surrogate — []rune turns invalid UTF-8, an encoded
+// surrogate included, into U+FFFD — so such a token digests as U+FFFD would.
+func TokenDigest(token string) string {
+	units := utf16.Encode([]rune(token))
+	fnv, djb2 := uint32(0x811C9DC5), uint32(5381)
+
+	for _, code := range units {
+		fnv = (fnv ^ uint32(code)) * 0x01000193
+		djb2 = djb2*33 + uint32(code)
 	}
 
-	return *stamped.Subject == *current
+	return strconv.FormatUint(uint64(len(units)), 36) + ":" + strconv.FormatUint(uint64(fnv), 36) + ":" + strconv.FormatUint(uint64(djb2), 36)
+}
+
+// ReplayVerdict is the identity gate's answer for one queued write.
+type ReplayVerdict string
+
+const (
+	// ReplayMatch sends the write.
+	ReplayMatch ReplayVerdict = "match"
+	// ReplayUnknown holds it: nobody is signed in, so whose write it is cannot
+	// be told. It stays queued and persisted, neither sent nor dropped.
+	ReplayUnknown ReplayVerdict = "unknown"
+	// ReplayMismatch rejects it with CodeOfflineIdentityChanged: someone else is
+	// signed in, and replaying would attribute one user's write to another.
+	ReplayMismatch ReplayVerdict = "mismatch"
+)
+
+// ReplayIdentityVerdict judges a write stamped stamped against current, the
+// identity in effect now (see Client.Identity), with token the bearer held now
+// ("" for none). Mirrors the reference's replayIdentityVerdict:
+//
+//   - ReplayMatch — the same identity, SignedOut included, or a TokenStamp of
+//     the very token held now (the write was queued under this credential
+//     before an identity named it). A token stamp only ever equals a token
+//     stamp, and a subject only a subject. A record with no stamp at all
+//     predates stamping and replays ambiently: there is nothing to wait for.
+//   - ReplayUnknown — nobody is signed in now.
+//   - ReplayMismatch — someone else is.
+func ReplayIdentityVerdict(stamped Identity, current Identity, token string) ReplayVerdict {
+	if !stamped.Present || stamped.Equal(current) {
+		return ReplayMatch
+	}
+
+	if stamped.TokenDigest != "" && token != "" && TokenDigest(token) == stamped.TokenDigest {
+		return ReplayMatch
+	}
+
+	if current.signedOut() {
+		return ReplayUnknown
+	}
+
+	return ReplayMismatch
 }
 
 // PersistenceAdapter is durable storage for queued writes. Injected, and
@@ -196,10 +279,13 @@ func (m *QueuedMutation) Record(version string) (map[string]any, error) {
 	}
 
 	if m.Identity.Present {
-		if m.Identity.Subject == nil {
-			record["identity"] = nil
-		} else {
+		switch {
+		case m.Identity.Subject != nil:
 			record["identity"] = *m.Identity.Subject
+		case m.Identity.TokenDigest != "":
+			record["identity"] = map[string]any{"tokenDigest": m.Identity.TokenDigest}
+		default:
+			record["identity"] = nil
 		}
 	}
 
@@ -220,7 +306,7 @@ func (m *QueuedMutation) Record(version string) (map[string]any, error) {
 // caller that submitted it did not survive the restart, so the client's own
 // settled listeners are its only report. A missing identity key restores as absent (a legacy
 // record); a stored null restores as signed out — the distinction the identity
-// gate turns on.
+// gate turns on — and {"tokenDigest": …} as a token stamp.
 //
 // It fails when the stored args are not wire values, and never substitutes: a
 // record hydrated as empty args replays SUCCESSFULLY with the wrong arguments,
@@ -251,10 +337,15 @@ func mutationFromRecord(record map[string]any) (*QueuedMutation, error) {
 	}
 
 	if raw, present := record["identity"]; present {
-		if subject, ok := raw.(string); ok {
-			entry.Identity = IdentityOf(subject)
-		} else {
-			entry.Identity = SignedOut()
+		entry.Identity = SignedOut()
+
+		switch stamp := raw.(type) {
+		case string:
+			entry.Identity = IdentityOf(stamp)
+		case map[string]any:
+			if digest, ok := stamp["tokenDigest"].(string); ok && digest != "" {
+				entry.Identity = Identity{Present: true, TokenDigest: digest}
+			}
 		}
 	}
 

@@ -42,6 +42,7 @@ from .submit import (
     close_queue,
     flush_queue,
     hydrate_queue,
+    replay_backoff_ms,
     submit_write,
 )
 from .wire import WireFormatError, decode_wire, encode_wire, stable_wire_key
@@ -353,6 +354,8 @@ class LunoraClient:
         #: came back rate-limited and the envelope named a delay. Monotonic, so a
         #: wall-clock adjustment cannot strand a queue for hours.
         self._flush_not_before = 0.0
+        #: ``loop.call_later`` unless replaced; a test injects a fake clock here.
+        self._call_later: Optional[Callable[[float, Callable[[], None]], Any]] = None
         self._was_ever_connected = False
         self._closed = False
         self._subs: dict[str, _Subscription] = {}
@@ -714,6 +717,7 @@ class LunoraClient:
                 report.conflicted += one.conflicted
                 report.requeued = one.requeued
                 report.retry_after_ms = one.retry_after_ms
+                report._answered = one._answered
                 with self._lock:
                     if shard not in self._flush_again:
                         return report
@@ -1249,10 +1253,45 @@ class LunoraClient:
             def finished(task: asyncio.Task) -> None:
                 flushes.discard(task)
                 if not task.cancelled() and task.exception() is not None:
-                    _log.warning("lunora: the flush after a token change failed", exc_info=task.exception())
+                    _log.warning("lunora: a background offline flush failed", exc_info=task.exception())
+
+            # A transient refusal the server ANSWERED leaves the socket up, so
+            # nothing reconnects to flush again: re-flush after the server's
+            # hint, or a bounded, jittered backoff when it sent none
+            # (protocol/README.md 4.3). One timer per socket; progress resets the
+            # backoff, and the timer dies with the socket: `alive` goes false when
+            # this run ends, so a flush still in flight then arms nothing.
+            retry: dict = {"alive": True, "attempts": 0, "timer": None}
+
+            def schedule_retry(report: FlushReport) -> None:
+                if not retry["alive"] or self._closed:
+                    return
+
+                # A flush that met the rate-limit window drained nothing and
+                # reports what is left of it: wait that out too, or a timer that
+                # fires a hair early would park the write after all.
+                waited = report.retry_after_ms is not None and not (report.committed or report.rejected or report.requeued)
+
+                if not report._answered and not waited:
+                    if report.committed or report.rejected:
+                        retry["attempts"] = 0
+                    return
+
+                if report._answered:
+                    retry["attempts"] += 1
+                delay_ms = report.retry_after_ms or replay_backoff_ms(retry["attempts"])
+                if retry["timer"] is not None:
+                    retry["timer"].cancel()
+                retry["timer"] = (self._call_later or loop.call_later)(delay_ms / 1000, start_flush)
+
+            async def flush_and_schedule() -> None:
+                schedule_retry(await self.flush_offline_queue(shard_key))
 
             def start_flush() -> None:
-                task = loop.create_task(self.flush_offline_queue(shard_key))
+                retry["timer"] = None
+                if not retry["alive"]:
+                    return
+                task = loop.create_task(flush_and_schedule())
                 flushes.add(task)
                 task.add_done_callback(finished)
 
@@ -1279,7 +1318,7 @@ class LunoraClient:
                 # land ahead of the backlog still replaying. The reference client
                 # has the same window; closing it needs a flushing flag in the
                 # queue-it decision, which is a protocol change, not a port fix.
-                await self.flush_offline_queue(shard_key)
+                schedule_retry(await self.flush_offline_queue(shard_key))
 
                 # `closer` finishing is `close()`: return, and let the `async
                 # with` close the socket, rather than run on for a dead client.
@@ -1295,6 +1334,15 @@ class LunoraClient:
             finally:
                 with self._lock:
                     self._token_listeners.remove(refreshed)
+                retry["alive"] = False
+                if retry["timer"] is not None:
+                    retry["timer"].cancel()
+                # A background flush still waiting on its post is ended with the
+                # socket; its drained writes go back on the queue for the
+                # reconnect, or are settled if the client closed.
+                for task in list(flushes):
+                    task.cancel()
+                await asyncio.gather(*flushes, return_exceptions=True)
                 # Writes submitted after this point queue instead of failing, and
                 # the writer never outlives the socket it writes to.
                 self.detach_socket()

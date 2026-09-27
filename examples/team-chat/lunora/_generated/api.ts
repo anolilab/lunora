@@ -21,7 +21,7 @@ export interface ApiTypes {
     presence: {
         heartbeat: FunctionReference<"mutation", { channelId: string; sessionId: string; name: string }, void>;
         leave: FunctionReference<"mutation", { channelId: string; sessionId: string }, void>;
-        list: FunctionReference<"query", { channelId: string }, import("./dataModel.js").Doc_presence[]>;
+        list: FunctionReference<"query", { channelId: string }, Omit<import("./dataModel.js").Doc_presence, "sessionId">[]>;
     };
     profiles: {
         avatarUrl: FunctionReference<"action", { userId: string }, string>;

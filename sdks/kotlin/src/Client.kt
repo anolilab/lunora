@@ -72,7 +72,7 @@ data class HttpResponse(val status: Int, val body: String)
 class Client(
     private val baseUrl: String,
     private val post: ((String, Map<String, String>, ByteArray) -> HttpResponse)? = null,
-    @Volatile var authToken: String? = null,
+    authToken: String? = null,
     /**
      * Identifies this client to the shard. It rides every write that carries an
      * idempotency key, because an anonymous caller has no server-minted user id to
@@ -97,8 +97,12 @@ class Client(
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
      * not a bearer token. It is persisted alongside every queued write and
      * re-checked before that write replays, so a restart cannot push one user's
-     * queued writes as another. Null means signed out, which is itself an identity
-     * a write can be stamped with.
+     * queued writes as another. Left null, a write is stamped with a digest of
+     * [authToken] instead ([Identity.Token]; signed out with no token either), so a
+     * new token is a new identity: a token refresh rejects the writes queued under
+     * the old one and evicts its session. Set this to keep them across a refresh.
+     * Any string is accepted: no identity, however it is spelled, equals a token
+     * stamp.
      *
      * Changing it FROM a set value to a different one — a sign-out, or another
      * user signing in — evicts the previous session: every query and shape
@@ -124,6 +128,44 @@ class Client(
 
             for (onRows in cleared) onRows(emptyList())
         }
+
+    /**
+     * The bearer token every RPC carries; the next call picks up a new one.
+     *
+     * With [identity] unset the token's digest IS the identity, so a different
+     * token (or none) retires the previous one's session exactly as [identity]
+     * changing from a set value does. With [identity] set a token change is a
+     * refresh, not a change of user, and evicts nothing. Setting it flushes
+     * nothing: the app calls [flushOfflineQueue] after a refresh, as on a
+     * reconnect.
+     */
+    @Volatile
+    var authToken: String? = authToken
+        set(value) {
+            val cleared = synchronized(lock) {
+                val previous = effectiveIdentity()
+
+                field = value
+
+                if (previous == Identity.SignedOut || previous == effectiveIdentity()) return
+
+                evictPreviousIdentitySession()
+            }
+
+            for (onRows in cleared) onRows(emptyList())
+        }
+
+    /**
+     * Who a write queued now belongs to; call with [lock] held. [identity] when set,
+     * else [Identity.Token] of [authToken], else [Identity.SignedOut] — the
+     * reference's `identityFingerprint`. Without the token branch every write made
+     * with no identity was stamped signed out and matched any token, so a flush
+     * after an account switch sent the previous user's writes with the new user's
+     * credential.
+     */
+    internal fun effectiveIdentity(): Identity = identity?.let { Identity.Of(it) }
+        ?: authToken?.let { Identity.Token(tokenDigest(it)) }
+        ?: Identity.SignedOut
 
     /**
      * Guards every field below, and the `cursor`/`epoch`/row state hanging off
@@ -534,14 +576,23 @@ class Client(
      * The cursor is what gates an optimistic overlay's removal, so it has to
      * survive the call rather than be discarded by [parseRpcResponse].
      * [issuingClientId] overrides this session's, so a replayed write namespaces
-     * server-side under the id that ISSUED it.
+     * server-side under the id that ISSUED it. [token] is the bearer to send (null:
+     * none); a replay passes the one its identity gate judged the pass against, so
+     * a token swapped mid-flush cannot carry the rest of it.
      */
-    internal fun rpcFull(functionPath: String, args: WireValue?, shardKey: String?, mutationId: String?, issuingClientId: String? = null): RpcReply {
+    internal fun rpcFull(
+        functionPath: String,
+        args: WireValue?,
+        shardKey: String?,
+        mutationId: String?,
+        issuingClientId: String? = null,
+        token: String? = authToken,
+    ): RpcReply {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
         val headers = LinkedHashMap<String, String>()
 
         headers["content-type"] = "application/json"
-        authToken?.let { headers["authorization"] = "Bearer $it" }
+        token?.let { headers["authorization"] = "Bearer $it" }
 
         if (mutationId != null) {
             headers["x-lunora-mutation-id"] = mutationId
@@ -591,14 +642,14 @@ class Client(
      * No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
      * carrying independent calls, so each entry carries its own idempotency key
      * and client id in the body. A single outer header would name one write and
-     * de-duplicate the whole chunk against it.
+     * de-duplicate the whole chunk against it. [token] as for [rpcFull].
      */
-    internal fun rpcBatch(calls: List<Any?>): Pair<Int, Map<*, *>?> {
+    internal fun rpcBatch(calls: List<Any?>, token: String?): Pair<Int, Map<*, *>?> {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
         val headers = LinkedHashMap<String, String>()
 
         headers["content-type"] = "application/json"
-        authToken?.let { headers["authorization"] = "Bearer $it" }
+        token?.let { headers["authorization"] = "Bearer $it" }
 
         val payload = Json.write(mapOf("calls" to calls))
         val response = poster(join(RPC_BATCH_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))

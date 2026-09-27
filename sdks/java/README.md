@@ -30,6 +30,7 @@ retries and socket library:
 ```java
 Client client = new Client("https://my-app.example.com", myPoster);
 client.identity(currentUserId);
+client.authToken(currentBearer);
 // The client id is minted per instance. Pin a stable per-device one only when
 // the offline queue is durable — a replayed write is namespaced server-side
 // under the id that issued it.
@@ -113,7 +114,9 @@ A replay failure is classified the same way whether the write went out alone or
 in a batch: a coded error envelope by its code alone, whatever the HTTP status —
 only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
 the refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED` and
-`UNAUTHENTICATED` (held until a token refresh, never settled) re-queue, so a
+`UNAUTHENTICATED` (held until a token refresh, never settled — set the fresh
+`client.authToken(token)` and call `flushOfflineQueue` yourself: this client
+never flushes on its own, on a reconnect or on a new token) re-queue, so a
 coded 5xx is terminal; an envelope whose `data` does not decode keeps its code
 with the `data` dropped — and a reply with no envelope by its
 status: re-queued, except a 413. A 413 is `PAYLOAD_TOO_LARGE` whatever its body,
@@ -130,12 +133,26 @@ puts every write it had drained but not yet settled back on the queue.
 
 `client.identity(id)` sets an opaque, **non-secret** stamp — a user id, not a
 bearer token. It is persisted with every queued write and re-checked before that
-write replays, so a restart cannot push one user's queued writes as another.
+write replays, so a restart cannot push one user's queued writes as another. Left
+`null`, a write is stamped with a digest of `client.authToken()` instead
+(`Identity.tokenStamp`, persisted as `{"tokenDigest": …}` — the reference
+client's digest, never the token itself), and signed out only when there is no
+token either — so a write queued under one token is never sent with another.
+Under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token
+at all it is held, unsettled, until one is set. A flush sends each write with
+the token its identity was checked against, so a token set mid-flush applies
+from the next flush, never to the rest of the current one. Setting `identity` is
+what lets a token refresh keep the queue. A record persisted by an earlier build
+with a `null` stamp is rejected the same way once a token is held, since `null`
+then said nothing about whose write it was. `identity` may be any string: a
+token stamp is a separate component of `Identity`, so no identity, however it is
+spelled, can match a token's writes, nor a token stamp an identity's.
 Changing it from a set value to a different one (another user, or `null` for
 signed out) also evicts the previous session: every query and shape
 subscription drops its resume cursor and epoch, and every shape view is emptied
 and its `onRows` told `[]`. A first sign-in and re-setting the same value evict
-nothing.
+nothing. With `identity` unset, setting a different `authToken` (or clearing it)
+evicts the same way, since the token's digest is then the identity.
 
 `synchronized` is reentrant, so a consumer callback invoked under the client's
 monitor would not deadlock — it would instead run inside the critical section

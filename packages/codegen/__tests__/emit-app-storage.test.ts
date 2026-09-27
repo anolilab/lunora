@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { emitShard } from "../src/emit";
 import { emitApp } from "../src/emit-app";
 
 /** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
@@ -54,9 +55,35 @@ describe("emitApp — storage bucket factory", () => {
         // Default bucket signs as `"default"`; named buckets sign as their key —
         // `bucketName` is bound into the signed-URL HMAC canonical, so a bucket
         // signing under another's name lets a URL cross buckets.
-        expect(output).toContain('this.makeStorage(env, declaration, defaultBucket, "default")');
-        expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name);");
+        expect(output).toContain('this.makeStorage(env, declaration, defaultBucket, "default", origin)');
+        expect(output).toContain("map[name] = this.makeStorage(env, declaration, bucket, name, origin);");
         expect(output).toContain("buckets[name] = this.makeStorage(env, declaration, bucket, name);");
+    });
+
+    // A fixed `publicBaseUrl` binds signed URLs to one host (the HMAC covers it),
+    // so a value that is right in dev is wrong on every deploy. Undeclared, the
+    // base is the origin the request reached the worker on — on both the shard
+    // and the HTTP-action path. A declared one still wins.
+    it("falls back to the request origin when no publicBaseUrl is declared", () => {
+        expect.assertions(3);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain("publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,");
+        expect(output).toContain("storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin)");
+        expect(output).toContain("options.storage = (rawEnv: unknown, origin?: string) => this.resolveStorage(rawEnv as Env, origin);");
+    });
+
+    // The shard hands the origin only to a synchronous mutation/action dispatch.
+    // A query re-runs on subscription refreshes with no request behind it, and
+    // the reactive cache does not key on the host, so it must never see one.
+    it("hands the request origin to non-query synchronous dispatches only", () => {
+        expect.assertions(2);
+
+        const shard = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        expect(shard).toContain('const requestOrigin = contextKind !== "query" && options.identity === undefined ? this.getCurrentOrigin() : undefined;');
+        expect(shard).toContain("config.storage?.(env, requestOrigin)");
     });
 
     // `buckets` is a plain object literal, so `buckets[name] ?? fallbackStorage`

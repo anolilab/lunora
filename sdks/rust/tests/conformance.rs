@@ -28,9 +28,9 @@ use offline_cases::{
     offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
     offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
     offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, offline_write_held_for_credential_replays_after_token_refresh, optimistic_cursorless_frame_preserves_cursor,
-    optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame,
-    optimistic_layer_rolls_back_on_failure,
+    offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest, offline_write_held_for_credential_replays_after_token_refresh,
+    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
+    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -153,6 +153,7 @@ fn conformance_manifest_is_covered() {
             "subscription_stream_ends_on_close" => subscription_stream_ends_on_close(),
             "identity_change_evicts_previous_session" => identity_change_evicts_previous_session(),
             "auth_token_redacted_when_printed" => auth_token_redacted_when_printed(),
+            "offline_unset_identity_stamps_token_digest" => offline_unset_identity_stamps_token_digest(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -1217,6 +1218,45 @@ fn identity_change_evicts_previous_session() {
             );
         }
     }
+
+    token_change_without_identity_evicts_previous_session(&document);
+}
+
+/// With no identity the token's digest IS the identity, so a new token is a
+/// change of user for the session as it is for the queue. Only a change FROM a
+/// token evicts, as only a change from a set identity does.
+fn token_change_without_identity_evicts_previous_session(document: &Value) {
+    let case = &document["identityChange"];
+    let transitions = [
+        (Some("token-a"), Some("token-b"), None, true),
+        (Some("token-a"), None, None, true),
+        (Some("token-a"), Some("token-a"), None, false),
+        (None, Some("token-a"), None, false),
+        (Some("token-a"), Some("token-b"), Some("user-a"), false),
+    ];
+
+    for (before, after, identity, evicts) in transitions {
+        let label = format!("{before:?} -> {after:?} (identity {identity:?})");
+        let (mut client, sent, (_rows, _errors)) = shape_client();
+
+        set_token(&mut client, before);
+        client.set_identity(identity.map(str::to_string));
+        client.subscribe("messages:list", WireValue::Object(Vec::new()), None, None);
+        client.handle_frame(&case["queryFrame"].to_string()).expect("query frame");
+        deliver(&mut client, &document["shape"]["pokeSequence"]);
+
+        set_token(&mut client, after);
+
+        let query = resent(&client, &sent, "subscribe");
+        let shape = resent(&client, &sent, "shape_subscribe");
+
+        assert_eq!(query["query"].get("sinceSeq").is_none(), evicts, "{label}: query");
+        assert_eq!(shape.get("sinceCheckpoint").is_none(), evicts, "{label}: shape");
+    }
+}
+
+fn set_token(client: &mut Client, token: Option<&str>) {
+    client.set_auth_token(token.map(str::to_string));
 }
 
 /// The bearer token never reaches a printed value. `Debug` is Rust's one
@@ -1227,7 +1267,7 @@ fn auth_token_redacted_when_printed() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.auth_token = Some(TOKEN.to_string());
+    client.set_auth_token(Some(TOKEN.to_string()));
 
     for printed in [format!("{client:?}"), format!("{client:#?}")] {
         assert!(!printed.contains(TOKEN), "the token leaked: {printed}");

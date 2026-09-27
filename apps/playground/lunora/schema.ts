@@ -135,9 +135,12 @@ export default defineSchema({
         text: v.string(),
     }).index("by_owner", ["ownerId"]),
 
-    // Mirror of the better-auth user rows (id + display name), owned by
-    // `@lunora/auth`'s adapter rather than a hand-written mutation — hence
-    // `.externallyManaged()`.
+    // Mirror of the better-auth user rows (id + display name), keyed by the
+    // better-auth id. better-auth writes its own `user` table, not this one; the
+    // worker's `databaseHooks` copy each created/updated user in through
+    // `users:mirrorAuthUser`, so the chat can render author names. That write is
+    // an explicit-id `insertManyUnsafe`, which the `table_without_insert`
+    // advisory does not count, hence `.externallyManaged()`.
     users: defineTable({
         email: v.string(),
         name: v.string(),

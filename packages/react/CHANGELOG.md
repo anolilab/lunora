@@ -1,3 +1,35 @@
+## @lunora/react [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.157...@lunora/react@1.0.0-alpha.158) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.151
+
+## @lunora/react [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.156...@lunora/react@1.0.0-alpha.157) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **react:** `usePreloadedQuery` and `hydratePreloaded` in @lunora/react,
+and `hydratePreloaded` in @lunora/vue, @lunora/svelte and @lunora/solid, now
+type the preloaded value as possibly `undefined`. Guard before reading a field
+(`if (!data) return <Loading />`, `data?.field`, `$store ?? []`).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(react): drop casts that widened a preloaded value by hand
+
+The identity-switch tests in @lunora/react, @lunora/solid and @lunora/svelte cast the preloaded
+value to `T | undefined` to get around the old `T` return type. The adapters return that type
+now, so the casts are redundant and trip `no-unnecessary-type-assertion`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **react:** type a preloaded value as possibly undefined ([#861](https://github.com/anolilab/lunora/issues/861)) ([a90ea49](https://github.com/anolilab/lunora/commit/a90ea496c5df42fa325a15cdf579c2bbbb36392d))
+
 ## @lunora/react [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.155...@lunora/react@1.0.0-alpha.156) (2026-09-27)
 
 

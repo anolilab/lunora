@@ -67,6 +67,14 @@ final class OptimisticOfflineTest {
         flushNeverLosesDrainedWrites();
         offlineFlushClassifiesSingleAndBatchAlike();
         offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge();
+        offlineUnsetIdentityStampsTokenDigest();
+        verdictsForPlainTokenAndLegacyStamps();
+        aWriteQueuedUnderATokenIsHeldOnceTheTokenIsCleared();
+        anIdentitySpelledLikeADigestNeverMatchesATokenStamp();
+        aTokenStampSurvivesPersistence();
+        aTokenSwappedMidFlushDoesNotCarryTheRestOfIt();
+        legacyStampsUnderAHeldToken();
+        aNewTokenWithoutAnIdentityEvictsThePreviousSession();
     }
 
     /**
@@ -1605,10 +1613,14 @@ final class OptimisticOfflineTest {
                 stamped = Identity.of(stampedRaw.toString());
             }
 
-            String current = spec.get("current") == null ? null : spec.get("current").toString();
+            Identity current =
+                    spec.get("current") == null
+                            ? Identity.signedOut()
+                            : Identity.of(spec.get("current").toString());
 
             check(
-                    Offline.identityAllowsReplay(stamped, current)
+                    (Offline.replayIdentityVerdict(stamped, current, null)
+                                    == Offline.ReplayVerdict.MATCH)
                             == Boolean.TRUE.equals(spec.get("replays")),
                     "identity gate: " + spec.get("name"));
         }
@@ -1674,7 +1686,7 @@ final class OptimisticOfflineTest {
                         });
 
         client.identity(identity);
-        client.authToken = (String) testCase.get("staleToken");
+        client.authToken((String) testCase.get("staleToken"));
         client.offlineQueue(new OfflineQueue().persistence(store));
 
         for (String id : strings(testCase.get("queued"))) {
@@ -1701,7 +1713,7 @@ final class OptimisticOfflineTest {
         check(store.removed.isEmpty(), "refused: the durable record survives");
 
         // A refresh, not an account switch: same identity, new token, then the app's own flush.
-        client.authToken = (String) testCase.get("freshToken");
+        client.authToken((String) testCase.get("freshToken"));
 
         Map<String, Object> afterRefresh = map(testCase.get("afterRefresh"));
         FlushReport replayed = client.flushOfflineQueue(null);
@@ -2316,6 +2328,379 @@ final class OptimisticOfflineTest {
                             name + ": refused with " + testCase.get("code"));
                 }
             }
+        }
+    }
+
+    // --- Token-digest identity: with no identity set, the token's digest is who a write belongs
+    // to. Every write goes through `submit`, the path that stamps it, and every flush is the app's.
+
+    /** Sets the bearer token; the one place these cases touch it. */
+    private static void token(Client client, String value) {
+        client.authToken(value);
+    }
+
+    /** A client whose poster records each request's authorization header and commits it. */
+    private static Client tokenClient(String identity, String bearer, List<String> authorizations) {
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            authorizations.add(headers.get("authorization"));
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        client.identity(identity);
+        token(client, bearer);
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
+
+        return client;
+    }
+
+    private static MutationOutcome queueOne(Client client) {
+        return client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+    }
+
+    /** The fixture's digest of {@code token}. */
+    private static String fixtureDigest(String token) throws IOException {
+        for (Object raw : list(scenario("offlineQueue", "tokenIdentity").get("digests"))) {
+            if (token.equals(map(raw).get("token"))) {
+                return (String) map(raw).get("digest");
+            }
+        }
+
+        throw new AssertionError("no fixture digest for " + token);
+    }
+
+    /**
+     * With no identity set, a write queued under one token is never sent with another: an account
+     * switch followed by the app's flush rejects it rather than sending user A's write with user
+     * B's bearer, and the same token replays it.
+     */
+    private static void offlineUnsetIdentityStampsTokenDigest() throws IOException {
+        covers("offline_unset_identity_stamps_token_digest");
+
+        Map<String, Object> tokenIdentity = scenario("offlineQueue", "tokenIdentity");
+
+        for (Object raw : list(tokenIdentity.get("digests"))) {
+            String token = (String) map(raw).get("token");
+
+            check(
+                    Offline.tokenDigest(token).equals(map(raw).get("digest")),
+                    "digest of a " + token.length() + "-unit token");
+        }
+
+        // Java strings are UTF-16, so a lone surrogate is a real token here. These cannot live in
+        // the shared fixture: serde_json and Swift's JSONSerialization refuse to parse them. The
+        // values are the reference algorithm's, over code units.
+        check(Offline.tokenDigest("\uD800").equals("1:190qvz:4zol"), "a lone high surrogate");
+        check(Offline.tokenDigest("a\uDC00b").equals("3:2wutaq:38auaw"), "a lone low surrogate");
+        Map<String, Object> accountSwitch = map(tokenIdentity.get("accountSwitch"));
+        String queuedUnder = (String) accountSwitch.get("queuedUnder");
+        String flushedUnder = (String) accountSwitch.get("flushedUnder");
+        String code = (String) scenario("offlineQueue", "identityGate").get("code");
+
+        List<String> authorizations = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
+        Client switched = tokenClient(null, queuedUnder, authorizations);
+
+        switched.onMutationSettled(settled::add);
+        queueOne(switched);
+        token(switched, flushedUnder);
+
+        FlushReport report = switched.flushOfflineQueue(null);
+
+        check(authorizations.isEmpty(), "user A's write must not travel with user B's bearer");
+        check(
+                report.rejected.size() == 1,
+                "the switched write is rejected, got " + report.rejected);
+        check(settled.size() == 1 && code.equals(settledCode(settled.get(0))), "with " + code);
+        check(switched.pendingMutationCount() == 0, "and nothing is left queued");
+
+        List<String> same = new ArrayList<>();
+        Client kept = tokenClient(null, queuedUnder, same);
+
+        queueOne(kept);
+
+        FlushReport replayed = kept.flushOfflineQueue(null);
+
+        check(same.equals(List.of("Bearer " + queuedUnder)), "the same token replays, got " + same);
+        check(replayed.committed.size() == 1, "and commits");
+    }
+
+    /** The three verdicts, over every kind of stamp, as the reference judges them. */
+    private static void verdictsForPlainTokenAndLegacyStamps() {
+        Identity tokenA = Identity.tokenStamp("token-a");
+        Identity digestSpelled = Identity.of(Offline.tokenDigest("token-a"));
+        Object[][] cases = {
+            {Identity.of("user-a"), Identity.of("user-a"), null, Offline.ReplayVerdict.MATCH},
+            {Identity.of("user-a"), Identity.of("user-b"), null, Offline.ReplayVerdict.MISMATCH},
+            {Identity.of("user-a"), Identity.signedOut(), null, Offline.ReplayVerdict.UNKNOWN},
+            {Identity.signedOut(), Identity.signedOut(), null, Offline.ReplayVerdict.MATCH},
+            {Identity.signedOut(), Identity.of("user-a"), null, Offline.ReplayVerdict.MISMATCH},
+            {
+                Identity.signedOut(),
+                Identity.tokenStamp("token-b"),
+                "token-b",
+                Offline.ReplayVerdict.MISMATCH
+            },
+            {Identity.absent(), Identity.of("user-a"), null, Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.tokenStamp("token-a"), "token-a", Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.of("user-a"), "token-a", Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.tokenStamp("token-b"), "token-b", Offline.ReplayVerdict.MISMATCH},
+            {tokenA, Identity.signedOut(), null, Offline.ReplayVerdict.UNKNOWN},
+            {tokenA, digestSpelled, null, Offline.ReplayVerdict.MISMATCH},
+            {digestSpelled, tokenA, "token-a", Offline.ReplayVerdict.MISMATCH},
+        };
+
+        for (Object[] spec : cases) {
+            check(
+                    Offline.replayIdentityVerdict(
+                                    (Identity) spec[0], (Identity) spec[1], (String) spec[2])
+                            == spec[3],
+                    "verdict for " + spec[0] + " under " + spec[1]);
+        }
+
+        QueuedMutation stamped =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
+
+        stamped.identity = tokenA;
+
+        QueuedMutation restored =
+                QueuedMutation.fromRecord(map(Json.parse(Json.write(stamped.record(null)))));
+
+        check(restored.identity.equals(tokenA), "a token stamp survives the record round trip");
+    }
+
+    /** Nobody signed in: whose write it is cannot be told, so it is held, neither sent nor lost. */
+    private static void aWriteQueuedUnderATokenIsHeldOnceTheTokenIsCleared() {
+        List<String> authorizations = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client = tokenClient(null, "token-a", authorizations);
+
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true).persistence(store));
+        client.onMutationSettled(settled::add);
+        queueOne(client);
+        token(client, null);
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(authorizations.isEmpty(), "held: nothing is sent, got " + authorizations);
+        check(settled.isEmpty() && report.rejected.isEmpty(), "held: nothing settles");
+        check(client.pendingMutationCount() == 1, "held: the write stays queued");
+        check(store.removed.isEmpty(), "held: the durable record survives");
+
+        token(client, "token-a");
+        client.flushOfflineQueue(null);
+
+        check(authorizations.equals(List.of("Bearer token-a")), "the token back replays it");
+    }
+
+    /**
+     * A token write is stamped as a token stamp and an identity as itself, so neither can be taken
+     * for the other however the identity is spelled.
+     */
+    private static void anIdentitySpelledLikeADigestNeverMatchesATokenStamp() throws IOException {
+        String digest = fixtureDigest("token-a");
+        List<String> forward = new ArrayList<>();
+        Client tokenFirst = tokenClient(null, "token-a", forward);
+
+        queueOne(tokenFirst);
+        token(tokenFirst, null);
+        tokenFirst.identity(digest);
+        tokenFirst.flushOfflineQueue(null);
+        check(forward.isEmpty(), "a digest-spelled identity does not own a token's write");
+
+        List<String> backward = new ArrayList<>();
+        Client identityFirst = tokenClient(digest, null, backward);
+
+        queueOne(identityFirst);
+        identityFirst.identity(null);
+        token(identityFirst, "token-a");
+        identityFirst.flushOfflineQueue(null);
+        check(backward.isEmpty(), "a token does not own a digest-spelled identity's write");
+    }
+
+    /** The typed stamp survives the persistence round trip, and still gates the replay. */
+    private static void aTokenStampSurvivesPersistence() throws IOException {
+        MemoryStore store = new MemoryStore();
+        Client client = tokenClient(null, "token-a", new ArrayList<>());
+
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true).persistence(store));
+        queueOne(client);
+
+        check(
+                Map.of("tokenDigest", fixtureDigest("token-a"))
+                        .equals(store.records.get(0).get("identity")),
+                "the record is stamped with the token's digest, got "
+                        + store.records.get(0).get("identity"));
+
+        for (String bearer : List.of("token-a", "token-b")) {
+            List<String> authorizations = new ArrayList<>();
+            Client restored = tokenClient(null, bearer, authorizations);
+
+            restored.offlineQueue(new OfflineQueue().persistence(new MemoryStore(store.records)));
+            restored.hydrateOfflineQueue();
+            restored.flushOfflineQueue(null);
+
+            check(
+                    authorizations.equals(
+                            bearer.equals("token-a") ? List.of("Bearer token-a") : List.of()),
+                    "restored under " + bearer + ", got " + authorizations);
+        }
+    }
+
+    /**
+     * The gate judged the pass against one token, so every request in that pass carries it: a later
+     * chunk, and both halves of a 413 split, never go out with a token set mid-flush.
+     */
+    private static void aTokenSwappedMidFlushDoesNotCarryTheRestOfIt() {
+        List<String> seen = new ArrayList<>();
+        Client[] holder = new Client[1];
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            seen.add(headers.get("authorization") + " x" + batchCalls(body).size());
+                            token(holder[0], "token-b");
+
+                            return new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        holder[0] = client;
+        token(client, "token-a");
+        client.offlineQueue(
+                new OfflineQueue()
+                        .maxItems(Offline.MAX_BATCH_ENTRIES + 1)
+                        .queueBeforeFirstConnect(true));
+
+        for (int index = 0; index <= Offline.MAX_BATCH_ENTRIES; index++) {
+            queueOne(client);
+        }
+
+        client.flushOfflineQueue(null);
+
+        check(
+                seen.equals(
+                        List.of(
+                                "Bearer token-a x" + Offline.MAX_BATCH_ENTRIES,
+                                "Bearer token-a x1")),
+                "every chunk carries the snapshotted token, got " + seen);
+
+        List<String> split = new ArrayList<>();
+        Client splitting =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            int size = batchCalls(body).size();
+
+                            split.add(headers.get("authorization") + " x" + size);
+                            token(holder[0], "token-b");
+
+                            return size > 1
+                                    ? new Response(413, "too large")
+                                    : new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        holder[0] = splitting;
+        token(splitting, "token-a");
+        splitting.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
+        queueOne(splitting);
+        queueOne(splitting);
+        splitting.flushOfflineQueue(null);
+
+        check(
+                split.equals(
+                        List.of("Bearer token-a x2", "Bearer token-a x1", "Bearer token-a x1")),
+                "both halves of a 413 split carry the snapshotted token, got " + split);
+    }
+
+    /**
+     * A record an earlier build stamped signed-out whatever token was held says nothing about whose
+     * it is: under a token it is a mismatch. A record with no stamp at all still replays.
+     */
+    private static void legacyStampsUnderAHeldToken() {
+        List<String> authorizations = new ArrayList<>();
+        Client client = tokenClient(null, "token-b", authorizations);
+        QueuedMutation signedOut =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
+        QueuedMutation unstamped =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m2");
+
+        signedOut.identity = Identity.signedOut();
+        unstamped.identity = Identity.absent();
+        client.offlineQueue().enqueue(signedOut);
+        client.offlineQueue().enqueue(unstamped);
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(
+                report.rejected.equals(List.of("m1")),
+                "a null stamp is rejected, got " + report.rejected);
+        check(report.committed.equals(List.of("m2")), "the unstamped record replays");
+        check(authorizations.equals(List.of("Bearer token-b")), "only the unstamped write is sent");
+    }
+
+    /**
+     * With no identity the token's digest is the identity, so a token change retires the previous
+     * session as an identity change does. Only a change FROM a token evicts.
+     */
+    @SuppressWarnings("unchecked")
+    private static void aNewTokenWithoutAnIdentityEvictsThePreviousSession() throws IOException {
+        Map<String, Object> document = fixture("ws-frames.json");
+        Map<String, Object> testCase = (Map<String, Object>) document.get("identityChange");
+        Map<String, Object> shape = (Map<String, Object>) document.get("shape");
+        Object[][] transitions = {
+            {"token-a", "token-b", null, true},
+            {"token-a", null, null, true},
+            {"token-a", "token-a", null, false},
+            {null, "token-a", null, false},
+            {"token-a", "token-b", "user-a", false},
+        };
+
+        for (Object[] transition : transitions) {
+            String label = transition[0] + " -> " + transition[1] + " as " + transition[2];
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<List<Object>> delivered = new ArrayList<>();
+
+            client.identity((String) transition[2]);
+            token(client, (String) transition[0]);
+            client.attachSocket(sent::add);
+            client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+            client.handleFrame(Json.write(testCase.get("queryFrame")));
+            client.subscribeShape("roomMessages", Map.of("room", "general"), delivered::add, null);
+
+            for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+                client.handleFrame(Json.write(frame));
+            }
+
+            delivered.clear();
+            token(client, (String) transition[1]);
+            sent.clear();
+            client.resendSubscriptions();
+
+            boolean evicts = (Boolean) transition[3];
+            Map<String, Object> query = null;
+            Map<String, Object> shapeFrame = null;
+
+            for (Map<String, Object> frame : sent) {
+                if ("sub_1".equals(frame.get("id"))) {
+                    query = (Map<String, Object>) frame.get("query");
+                } else if ("shape_1".equals(frame.get("id"))) {
+                    shapeFrame = frame;
+                }
+            }
+
+            check(query != null && shapeFrame != null, "both resend, " + label);
+            check(
+                    !query.containsKey("sinceSeq") == evicts,
+                    "query cursor, " + label + ": " + query);
+            check(
+                    !shapeFrame.containsKey("sinceCheckpoint") == evicts,
+                    "shape checkpoint, " + label + ": " + shapeFrame);
+            check(!delivered.isEmpty() == evicts, "shape callback, " + label);
         }
     }
 }

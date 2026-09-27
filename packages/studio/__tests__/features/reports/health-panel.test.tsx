@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -338,5 +338,69 @@ describe("healthPanel", () => {
         });
 
         expect(screen.getByTestId("hl-requests").textContent).toBe("200");
+    });
+
+    it("reloads for a new shard prop while the previous shard's fan-out is still in flight", async () => {
+        expect.assertions(2);
+
+        const held: (() => void)[] = [];
+        const REQUESTS_BY_SHARD: Record<string, number> = { "": 100, "room-a": 900, "room-b": 200 };
+
+        const mock = withConnection(
+            createMockClient({
+                query: (reference, _args, options): unknown => {
+                    const shard = (options as undefined | { shardKey?: string })?.shardKey ?? "";
+                    const answer = (): unknown => {
+                        if (reference === ADMIN_FUNCTIONS.getLogs) {
+                            return { entries: [] };
+                        }
+
+                        if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                            // root 100 + room-a 900, or root 100 + room-b 200.
+                            return { ...METRICS, requests: REQUESTS_BY_SHARD[shard] ?? 0, shard };
+                        }
+
+                        throw new Error(`unexpected ${reference}`);
+                    };
+
+                    if (shard !== "room-a") {
+                        return answer();
+                    }
+
+                    return new Promise((resolve) => {
+                        held.push(() => {
+                            resolve(Promise.resolve().then(answer));
+                        });
+                    });
+                },
+            }),
+        );
+
+        const panel = (shard: string): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <HealthPanel initialShardKey={shard} />
+            </LunoraProvider>
+        );
+
+        const { rerender } = render(panel("room-a"));
+
+        rerender(panel("room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("hl-requests").textContent !== "300") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        expect(screen.getByTestId("hl-requests").textContent).toBe("300");
+
+        // room-a's fan-out landing late must not paint over room-b.
+        await act(async () => {
+            for (const release of held) {
+                release();
+            }
+        });
+
+        expect(screen.getByTestId("hl-requests").textContent).toBe("300");
     });
 });

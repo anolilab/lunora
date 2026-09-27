@@ -276,18 +276,18 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     // Recently-visited shard keys the studio remembers — read once on mount.
     const [recentShards] = useState<string[]>(loadRecentShards);
 
-    // Guard against overlapping refreshes (a live push landing mid-fan-out) and
-    // setState after unmount.
+    // Guard against overlapping refreshes (a live push landing mid-fan-out).
     const inFlightRef = useRef(false);
-    const mountedRef = useRef(true);
+    // Bumped whenever `refresh` is replaced (a new shard prop or client) and on
+    // unmount. A fan-out from an older generation neither paints nor keeps holding
+    // `inFlightRef`, so the new shard's first load is not skipped behind it.
+    const generationRef = useRef(0);
 
-    useEffect(() => {
-        mountedRef.current = true;
-
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
+    // Cadence cap for the live fan-out: a cross-shard re-pull is expensive, so a
+    // burst of write-flush pushes runs at most one fan-out per interval (leading +
+    // one trailing), on top of the `inFlightRef` concurrency guard.
+    const lastFanOutRef = useRef(0);
+    const trailingTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
 
     const rootShard = initialShardKey ?? "";
 
@@ -299,15 +299,15 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
         inFlightRef.current = true;
 
+        const generation = generationRef.current;
+
         // Per-shard signals (metrics, function stats, migrations) sum across the
         // best-effort "shards we know about" set — DOs aren't enumerable, so it's
         // root + current + recently-visited. The global signals (logs buffer, auth
         // metrics, scheduler backlog) live on the root shard / worker, read once.
         const result = await loadSloData(client, rootShard, shardsToAggregate(rootShard, recentShards));
 
-        if (!mountedRef.current) {
-            inFlightRef.current = false;
-
+        if (generation !== generationRef.current) {
             return;
         }
 
@@ -326,13 +326,18 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
     useEffect(() => {
         fireAndForget(refresh());
-    }, [refresh]);
 
-    // Cadence cap for the live fan-out: a cross-shard re-pull is expensive, so a
-    // burst of write-flush pushes runs at most one fan-out per interval (leading +
-    // one trailing), on top of the `inFlightRef` concurrency guard.
-    const lastFanOutRef = useRef(0);
-    const trailingTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
+        return () => {
+            generationRef.current += 1;
+            inFlightRef.current = false;
+
+            // A pending trailing run holds the previous `refresh`, i.e. the previous shard.
+            if (trailingTimerRef.current !== null) {
+                clearTimeout(trailingTimerRef.current);
+                trailingTimerRef.current = null;
+            }
+        };
+    }, [refresh]);
 
     const scheduleFanOut = (): void => {
         const elapsed = Date.now() - lastFanOutRef.current;
@@ -360,15 +365,6 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
             }, MIN_FANOUT_INTERVAL_MS - elapsed);
         }
     };
-
-    useEffect(
-        () => () => {
-            if (trailingTimerRef.current !== null) {
-                clearTimeout(trailingTimerRef.current);
-            }
-        },
-        [],
-    );
 
     // Live channel: always on. A root-shard `getMetrics` subscription (re-pushed on
     // every write-flush) drives a cross-shard re-pull, rate-limited by

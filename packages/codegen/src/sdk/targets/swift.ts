@@ -295,7 +295,14 @@ const swiftTarget: SdkTarget = {
     // `access-level: public` because Swift refuses a public method whose
     // parameter is an internal type — the generated surface is public, so the
     // models it names must be too.
-    quicktype: { lang: "swift", rendererOptions: { "access-level": "public" } },
+    //
+    // `initializers: false` drops quicktype's convenience layer — `init(data:)`,
+    // `init(fromURL:)`, `jsonData()`, `with(…)`. The surface never calls it (it
+    // goes through `JSONDecoder` and `LunoraClient.wireValue`), and for a
+    // non-struct top level it is emitted as an `extension Array`/`Dictionary`
+    // keyed on the SHAPE, not the name: two functions returning `[String]` gave
+    // two identical extensions and "invalid redeclaration of 'init(data:)'".
+    quicktype: { lang: "swift", rendererOptions: { "access-level": "public", initializers: "false" } },
     render,
     // Nothing: the transport is Foundation only.
     requires: [],

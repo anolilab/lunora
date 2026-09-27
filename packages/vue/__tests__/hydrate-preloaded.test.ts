@@ -189,7 +189,7 @@ describe("hydratePreloaded return type", () => {
         scope.stop();
     });
 
-    it("is Ref<T>, not Ref<T | undefined> — the seed makes undefined unreachable", () => {
+    it("holds the seed on first read, typed Ref<T | undefined> for the identity-switch window", () => {
         const fake = createFakeClient();
         const scope = effectScope();
 
@@ -197,11 +197,9 @@ describe("hydratePreloaded return type", () => {
             fake.provide(() => {
                 const data = hydratePreloaded(makePreloaded(["hello"]));
 
-                // Regression: this assignment did not compile while the return type
-                // inherited `| undefined` from `subscribeToQuery` (which widens only
-                // because it also serves the unseeded `useQuery` case), forcing every
-                // Vue consumer to guard a state the primitive's contract forbids.
-                const rows: string[] = data.value;
+                // An identity switch blanks the ref, so the type carries `undefined`
+                // even though the seed is always present on the first read.
+                const rows: string[] | undefined = data.value;
 
                 expect(rows).toStrictEqual(["hello"]);
             });

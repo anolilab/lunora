@@ -273,6 +273,10 @@ sdks:
     # The generator too: a target template hardcodes the runtime's call signatures, so
     # an edit here breaks every generated SDK while every other gate stays green.
     - "packages/codegen/src/sdk/**"
+    # And the spec `generated-check.sh` generates its second suite from. It is the
+    # emitter's golden, so a change to how a validator schemas (the `v.bigint()`
+    # spelling that once went unnoticed) lands here when the golden is recaptured.
+    - "packages/codegen/__tests__/fixtures/sdk-surface/**"
     # And the CLI the job invokes: the generate-and-build step shells out to
     # `sdk generate`, so a change there breaks every leg while matching no filter.
     - "packages/cli/src/commands/sdk/**"

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LogDrainsPanel from "../../../src/features/logs/log-drains-panel";
@@ -81,5 +81,37 @@ describe("logDrainsPanel", () => {
         });
 
         expect(screen.getByTestId("drain-webhook-result").textContent).toContain("network down");
+    });
+
+    it("does not show a test result under a URL edited while the test was in flight", async () => {
+        expect.assertions(2);
+
+        let settle: (response: Response) => void = () => {};
+        const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+            async () =>
+                new Promise<Response>((resolve) => {
+                    settle = resolve;
+                }),
+        );
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<LogDrainsPanel />);
+
+        fireEvent.change(screen.getByTestId("drain-webhook-url"), { target: { value: "https://a.test/logs" } });
+        fireEvent.click(screen.getByTestId("drain-webhook-test"));
+        fireEvent.change(screen.getByTestId("drain-webhook-url"), { target: { value: "https://b.test/logs" } });
+
+        await act(async () => {
+            settle({ ok: true, status: 200 } as Response);
+        });
+
+        // The result belongs to A; B was never tested.
+        expect(screen.queryByTestId("drain-webhook-result")).toBeNull();
+
+        // Editing back to A shows A's result again — it is still A's answer.
+        fireEvent.change(screen.getByTestId("drain-webhook-url"), { target: { value: "https://a.test/logs" } });
+
+        expect(screen.getByTestId("drain-webhook-result").textContent).toContain("200");
     });
 });

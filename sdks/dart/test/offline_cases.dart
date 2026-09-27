@@ -757,9 +757,11 @@ Future<void> caseIdentityChangeDiscardsQueuedWrites() async {
 
 /// The identity stamp is a digest, not the token: an app's queue file must not
 /// become somewhere a bearer token sits at rest. The values are the reference
-/// client's, read from the shared fixture python asserts too, so no port can
+/// client's, read from the shared fixture every port asserts, so none can
 /// drift from it silently.
-void caseTokenDigestMatchesTheReferenceClient() {
+Future<void> caseTokenDigestMatchesTheReferenceClient() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
   for (final raw in _scenario('tokenIdentity')['digests']! as List<Object?>) {
     final spec = raw! as Map<String, Object?>;
     final token = spec['token']! as String;
@@ -773,6 +775,39 @@ void caseTokenDigestMatchesTheReferenceClient() {
     'subj:user_1',
     'a subject wins over the token, so a refresh keeps the queue',
   );
+
+  // The account switch: with no subject, a write queued under one token is
+  // never sent with another, and replays under the one it was queued with.
+  final tokenSwitch = _scenario('tokenIdentity')['accountSwitch']! as Map<String, Object?>;
+  final queuedUnder = tokenSwitch['queuedUnder']! as String;
+
+  for (final flushedUnder in <String>[tokenSwitch['flushedUnder']! as String, queuedUnder]) {
+    final poster = Poster(result: 'null');
+    final client = LunoraClient(url: 'https://app.example', post: poster.call, authToken: queuedUnder)
+      ..attachSocket((_) {})
+      ..setConnected(true)
+      ..setConnected(false);
+    final pending = client.mutation('messages:send');
+
+    client
+      ..authToken = flushedUnder
+      ..setConnected(true);
+
+    if (flushedUnder == queuedUnder) {
+      await pending;
+      equals(canonical(poster.headers.map((headers) => headers['authorization']).toList()), canonical(<Object?>['Bearer $queuedUnder']),
+          'the same token replays the write');
+    } else {
+      try {
+        await pending;
+        failures.add('a write queued under another token should reject');
+      } on LunoraApiException catch (error) {
+        equals(error.code, offlineIdentityChanged, 'the discarded write names why');
+      }
+
+      equals(poster.paths.length, 0, 'the previous token\'s write is never sent with the next one');
+    }
+  }
 }
 
 /// A reconnect that lands WHILE a flush is running must not be dropped: the
@@ -1182,4 +1217,273 @@ Future<void> caseRateLimitedBatchSlotIsTransient() async {
   equals(committed.error, null, 'and its sibling still commits');
   equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-limited']), 'only the rate-limited write is re-queued');
   equals(retryAfter, maxRetryAfterMs, 'the delay is honoured but clamped: 90000 asked, 60000 held');
+}
+
+/// Timers the test advances by hand. Only NON-zero timers are captured, so the
+/// `Future.delayed(Duration.zero)` turns a case awaits still run for real.
+class _FakeTimers {
+  final List<({void Function() callback, _FakeTimer timer})> pending = <({void Function() callback, _FakeTimer timer})>[];
+  final List<int> delays = <int>[];
+
+  ZoneSpecification get spec => ZoneSpecification(
+        createTimer: (self, parent, zone, duration, callback) {
+          if (duration == Duration.zero) {
+            return parent.createTimer(zone, duration, callback);
+          }
+
+          final timer = _FakeTimer();
+
+          delays.add(duration.inMilliseconds);
+          pending.add((callback: zone.bindCallback(callback), timer: timer));
+
+          return timer;
+        },
+      );
+
+  List<_FakeTimer> get live => <_FakeTimer>[
+        for (final entry in pending)
+          if (entry.timer.isActive) entry.timer,
+      ];
+
+  /// Fire every live timer, as though its whole delay had passed.
+  void fire() {
+    final due = pending.where((entry) => entry.timer.isActive).toList();
+
+    pending.clear();
+
+    for (final entry in due) {
+      entry.timer.cancel();
+      entry.callback();
+    }
+  }
+}
+
+class _FakeTimer implements Timer {
+  bool _active = true;
+
+  @override
+  void cancel() => _active = false;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => 0;
+}
+
+Future<void> _settle() async {
+  for (var turn = 0; turn < 10; turn += 1) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// A transient refusal on a HEALTHY socket is re-flushed on a timer.
+///
+/// A 429 or a 503 leaves the socket open, so nothing reconnects to flush again:
+/// the write replays after the server's `retryAfterMs`, or — lacking one — a
+/// bounded jittered backoff, and each retry waits for its timer (no hot loop).
+/// Timers are faked through the zone, so no case waits in real time.
+Future<void> caseTransientRefusalOnAHealthySocketIsRetried() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  const limited = LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":100}}}');
+  const unavailable = LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+
+  for (final (label, refusals) in <(String, List<LunoraHttpResponse>)>[
+    ('hinted 429', <LunoraHttpResponse>[limited]),
+    ('hintless 503', <LunoraHttpResponse>[unavailable, unavailable, unavailable]),
+  ]) {
+    final timers = _FakeTimers();
+
+    await runZoned(zoneSpecification: timers.spec, () async {
+      var posts = 0;
+
+      Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+        posts += 1;
+
+        return posts <= refusals.length ? refusals[posts - 1] : const LunoraHttpResponse(200, '{"result":null}');
+      }
+
+      final client = LunoraClient(
+        url: 'https://app.example',
+        post: post,
+        offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+      );
+      final pending = Settled(client.mutation('messages:send', mutationId: 'm-$label'));
+
+      client
+        ..attachSocket((_) {})
+        ..setConnected(true);
+      await _settle();
+
+      for (var refused = 1; refused <= refusals.length; refused += 1) {
+        equals(posts, refused, '$label: nothing posts until the timer fires');
+        equals(timers.live.length, 1, '$label: one retry is scheduled, not a loop');
+        timers.fire();
+        await _settle();
+      }
+
+      await pending.done;
+      equals(pending.error, null, '$label: the write commits on the retry');
+      equals(posts, refusals.length + 1, '$label: once per timer');
+      equals(timers.live.length, 0, '$label: a committed write schedules nothing more');
+
+      if (label == 'hinted 429') {
+        equals(canonical(timers.delays), canonical(<int>[100]), '$label: the hint is the delay');
+      } else {
+        check(timers.delays[0] >= 500 && timers.delays[0] <= 1000, '$label: first backoff in [500, 1000], got ${timers.delays}');
+        check(timers.delays[1] >= 1000 && timers.delays[1] <= 2000, '$label: then [1000, 2000], got ${timers.delays}');
+        check(timers.delays[2] >= 2000 && timers.delays[2] <= 4000, '$label: then [2000, 4000], got ${timers.delays}');
+      }
+
+      client.close();
+    });
+  }
+}
+
+/// A retry is an ordinary flush pass, judged against the token held when it
+/// fires: with no subject the write is stamped with the token's digest, so a
+/// retry that fires after the token was cleared holds it rather than sending it
+/// with no bearer, and the same token set again replays it with that token.
+Future<void> caseRetryFlushIsGatedOnTheToken() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final bearers = <String?>[];
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      bearers.add(headers['authorization']);
+
+      return bearers.length == 1
+          ? const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}')
+          : const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      authToken: 'token-a',
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+    final pending = Settled(client.mutation('messages:send', mutationId: 'm-retry-gate'));
+
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    client.authToken = null;
+    await _settle();
+    timers.fire();
+    await _settle();
+    equals(bearers.length, 1, 'held: the retry sends nothing once the token is gone');
+    equals(client.pendingWrites, 1, 'the write is still queued');
+
+    client.authToken = 'token-a';
+    await _settle();
+    await pending.done;
+    equals(pending.error, null, 'the same token replays the write');
+    equals(canonical(bearers), canonical(<Object?>['Bearer token-a', 'Bearer token-a']), 'every send carries token-a');
+
+    client.close();
+  });
+}
+
+/// The retry timer dies with the socket and with the client.
+Future<void> caseRetryTimerIsCancelledOnDisconnectAndClose() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async =>
+        const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+
+    unawaited(client.mutation('messages:send', mutationId: 'm-cancel').then((_) {}, onError: (_) {}));
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'a retry is scheduled');
+
+    client.setConnected(false);
+    equals(timers.live.length, 0, 'a dropped socket cancels it: the reconnect flushes');
+
+    client.setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the reconnect flush schedules again');
+
+    client.close();
+    equals(timers.live.length, 0, 'close cancels it');
+  });
+}
+
+/// A retry that fires while another flush of its shard is running is folded into
+/// that flush. When the socket drops before that flush finishes, the retry's
+/// "already waited out the window" mark must go with the timer — or the next
+/// reconnect's flush skips a rate-limit window the server set in the meantime.
+Future<void> caseCancelledRetryDoesNotSkipTheRateLimitWindow() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final held = Completer<void>();
+    var posts = 0;
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      posts += 1;
+
+      if (posts == 1) {
+        return const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+      }
+
+      if (posts == 2) {
+        await held.future;
+
+        return const LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":60000}}}');
+      }
+
+      return const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+
+    unawaited(client.mutation('messages:send', mutationId: 'm-window').then((_) {}, onError: (_) {}));
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    final running = client.flushOfflineQueue();
+
+    await _settle();
+    equals(posts, 2, 'a second flush is waiting on its post');
+
+    timers.fire();
+    client.setConnected(false);
+    held.complete();
+    await running;
+    await _settle();
+
+    client.setConnected(true);
+    await _settle();
+    equals(posts, 2, 'the reconnect waits out the 60 s window the 429 set');
+
+    client.close();
+  });
 }

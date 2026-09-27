@@ -99,7 +99,7 @@ function ChannelView() {
 
     return (
         <ul>
-            {messages.map((m) => (
+            {messages?.map((m) => (
                 <li key={m._id}>{m.text}</li>
             ))}
         </ul>
@@ -107,9 +107,12 @@ function ChannelView() {
 }
 ```
 
-The component never renders a loading state. `messages` is the real list on the
-very first paint, and it updates on every write from any client, with no extra
-wiring.
+There is no loading state on the first paint: `messages` is the real list, and
+it updates on every write from any client, with no extra wiring. It is typed
+`T | undefined` all the same (and so is every adapter's `hydratePreloaded`):
+after a sign-out or user switch the preloaded value, read for the previous
+identity, is dropped until the new identity's subscription answers, hence the
+`?.`.
 
 ## Why there's no flash
 
