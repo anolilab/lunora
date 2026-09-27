@@ -157,4 +157,39 @@ describe("hydratePreloaded across an identity change", () => {
 
         client.close();
     });
+
+    it("blanks the value when user B signs in between creation and mount", async () => {
+        expect.assertions(1);
+
+        const sockets: MockSocket[] = [];
+        const client = createClient(sockets);
+
+        client.setAuthToken("jwt-A", "user-A");
+
+        // Mount callbacks are deferred, so the switch lands after the seed is
+        // taken but before the identity listener is registered.
+        const { container } = render(
+            () => {
+                const data = hydratePreloaded(PRELOADED_FOR_A) as () => { text: string }[] | undefined;
+
+                client.setAuthToken("jwt-B", "user-B");
+
+                return (
+                    <pre>
+                        {data()
+                            ?.map((row) => row.text)
+                            .join(",") ?? "(none)"}
+                    </pre>
+                );
+            },
+            { wrapper: (props) => <LunoraProvider client={client}>{props.children}</LunoraProvider> },
+        );
+
+        await settle();
+        await refuse(sockets);
+
+        expect(container.textContent).toBe("(none)");
+
+        client.close();
+    });
 });

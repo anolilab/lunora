@@ -50,6 +50,13 @@ const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: Subsc
 
     onMounted(() => {
         const offIdentity = client.onIdentityChange(() => setData(() => undefined as T));
+
+        // Mount is deferred: an identity retired after the seed was taken but
+        // before this listener existed must still blank it.
+        if (client.identityEpoch() !== 0) {
+            setData(() => undefined as T);
+        }
+
         const unsubscribe = client.subscribe(functionRef, args, (next) => setData(() => next as T), { onError: options.onError, shardKey });
 
         return () => {
