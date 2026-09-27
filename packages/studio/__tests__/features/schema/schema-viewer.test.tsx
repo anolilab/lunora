@@ -1,7 +1,9 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { useSchemaExplorer } from "../../../src/features/schema/hooks/use-schema-explorer";
 import { SchemaViewer } from "../../../src/features/schema/schema-viewer";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
@@ -269,5 +271,48 @@ describe("schemaViewer", () => {
 
         expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
         expect(screen.getByTestId("sc-global-error").textContent).toContain("no D1 binding");
+    });
+});
+
+describe("useSchemaExplorer shard switch", () => {
+    it("keeps the current shard's tables when the previous shard's list lands late", async () => {
+        expect.assertions(1);
+
+        const pending = new Map<string, (tables: { name: string; rowCount: number }[]) => void>();
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.listTables) {
+                    return {};
+                }
+
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+
+                return new Promise((resolve) => {
+                    pending.set(shard, resolve);
+                });
+            },
+        });
+        const wrapper = ({ children }: { children: ReactNode }): ReactElement => <LunoraProvider client={mock.asClient}>{children}</LunoraProvider>;
+        const { result } = renderHook(() => useSchemaExplorer({ initialShardKey: "a" }), { wrapper });
+
+        act(() => {
+            result.current.setShardKey("b");
+        });
+        await waitFor(() => {
+            if (!pending.has("b")) {
+                throw new Error("shard b not listed yet");
+            }
+        });
+
+        await act(async () => {
+            pending.get("b")?.([{ name: "b_only", rowCount: 1 }]);
+            await Promise.resolve();
+        });
+        await act(async () => {
+            pending.get("a")?.([{ name: "a_only", rowCount: 1 }]);
+            await Promise.resolve();
+        });
+
+        expect(result.current.tables?.map((table) => table.name)).toStrictEqual(["b_only"]);
     });
 });

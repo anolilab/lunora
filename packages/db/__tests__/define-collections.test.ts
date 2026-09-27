@@ -31,10 +31,18 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
         // honest "composed with no baseline" answer.
         currentBaseline: () => undefined,
         currentIdentity: () => null,
+        getAuthToken: () => null,
         mutation: mutationMock,
         // Mirrors `LunoraClient.replayIdentityVerdict`. Both stamp and current are
-        // the signed-out sentinel here, so every replay is a "match".
-        replayIdentityVerdict: (stamped: null | string | undefined) => (stamped === null ? "match" : "mismatch"),
+        // the signed-out sentinel here, so every replay is a "match", carrying the
+        // credential it was judged under (`{ judged }` stands in for the opaque one).
+        replayIdentityVerdict: (stamped: null | string | undefined) => {
+            if (stamped === null) {
+                return { credential: { judged: stamped }, verdict: "match" as const };
+            }
+
+            return { verdict: "mismatch" as const };
+        },
         subscribe: vi.fn<
             (
                 reference: unknown,
@@ -241,7 +249,7 @@ describe(defineCollections, () => {
             messagesSend,
             { channelId: "c1", id, text: "hi" },
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
-            { mutationId: expect.any(String), replayBaseline: null, replayIdentity: null, shardKey: undefined },
+            { mutationId: expect.any(String), replayBaseline: null, replayCredential: { judged: null }, shardKey: undefined },
         );
     });
 

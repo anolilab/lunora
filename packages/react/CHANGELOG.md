@@ -1,3 +1,62 @@
+## @lunora/react [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.154...@lunora/react@1.0.0-alpha.155) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **react:** the third element of a `lunoraQueryKey` / `lunoraQueryOptions`
+key is now the `stableWireKey` string of the args instead of the args object.
+Code that partial-matches TanStack filters on the args object must build the key
+with `lunoraQueryKey` instead. Prefix filters such as `["lunora", ref]` still work.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(react): retire stale results on skip, swap and shard change
+
+Follow-ups to the stale-row fixes:
+
+- useSubscription / usePresence cleared nothing when a subscription was retired.
+  Going to "skip" (or to args or a room that never answered) and back to the
+  same key matched the retired result again. That result could predate a
+  sign-out, because a skipped subscription never hears the blank. The effect
+  cleanup now drops it.
+- Their result keys wrote an absent shard key as "". `lunoraQueryKey` keeps
+  `undefined` apart from "", so the keys now do too.
+- After a provider `client` swap, the previous client's registry still watched
+  the QueryClient. A later sign-out on that client blanked the new client's
+  queries, and nothing refetched them. The swap now stops that watch.
+- usePreloadedQuery kept serving its preloaded value under a swapped-in client
+  (as `initialData`, and as the fallback while the query is empty). The value
+  is now tied to the client the hook mounted under.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(react): key subscriptions to the shard the client resolves
+
+The client routes an absent shard key and "" to the same root shard (it keys
+subscriptions, connections and its query cache by `shardKey ?? ""`). The result
+keys of useSubscription and usePresence now normalize the same way, so switching
+between the two no longer blanks a result that belongs to the same shard.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **react:** stop cache keys and hooks serving stale rows ([#856](https://github.com/anolilab/lunora/issues/856)) ([146976a](https://github.com/anolilab/lunora/commit/146976ac715fecc032d3b67ba5b8d8fe31b7a9e8))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.149
+
+## @lunora/react [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.153...@lunora/react@1.0.0-alpha.154) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/react [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.152...@lunora/react@1.0.0-alpha.153) (2026-09-26)
 
 

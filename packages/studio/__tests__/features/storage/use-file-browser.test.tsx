@@ -138,3 +138,73 @@ describe("useFileBrowser orphan check", () => {
         expect(result.current.danglingTruncated).toBe(false);
     });
 });
+
+describe("useFileBrowser bucket switch during a write", () => {
+    it("keeps the new bucket's listing when an upload started in the old bucket finishes", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            listStorageBuckets: () => ["alpha", "beta"],
+            listStorageObjects: (options): StorageListPage => {
+                return { objects: [{ etag: "e", key: `${options.bucket ?? "?"}-only.txt`, size: 1 }] };
+            },
+        });
+        let finishUpload: () => void = () => {};
+
+        mock.uploadStorageObject.mockImplementation(
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- test mock returns a deferred promise by design
+            async () =>
+                new Promise((resolve) => {
+                    finishUpload = () => {
+                        resolve({ key: "big.bin" });
+                    };
+                }),
+        );
+
+        const { result } = renderHook(() => useFileBrowser({ pageSize: 50 }), { wrapper: wrapperFor(mock) });
+
+        await waitFor(() => {
+            if (result.current.files[0]?.key !== "alpha-only.txt") {
+                throw new Error("alpha not listed yet");
+            }
+        });
+
+        act(() => {
+            result.current.onFile(new File(["hi"], "big.bin"));
+        });
+        await act(async () => {
+            await Promise.resolve();
+        });
+        act(() => {
+            result.current.selectBucket("beta");
+        });
+        await waitFor(() => {
+            if (result.current.files[0]?.key !== "beta-only.txt") {
+                throw new Error("beta not listed yet");
+            }
+        });
+
+        // The alpha upload lands only now. Its post-write reload must not re-list alpha
+        // under the beta picker — a row Delete from there would send alpha's key to beta.
+        await act(async () => {
+            finishUpload();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        expect(result.current.files.map((file) => file.key)).toStrictEqual(["beta-only.txt"]);
+
+        act(() => {
+            result.current.onDelete("beta-only.txt");
+        });
+
+        await waitFor(() => {
+            if (mock.deleteStorageObject.mock.calls.length === 0) {
+                throw new Error("delete not sent yet");
+            }
+        });
+
+        expect(mock.deleteStorageObject.mock.calls).toStrictEqual([["beta-only.txt", { bucket: "beta" }]]);
+    });
+});

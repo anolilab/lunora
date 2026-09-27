@@ -22,6 +22,7 @@ export {
     CONFLICT_ERROR_CODE,
     getErrorCode,
     getRetryAfterMs,
+    isAuthReplayFailure,
     isConflictError,
     isForbiddenError,
     isRateLimitedError,
@@ -42,6 +43,8 @@ export type {
     LunoraClientError,
     MutationCallOptions,
     MutationSettledEvent,
+    ReplayCredential,
+    ReplayIdentityVerdict,
     SyncWatermark,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";

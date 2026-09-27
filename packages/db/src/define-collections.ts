@@ -1,5 +1,6 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
-import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
+import type { FunctionReference, LunoraClient, ReplayCredential, SubscriptionError } from "@lunora/client";
+import { isAuthReplayFailure } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnostic } from "@tanstack/offline-transactions";
@@ -15,6 +16,8 @@ import {
     registerOutboxCarrier,
     runOutboxMutation,
     takeOutboxRejection,
+    terminalVerdict,
+    toNonRetriable,
 } from "./internals";
 
 /** Element type of an array (the row type a `list` query returns). */
@@ -169,22 +172,45 @@ const reportWriteRejected = (options: DefineCollectionsOptions, event: WriteReje
  *
  * An unstamped write — queued by an older build — has no provenance, so it is
  * held rather than dropped for the same reason.
+ *
+ * A pass returns the credential the verdict was judged under, and the replay is
+ * sent with exactly that ({@link ReplayCredential}): the send is a separate call,
+ * and a `setAuthToken` between the two must not put a write judged as one user's
+ * on another user's bearer. The next attempt judges again against whatever
+ * token is current then.
  */
-type AssertIssuingIdentity = (client: LunoraClient, meta: undefined | WriteProvenance) => asserts meta is WriteProvenance;
+const replayCredentialFor = (client: LunoraClient, meta: undefined | WriteProvenance): ReplayCredential => {
+    const judged = client.replayIdentityVerdict(meta?.identity);
 
-const assertIssuingIdentity: AssertIssuingIdentity = (client, meta) => {
-    const verdict = client.replayIdentityVerdict(meta?.identity);
-
-    if (verdict === "mismatch") {
+    if (judged.verdict === "mismatch") {
         throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
     }
 
-    if (verdict === "unknown") {
+    if (judged.verdict === "unknown") {
         // Deliberately NOT a NonRetriableError: the executor's retry policy holds
         // the write and replays it once an identity is established.
         throw new Error("outbox write deferred: no identity established yet");
     }
+
+    return judged.credential;
 };
+
+/**
+ * How long a write refused for its credential waits for a fresh token before it
+ * is rejected. Long enough for an app to refresh when `onTokenExpired` fires;
+ * short enough that an app which never refreshes learns the write failed, and
+ * the writes queued behind it (held with it, in order) move on.
+ */
+const CREDENTIAL_HOLD_MS = 60_000;
+
+/** A write the worker refused for its credential, parked until the token changes. */
+interface CredentialHold {
+    /** The refusal, reported if the hold ends in a rejection. */
+    error: unknown;
+    /** The token the refused replay was sent with. */
+    refused: null | string;
+    since: number;
+}
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
@@ -289,6 +315,72 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
     assertSecureRandom("defineCollections");
 
     const collections: Record<string, Collection<Row, string>> = {};
+
+    // Per write (keyed by its replay id): a credential refusal parks it here.
+    const credentialHolds = new Map<string, CredentialHold>();
+
+    /**
+     * Judge and send one durable write, holding it through a refused credential.
+     *
+     * A `TOKEN_EXPIRED` / `UNAUTHENTICATED` refusal is about the token, not the
+     * write, so the write is parked on the token it was refused with: until that
+     * token changes, each executor attempt defers without sending (the executor
+     * re-runs every second, and re-sending a refused token can only earn the same
+     * refusal). Once the token changes the write is judged and sent again. A
+     * second refusal after the change, or no change within
+     * {@link CREDENTIAL_HOLD_MS}, rejects it, so an app that never refreshes sees
+     * `onWriteRejected` and the optimistic row rolls back.
+     */
+    const replayHoldingCredential = async (key: string, meta: undefined | WriteProvenance, send: (replayCredential: ReplayCredential) => Promise<unknown>) => {
+        const hold = credentialHolds.get(key);
+
+        if (client.getAuthToken() === hold?.refused) {
+            if (Date.now() - hold.since < CREDENTIAL_HOLD_MS) {
+                throw new Error("outbox write deferred: waiting for a fresh credential");
+            }
+
+            credentialHolds.delete(key);
+
+            throw toNonRetriable(hold.error);
+        }
+
+        // Read with the verdict, no await between: the token the credential pins.
+        const judgedToken = client.getAuthToken();
+        const replayCredential = replayCredentialFor(client, meta);
+
+        try {
+            await runOutboxMutation(async () => send(replayCredential));
+        } catch (error) {
+            if (!isAuthReplayFailure(error)) {
+                throw error;
+            }
+
+            if (hold !== undefined) {
+                credentialHolds.delete(key);
+
+                throw toNonRetriable(error);
+            }
+
+            credentialHolds.set(key, { error, refused: judgedToken, since: Date.now() });
+
+            // A message naming no status: the executor gives up on one that does.
+            throw new Error("outbox write deferred: its credential was refused", { cause: error });
+        }
+
+        credentialHolds.delete(key);
+    };
+
+    /** The executor's terminal verdict on a failed replay, if it reached one; ends any hold. */
+    const settleFailure = (key: string, error: unknown): NonRetriableError | undefined => {
+        const terminal = terminalVerdict(error);
+
+        if (terminal !== undefined) {
+            credentialHolds.delete(key);
+        }
+
+        return terminal;
+    };
+
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};
 
@@ -340,10 +432,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                         // transaction awaits between its writes, which is exactly where a
                         // `setAuthToken` can slip in. Inside the try so the drop reaches
                         // `onWriteRejected` instead of rolling the row back in silence.
-                        assertIssuingIdentity(client, meta);
-
-                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await runOutboxMutation(() =>
+                        const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
                             // `shardKey` routes the write to the DO the collection's `list`
                             // subscription reads. The server derives no shard from args, so
                             // omitting it lands a `.shardBy()`'d collection's writes in the
@@ -354,21 +443,28 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                                 // `null` pins "composed with no baseline"; omitting the
                                 // option entirely would sample the current cursor instead.
                                 // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: meta.baselineSeq ?? null,
-                                // Under a cookie session the worker refuses the write
-                                // if the cookie now belongs to someone else.
-                                replayIdentity: meta.identity,
-                                shardKey: meta.shardKey,
-                            }),
-                        );
+                                replayBaseline: meta?.baselineSeq ?? null,
+                                // Sent with the bearer the verdict judged; under a cookie
+                                // session the worker also refuses the write if the cookie
+                                // now belongs to someone else.
+                                replayCredential,
+                                shardKey: meta?.shardKey,
+                            });
+
+                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                        await replayHoldingCredential(mutationId, meta, send);
                     } catch (error) {
-                        // A permanent (coded) rejection: the executor will roll the
-                        // optimistic row back. Report it on the aggregate channel so a
+                        // A permanent rejection: the executor will roll the optimistic
+                        // row back. Report it on the aggregate channel so a
                         // fire-and-forget caller still learns the write was dropped, then
-                        // rethrow so the rollback proceeds. Transient errors retry — only
-                        // the NonRetriableError verdict is terminal, so only it is reported.
-                        if (error instanceof NonRetriableError) {
-                            reportWriteRejected(options, { code: (error as Error & { code?: string }).code, collection: name, error, row });
+                        // rethrow so the rollback proceeds. Transient errors retry, so
+                        // only a terminal verdict is reported.
+                        const terminal = settleFailure(mutationId, error);
+
+                        if (terminal !== undefined) {
+                            reportWriteRejected(options, { code: (terminal as Error & { code?: string }).code, collection: name, error: terminal, row });
+
+                            throw terminal;
                         }
 
                         throw error;
@@ -393,45 +489,49 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         }
 
         try {
-            assertIssuingIdentity(client, meta);
-
             // Replay under the *original* idempotency key (not a fresh one), so a
             // committed-but-unacked write that the executor retries is deduped by the
             // server instead of applied twice.
-            await runOutboxMutation(() =>
+            const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
                 client.mutation({ __lunoraRef: meta.functionPath }, meta.args, {
                     mutationId: meta.idempotencyKey,
                     // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
                     // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                     replayBaseline: meta.baselineSeq ?? null,
-                    // Under a cookie session the worker refuses the write if the
-                    // cookie now belongs to someone else.
-                    replayIdentity: meta.identity,
+                    // Sent with the bearer the verdict above judged; under a cookie
+                    // session the worker also refuses the write if the cookie now
+                    // belongs to someone else.
+                    replayCredential,
                     shardKey: meta.shardKey,
-                }),
-            );
+                });
+
+            await replayHoldingCredential(meta.idempotencyKey, meta, send);
 
             // Committed: the predicted value it painted is now the server's, so
             // forget the rollback rather than leave it pinned for the session.
             takeOutboxRejection(meta.idempotencyKey);
         } catch (error) {
-            // Covers the identity drop AND a server-coded rejection from the replay:
-            // reporting only the first would leave this handler half-guarded, which is
-            // the shape being fixed here.
-            if (error instanceof NonRetriableError) {
+            // Covers the identity drop, a server-coded rejection from the replay, and
+            // a failure the executor gives up on by itself: every terminal outcome is
+            // rolled back and reported.
+            const terminal = settleFailure(meta.idempotencyKey, error);
+
+            if (terminal !== undefined) {
                 // Permanent verdict — take the rejected write's optimistic value off
                 // the screen. A transient failure falls through untouched: the
                 // executor will retry it, and its prediction must survive until then.
                 takeOutboxRejection(meta.idempotencyKey)?.();
 
                 reportWriteRejected(options, {
-                    code: (error as Error & { code?: string }).code,
+                    code: (terminal as Error & { code?: string }).code,
                     // A raw outbox write targets a function, not a collection; the path
                     // is the only identifier it carries. No `row` — it rides the
                     // transport carrier, which holds no optimistic collection row.
                     collection: meta.functionPath,
-                    error,
+                    error: terminal,
                 });
+
+                throw terminal;
             }
 
             throw error;

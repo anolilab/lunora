@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import type { ColumnMeta, FilterClause, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult, TablesIndexesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
@@ -271,12 +272,17 @@ export const DataBrowser = ({
     // land in the visible filter rows for the operator to see and edit — the
     // query never runs off un-reviewed model output.
     const assistant = useSqlAssistant(shardKey);
+    // The table on screen when a suggestion lands. The clauses name the columns of
+    // the table they were asked for, so a reply that arrives after a table switch
+    // is dropped rather than filtering the new table by the old one's columns.
+    const selectedTableRef = useMirroredRef(selectedTable);
 
     const askAiFilter = (prompt: string): void => {
+        const askedFor = selectedTable;
         const apply = async (): Promise<void> => {
-            const clauses = await assistant.suggestFilter(prompt, selectedTable ?? "");
+            const clauses = await assistant.suggestFilter(prompt, askedFor ?? "");
 
-            if (clauses !== undefined) {
+            if (clauses !== undefined && selectedTableRef.current === askedFor) {
                 onFiltersChange(
                     clauses.map((clause) => {
                         // The wire value is `unknown`; a filter row is a string

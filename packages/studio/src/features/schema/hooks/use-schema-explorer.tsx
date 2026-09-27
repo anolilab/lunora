@@ -96,12 +96,23 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
     const [globalColumns, setGlobalColumns] = useState<Record<string, string[]>>({});
     const [globalExpanded, setGlobalExpanded] = useState<null | string>(null);
 
+    // Only the latest `refresh` may paint: switching shards while a slow list is in
+    // flight otherwise let the previous shard's tables land under the new shard.
+    const listSeq = useRef(0);
+
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
+            listSeq.current += 1;
+            const seq = listSeq.current;
+
             setError(null);
 
             try {
                 const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+
+                if (seq !== listSeq.current) {
+                    return;
+                }
 
                 recordShard(shard);
                 setTables(result);
@@ -113,6 +124,10 @@ const useSchemaExplorer = ({ initialShardKey, initialTable }: { initialShardKey?
                 setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
                 setShardColumnsError((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
             } catch (error_) {
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
                 setTables(null);
                 setError(errorMessage(error_));
             }

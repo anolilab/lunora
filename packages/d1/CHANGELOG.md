@@ -1,3 +1,66 @@
+## @lunora/d1 [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.143...@lunora/d1@1.0.0-alpha.144) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** listTables and the D1 global browser hide every table whose
+name starts with `__` (previously only __lunora*/__miniflare*/__cdc* and
+the migration table). parseTablePageFilters drops vacuous clauses, so a
+deleteRows call carrying only an empty `contains` is now rejected with 400.
+New exports from @lunora/shard-engine: isInternalTableName and
+isVacuousFilterClause.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(shard-engine): refuse unfiltered bulk scans, speed up search
+
+- selectMatchingIds (the id scan behind deleteRows/patchRows) silently
+  dropped a filter on a column a plain table does not have, so a delete
+  whose only clause named such a column ran unfiltered and removed every
+  row. It now refuses an unknown column with a 400, and refuses filters
+  that all compile to nothing rather than scanning the whole table.
+- Values-only document search walked the __originals__ object, so terms
+  like "bigint" or "wire" matched every row with a projected bigint/bytes
+  field. That subtree is skipped (both fullkey spellings SQLite builds
+  use); those fields match through their projected value.
+- json_tree search cost 2-11x a plain instr over the text. The raw text
+  is now tested first as a pre-filter, bound as '' when the term holds a
+  character JSON escapes; the statement binds two params either way.
+  10k x 1.7 KB rows, no match: 191 ms -> 22 ms; 20 docs x 200k fields:
+  837 ms -> 74 ms.
+- isInternalTableName moves to shared/ so schema discovery can reuse it;
+  @lunora/observability's storage-correlation scan now uses it too instead
+  of its own shorter prefix list, so it skips the same tables the data
+  browser hides.
+- isVacuousFilterClause's doc now says what each dropped clause used to
+  match.
+* **shard-engine:** selectMatchingIds throws BAD_REQUEST for a filter on an
+unknown column, or when every filter is dropped as empty.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): reserve framework table names
+
+A table named with a leading `__` or an `__agg_`/`__rank_`/`__geo_`/`__fts_`
+infix passed schema discovery, then was hidden and refused by the Studio
+and every admin op, which treat those names as framework storage. Schema
+discovery now rejects them with a located diagnostic, using the same
+isInternalTableName predicate as the runtime.
+* **shard-engine:** schemas declaring such a table name now fail codegen.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **shard-engine:** harden admin introspection reads ([#857](https://github.com/anolilab/lunora/issues/857)) ([873775a](https://github.com/anolilab/lunora/commit/873775a10e1877ba343d968c32128f91c2af42cc))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.173
+
 ## @lunora/d1 [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.142...@lunora/d1@1.0.0-alpha.143) (2026-09-26)
 
 

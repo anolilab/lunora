@@ -1,12 +1,13 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { LunoraClient } from "@lunora/client";
+import { isAuthReplayFailure } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
 import { getShardCheckpoints, hasCheckpointsAttached, syncShardCheckpointIdentity } from "./collection-options";
-import { assertSecureRandom, runOutboxMutation } from "./internals";
+import { assertSecureRandom, runOutboxMutation, toNonRetriable } from "./internals";
 
 /**
  * TanStack DB's "direct transaction" marker.
@@ -429,9 +430,15 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
                 mutationFn: async () => {
                     let appliedSeq = 0;
 
-                    await runOutboxMutation(async () => {
-                        appliedSeq = await pushSerialized(mutator.serverRef, args as Record<string, unknown>);
-                    });
+                    try {
+                        await runOutboxMutation(async () => {
+                            appliedSeq = await pushSerialized(mutator.serverRef, args as Record<string, unknown>);
+                        });
+                    } catch (error) {
+                        // A direct write is never retried, so a refused credential is
+                        // as final as any other coded verdict: report it as one.
+                        throw isAuthReplayFailure(error) ? toNonRetriable(error) : error;
+                    }
 
                     // Hold the overlay until the synced row lands (the poke echoes
                     // this client's `lastMutationId`). Skipped when the caller opted
