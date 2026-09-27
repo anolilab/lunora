@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.156...@lunora/runtime@1.0.0-alpha.157) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** drop the placeholder storage base url ([#867](https://github.com/anolilab/lunora/issues/867)) ([252abce](https://github.com/anolilab/lunora/commit/252abce0c92d6d355fe52bffeb1157e200fb97ff))
+
 ## @lunora/runtime [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.155...@lunora/runtime@1.0.0-alpha.156) (2026-09-27)
 
 ### Bug Fixes
