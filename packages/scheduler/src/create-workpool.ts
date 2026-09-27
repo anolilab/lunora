@@ -78,7 +78,8 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
             maxConcurrency: options.maxConcurrency,
             pool: name,
             retry: options_.retry,
-            scheduledFor: Date.now() + delayMs,
+            // Whole milliseconds, rounded up — see `createScheduler`'s `runAt`.
+            scheduledFor: Math.ceil(Date.now() + delayMs),
             shardKey: options_.shardKey,
         });
     };

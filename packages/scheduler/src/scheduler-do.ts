@@ -1985,5 +1985,5 @@ class SchedulerDO {
     }
 }
 
-export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
+export { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES, MAX_RETRY_ATTEMPTS, MAX_SCHEDULED_FOR_MS, RETRY_BASE_DELAY_MS, SchedulerDO };
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };

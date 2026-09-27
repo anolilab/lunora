@@ -4025,7 +4025,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
-                scheduledFor,
+                // Whole milliseconds, rounded up: the SchedulerDO refuses a
+                // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
+                // `runAt` also rounds.
+                scheduledFor: Math.ceil(scheduledFor),
                 ...fields,
             });
 

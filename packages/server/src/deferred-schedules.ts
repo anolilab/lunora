@@ -271,7 +271,9 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
             args: encodeArgsOrThrow(`ctx.scheduler.${method}`, scheduleTargetLabel(target), args),
             options,
             target,
-            when: method === "runAfter" ? Date.now() + when : when,
+            // Whole milliseconds, rounded up — the instant `@lunora/scheduler`'s
+            // `runAt` stores, so the replay and the live call agree.
+            when: Math.ceil(method === "runAfter" ? Date.now() + when : when),
         });
 
         // Buffered against the window that is innermost RIGHT NOW, so it is
