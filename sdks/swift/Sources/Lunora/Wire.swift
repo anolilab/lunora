@@ -420,7 +420,7 @@ extension Wire {
         var seen: Set<String> = []
 
         for entry in raw {
-            let item = try decode(entry, depth: depth + 1)
+            let item = positiveZero(try decode(entry, depth: depth + 1))
 
             if let identity = mapKeyIdentity(item) {
                 if seen.contains(identity) { continue }
@@ -441,7 +441,7 @@ extension Wire {
         for item in raw {
             guard let pair = item as? [Any], pair.count == 2 else { throw WireFormatError.malformed("map entry") }
 
-            let key = try decode(pair[0], depth: depth + 1)
+            let key = positiveZero(try decode(pair[0], depth: depth + 1))
             let entry = (key: key, value: try decode(pair[1], depth: depth + 1))
 
             // Last write wins, at the FIRST occurrence's position — the reference
@@ -464,6 +464,19 @@ extension Wire {
             entries.append(entry)
         }
         return WireMap(entries)
+    }
+
+    /// Store a signed zero as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+    /// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+    /// bare `-0` token) as `0` in the reference, not only when it collides.
+    private static func positiveZero(_ value: Any) -> Any {
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+           number.doubleValue == 0, number.doubleValue.sign == .minus {
+            return 0.0
+        }
+        if let double = value as? Double, double == 0, double.sign == .minus { return 0.0 }
+
+        return value
     }
 
     /// A map key's collapse identity, or `nil` when it never collapses.

@@ -261,6 +261,34 @@
             ]
         },
         {
+            "$comment": "A signed zero is normalised to +0 on INSERT, not just when it collides: `Set.prototype.add` and `Map.prototype.set` both store +0 for a -0 argument, so a lone -0 member or key re-encodes as 0. A port that only clears the sign when comparing carries the -0 through and re-encodes (and keys, per §3's bare `-0` token) a value the reference never emits.",
+            "name": "set-lone-negative-zero",
+            "encoded": ["$lunora.wire$", "set", [-0.0]],
+            "reencoded": ["$lunora.wire$", "set", [0]]
+        },
+        {
+            "name": "map-lone-negative-zero-key",
+            "encoded": ["$lunora.wire$", "map", [[-0.0, 1]]],
+            "reencoded": ["$lunora.wire$", "map", [[0, 1]]]
+        },
+        {
+            "name": "set-negative-zero-before-zero",
+            "encoded": ["$lunora.wire$", "set", [-0.0, 0, 1]],
+            "reencoded": ["$lunora.wire$", "set", [0, 1]]
+        },
+        {
+            "name": "map-negative-zero-key-before-zero",
+            "encoded": [
+                "$lunora.wire$",
+                "map",
+                [
+                    [-0.0, "a"],
+                    [0, "b"]
+                ]
+            ],
+            "reencoded": ["$lunora.wire$", "map", [[0, "b"]]]
+        },
+        {
             "name": "set-duplicate-nonscalars",
             "encoded": [
                 "$lunora.wire$",

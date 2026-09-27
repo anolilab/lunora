@@ -325,7 +325,7 @@ module Lunora
     seen = {}
 
     payload_of(value, "set", ::Array).each do |entry|
-      item = decode_wire(entry, depth + 1)
+      item = positive_zero(decode_wire(entry, depth + 1))
       identity = map_key_identity(item)
 
       next if !identity.nil? && seen.key?(identity)
@@ -349,7 +349,7 @@ module Lunora
     payload_of(value, "map", ::Array).each do |entry|
       raise WireFormatError, "wire-codec: malformed map entry" unless entry.is_a?(::Array) && entry.length == 2
 
-      key = decode_wire(entry[0], depth + 1)
+      key = positive_zero(decode_wire(entry[0], depth + 1))
       item = decode_wire(entry[1], depth + 1)
       identity = map_key_identity(key)
 
@@ -370,6 +370,13 @@ module Lunora
     end
 
     WireMap.new(pairs)
+  end
+
+  # Store a signed zero as +0, as +Set.prototype.add+ and +Map.prototype.set+
+  # do on INSERT — so a lone -0 member or key re-encodes (and keys, per §3's
+  # bare +-0+ token) as 0 in the reference, not only when it collides.
+  def positive_zero(value)
+    value.is_a?(::Float) && value.zero? ? 0 : value
   end
 
   # A map key's collapse identity, or nil when it never collapses.

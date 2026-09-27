@@ -133,16 +133,22 @@ Notes that a port MUST honour:
 - **Duplicate map keys collapse, last value wins, at the FIRST occurrence's
   position** — the reference decodes into a real `Map`, and `Map.prototype.set`
   on a key already present overwrites in place. It overwrites the VALUE only:
-  the key already stored is kept, so `[[0,"a"],[-0,"b"]]` re-encodes with the
-  `0` it first held, not the `-0` that collapsed onto it. So
+  the key already stored is kept. So
   `[TAG, "map", [["a",1],["b",2],["a",3]]]` decodes to two entries and
   re-encodes as `[["a",3],["b",2]]`. Keys collapse under SameValueZero: the
   scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
   string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
   a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
-  structurally identical non-scalar keys stay two entries. SameValueZero holds
-  `-0` equal to `0`, so a signed zero is never its own key — a port whose number
-  formatting keeps the sign must clear it before comparing.
+  structurally identical non-scalar keys stay two entries.
+- **A signed zero in a `set` or a map key is stored as `+0`.** `Set.prototype.add`
+  and `Map.prototype.set` both normalise `-0` to `+0` on INSERT, not only when
+  it collides with a `0` already held — so `[TAG, "set", [-0]]` re-encodes as
+  `[TAG, "set", [0]]`, `[TAG, "map", [[-0,1]]]` as `[[0,1]]`, and
+  `[[-0,"a"],[0,"b"]]` as `[[0,"b"]]`. A port that only clears the sign when
+  comparing keeps a lone `-0`, which §3 keys as its own `-0` token: a different
+  subscription than the TS client's for the same args. (A map VALUE or an array
+  element keeps its sign; only set members and map keys go through the
+  collection.)
 - **Error** `ownProps` is neither optional nor nullable: the reference reads it
   with `Object.keys`, which throws on a missing or `null` slot, so a 4-element
   error tag and `[TAG, "error", n, m, null]` are both refused.
