@@ -543,5 +543,5 @@ const sandboxComponent = (): SandboxComponent => {
     return { invoke };
 };
 
-export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxContainerHandle, SandboxInvokeArgs, SandboxRegisteredFunction };
+export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxInvokeArgs, SandboxRegisteredFunction };
 export { resolveFsKey, runFsOp, sandboxComponent };
