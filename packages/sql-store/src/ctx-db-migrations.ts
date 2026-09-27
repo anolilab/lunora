@@ -863,18 +863,58 @@ const alterGlobalTableDrift = async (exec: SqlCtxExec, tableName: string, defini
 };
 
 /**
+ * `table.column` pairs {@link relaxNullAcceptingColumns} already reported in
+ * this isolate. Provisioning runs once per ctx-db — once per request on a
+ * Hyperdrive binding — so an unconditional warning would repeat on every one.
+ */
+const reportedRelaxations = new Set<string>();
+
+/** Warn once per isolate for `key`. The only channel a provisioning pass has. */
+const warnOnce = (key: string, message: string): void => {
+    if (reportedRelaxations.has(key)) {
+        return;
+    }
+
+    reportedRelaxations.add(key);
+    // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
+    console.warn(`[@lunora/sql-store] ${message}`);
+};
+
+/**
+ * The one-off statement that relaxes a MySQL column to NULL while keeping the
+ * declaration it has TODAY. `MODIFY COLUMN` replaces the whole definition, so it
+ * is rebuilt from `information_schema` rather than from the current DDL: a
+ * legacy column may carry a case-folding collation, or `LONGTEXT` where a
+ * `.unique()` column is now `VARCHAR(768)`, and restating today's DDL would
+ * change how it compares or fail on rows longer than the new type.
+ */
+const mysqlRelaxStatement = (tableName: string, field: string, row: Record<string, unknown>): string => {
+    const charset = typeof row["charset"] === "string" ? ` CHARACTER SET ${row["charset"]} COLLATE ${String(row["collation"])}` : "";
+
+    return `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`${field}\` ${String(row["type"])}${charset} NULL`;
+};
+
+/**
  * Drop `NOT NULL` from the columns of an existing table whose validator accepts
  * null — the constraint every table provisioned before those kinds were exempt
  * still carries, so `insert({ note: null })` kept raising a raw constraint error
  * there after the DDL was fixed.
  *
- * Postgres and MySQL only. Each can relax a column in place, and the catalog
- * probe that gates it is one `information_schema` read, made only for a table
- * that declares such a column at all. SQLite cannot drop a column constraint
- * without rebuilding the table, which is not something to do unasked on every
- * cold start: a D1 table keeps the constraint until it is rebuilt by hand (see
- * the global-tables migration guide), and `lunora migrate generate` reports the
- * nullability change so the step is not missed.
+ * Only Postgres is changed in place: `ALTER COLUMN … DROP NOT NULL` touches the
+ * catalog and nothing else, and is a no-op once done. MySQL is NOT — its only
+ * way to relax a column is `MODIFY COLUMN`, which restates the whole definition
+ * and can rebuild the table, so running it from a cold start would block writes
+ * and could change the column's collation or type. Such a column is reported
+ * instead, once per isolate, with the exact statement to run (see
+ * {@link mysqlRelaxStatement}). SQLite cannot drop a column constraint without a
+ * rebuild at all: a D1 table keeps it until it is rebuilt by hand (the global
+ * tables migration guide carries the recipe), and `lunora migrate generate`
+ * reports the nullability change so the step is not missed.
+ *
+ * Best-effort by design. A failure here is logged and provisioning carries on:
+ * the table still serves every write that does not store `null` in such a
+ * column, where rejecting the whole provisioning pass would fail every request,
+ * on every isolate, until an operator intervened.
  */
 const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
     if (dialect.name === "sqlite") {
@@ -882,37 +922,51 @@ const relaxNullAcceptingColumns = async (exec: SqlCtxExec, tableName: string, de
     }
 
     // Exactly the columns the fixed DDL leaves nullable where the old rule did not.
-    const candidates = Object.entries(definition.shape).filter(
-        ([, validator]) => validator._meta?.column?.notNull === true && validator.kind !== "optional" && validatorAcceptsNull(validator),
-    );
+    const candidates = Object.keys(definition.shape).filter((field) => {
+        const validator = definition.shape[field] as ValidatorLike;
+
+        return validator._meta?.column?.notNull === true && validator.kind !== "optional" && validatorAcceptsNull(validator);
+    });
 
     if (candidates.length === 0) {
         return;
     }
 
-    const schemaScope = dialect.name === "postgres" ? sql`table_schema = ANY (current_schemas(false))` : sql`table_schema = DATABASE()`;
-    const rows = await queryAll(
-        exec,
-        dialect,
-        sql`SELECT column_name AS ${sql.identifier("name")} FROM information_schema.columns WHERE ${schemaScope} AND table_name = ${tableName} AND is_nullable = 'NO' AND column_name IN (${sql.join(
-            candidates.map(([field]) => sql`${field}`),
-            sql`, `,
-        )})`,
-    );
-    const constrained = new Set(rows.map((row) => String(row["name"])));
-
-    for (const [field, validator] of candidates) {
-        if (!constrained.has(field)) {
-            continue;
-        }
-
-        const alter =
+    try {
+        // Postgres needs only the names; MySQL also the declaration the report restates.
+        const selected =
             dialect.name === "postgres"
-                ? sql`ALTER TABLE ${sql.identifier(tableName)} ALTER COLUMN ${sql.identifier(field)} DROP NOT NULL`
-                : sql`ALTER TABLE ${sql.identifier(tableName)} MODIFY COLUMN ${sql.identifier(field)} ${sql.raw(globalColumnAffinity(validator, dialect, fullValueIndexedFields(definition).has(field)))} NULL`;
+                ? sql`column_name AS ${sql.identifier("name")}`
+                : sql`column_name AS ${sql.identifier("name")}, column_type AS ${sql.identifier("type")}, character_set_name AS ${sql.identifier("charset")}, collation_name AS ${sql.identifier("collation")}`;
+        const schemaScope = dialect.name === "postgres" ? sql`table_schema = ANY (current_schemas(false))` : sql`table_schema = DATABASE()`;
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${selected} FROM information_schema.columns WHERE ${schemaScope} AND table_name = ${tableName} AND is_nullable = 'NO' AND column_name IN (${sql.join(
+                candidates.map((field) => sql`${field}`),
+                sql`, `,
+            )})`,
+        );
 
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
-        await queryRun(exec, dialect, alter);
+        for (const row of rows) {
+            const field = String(row["name"]);
+
+            if (dialect.name === "postgres") {
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared connection.
+                await queryRun(exec, dialect, sql`ALTER TABLE ${sql.identifier(tableName)} ALTER COLUMN ${sql.identifier(field)} DROP NOT NULL`);
+                continue;
+            }
+
+            warnOnce(
+                `${tableName}.${field}`,
+                `"${tableName}"."${field}" accepts null in the schema but its column is NOT NULL, so writing null there fails. Relaxing it on MySQL can rebuild the table, so it is not done at startup; run this once, in a maintenance window: ${mysqlRelaxStatement(tableName, field, row)};`,
+            );
+        }
+    } catch (error) {
+        warnOnce(
+            `${tableName}:relax-failed`,
+            `could not relax NOT NULL on the null-accepting columns of "${tableName}" (${candidates.join(", ")}): ${error instanceof Error ? error.message : String(error)}. Writing null to them fails until the constraint is dropped by hand.`,
+        );
     }
 };
 

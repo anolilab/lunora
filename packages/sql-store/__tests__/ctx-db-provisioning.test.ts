@@ -1,6 +1,6 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb } from "../src/ctx-db";
@@ -189,5 +189,36 @@ describe("createSqlCtxDb — provisionScope", () => {
         await createSqlCtxDb({ clock: () => 1, dialect: sqliteDialect, exec, provisionScope, schema }).findMany("notes", {});
 
         expect(statements.filter((statement) => isCreateTable(statement)).length).toBeGreaterThan(0);
+    });
+});
+
+describe("relaxing NOT NULL on a null-accepting column", () => {
+    it("logs a failure once and keeps serving, instead of failing provisioning on every request", async () => {
+        expect.assertions(3);
+
+        const nullable = {
+            tables: { notes: { indexes: [], shape: { anything: { _meta: { column: { notNull: true } }, kind: "any" } }, shardMode: { kind: "global" } } },
+        } as never;
+        const exec: SqlCtxExec = {
+            all: (query) =>
+                /information_schema/iu.test(query) ? Promise.reject(new Error("permission denied for schema information_schema")) : Promise.resolve([]),
+            run: () => Promise.resolve(),
+        };
+        const postgresLike: SqlDialect = { ...sqliteDialect, name: "postgres" };
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            // Two writers: a Hyperdrive host builds one per request.
+            await expect(createSqlCtxDb({ clock: () => 1, dialect: postgresLike, exec, schema: nullable }).findMany("notes", {})).resolves.toMatchObject({
+                page: [],
+            });
+            await expect(createSqlCtxDb({ clock: () => 1, dialect: postgresLike, exec, schema: nullable }).findMany("notes", {})).resolves.toMatchObject({
+                page: [],
+            });
+
+            expect(warn.mock.calls.filter((call) => String(call[0]).includes("could not relax NOT NULL"))).toHaveLength(1);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });

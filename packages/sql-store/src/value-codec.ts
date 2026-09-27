@@ -197,18 +197,6 @@ const decodeBytes = (raw: unknown): unknown => {
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown, kind?: string): unknown => {
-    // Postgres TEXT cannot hold U+0000 at all and raised a raw driver error
-    // ("invalid byte sequence … 0x00") for a value SQLite and MySQL stored. A
-    // `.global()` table may move between those engines, so the value is refused
-    // the same way on every one of them, before it reaches any. A NUL nested in
-    // an object or array is unaffected: it is stored as JSON's `\u0000` escape.
-    if (typeof value === "string" && value.includes("\0")) {
-        throw new LunoraError(
-            "BAD_REQUEST",
-            "a .global() table cannot store or match a string containing a NUL character (U+0000): Postgres cannot hold one, so no engine accepts it",
-        );
-    }
-
     const untyped = untypedStorageForm(value, kind);
 
     if (untyped !== undefined) {

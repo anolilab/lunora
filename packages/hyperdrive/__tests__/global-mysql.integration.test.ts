@@ -109,15 +109,14 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness.query("DROP TABLE IF EXISTS `__cdc_log`");
         await harness.query("DROP TABLE IF EXISTS `__cdc_sweep`");
         await harness.query("DROP TABLE IF EXISTS `nullables`");
+        await harness.query("DROP TABLE IF EXISTS `__lunora_migration_state`");
         await harness.query("DROP TABLE IF EXISTS `wide`");
     });
 
     describe("values every engine must treat alike", () => {
         it.each(
             backendParityCases({
-                ddl: async (statement) => {
-                    await harness.query(statement);
-                },
+                query: async (statement) => await harness.query(statement),
                 engine: "mysql",
                 setup: async (schema) => {
                     await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);

@@ -79,6 +79,13 @@ const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/i
  * cold start. A binding provisioned before this ships needs the operator to run
  * `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
  * once per table, companions included.
+ *
+ * The same rule covers `NOT NULL` on a column whose validator now accepts null:
+ * relaxing it takes a `MODIFY COLUMN`, so the store only reports it, with the
+ * statement to run (`relaxNullAcceptingColumns` in `@lunora/sql-store`). And a
+ * wide `in` list past the placeholder cap compares under the column's collation
+ * only when that is `utf8mb4_0900_ai_ci` or a `_bin` one; another legacy
+ * collation raises "Illegal mix of collations" until the table is converted.
  */
 const MYSQL_COLLATION = "utf8mb4_0900_bin";
 

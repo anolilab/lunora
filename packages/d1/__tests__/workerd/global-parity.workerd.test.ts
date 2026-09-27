@@ -211,18 +211,32 @@ describe("a required column that accepts null, on a real D1 .global() table", ()
 });
 
 describe("a string holding U+0000, on a real D1 .global() table", () => {
-    it("is refused with the typed error Postgres forces on every engine", async () => {
-        expect.assertions(1);
+    it("is stored, and a row holding one stays patchable and re-importable", async () => {
+        expect.assertions(2);
 
         await env.DB.prepare("DROP TABLE IF EXISTS texts").run();
 
-        const schema = { tables: { texts: { indexes: [], shape: { body: v.string() }, shardMode: { kind: "global" } } } } as unknown as SchemaLike;
+        const schema = {
+            tables: { texts: { indexes: [], shape: { body: v.string(), n: v.number() }, shardMode: { kind: "global" } } },
+        } as unknown as SchemaLike;
 
         await runD1GlobalTableMigrations(exec, schema);
 
         const db = createD1CtxDb({ exec, idGenerator: () => crypto.randomUUID(), schema });
 
-        await expect(db.insert("texts", { body: "a\u0000b" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        // A row an earlier build stored, holding a NUL the caller is not writing now.
+        const id = "t1";
+
+        await env.DB.prepare(`INSERT INTO texts (id, "_creationTime", body, n) VALUES (?, 1, ?, 1)`).bind(id, "a\u0000b").run();
+        await db.patch(id, { n: 2 });
+
+        const stored = await db.get(id);
+
+        expect(stored).toMatchObject({ body: "a\u0000b", n: 2 });
+
+        await db.delete(id);
+
+        await expect(db.insert("texts", stored as never, { allowExplicitId: true })).resolves.toBe(id);
     });
 });
 

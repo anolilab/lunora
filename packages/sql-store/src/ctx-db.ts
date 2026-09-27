@@ -580,6 +580,29 @@ const bindList = (values: ReadonlyArray<unknown>): SQL =>
     );
 
 /**
+ * Refuse, on Postgres, a top-level string the caller is writing that holds
+ * U+0000.
+ *
+ * Postgres `text` cannot store the character at all, and the driver raised a
+ * raw "invalid byte sequence … 0x00" for it. Checked on the fields the caller
+ * WRITES — an insert's document, a patch's delta, a replacement — never on the
+ * merged row: SQLite and MySQL store the character, so a row holding one must
+ * stay patchable and re-importable there. A NUL nested in an object or array is
+ * stored as JSON's `\u0000` escape and needs no check.
+ */
+const assertStorableStrings = (engine: SqlDialect["name"], written: Record<string, unknown>): void => {
+    if (engine !== "postgres") {
+        return;
+    }
+
+    for (const [field, value] of Object.entries(written)) {
+        if (typeof value === "string" && value.includes("\0")) {
+            throw new LunoraError("BAD_REQUEST", `"${field}" holds a NUL character (U+0000), which a Postgres text column cannot store`);
+        }
+    }
+};
+
+/**
  * A rank-table value in a form every driver binds as the BLOB it came from. A
  * `v.bytes()` sort key is read back as `number[]` from the D1 binding and as an
  * `ArrayBuffer` from a decoded cursor; bound as-is, drizzle expands the array
@@ -3337,6 +3360,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // INSERT against the fts/agg/rank tables.
             await ensureMigrated();
 
+            assertStorableStrings(dialect.name, document);
+
             const withDefaults = applyInsertDefaults(definition, document, auth);
 
             // Refinements declared via `.check(predicate)` fire on the
@@ -3417,6 +3442,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // sharing its guard rather than restating it is what keeps the two
             // from drifting again.
             assertNoExplicitUndefined("patch", patch);
+            assertStorableStrings(dialect.name, patch);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -3984,6 +4010,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async replace(id, document, expectedTable, replaceOptions) {
             assertNoExplicitUndefined("replace", document);
+            assertStorableStrings(dialect.name, document);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
