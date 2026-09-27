@@ -7,13 +7,23 @@
  * `tool()` and `paidTool()` registrations coexist on one server (mirroring
  * Cloudflare's `withX402(server, config)`). The server is served over
  * Streamable HTTP (paid tools require an HTTP boundary — an HTTP request can
- * carry `X-PAYMENT`, which stdio cannot), and each `tools/call` for a **paid**
- * tool is gated by the Phase-1 charge middleware: unpaid → `402` +
- * `PAYMENT-REQUIRED`; verified → settle, dispatch, attach `X-PAYMENT-RESPONSE`.
- * Settlement precedes dispatch (x402's `settleBeforeHandler` default, which this
- * module does not override), so a tool that throws has already been paid for —
- * which is why a throwing handler returns an `isError` result rather than a
- * JSON-RPC protocol error the client may not surface.
+ * carry `PAYMENT-SIGNATURE`, which stdio cannot), and each `tools/call` for a
+ * **paid** tool is gated by the Phase-1 charge middleware: unpaid → `402` +
+ * `PAYMENT-REQUIRED`; verified → settle, dispatch, attach `PAYMENT-RESPONSE`
+ * (the x402 v2 names — v1's `X-PAYMENT` is not read, and earns a fresh `402`).
+ *
+ * A call the transport would reject anyway (wrong Accept or Content-Type, a
+ * malformed or id-less JSON-RPC message, an unsupported protocol version) is
+ * answered with the transport's own error BEFORE the paywall, so it is never
+ * charged. Settlement then precedes dispatch (x402's `settleBeforeHandler`
+ * default, which this module does not override), so a tool that throws has
+ * already been paid for — which is why a throwing handler returns an `isError`
+ * result rather than a JSON-RPC protocol error the client may not surface.
+ * Nothing refunds that payment automatically: settlement is final on-chain, so a
+ * refund the app decides it owes is paid out of band, keyed on the settlement
+ * transaction in the `onReceipt` receipt. The arguments are not validated
+ * against `inputSchema` before settlement either — a tool rejecting its input
+ * after payment has still been paid.
  *
  * ```ts
  * const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
@@ -219,12 +229,45 @@ const callToolName = (message: unknown): string | undefined => {
 
 /**
  * Refuse a JSON-RPC batch that references a paid tool. A single HTTP request
- * carries at most one `X-PAYMENT`, so it can't settle several priced calls;
+ * carries at most one `PAYMENT-SIGNATURE`, so it can't settle several priced calls;
  * rather than let a batched paid call slip through unpaid we fail closed. MCP
  * 2025-06-18 removed JSON-RPC batching, so this is a defensive belt.
  */
 const refuseBatch = (): Response =>
     Response.json({ error: "A JSON-RPC batch may not reference a paid MCP tool; send paid tools/call requests individually." }, { status: 400 });
+
+/**
+ * The response the MCP transport would give `request` WITHOUT ever reaching the
+ * `tools/call` handler for `name`, or `undefined` when it would reach it.
+ *
+ * Runs the request through the real SDK transport against a throwaway server
+ * whose only handler records that it was reached. Everything the transport and
+ * the SDK `Server` refuse before a tool runs — a missing `text/event-stream` in
+ * Accept (406), a non-JSON Content-Type (415), a malformed JSON-RPC envelope or
+ * an unsupported `mcp-protocol-version` (400), a notification with no id (202),
+ * invalid `tools/call` params — comes back as the transport's own response,
+ * because it IS the transport's own response. A hand-copied list of those checks
+ * would drift from the SDK on its next release; this cannot.
+ *
+ * Side-effect free: the stub handler replaces every tool, and the body is the
+ * already-parsed one, so the real dispatch after payment re-reads nothing.
+ */
+const transportRejection = async (request: Request, parsedBody: unknown, name: string, maxRequestBytes: number | undefined): Promise<Response | undefined> => {
+    // An object, not a `let`: the flag is flipped inside a callback, which flow
+    // analysis cannot see, so a bare boolean reads as always-false here.
+    const handler = { reached: false };
+    const probe = new Server({ name: "lunora-paid-mcp-preflight", version: "0.0.0" }, { capabilities: { tools: {} } });
+
+    probe.setRequestHandler(CallToolRequestSchema, (call): CallToolResult => {
+        handler.reached = call.params.name === name;
+
+        return { content: [] };
+    });
+
+    const response = await serveStateless(probe, request, { maxRequestBytes, parsedBody });
+
+    return handler.reached ? undefined : response;
+};
 
 /**
  * Create a paid MCP server. Register free tools with `tool()` and priced tools
@@ -350,6 +393,17 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         // dispatch without a paywall.
         if (name === undefined || price === undefined) {
             return dispatch();
+        }
+
+        // Charge only for a call the transport will actually deliver. Payment is
+        // settled BEFORE dispatch, and the transport's own checks (Accept,
+        // Content-Type, protocol version, a JSON-RPC request with an id) run INSIDE
+        // dispatch — so a call it rejects would be paid for and answered with an
+        // error. The dry run below is those checks, not a copy of them.
+        const rejected = await transportRejection(request, parsedBody, name, config.maxRequestBytes);
+
+        if (rejected !== undefined) {
+            return rejected;
         }
 
         const middleware = await gateFor(name, price);
