@@ -89,6 +89,19 @@ describe("storage-correlation", () => {
             expect(references).toEqual([{ column: "fileKey", id: "a2", key: "u/gone.png", table: "avatars" }]);
         });
 
+        it("skips framework tables and index companions the data browser hides", () => {
+            expect.assertions(1);
+
+            database.raw(`CREATE TABLE "__stream_runs" ("id" TEXT PRIMARY KEY, "image" TEXT)`);
+            database.raw(`INSERT INTO "__stream_runs" VALUES ('s1', 'u/stale.png')`);
+            database.raw(`CREATE TABLE "banners__rank_byImage" ("id" TEXT PRIMARY KEY, "image" TEXT)`);
+            database.raw(`INSERT INTO "banners__rank_byImage" VALUES ('r1', 'u/stale.png')`);
+
+            const { references } = findDanglingReferences(database.sql, { __stream_runs: ["image"], banners__rank_byImage: ["image"] }, new Set());
+
+            expect(references).toEqual([]);
+        });
+
         it("returns an empty, non-truncated result for a schema with no storage columns", () => {
             expect.assertions(1);
 

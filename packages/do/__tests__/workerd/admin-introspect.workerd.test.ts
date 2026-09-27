@@ -51,6 +51,23 @@ describe("admin introspection on workerd", () => {
         });
     });
 
+    it("skips the wire-tagged originals of projected fields, however this SQLite spells their path", async () => {
+        expect.assertions(3);
+
+        await withSql("admin-search-originals", (sql) => {
+            createDocTable(sql, "ledger");
+            sql.exec(
+                `INSERT INTO "ledger" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify({ __originals__: { amount: ["$lunora.wire$", "bigint", "123"] }, amount: "000123", memo: "rent" }),
+                JSON.stringify({ memo: 'say "hi"' }),
+            );
+
+            expect(readTablePage(sql, { search: "bigint", table: "ledger" }).total).toBe(0);
+            expect(readTablePage(sql, { search: "rent", table: "ledger" }).total).toBe(1);
+            expect(readTablePage(sql, { search: '"hi"', table: "ledger" }).total).toBe(1);
+        });
+    });
+
     it("keeps a date search under the parameter cap however many date fields a table declares", async () => {
         expect.assertions(1);
 

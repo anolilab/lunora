@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 // Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
+import { isInternalTableName } from "../../../shared/internal-table-name";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire } from "../../../shared/wire-codec";
@@ -1108,27 +1109,6 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
  */
 const containsSql = (expression: string): string => `instr(lower(CAST(${expression} AS TEXT)), lower(?)) > 0`;
 
-/**
- * Reserved table names: SQLite's own bookkeeping (`sqlite_*`), Cloudflare's
- * internals (`_cf_*`), every framework table (`__`-prefixed — the CDC log,
- * idempotency cache, schedule outbox, stream runs, reactor state, commit
- * sequence, `__lunora_*` …) and every per-table index companion, which carries a
- * reserved infix (`todos__agg_byProject`, `messages__rank_byChannel`,
- * `places__geo_near`, `messages__fts_body` and its FTS5 `*_data`/`*_idx`
- * siblings).
- */
-const RESERVED_TABLE_PREFIX = /^(?:sqlite_|_cf_|__)/u;
-const COMPANION_TABLE_INFIX = /__(?:agg|rank|geo|fts)_/u;
-
-/**
- * Whether `name` is framework storage rather than a user table. The one
- * definition every admin surface filters by — the shard data browser and the D1
- * global browser alike — so a table listed on one is listed on the other, and a
- * row count, a facet or a clear can never be pointed at bookkeeping.
- * @returns `true` for a reserved or companion table name
- */
-const isInternalTableName = (name: string): boolean => RESERVED_TABLE_PREFIX.test(name) || COMPANION_TABLE_INFIX.test(name);
-
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 const countRows = (sql: SqlExec, quotedTable: string): number => {
@@ -1189,16 +1169,25 @@ const filterValueText = (value: unknown): string => {
 const RANGE_OPERATORS: ReadonlySet<FilterOperator> = new Set<FilterOperator>(["gt", "gte", "lt", "lte"]);
 
 /**
- * Whether `clause` constrains nothing, so it is dropped rather than compiled.
+ * Whether `clause` is an unfilled input rather than a condition, so it is
+ * dropped instead of compiled.
  *
- * `contains` with empty text is `instr(x, '') > 0`, which is true for every row,
- * and a range bound of `""` is an unfilled input box, not a bound (`x >= ''`
- * holds for every text value). Compiled, either one reads as a predicate while
- * matching the whole table — which is how a "delete matching" request carrying
- * only such a clause got past the predicate-required guard and emptied the
- * table. The admin argument parser drops exactly these clauses too, so the guard
- * sees what the SQL will.
- * @returns `true` when the clause would match every row it is applied to
+ * `contains ""` compiled to `instr(x, '') > 0`, which holds for every row where
+ * the column is non-NULL — in effect "field present", and for a required field
+ * every row. Dropped, it constrains nothing.
+ *
+ * A range bound of `""` compared under SQLite's cross-type order, where every
+ * number sorts below every text: `gt`/`gte ""` matched no number and every text
+ * value, `lt`/`lte ""` matched every number and (for `lt`) no text. None of that
+ * is what an empty box means. Dropped, it constrains nothing.
+ *
+ * `eq ""`/`ne ""` are kept: an empty string is a real value to compare against.
+ *
+ * Only a "delete matching" request carrying nothing but such a clause changes
+ * outcome: it used to delete every row the clause happened to match while
+ * passing the predicate-required guard; now the admin argument parser drops the
+ * clause too, so the guard sees the missing predicate and refuses.
+ * @returns `true` when the clause is an empty input the builder drops
  */
 const isVacuousFilterClause = (clause: FilterClause): boolean =>
     clause.operator === "contains" ? filterValueText(clause.value) === "" : RANGE_OPERATORS.has(clause.operator) && clause.value === "";
@@ -1328,6 +1317,16 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
 const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
 
 /**
+ * Excludes the leaves under the {@link DOC_ORIGINALS_KEY} object. SQLite builds
+ * disagree on whether `fullkey` quotes a key starting with `_` (`$."__originals__"`
+ * vs `$.__originals__`), so both spellings are tested. A constant — no bound
+ * parameter, and no `LIKE`, whose `_` is a wildcard.
+ */
+const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINALS_KEY}"`]
+    .map((prefix) => `substr(j.fullkey, 1, ${String(prefix.length + 1)}) NOT IN ('${prefix}.', '${prefix}[')`)
+    .join(" AND ");
+
+/**
  * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
  * at any depth — never its keys.
  *
@@ -1335,10 +1334,42 @@ const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
  * every row with a `status` field, and "delete matching" then removed them all.
  * `json_tree` walks every leaf (nested objects and arrays included) and exposes
  * its value apart from its key; booleans are compared as `true`/`false`, the text
- * the raw JSON carried. One bound parameter, like {@link containsSql}.
+ * the raw JSON carried.
+ *
+ * The {@link DOC_ORIGINALS_KEY} object is skipped: it holds the wire-tagged
+ * originals of projected `v.bigint()`/`v.bytes()` fields (`["$lunora.wire$",
+ * "bigint", "123"]`), so without the skip `bigint` or `wire` matched every row
+ * with such a field. Those fields are matched through their projected value at
+ * `$.field` instead — the zero-padded sort key for a bigint (so `0000` still
+ * matches small bigints), base64 text for bytes. A non-object value under that
+ * key is a user field and is searched like any other.
+ *
+ * `json_tree` costs several times a plain `instr` over the text, so the raw text
+ * is tested first as a cheap pre-filter: a value containing the term makes the
+ * JSON text contain it too — unless the term holds a character JSON escapes
+ * (`"`, `\`, a control character), for which {@link rawTextPrefilter} binds `''`
+ * and the pre-filter passes every row. Two bound parameters: the pre-filter term,
+ * then the term. The value test runs before the originals check, so `fullkey` —
+ * a string built per leaf — is only materialised for leaves that matched.
  */
 const documentValuesContainSql = (documentExpression: string): string =>
-    `EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")})`;
+    `(${containsSql(documentExpression)} AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION}))`;
+
+/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
+// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
+const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
+
+/**
+ * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
+ * search term itself, or `''` (which every row contains) when the term holds a
+ * character the stored JSON only carries escaped.
+ *
+ * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
+ * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
+ * searching those is not a real use.
+ * @returns the pre-filter term
+ */
+const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
 
 /** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
 const DATE_PREFIX = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
@@ -1428,7 +1459,7 @@ const buildTablePredicate = (
     if (needle !== "" && columns.length > 0) {
         const disjuncts = columns.map((name) => (name === DOC_COLUMN ? documentValuesContainSql(quoteIdentifier(name)) : containsSql(quoteIdentifier(name))));
 
-        parameters.push(...columns.map(() => needle));
+        parameters.push(...columns.flatMap((name) => (name === DOC_COLUMN ? [rawTextPrefilter(needle), needle] : [needle])));
 
         // A date-shaped term additionally matches timestamp columns by RANGE, so
         // `2026-07` finds July's rows rather than only those whose rendered text
@@ -1597,7 +1628,23 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const columns = physicalColumnNames(sql, quoted);
 
     const needle = options.search?.trim() ?? "";
+
+    // This scan selects the rows a bulk delete/patch then writes, so a clause the
+    // builder would silently drop must fail the op instead: a filter on a column
+    // the table does not have, or clauses that compile to nothing at all, would
+    // otherwise leave the scan unfiltered — a whole-table write under the verb of
+    // a filtered one.
+    for (const clause of options.filters ?? []) {
+        if (resolveColumnExpression(clause.column, columns) === undefined) {
+            throw new LunoraError("BAD_REQUEST", `unknown column: ${clause.column}`);
+        }
+    }
+
     const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
+
+    if (predicate === undefined && (options.filters?.length ?? 0) > 0) {
+        throw new LunoraError("BAD_REQUEST", `the filters on ${table} are all empty, so the predicate constrains no rows — refusing to select the whole table`);
+    }
 
     const conditions: string[] = [];
     const parameters: unknown[] = [];
@@ -2095,7 +2142,6 @@ export {
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
-    isInternalTableName,
     isVacuousFilterClause,
     listTables,
     MAX_PAGE_SIZE,
@@ -2167,3 +2213,4 @@ export type {
     WorkflowMetadata,
     WorkflowsResult,
 };
+export { isInternalTableName } from "../../../shared/internal-table-name";

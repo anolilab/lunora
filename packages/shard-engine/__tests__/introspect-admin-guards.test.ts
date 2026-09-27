@@ -160,5 +160,58 @@ describe("admin introspection guards", () => {
             expect(readTablePage(database.sql, { columnKinds, search: "2026-07", table: "tasks" }).total).toBe(2);
             expect(readTablePage(database.sql, { columnKinds, search: "2026-07-15", table: "tasks" }).total).toBe(1);
         });
+
+        it("does not match the wire-tagged originals kept for projected fields", () => {
+            expect.assertions(3);
+
+            database.sql.exec(`CREATE TABLE "ledger" (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.sql.exec(
+                `INSERT INTO "ledger" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify({ __originals__: { amount: ["$lunora.wire$", "bigint", "123"] }, amount: "000123", memo: "rent" }),
+                JSON.stringify({ memo: "food" }),
+            );
+
+            expect(readTablePage(database.sql, { search: "bigint", table: "ledger" }).total).toBe(0);
+            expect(readTablePage(database.sql, { search: "wire", table: "ledger" }).total).toBe(0);
+            expect(readTablePage(database.sql, { search: "rent", table: "ledger" }).total).toBe(1);
+        });
+
+        it("still finds a term the JSON text only holds escaped", () => {
+            expect.assertions(2);
+
+            database.sql.exec(`CREATE TABLE "quotes" (id TEXT PRIMARY KEY, _creationTime REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.sql.exec(
+                `INSERT INTO "quotes" VALUES ('a', 1, ?), ('b', 1, ?)`,
+                JSON.stringify({ text: 'say "hi"' }),
+                JSON.stringify({ text: String.raw`a\b` }),
+            );
+
+            expect(readTablePage(database.sql, { search: '"hi"', table: "quotes" }).total).toBe(1);
+            expect(readTablePage(database.sql, { search: String.raw`a\b`, table: "quotes" }).total).toBe(1);
+        });
+    });
+
+    describe("bulk-op id selection", () => {
+        beforeEach(() => {
+            database.sql.exec(`CREATE TABLE "plain" (id TEXT PRIMARY KEY, name TEXT)`);
+            database.sql.exec(`INSERT INTO "plain" VALUES ('a', 'x'), ('b', 'y')`);
+        });
+
+        it("refuses a filter on a column the table does not have", () => {
+            expect.assertions(1);
+
+            expect(() => selectMatchingIds(database.sql, { filters: [{ column: "nope", operator: "eq", value: "x" }], table: "plain" })).toThrow(
+                /unknown column: nope/u,
+            );
+        });
+
+        it("refuses a predicate that compiles to nothing rather than selecting every row", () => {
+            expect.assertions(2);
+
+            expect(() => selectMatchingIds(database.sql, { filters: [{ column: "name", operator: "contains", value: "" }], table: "plain" })).toThrow(
+                /constrains no rows/u,
+            );
+            expect(() => selectMatchingIds(database.sql, { search: "   ", table: "plain" })).not.toThrow();
+        });
     });
 });
