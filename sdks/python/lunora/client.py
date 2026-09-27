@@ -1253,16 +1253,20 @@ class LunoraClient:
             def finished(task: asyncio.Task) -> None:
                 flushes.discard(task)
                 if not task.cancelled() and task.exception() is not None:
-                    _log.warning("lunora: the flush after a token change failed", exc_info=task.exception())
+                    _log.warning("lunora: a background offline flush failed", exc_info=task.exception())
 
             # A transient refusal the server ANSWERED leaves the socket up, so
             # nothing reconnects to flush again: re-flush after the server's
             # hint, or a bounded, jittered backoff when it sent none
             # (protocol/README.md 4.3). One timer per socket; progress resets the
-            # backoff, and the timer dies with the socket.
-            retry: dict = {"attempts": 0, "timer": None}
+            # backoff, and the timer dies with the socket: `alive` goes false when
+            # this run ends, so a flush still in flight then arms nothing.
+            retry: dict = {"alive": True, "attempts": 0, "timer": None}
 
             def schedule_retry(report: FlushReport) -> None:
+                if not retry["alive"] or self._closed:
+                    return
+
                 # A flush that met the rate-limit window drained nothing and
                 # reports what is left of it: wait that out too, or a timer that
                 # fires a hair early would park the write after all.
@@ -1285,6 +1289,8 @@ class LunoraClient:
 
             def start_flush() -> None:
                 retry["timer"] = None
+                if not retry["alive"]:
+                    return
                 task = loop.create_task(flush_and_schedule())
                 flushes.add(task)
                 task.add_done_callback(finished)
@@ -1328,8 +1334,15 @@ class LunoraClient:
             finally:
                 with self._lock:
                     self._token_listeners.remove(refreshed)
+                retry["alive"] = False
                 if retry["timer"] is not None:
                     retry["timer"].cancel()
+                # A background flush still waiting on its post is ended with the
+                # socket; its drained writes go back on the queue for the
+                # reconnect, or are settled if the client closed.
+                for task in list(flushes):
+                    task.cancel()
+                await asyncio.gather(*flushes, return_exceptions=True)
                 # Writes submitted after this point queue instead of failing, and
                 # the writer never outlives the socket it writes to.
                 self.detach_socket()

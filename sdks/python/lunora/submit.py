@@ -496,9 +496,20 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         leftover = [item for item in drained if item.id not in settled]
 
         if leftover:
+            # Unless the client closed underneath the flush: `close` already
+            # emptied the queue and could not see these writes, so putting them
+            # back would strand them in a closed client with no caller settled.
             with client._lock:
-                queue.requeue(leftover)
-            report.requeued.extend(item.id for item in leftover)
+                closed = client._closed
+                if not closed:
+                    queue.requeue(leftover)
+
+            if closed:
+                report.rejected.extend(item.id for item in leftover)
+                for item in leftover:
+                    settle_rejected(client, item, OfflineError(CLIENT_CLOSED, "client closed with the write still queued"))
+            else:
+                report.requeued.extend(item.id for item in leftover)
 
     return report
 

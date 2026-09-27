@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import sys
+import threading
 import types
 import unittest
 import unittest.mock
@@ -464,6 +465,72 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         client.close()
         await asyncio.wait_for(run, TIMEOUT)
         self.assertTrue(all(handle.cancelled for _, _, handle in clock.timers), "the timer dies with the socket")
+
+    async def _retry_in_flight_when_the_run_ends(self, end: str):
+        """A retry flush still waiting on its post when the run ends.
+
+        The post is answered 503 only AFTER ``connect_and_run`` has returned, so
+        whatever that late answer arms has no socket under it any more.
+        """
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.submit.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        release = threading.Event()
+        self.addCleanup(release.set)
+        posts = []
+        unavailable = (503, {"error": {"code": "SHARD_UNAVAILABLE", "message": "try again"}})
+
+        def post(_url, _headers, _body):
+            posts.append(clock.now)
+            if len(posts) == 2:
+                release.wait(TIMEOUT)
+            return unavailable
+
+        client = LunoraClient("http://example.invalid", identity="user-a", http_post=post)
+        client._call_later = clock.call_later
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
+        await client.submit(SubmitOptions("messages:send", {}))
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: posts and clock.timers)
+
+        clock.advance(clock.timers[0][0] - clock.now)
+        await _wait_for(lambda: len(posts) == 2)
+
+        if end == "socket":
+            socket.close()
+        else:
+            client.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        release.set()
+        await asyncio.sleep(0.1)
+
+        live = [timer for timer in clock.timers if not timer[2].cancelled]
+        self.assertEqual(live, [], "no retry timer outlives connect_and_run")
+        clock.advance(120.0)
+        await asyncio.sleep(0.05)
+        self.assertEqual(len(posts), 2, "and nothing posts without a socket")
+
+        return client, settled
+
+    async def test_a_retry_in_flight_when_the_socket_drops_arms_nothing(self):
+        client, settled = await self._retry_in_flight_when_the_run_ends("socket")
+
+        self.assertEqual(settled, [])
+        self.assertEqual(client.pending_mutation_count, 1, "the write waits for the reconnect")
+
+    async def test_a_retry_in_flight_when_the_client_closes_arms_nothing(self):
+        client, settled = await self._retry_in_flight_when_the_run_ends("client")
+
+        self.assertEqual([event.status for event in settled], ["rejected"], "the in-flight write is settled, once")
+        self.assertEqual(settled[0].error.code, "CLIENT_CLOSED")
+        self.assertEqual(client.pending_mutation_count, 0, "and never requeued into the closed queue")
 
     async def test_frames_past_the_library_default_size_are_accepted(self):
         """``websockets`` closes on any message over 1 MiB (1009) unless told otherwise.
