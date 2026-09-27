@@ -3389,3 +3389,57 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
         expect(filteredUserReads).toStrictEqual([]);
     });
 });
+
+describe("dataBrowser — bulk op finishing after a table switch", () => {
+    it("does not show the old table's outcome notice or reset the new table's page", async () => {
+        expect.assertions(2);
+
+        const userRows = Array.from({ length: 5 }, (_, index) => {return { __id__: `u${index.toString()}`, name: `user-${index.toString()}` }});
+        let finishClear: () => void = () => {};
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable) {
+                    return new Promise((resolve) => {
+                        finishClear = () => {
+                            resolve({ count: 3, hasMore: false });
+                        };
+                    });
+                }
+
+                const { limit = 50, offset = 0, table } = args as PageArgs;
+
+                return table === "users"
+                    ? { columns: ["__id__", "name"], rows: userRows.slice(offset, offset + limit), total: userRows.length }
+                    : { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.click(screen.getByTestId("db-clear-table"));
+        fireEvent.click(screen.getByTestId("db-clear-table-confirm"));
+
+        // Switch table and page forward while the clear is still in flight.
+        fireEvent.click(screen.getByTestId("db-table-users"));
+        await screen.findByText("1-2 of 5");
+        fireEvent.click(screen.getByTestId("db-next"));
+        await screen.findByText("3-4 of 5");
+
+        await act(async () => {
+            finishClear();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        // "3 rows deleted." describes `messages`, and page 2 of `users` stays put.
+        expect(screen.queryByTestId("db-write-notice")).toBeNull();
+        expect(screen.getByText("3-4 of 5")).not.toBeNull();
+    });
+});
