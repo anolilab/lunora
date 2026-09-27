@@ -1,3 +1,18 @@
+## @lunora/ai [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.100...@lunora/ai@1.0.0-alpha.101) (2026-09-27)
+
+### Miscellaneous Chores
+
+* drop unused devdependencies and a dead script ([#876](https://github.com/anolilab/lunora/issues/876)) ([e2e947f](https://github.com/anolilab/lunora/commit/e2e947f842c7115b99481c08dd7ca9ed49961f9f))
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
 ## @lunora/ai [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.99...@lunora/ai@1.0.0-alpha.100) (2026-09-27)
 
 
