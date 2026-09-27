@@ -339,10 +339,22 @@ const trimTrailingNewlines = (text: string): string => {
  * cross-OS deploy refuse an unchanged migration as drift. `raw` is still
  * accepted when reading, because an earlier build recorded that form.
  */
-const hashMigration = async (text: string): Promise<{ normalized: string; raw: string }> => {
-    const normalized = trimTrailingNewlines(text.replace(BOM_RE, "").replaceAll("\r\n", "\n"));
 
-    return { normalized: await sha256Hex(normalized), raw: await sha256Hex(text) };
+/**
+ * The form of a migration's SQL that is hashed and compared: no byte-order mark,
+ * CRLF folded to LF, no trailing newlines.
+ *
+ * Folded everywhere, string literals included. A checkout with `core.autocrlf`
+ * rewrites the line endings inside a multi-line literal too, so folding only
+ * outside literals would keep refusing exactly the cross-OS case this exists
+ * for. The cost is that an edit changing nothing but a literal's line endings
+ * reads as the same migration — which skips it, the safe direction: an applied
+ * migration is never run twice.
+ */
+const normalizeMigrationText = (text: string): string => trimTrailingNewlines(text.replace(BOM_RE, "").replaceAll("\r\n", "\n"));
+
+const hashMigration = async (text: string): Promise<{ normalized: string; raw: string }> => {
+    return { normalized: await sha256Hex(normalizeMigrationText(text)), raw: await sha256Hex(text) };
 };
 
 /** Does a recorded hash identify this migration's text, in either form? */
@@ -586,10 +598,16 @@ class MigrationRunner {
         // a bumped version but identical SQL. Hash collisions are checked at
         // apply time too (against the tracking table), but failing fast at
         // construction means the CLI surfaces the problem before any I/O.
+        //
+        // Compared in the normalized form the hash is taken over: two texts that
+        // differ only in line endings or trailing newlines hash alike, so a
+        // tracking row for one could be read as the other's and the first — not
+        // necessarily idempotent — run a second time.
         const seen = new Map<string, number>();
 
         for (const m of this.migrations) {
-            const previousVersion = seen.get(m.sql);
+            const text = normalizeMigrationText(m.sql);
+            const previousVersion = seen.get(text);
 
             if (previousVersion !== undefined) {
                 throw new LunoraError(
@@ -598,7 +616,7 @@ class MigrationRunner {
                 );
             }
 
-            seen.set(m.sql, m.version);
+            seen.set(text, m.version);
         }
     }
 }

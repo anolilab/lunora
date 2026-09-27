@@ -309,6 +309,21 @@ describe("migrationRunner", () => {
         ).toThrow(IDENTICAL_SQL_RE);
     });
 
+    it("rejects two migrations whose SQL differs only in line endings or trailing newlines", async () => {
+        expect.assertions(1);
+
+        const database = await createDatabase();
+
+        // They hash alike, so a tracking row for one could be read as the other's.
+        expect(
+            () =>
+                new MigrationRunner(database, [
+                    { name: "bump", sql: "UPDATE counter SET value = value + 1;", version: 1 },
+                    { name: "bump_again", sql: "UPDATE counter SET value = value + 1;\r\n", version: 2 },
+                ]),
+        ).toThrow(IDENTICAL_SQL_RE);
+    });
+
     it("rejects multi-statement migration SQL", async () => {
         expect.assertions(1);
 
