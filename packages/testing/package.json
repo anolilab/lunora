@@ -72,7 +72,6 @@
         "@lunora/shard-engine": "1.0.0-alpha.94"
     },
     "devDependencies": {
-        "@lunora/do": "1.0.0-alpha.174",
         "@lunora/observability": "1.0.0-alpha.103",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
