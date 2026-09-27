@@ -1,3 +1,175 @@
+## @lunora/client [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.151...@lunora/client@1.0.0-alpha.152) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **db:** a `scopeBy` collection without `shardKey` now subscribes and
+writes to the shard named by its scoped value instead of `__root__`; data
+previously written through it sits in `__root__`. `scope()` and inserts on
+such a collection throw when the scoped field is missing. The
+`checkpoints` returned by `lunoraCollectionOptions` is now the current
+shard's registry (read through a getter), and a shape subscription falls
+back to the top-level `shardKey` when the shape carries none.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(e2e): assert sharded rows live in their channel's shard
+
+The sharding spec called `messages:send` / `messages:list` without a
+`shardKey`, so every call went to the default `__root__` shard and the spec
+passed just as well with every shard collapsed into the root DO.
+
+Every call now names the channel's shard, and each spec asserts the rows are
+present in that shard and absent from `__root__` (and from the other
+channel's shard). A new browser test checks that a message sent from the
+playground UI lands in the channel's shard, and that a row written straight
+into that shard renders in the UI.
+
+With `resolveShard` rewritten to always return `__root__`, the three
+shard-isolation tests now fail; the previous spec passed in full.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): close a shard socket once nothing uses it
+
+Every shard a client subscribed to kept its own WebSocket open for the life
+of the client: unsubscribing only sent an `unsubscribe` frame. A UI that
+re-points a subscription per channel therefore accumulated one socket per
+channel visited.
+
+A non-default shard's connection is now torn down (and its record dropped)
+5s after the last user lets go, if by then it has no live or shape
+subscription, stream, whisper topic, connection context (presence), queued
+offline write, running flush, or durable-stream cancel waiting to be sent.
+The delay lets a quick leave-and-return reuse the socket. The default
+shard's socket is never closed. Every release path re-arms the check:
+unsubscribes, finished or cancelled streams, a send-only `whisper()`, a
+released context, a drained, evicted or rejected queued write, and the
+delivery of queued unsubscribes on reconnect.
+
+An idle-closed shard is remembered, so writes to it keep the gating of a
+connected shard: they are sent over HTTP, and queued for replay if the
+network turns out to be unreachable (`canQueueOffline` stays true). A
+write queued for a shard with no socket now opens that shard's socket, so
+it is flushed on connect — previously nothing ever connected a shard the
+client had not subscribed to, and such a write waited forever.
+
+`teardownConnection` now releases `conn.socket` before calling `close()`, so
+a `close` event delivered synchronously trips the identity guard instead of
+arming a reconnect for a connection being retired.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(db): let custom mutators follow a collection's scope
+
+With a `scopeBy` shape collection now syncing the scoped channel's shard, the
+documented pairing with `bindMutators` split reads from writes: mutators
+pushed to their fixed `shardKey` (the default shard), and the `checkpoints`
+destructured at creation pointed at the default shard's registry. Mutator
+writes never reached the subscription, and each optimistic row showed, then
+vanished when the checkpoint fallback fired.
+
+- `lunoraCollectionOptions` on a scope-following collection returns a stable
+  `checkpoints` object that forwards every call to the current scope's
+  shard registry, so destructuring it before scoping stays correct. The
+  scoped shard's registry is marked attached when its subscription opens,
+  so a write made before the first frame is held for the echo.
+- `bindMutators` accepts `scopeBy`: each call pushes to the shard its own
+  args name, with a separate `clientSeq` line per shard, and is gated on
+  that shard's registry. `shardKey` still takes precedence. Binding a
+  scope-following `checkpoints` without `scopeBy` throws.
+- A scoped write queued with no shard by an earlier build replays to the
+  shard its row names, with no replay baseline (its stamped baseline was
+  the default shard's cursor).
+- Args or a row missing the scoped field throw synchronously, before any
+  optimistic write, as other invalid arguments do; this is now documented.
+
+Docs and the blog example use `bindMutators(client, { checkpoints,
+collections, scopeBy: "channelId" }, mutators)`, and the db docs and README
+gain an upgrade section.
+* **db:** `scopeBy` collections (with no `shardKey`) subscribe and
+write to the scoped value's shard instead of `__root__`.
+- The worker must allow non-default shards: configure `authorizeShard`
+  (or `allowUnauthenticatedShardAccess: true` when every table has
+  row-level security), else scoped subscriptions and writes fail with
+  403 FORBIDDEN_SHARD.
+- Rows written before the upgrade stay in `__root__`; there is no read
+  fallback. Move them: `lunora export --tables <table>` before any channel
+  shard is registered (the export reaches the default shard only while the
+  table has no registered shard keys), then `lunora import` the file, which
+  buckets each row by `.shardBy`, keeps `_id` and skips an `_id` the target
+  shard already holds. Import deletes nothing: remove the root copies with
+  a one-off mutation via `lunora run <fn> --shard __root__`.
+- `bindMutators` context gains `scopeBy`; `checkpoints` from a `scopeBy`
+  collection requires it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(db): settle writes on a shard a scoped collection leaves
+
+A scope-following collection kept its previous shard's checkpoint registry
+marked attached after re-scoping. A custom-mutator write made on that shard
+just before the re-scope then waited for an echo from a subscription that no
+longer existed, and its optimistic row lingered for the full checkpoint
+fallback window, with a warning.
+
+Attachment is now counted per collection. When a scope-following collection
+leaves a shard (or detaches) and was the last collection syncing it, the
+shard's registry is detached and its waiting writes are settled at once,
+through the same in-place rewind an identity switch uses. A re-scope to the
+same shard keeps it attached, and so does any other collection on the shard.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): keep a durable cancel when its resend fails
+
+The reconnect drain cleared a shard's queued unsubscribes before sending
+them and ignored each send's result. A durable stream's cancel whose send
+failed (the socket closing again mid-drain) was dropped, and that run kept
+producing on the server. A failed durable cancel now goes back on the queue
+for the next reconnect; a plain unsubscribe still needs no retry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(db): detach checkpoints when a collection's sync stops
+
+- A collection whose sync is torn down (its last subscriber left) now
+  detaches from its shard's checkpoint registry, as a scope change already
+  did. When it was the last source, writes waiting on an echo that can no
+  longer arrive settle at once instead of after the fallback window; a
+  restarted sync attaches again. A caller-supplied registry is never
+  settled from here.
+- `bindMutators` accepts scope-following `checkpoints` with a pinned
+  `shardKey` and no `scopeBy`: each push goes to that shard and is gated on
+  its registry. It still throws when neither names a shard.
+- The upgrade notes explain how a write queued by an earlier build and
+  committed but unacknowledged on the default shard converges after the
+  replay to its row's shard.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(e2e): read and write chat messages in the channel's shard
+
+`chat-history` seeded its 50 messages and `offline-replay` read its replayed
+rows with `messages:send` / `messages:list` RPCs that named no shard, so
+they addressed the default shard. `messages` is `.shardBy("channelId")` and
+the playground now reads and writes each channel's own shard, so the seeded
+rows never rendered and the replayed rows were never found. Both specs now
+pass `shardKey: channelId`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **db:** route scopeBy collections to the scoped shard ([#863](https://github.com/anolilab/lunora/issues/863)) ([a0106b5](https://github.com/anolilab/lunora/commit/a0106b579b5a367e8ef285e36546b1b6bf1c4bbc))
+
 ## @lunora/client [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.150...@lunora/client@1.0.0-alpha.151) (2026-09-27)
 
 
