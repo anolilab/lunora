@@ -270,7 +270,7 @@ export interface Caller {
     presence: {
         heartbeat: (args: { channelId: string; sessionId: string; name: string }) => Promise<void>;
         leave: (args: { channelId: string; sessionId: string }) => Promise<void>;
-        list: (args: { channelId: string }) => Promise<import("./dataModel.js").Doc_presence[]>;
+        list: (args: { channelId: string }) => Promise<Omit<import("./dataModel.js").Doc_presence, "sessionId">[]>;
     };
     profiles: {
         avatarUrl: (args: { userId: string }) => Promise<string>;

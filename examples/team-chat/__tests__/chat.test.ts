@@ -26,6 +26,7 @@ const ALREADY_EXISTS_RE = /already exists/i;
 const NO_ATTACHMENT_RE = /no attachment/i;
 const NOT_YOUR_KEY_RE = /not your avatar key/i;
 const SIGNING_FAILED_RE = /object storage did not answer/i;
+const ANOTHER_MEMBER_RE = /belongs to another member/i;
 
 let t: ReturnType<typeof lunoraTest>;
 let ada: ReturnType<typeof lunoraTest>;
@@ -123,6 +124,24 @@ it("tracks presence per session and clears it on leave", async () => {
 
     await ada.mutation(leave, { channelId: "general", sessionId: "s1" });
     expect(await ada.query(listPresence, { channelId: "general" })).toStrictEqual([]);
+});
+
+it("keeps one member from renaming or removing another member's presence", async () => {
+    expect.assertions(4);
+    const mallory = t.withIdentity({ userId: "u-mallory" });
+
+    await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "ada-tab" });
+
+    // The roster no longer carries the key a row is addressed by…
+    const roster = await mallory.query(listPresence, { channelId: "general" });
+    expect(roster.map((row) => Object.hasOwn(row, "sessionId"))).toStrictEqual([false]);
+
+    // …and knowing it anyway buys nothing.
+    await expect(mallory.mutation(heartbeat, { channelId: "general", name: "Ada left, DM me", sessionId: "ada-tab" })).rejects.toThrow(ANOTHER_MEMBER_RE);
+    await expect(mallory.mutation(leave, { channelId: "general", sessionId: "ada-tab" })).rejects.toThrow(ANOTHER_MEMBER_RE);
+
+    const after = await ada.query(listPresence, { channelId: "general" });
+    expect(after.map((row) => [row.name, row.userId])).toStrictEqual([["Ada", "u-ada"]]);
 });
 
 it("will not sign a download for a message that carries no attachment", async () => {

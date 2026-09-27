@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
 import type { Doc as Document_ } from "./_generated/dataModel.js";
@@ -23,12 +24,38 @@ const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): 
  * typed. Heartbeats already poke every subscriber; the client applies the TTL
  * as it renders, and nothing has to sweep expired rows on an alarm.
  */
-export const list = query.input({ channelId: v.string().max(128) }).query(async ({ args: { channelId }, ctx }): Promise<Document_<"presence">[]> =>
-    ctx.db
+export const list = query
+    .input({ channelId: v.string().max(128) })
+    .query(async ({ args: { channelId }, ctx }): Promise<Omit<Document_<"presence">, "sessionId">[]> => {
+        const rows = await ctx.db
+            .query("presence")
+            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
+            .collect();
+
+        // `sessionId` stays server-side. It is the key `heartbeat` and `leave`
+        // address a row by, so handing every member everyone else's is handing
+        // them the handle to someone else's presence.
+        return rows.map(({ sessionId: _sessionId, ...row }) => row);
+    });
+
+/**
+ * The caller's own presence row for this session, or `undefined` when there is
+ * none. A row under this `sessionId` that belongs to someone else is refused
+ * rather than returned: `sessionId` is client-chosen, so without the check any
+ * member could rename or remove another member's presence by reusing theirs.
+ */
+const ownPresence = async (ctx: MutationCtx, channelId: string, sessionId: string, userId: string): Promise<Document_<"presence"> | undefined> => {
+    const existing = await ctx.db
         .query("presence")
-        .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
-        .collect(),
-);
+        .withIndex("by_channel_session", (q) => q.eq("channelId", channelId).eq("sessionId", sessionId))
+        .first();
+
+    if (existing && existing.userId !== userId) {
+        throw new LunoraError("FORBIDDEN", "that presence session belongs to another member");
+    }
+
+    return existing ?? undefined;
+};
 
 /** Called by every open tab on an interval, and once on channel switch. */
 export const heartbeat = mutation
@@ -43,10 +70,7 @@ export const heartbeat = mutation
             return;
         }
 
-        const existing = await ctx.db
-            .query("presence")
-            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId).eq("sessionId", sessionId))
-            .first();
+        const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 
         if (existing) {
             await ctx.db.patch(existing._id, { lastSeen: Date.now(), name });
@@ -63,10 +87,11 @@ export const leave = mutation
     .use(rateLimit(mutationLimiter, "presence", byUser))
     .input({ channelId: v.string().max(128), sessionId: v.string().max(64) })
     .mutation(async ({ args: { channelId, sessionId }, ctx }): Promise<void> => {
-        const existing = await ctx.db
-            .query("presence")
-            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId).eq("sessionId", sessionId))
-            .first();
+        if (!ctx.auth.userId) {
+            return;
+        }
+
+        const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 
         if (existing) {
             await ctx.db.delete(existing._id);
