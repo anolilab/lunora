@@ -289,9 +289,23 @@ class TestEchoDO extends DurableObject<Env> {
 class ConcreteSyncShard extends ShardDO {
     private migrated = false;
 
+    /**
+     * `race:list` — a live query whose FIRST run reads `messages`, then parks on
+     * timer I/O until `race:release`. Timer I/O opens the input gate exactly as
+     * a `.global()` D1 read, `ctx.vectors` or R2 does, so a write can commit and
+     * flush while the seed is parked. `race:failRefreshes` makes every later run
+     * throw (until `race:healRefreshes`), leaving the parked seed as the only
+     * value that can reach the socket.
+     */
+    private readonly race = { calls: 0, failRefreshes: false, released: false, settled: false };
+
     private writer: DatabaseWriterLike | undefined;
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        if (functionPath.startsWith("race:")) {
+            return this.raceControl(functionPath);
+        }
+
         const writer = this.getWriter();
 
         switch (functionPath) {
@@ -347,6 +361,36 @@ class ConcreteSyncShard extends ShardDO {
         return undefined;
     }
 
+    protected override async executeSubscription(functionPath: string): Promise<{ result: unknown; tables: Set<string> } | null> {
+        if (functionPath !== "race:list") {
+            return null;
+        }
+
+        this.ensureMigrated();
+        this.race.calls += 1;
+
+        const first = this.race.calls === 1;
+
+        if (!first && this.race.failRefreshes) {
+            throw new Error("race:list refresh failed");
+        }
+
+        const [row] = (this.sql as { exec: (query: string) => { toArray: () => { n: number }[] } }).exec(`SELECT COUNT(*) AS n FROM "messages"`).toArray();
+
+        if (first) {
+            while (!this.race.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling timer I/O is the point: it opens the input gate
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.race.settled = true;
+        }
+
+        return { result: { count: row?.n ?? 0 }, tables: new Set(["messages"]) };
+    }
+
     protected override ensureMigrated(): void {
         if (this.migrated) {
             return;
@@ -367,6 +411,18 @@ class ConcreteSyncShard extends ShardDO {
         });
 
         return this.writer;
+    }
+
+    private raceControl(functionPath: string): { calls: number; settled: boolean } {
+        if (functionPath === "race:release") {
+            this.race.released = true;
+        }
+
+        if (functionPath === "race:failRefreshes" || functionPath === "race:healRefreshes") {
+            this.race.failRefreshes = functionPath === "race:failRefreshes";
+        }
+
+        return { calls: this.race.calls, settled: this.race.settled };
     }
 }
 

@@ -1042,6 +1042,13 @@ interface SocketDelivery {
 
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
+    /**
+     * {@link ShardDO.writeGeneration} captured before the run that produced this
+     * baseline started reading. A later push carrying a LOWER generation read
+     * state older than this baseline and is dropped instead of sent.
+     */
+    generation: number;
+
     lastJson: string;
 
     /**
@@ -2156,6 +2163,16 @@ abstract class ShardDO {
      * memo simply forces one re-run and (at most) one redundant push.
      */
     private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+
+    /**
+     * Count of committed write batches handed to {@link ShardDO.flushChangedTables}.
+     * A subscription run captures it BEFORE it reads, and the value lands on the
+     * memo it produces ({@link SubscriptionMemo.generation}), so a run that parked
+     * on non-storage I/O (the input gate is open there) while a write committed
+     * and a newer run pushed cannot overwrite that newer value with its own.
+     * In-memory only, like the memos it orders.
+     */
+    private writeGeneration = 0;
 
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
@@ -4971,12 +4988,20 @@ abstract class ShardDO {
         }
 
         const attachment = this.readAttachment(ws);
+        // A `subscribe` for an id this socket already holds REPLACES it — the
+        // client's re-snapshot request after a delta it could not merge is
+        // exactly that. It adds nothing to the count, so it must not be refused
+        // at the cap.
+        const previous = Object.hasOwn(attachment.subs, subId) ? attachment.subs[subId] : undefined;
 
         // Counts BOTH registries, exactly as `shapeSubscribe` does: the cap
         // bounds what one socket's attachment holds, and subs and shapes share
         // that attachment. Counting only `subs` here let a socket that
         // registered shapes first hold up to twice the ceiling.
-        if (Object.keys(attachment.subs).length + Object.keys(attachment.shapes ?? {}).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+        if (
+            previous === undefined &&
+            Object.keys(attachment.subs).length + Object.keys(attachment.shapes ?? {}).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET
+        ) {
             return "too_many";
         }
 
@@ -4989,11 +5014,21 @@ abstract class ShardDO {
             // past the runtime's per-socket limit. Roll back the in-memory
             // mutation so a retry has a chance to land and surface a
             // structured error to the caller.
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended rollback
-            delete attachment.subs[subId];
+            if (previous === undefined) {
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended rollback
+                delete attachment.subs[subId];
+            } else {
+                attachment.subs[subId] = previous;
+            }
 
             return "serialize_failed";
         }
+
+        // Drop the diff baseline. A (re)subscribe asks for the current value, so
+        // the seed must go out as a full snapshot; diffed against the old memo it
+        // is answered `settled` (or a delta against a value the client just
+        // discarded) and the client never gets the snapshot it asked for.
+        this.subMemos.get(ws)?.delete(subId);
 
         return "ok";
     }
@@ -5035,8 +5070,11 @@ abstract class ShardDO {
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
         const attachment = this.readAttachment(ws);
         const shapes = attachment.shapes ?? {};
+        // Re-subscribing a held shape id (the client's re-seed on a diverged
+        // base) replaces it and adds nothing to the count — see `subscribe`.
+        const previous = Object.hasOwn(shapes, subId) ? shapes[subId] : undefined;
 
-        if (Object.keys(attachment.subs).length + Object.keys(shapes).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+        if (previous === undefined && Object.keys(attachment.subs).length + Object.keys(shapes).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
             return "too_many";
         }
 
@@ -5046,8 +5084,12 @@ abstract class ShardDO {
         try {
             (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
         } catch {
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended rollback
-            delete attachment.shapes[subId];
+            if (previous === undefined) {
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended rollback
+                delete attachment.shapes[subId];
+            } else {
+                attachment.shapes[subId] = previous;
+            }
 
             return "serialize_failed";
         }
@@ -10817,6 +10859,8 @@ abstract class ShardDO {
             return;
         }
 
+        this.writeGeneration += 1;
+
         // Merge this request's written tables into the coalesced refresh set.
         if (this.pendingRefreshTables) {
             for (const table of changed) {
@@ -11044,6 +11088,7 @@ abstract class ShardDO {
         // and stamp it on every frame as the cursor each subscriber advances to.
         const frameCursor = this.currentCdcCursor();
         const frameEpoch = this.currentCdcEpoch();
+        const generation = this.writeGeneration;
 
         // Flush-local dedup of identity-INDEPENDENT reactive runs: N sockets on
         // the same admin/reserved `(functionPath, args)` share ONE query run this
@@ -11152,7 +11197,7 @@ abstract class ShardDO {
                     // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
                     await awaitWsDrain(ws);
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch, delivery);
+                    this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -11243,6 +11288,17 @@ abstract class ShardDO {
         // what makes an `rls()` / `ctx.auth`-scoped live query return the
         // subscriber's own rows instead of evaluating anonymous.
         const attachment = this.readAttachment(ws);
+        // The cursor, epoch and write generation are read BEFORE the run, and
+        // that order is the point. The run may park on non-storage I/O (a
+        // `.global()` D1 read, vectors, R2), which opens the input gate: a write
+        // can commit there and its refresh push the post-write value. A cursor
+        // read afterwards would stamp this pre-write result as covering that
+        // write, and a reconnect presenting it would be answered `resume` and
+        // keep the stale value until some later write. Stamped before, the
+        // cursor can only under-claim, which costs a reconnect one snapshot.
+        const readCursor = this.currentCdcCursor();
+        const readEpoch = isAdmin ? undefined : this.currentCdcEpoch();
+        const generation = this.writeGeneration;
         const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
 
         if (!outcome) {
@@ -11251,15 +11307,16 @@ abstract class ShardDO {
 
         const { sinceEpoch, sinceSeq } = query;
         const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables, sinceEpoch);
-        // `evaluateResume` already read the epoch; reuse it and only fall back to
-        // a fresh read when no resume was evaluated (first subscribe / admin).
-        const epoch = isAdmin ? undefined : (resume?.epoch ?? this.currentCdcEpoch());
+        // A resume that sealed a forked timeline hands back the NEW epoch, which
+        // the client must receive; otherwise the pre-run epoch pairs with the
+        // pre-run cursor.
+        const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
 
         if (resume?.resumable) {
             // Keep the per-socket baseline current (so the next change diffs
             // cleanly) but send only the cursor + epoch — the client already
             // holds an equivalent value at `sinceSeq`.
-            this.seedSubscriptionMemo(ws, subId, outcome);
+            this.seedSubscriptionMemo(ws, subId, outcome, generation);
 
             try {
                 trySendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
@@ -11275,7 +11332,7 @@ abstract class ShardDO {
         // during it. The identity above is deliberately by-value (see there);
         // the delivery facts are not, and reading them stale would drop a
         // `clientId`/capability this socket has since announced.
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketDelivery(this.readAttachment(ws)));
+        this.pushSubscriptionData(ws, subId, outcome, { cursor: readCursor, epoch, generation }, this.socketDelivery(this.readAttachment(ws)));
     }
 
     /**
@@ -11460,11 +11517,14 @@ abstract class ShardDO {
         shape: ShapeSubscriptionQuery,
         resolved: ResolvedShape,
     ): Promise<"ok"> {
-        const { baseCheckpoint, cursor, epoch, reset, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
-
         // Await drain before the (potentially large) seed poke so a slow consumer
-        // can't grow this socket's outbound buffer without bound.
+        // can't grow this socket's outbound buffer without bound. BEFORE the
+        // compute, not between it and the send: the drain wait is timer I/O, a
+        // write can commit and poke this shape during it, and a seed computed
+        // earlier would then land after that poke and roll the client back.
         await awaitWsDrain(ws);
+
+        const { baseCheckpoint, cursor, epoch, reset, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // `reset` marks the full-membership branch so the client REPLACES its view
         // instead of splicing onto it. A seed is inserts-only, so without the flag a
@@ -13016,8 +13076,16 @@ abstract class ShardDO {
      * cached value but the server still needs a baseline so the next
      * write-flush can diff against it.
      */
-    private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome): void {
-        socketMap(this.subMemos, ws).set(subId, {
+    private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
+        const memos = socketMap(this.subMemos, ws);
+
+        // A refresh that started after this seed already recorded a newer baseline.
+        if ((memos.get(subId)?.generation ?? -1) > generation) {
+            return;
+        }
+
+        memos.set(subId, {
+            generation,
             // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
             lastJson: JSON.stringify(encodeWire(outcome.result ?? null)),
             ranges: outcome.ranges,
@@ -13055,11 +13123,21 @@ abstract class ShardDO {
         ws: ShardSocketLike,
         subId: string,
         outcome: SubscriptionOutcome,
-        cursor: number | undefined,
-        epoch: string | undefined,
+        stamp: { cursor: number | undefined; epoch: string | undefined; generation: number },
         delivery: SocketDelivery,
     ): void {
         const memos = socketMap(this.subMemos, ws);
+        const existing = memos.get(subId);
+
+        // Newer value wins. A run that began before the write that produced the
+        // current baseline read older state; sending it would roll the client
+        // back to a value a later write already replaced (and stamp a cursor on
+        // it). The baseline's own run already delivered the newer value.
+        if (existing !== undefined && stamp.generation < existing.generation) {
+            return;
+        }
+
+        const { cursor, epoch, generation } = stamp;
         const cursorSuffix = cdcSuffix(cursor, epoch);
         const { clientWatermark, pageDeltas } = delivery;
 
@@ -13070,9 +13148,9 @@ abstract class ShardDO {
         // encodes its next rows too) diffs against a consistently-encoded baseline.
         // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
         const json = JSON.stringify(encodeWire(outcome.result ?? null));
-        const existing = memos.get(subId);
 
         if (existing?.lastJson === json) {
+            existing.generation = generation;
             existing.tables = outcome.tables;
             // `ranges` legitimately shifts run-to-run even when the result is
             // byte-identical (a recency-windowed query is the obvious case) — it's
@@ -13143,7 +13221,14 @@ abstract class ShardDO {
         // always advances so dependency tracking stays accurate even on failure.
         const delivered = frames.map((frame) => trySendFrame(ws, frame)).every(Boolean);
 
-        memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });
+        memos.set(subId, {
+            // Tracks `lastJson`: an undelivered value leaves the baseline, and so
+            // its generation, where the last delivered one put it.
+            generation: delivered ? generation : (existing?.generation ?? generation),
+            lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            ranges: outcome.ranges,
+            tables: outcome.tables,
+        });
     }
 
     /**
