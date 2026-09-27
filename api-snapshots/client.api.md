@@ -420,6 +420,7 @@ class LunoraClient {
     }>;
     onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe;
     onIdentityChange(listener: () => void): Unsubscribe;
+    identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {

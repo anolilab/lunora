@@ -1,7 +1,9 @@
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import type { Ref } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
+import onScopeDisposeOrWarn from "./scope-dispose";
 import { subscribeToQuery } from "./use-query";
 
 /**
@@ -22,12 +24,12 @@ import { subscribeToQuery } from "./use-query";
  * session expiry, an RLS denial). Without it such an error is dropped and the
  * ref keeps rendering the SSR snapshot as if it were live.
  *
- * The ref is `Ref<T>`, not `Ref<T | undefined>`: `subscribeToQuery`'s ref widens
- * to `undefined` because it also serves the unseeded `useQuery` case, but this
- * entry point always passes `seed: preloaded.value`, so the "seeded
- * synchronously, no loading flash" contract means it is never undefined. Every
- * other adapter's `hydratePreloaded` returns `T`; narrowing here stops Vue
- * consumers guarding a state that cannot occur.
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires that identity
+ * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (mounted
+ * then or later) stops using it and holds `undefined` until the live value
+ * arrives — matching `@lunora/react`'s `usePreloadedQuery`. The ref is typed
+ * `Ref<T>` like every other adapter's return, so guard for that window.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@lunora/vue"` surface.
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Ref<T> => {
@@ -40,9 +42,20 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?
     // re-establishes the return type on the ref.
     const functionReference: FunctionReference = { __lunoraRef: functionPath };
 
-    return subscribeToQuery<FunctionReference, T>(client, functionReference, args, {
+    const data = subscribeToQuery<FunctionReference, T>(client, functionReference, args, {
         onError: options.onError,
-        seed: value,
+        seed: client.identityEpoch() === 0 ? value : undefined,
         shardKey,
-    }) as Ref<T>;
+    });
+
+    if (isBrowser()) {
+        onScopeDisposeOrWarn(
+            client.onIdentityChange(() => {
+                data.value = undefined;
+            }),
+            "[@lunora/vue] hydratePreloaded called with no active effect scope — its identity listener will not be cleaned up automatically.",
+        );
+    }
+
+    return data as Ref<T>;
 };
