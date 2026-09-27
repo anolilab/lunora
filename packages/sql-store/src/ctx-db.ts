@@ -122,7 +122,7 @@ import type { SearchStage } from "./ctx-db-search";
 import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
-import { createPointReadBatcher } from "./point-read-batcher";
+import createPointReadBatcher from "./point-read-batcher";
 import type { SqlCtxExec } from "./sql-exec";
 import {
     BACKFILL_BATCH_SIZE,
@@ -4097,7 +4097,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 };
 
 export { createSqlCtxDb, readSqlCdcChangedTables, readSqlCdcChanges, readSqlCdcFloor, runSqlCdcMigration, sweepSqlCdcRetention };
-export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export type { SqlCtxDbOptions };
 
 export { decodeGlobalRow, type SqlCtxExec } from "./sql-exec";

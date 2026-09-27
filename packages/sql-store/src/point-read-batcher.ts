@@ -139,5 +139,4 @@ const createPointReadBatcher = <Row>(fetchMany: FetchMany<Row>, options: PointRe
     };
 };
 
-export { createPointReadBatcher, DEFAULT_MAX_BATCH };
-export type { FetchMany, PointReadBatcher, PointReadBatcherOptions };
+export default createPointReadBatcher;

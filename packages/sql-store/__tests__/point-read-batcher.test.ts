@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPointReadBatcher } from "../src/point-read-batcher";
+import createPointReadBatcher from "../src/point-read-batcher";
 
 /** A fetch that records each call and answers from `rows`. */
 const stubFetch = (rows: Record<string, string> = {}) => {
