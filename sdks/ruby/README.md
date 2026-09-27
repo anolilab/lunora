@@ -129,7 +129,9 @@ time remaining.
 A replay is classified the same way whether the write went out alone or in a
 batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
 the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
-`UNAUTHENTICATED`, held until a token refresh — re-queue; every other code, a
+`UNAUTHENTICATED`, held until a token refresh: nothing flushes on its own when
+`client.auth_token` changes, so call `flush_offline_queue` after setting it, as
+on a reconnect — re-queue; every other code, a
 coded 5xx included, is terminal), a reply with no envelope as transport
 (re-queued). An envelope whose `data` does not decode is still that coded error,
 raised with `data` nil. A 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch
@@ -143,11 +145,30 @@ is put back at the front of the queue before the exception propagates.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another. Changing
-it from one set value to another (signing out included) drops every
-subscription's resume cursor and epoch and empties every shape view (its
-callback receives `[]`), so reconnect your socket under the new credential and
-the resubscribe is a cold one.
+replays, so a restart cannot push one user's queued writes as another. Left
+`nil`, a write is stamped with a `Lunora::TokenStamp` — a digest of
+`client.auth_token` (the reference client's, never the token itself), persisted
+as `{"tokenDigest" => …}` — and `nil` only when there is no token either, so a
+write queued under one token is never sent with another. Under a different
+token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token at all it is
+held, still queued and persisted and unsettled, in its place in line, until one
+is set. A flush sends each write with the token its identity was checked
+against, so a token set mid-flush applies from the next flush, never to the
+rest of the current one. Setting `identity` is what lets a token refresh keep
+the queue. A record persisted by an earlier build with a `nil` stamp is rejected
+the same way once a token is held, since `nil` then said nothing about whose
+write it was. `identity` may be any string: a token stamp is its own type, so no
+identity, however it is spelled, can match a token's writes, nor a token stamp
+an identity's. Changing `identity` from one set value to another (signing out
+included) drops every subscription's resume cursor and epoch and empties every
+shape view (its callback receives `[]`), and with `identity` unset setting a
+different `auth_token` (or clearing it) does the same, since the token's digest
+is then the identity. Reconnect your socket under the new credential and the
+resubscribe is a cold one.
+
+Ruby strings cannot hold a lone UTF-16 surrogate, so a token digests over the
+UTF-16 code units of its characters; bytes that are not valid in its encoding
+digest as replacement characters instead of raising.
 
 Ruby's `Mutex` is **not reentrant**, so every consumer callback — a transform, a
 `precondition`, a settled listener — runs with the client's lock released. That
