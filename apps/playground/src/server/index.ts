@@ -73,8 +73,8 @@ const ROOT_SHARD_KEY = "__root__";
  * over the shard client — an upsert keyed by the user id, safe to repeat. It
  * runs AFTER better-auth committed the user, so it must not throw: the account
  * already exists, and a throw here would fail the sign-up response for a user
- * who can then sign in anyway. A failed mirror costs a display name, and the
- * next profile update re-runs it.
+ * who can then sign in anyway. A failed mirror costs a display name until the
+ * user's next sign-in, which re-runs it (see `mirrorOnSignIn`).
  */
 const mirrorUser =
     (env: Env) =>
@@ -86,6 +86,26 @@ const mirrorUser =
         } catch (error) {
             // eslint-disable-next-line no-console -- no ctx.log here: the hook runs inside better-auth, outside any Lunora dispatch
             console.error("users:mirrorAuthUser failed", error);
+        }
+    };
+
+/**
+ * Re-mirror the user on every new session.
+ *
+ * The user hooks fire only when the row is written, so an account created
+ * before they existed, or one whose mirror failed, would stay unnamed for good.
+ * A sign-in repairs both; the upsert makes the repeat free of side effects.
+ */
+const mirrorOnSignIn =
+    (env: Env) =>
+    async (
+        session: { userId: string },
+        context: { context: { internalAdapter: { findUserById: (id: string) => Promise<{ email: string; id: string; name: string } | null> } } } | null,
+    ): Promise<void> => {
+        const user = await context?.context.internalAdapter.findUserById(session.userId).catch(() => null);
+
+        if (user) {
+            await mirrorUser(env)(user);
         }
     };
 
@@ -121,8 +141,12 @@ const authOptions = (env: Env): LunoraAuthOptions => {
             },
         },
         // Copy every created/updated user into the app's `.global()` `users`
-        // table, which the chat joins to render author names. See `mirrorUser`.
-        databaseHooks: { user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } } },
+        // table, which the chat joins to render author names, and repair the
+        // copy on each sign-in. See `mirrorUser` and `mirrorOnSignIn`.
+        databaseHooks: {
+            session: { create: { after: mirrorOnSignIn(env) } },
+            user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } },
+        },
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
     };
