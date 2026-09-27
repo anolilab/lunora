@@ -2638,9 +2638,6 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
-      '@lunora/react':
-        specifier: workspace:*
-        version: link:../react
       better-auth:
         specifier: catalog:auth
         version: 1.7.3(b8761ba90910715638d7b6852380d76e)
@@ -2669,9 +2666,6 @@ importers:
       '@sveltejs/vite-plugin-svelte':
         specifier: catalog:frontend
         version: 7.3.0(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
-      '@tanstack/react-query':
-        specifier: catalog:frontend
-        version: 5.101.4(react@19.2.8)
       '@testing-library/dom':
         specifier: catalog:frontend
         version: 10.4.1
