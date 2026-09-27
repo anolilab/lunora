@@ -90,5 +90,4 @@ const recordTransfer = async (cwd: string, provider: string, entry: TransferredO
     await appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
 };
 
-export type { TransferredObject };
 export { progressFileFor, readTransferProgress, recordTransfer };

@@ -249,4 +249,4 @@ export {
     normalizeFeature,
     promptAuthProvider,
 };
-export type { AuthUiItem, FeatureItem, NormalizedFeature };
+export type { FeatureItem, NormalizedFeature };

@@ -201,5 +201,5 @@ const runMcpServe = async (
     return { code: 0, deployment };
 };
 
-export type { ClosableServer, McpServeOptions, McpServeResult };
-export { isLoopbackUrl, resolveDeployment, runMcpServe };
+export type { ClosableServer };
+export { resolveDeployment, runMcpServe };

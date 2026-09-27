@@ -71,4 +71,4 @@ const resolveTypedDestination = (entered: string, warn: (message: string) => voi
 const withMailDestination = (manifest: RegistryManifest, address: string): RegistryManifest =>
     setBindingField(manifest, "send_email", { key: "name", value: SEND_EMAIL_BINDING }, "destination_address", address);
 
-export { isValidEmail, MAIL_DESTINATION_PROMPT, resolveTypedDestination, SEND_EMAIL_BINDING, withMailDestination };
+export { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination };

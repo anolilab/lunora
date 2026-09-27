@@ -56,4 +56,3 @@ const evaluateAdvisoryGate = <TAdvisory extends Pick<Finding, "level" | "name">>
 };
 
 export { evaluateAdvisoryGate, resolveStrictAdvisories };
-export type { AdvisoryGateOptions, AdvisoryGateResult };

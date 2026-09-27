@@ -111,5 +111,4 @@ const writeBindingManifestFile = (options: {
     return {};
 };
 
-export type { DevManifestSection, EmittedBindingManifest };
 export { deriveBindingManifest, writeBindingManifestFile };

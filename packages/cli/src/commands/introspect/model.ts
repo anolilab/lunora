@@ -179,4 +179,4 @@ const validatorForColumn = (column: IntrospectedColumn, dialect: SqlDialect): { 
 };
 
 export type { IntrospectedColumn, IntrospectedDatabase, IntrospectedIndex, IntrospectedTable, SqlDialect };
-export { MYSQL_TYPES, POSTGRES_TYPES, RESERVED_COLUMNS, validatorForColumn };
+export { RESERVED_COLUMNS, validatorForColumn };

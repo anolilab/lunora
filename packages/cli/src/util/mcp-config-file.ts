@@ -289,5 +289,5 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
     return spliceError === undefined ? { action: "removed", path } : { action: "invalid", error: spliceError, path };
 };
 
-export type { RemoveAction, RemoveMcpEntryResult, UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
+export type { RemoveAction, UpsertAction };
 export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry };

@@ -405,4 +405,3 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
 };
 
 export { applyLunoraOverlay, findExistingViteConfig, isLunoraDep };
-export type { ApplyOverlayOptions };

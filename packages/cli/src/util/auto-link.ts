@@ -97,5 +97,4 @@ const autoLinkFromDeployOutput = ({ cwd, env, logger, now, url }: AutoLinkInputs
     }
 };
 
-export type { AutoLinkInputs };
 export { autoLinkFromDeployOutput, parseDeployedUrl };

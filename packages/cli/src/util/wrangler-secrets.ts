@@ -120,5 +120,5 @@ const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListR
     return { names, ok: true };
 };
 
-export type { ListRemoteSecretsInputs, ListRemoteSecretsResult, SecretListRunner };
+export type { ListRemoteSecretsInputs, ListRemoteSecretsResult };
 export { listRemoteSecrets, parseSecretNames };

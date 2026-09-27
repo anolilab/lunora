@@ -130,4 +130,4 @@ const defineHandler =
     };
 
 export { defineHandler };
-export type { CommandBody, CommandContext, CommandHandler };
+export type { CommandHandler };

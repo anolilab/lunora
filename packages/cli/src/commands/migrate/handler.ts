@@ -858,12 +858,5 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
-export type {
-    MigrateCreateCommandOptions,
-    MigrateCreateCommandResult,
-    MigrateDataCommandOptions,
-    MigrateDataCommandResult,
-    MigrateGenerateCommandOptions,
-    MigrateGenerateCommandResult,
-};
+export type { MigrateDataCommandOptions, MigrateGenerateCommandOptions, MigrateGenerateCommandResult };
 export { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand };

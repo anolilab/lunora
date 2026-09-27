@@ -445,4 +445,4 @@ const migrateStorageBlobs = async (
 };
 
 export type { BlobUploadContext, StorageMetadataRow };
-export { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, migrateStorageBlobs, normalizeSha256, readStorageMetadata, uploadStorageBlob };
+export { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, migrateStorageBlobs, readStorageMetadata, uploadStorageBlob };
