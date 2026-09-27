@@ -1,3 +1,21 @@
+## @lunora/errors [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.44...@lunora/errors@1.0.0-alpha.45) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an HTTP call whose resolved identity carries a past exp or
+expiresAtMs now fails with 401 TOKEN_EXPIRED instead of running as that user.
+createAccessResolver returns an expired-but-genuine Access JWT's identity
+(with its past exp) instead of null; mapClaims now also sees those claims.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **runtime:** answer a lapsed credential with TOKEN_EXPIRED over HTTP ([#859](https://github.com/anolilab/lunora/issues/859)) ([5b50ddd](https://github.com/anolilab/lunora/commit/5b50dddc74f70f4a7ffe23bb29efe1090a41dd37))
+
 ## @lunora/errors [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.43...@lunora/errors@1.0.0-alpha.44) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES
