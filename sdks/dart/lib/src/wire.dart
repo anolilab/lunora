@@ -592,8 +592,7 @@ WireSet _decodeSet(List<Object?> raw, int depth) {
 /// A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
 /// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
 /// bare `-0` token) as `0` in the reference, not only when it collides.
-Object? _positiveZero(Object? value) =>
-    value is double && value == 0 ? 0 : value;
+Object? _positiveZero(Object? value) => value is double && value == 0 ? 0 : value;
 
 /// A map key's collapse identity, or `null` when it never collapses.
 ///
