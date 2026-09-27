@@ -1,3 +1,16 @@
+## @lunora/advisor [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.166...@lunora/advisor@1.0.0-alpha.167) (2026-09-27)
+
+### Code Refactoring
+
+* **advisor:** remove dead code and unused auth-ui deps ([#881](https://github.com/anolilab/lunora/issues/881)) ([4d9c843](https://github.com/anolilab/lunora/commit/4d9c843452707a92e74df092285f0bc7330352d6))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/server:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.57
+
 ## @lunora/advisor [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.165...@lunora/advisor@1.0.0-alpha.166) (2026-09-27)
 
 
