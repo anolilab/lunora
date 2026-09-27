@@ -117,7 +117,10 @@ before you look for a method that is not there:
   returns immediately with a `status` of `committed` or `queued`; the eventual
   verdict on a queued write arrives through the client's settled callback rather
   than by blocking a thread. Stamp the queue's identity yourself with
-  `client.identity` — a stable, non-secret subject such as a user id.
+  `client.identity` — a stable, non-secret subject such as a user id. Left unset,
+  a write is stamped with a digest of the bearer token, so a write queued under
+  one token is rejected rather than sent with another; setting the identity is
+  what lets a token refresh keep the queue.
 - **Dart uses `mutation` directly and learns about connectivity from you.** It does
   not own a socket, so `setConnected(true|false)` is what flushes the queue, and its
   `LunoraPersistence` adapter is asynchronous where the other seven's is
