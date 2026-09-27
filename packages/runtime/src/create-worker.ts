@@ -38,7 +38,7 @@ import type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 import { buildAuthJurisdictionMoveRpc, COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
-import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
+import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
@@ -5429,19 +5429,39 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * fire-and-forget via `ctx.waitUntil`, so the recording never blocks or
      * fails the auth response. Returns the auth `Response`, or `undefined` when
      * no handler is configured or the path isn't an auth route (fall through).
+     *
+     * Under the auth base path the handler gets the request with its body
+     * streamed through the shared {@link MAX_BODY_BYTES} budget: the entry-point
+     * `Content-Length` check is forgeable (a chunked body omits the header), and
+     * the handler reads the body itself, so the cap has to travel with the body.
+     * A body past the cap answers 413 whatever the handler made of the error.
      */
     const dispatchAuth = async (request: Request, env: unknown, url: URL, context: ExecutionContextLike): Promise<Response | undefined> => {
         if (!options.authHandler) {
             return undefined;
         }
 
-        const authResponse = await options.authHandler(request);
+        const basePath = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
+        const capped = isUnderAuthBasePath(url.pathname, basePath) ? withBodyLimit(request) : undefined;
+        let authResponse: Response | undefined;
+
+        try {
+            authResponse = await options.authHandler(capped?.request ?? request);
+        } catch (error) {
+            if (capped?.overflowed()) {
+                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
+
+            throw error;
+        }
+
+        if (capped?.overflowed()) {
+            throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+        }
 
         if (!authResponse) {
             return undefined;
         }
-
-        const basePath = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
 
         if (isAuthAttemptPath(url.pathname, basePath)) {
             context.waitUntil?.(recordAuthAttempt(env, authResponse.status >= 400 ? "fail" : "ok"));
