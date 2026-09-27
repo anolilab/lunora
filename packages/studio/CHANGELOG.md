@@ -1,3 +1,16 @@
+## @lunora/studio [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.224...@lunora/studio@1.0.0-alpha.225) (2026-09-27)
+
+### Bug Fixes
+
+* **studio:** guard panels against late results after a selection switch ([#858](https://github.com/anolilab/lunora/issues/858)) ([391765b](https://github.com/anolilab/lunora/commit/391765b5edff1dbfd9a71dfcc893fec26596f15f))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.148
+* **@lunora/react:** upgraded to 1.0.0-alpha.154
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.154
+
 ## @lunora/studio [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.223...@lunora/studio@1.0.0-alpha.224) (2026-09-26)
 
 
