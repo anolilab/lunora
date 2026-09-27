@@ -2567,8 +2567,14 @@ abstract class ShardDO {
             readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
             // `COUNT(*)` per user table — cheap next to building the snapshot,
             // which is the whole point: the bootstrap cap has to be decided
-            // before the rows are materialized, not after.
-            rowCount: () => listTables(this.sql as SqlExec).reduce((total, table) => total + table.rowCount, 0),
+            // before the rows are materialized, not after. Only the tables the
+            // export ships count: a schema table has declared columns, while the
+            // CDC log, index companions and any non-schema table on this shard do
+            // not — counted, they made a modest shard refuse every replica.
+            rowCount: () =>
+                listTables(this.sql as SqlExec)
+                    .filter((table) => this.tableColumns(table.name).length > 0)
+                    .reduce((total, table) => total + table.rowCount, 0),
         };
         this.replica = createReplicaLink({
             ...sibling,

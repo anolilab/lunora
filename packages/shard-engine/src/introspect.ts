@@ -1,4 +1,6 @@
 import { LunoraError } from "@lunora/errors";
+// Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
+import { sql as dsql } from "drizzle-orm";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
@@ -6,6 +8,7 @@ import { decodeWire } from "../../../shared/wire-codec";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
 import { DOC_ORIGINALS_KEY } from "./do-sql";
+import { renderSql, sqliteInList } from "./drizzle";
 import type { SortDirection } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
 import { decodeBigintSqlKey } from "./sql-projection";
@@ -1106,14 +1109,25 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
 const containsSql = (expression: string): string => `instr(lower(CAST(${expression} AS TEXT)), lower(?)) > 0`;
 
 /**
- * Tables the data browser must never surface: SQLite's own bookkeeping
- * (`sqlite_*`), Cloudflare's Durable Object KV mirror (`_cf_*`), the Lunora FTS
- * capability probe and any FTS5 shadow tables (whose names carry the reserved
- * `__fts_` infix, e.g. `messages__fts_body` and its internal `*_data` / `*_idx`
+ * Reserved table names: SQLite's own bookkeeping (`sqlite_*`), Cloudflare's
+ * internals (`_cf_*`), every framework table (`__`-prefixed — the CDC log,
+ * idempotency cache, schedule outbox, stream runs, reactor state, commit
+ * sequence, `__lunora_*` …) and every per-table index companion, which carries a
+ * reserved infix (`todos__agg_byProject`, `messages__rank_byChannel`,
+ * `places__geo_near`, `messages__fts_body` and its FTS5 `*_data`/`*_idx`
  * siblings).
  */
-const isInternalTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
+const RESERVED_TABLE_PREFIX = /^(?:sqlite_|_cf_|__)/u;
+const COMPANION_TABLE_INFIX = /__(?:agg|rank|geo|fts)_/u;
+
+/**
+ * Whether `name` is framework storage rather than a user table. The one
+ * definition every admin surface filters by — the shard data browser and the D1
+ * global browser alike — so a table listed on one is listed on the other, and a
+ * row count, a facet or a clear can never be pointed at bookkeeping.
+ * @returns `true` for a reserved or companion table name
+ */
+const isInternalTableName = (name: string): boolean => RESERVED_TABLE_PREFIX.test(name) || COMPANION_TABLE_INFIX.test(name);
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
@@ -1133,7 +1147,7 @@ const listTables = (sql: SqlExec): TableInfo[] => {
     const tables: TableInfo[] = [];
 
     for (const { name } of names) {
-        if (isInternalTable(name)) {
+        if (isInternalTableName(name)) {
             continue;
         }
 
@@ -1148,7 +1162,7 @@ const tableExists = (sql: SqlExec, table: string): boolean =>
 
 /** Reject an internal or unknown table with the data browser's typed 404 before any SQL interpolation. */
 const assertUserTable = (sql: SqlExec, table: string): void => {
-    if (isInternalTable(table) || !tableExists(sql, table)) {
+    if (isInternalTableName(table) || !tableExists(sql, table)) {
         throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 };
@@ -1171,6 +1185,23 @@ const filterValueText = (value: unknown): string => {
 
     return typeof value === "number" || typeof value === "boolean" ? String(value) : "";
 };
+
+const RANGE_OPERATORS: ReadonlySet<FilterOperator> = new Set<FilterOperator>(["gt", "gte", "lt", "lte"]);
+
+/**
+ * Whether `clause` constrains nothing, so it is dropped rather than compiled.
+ *
+ * `contains` with empty text is `instr(x, '') > 0`, which is true for every row,
+ * and a range bound of `""` is an unfilled input box, not a bound (`x >= ''`
+ * holds for every text value). Compiled, either one reads as a predicate while
+ * matching the whole table — which is how a "delete matching" request carrying
+ * only such a clause got past the predicate-required guard and emptied the
+ * table. The admin argument parser drops exactly these clauses too, so the guard
+ * sees what the SQL will.
+ * @returns `true` when the clause would match every row it is applied to
+ */
+const isVacuousFilterClause = (clause: FilterClause): boolean =>
+    clause.operator === "contains" ? filterValueText(clause.value) === "" : RANGE_OPERATORS.has(clause.operator) && clause.value === "";
 
 /**
  * Resolve a displayed column to its SQL expression plus any bound path params —
@@ -1269,7 +1300,7 @@ const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
 const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kinds: ColumnKinds | undefined): { params: unknown[]; sql: string } | undefined => {
     const resolved = resolveColumnExpression(clause.column, physicalColumns);
 
-    if (resolved === undefined) {
+    if (resolved === undefined || isVacuousFilterClause(clause)) {
         return undefined;
     }
 
@@ -1292,6 +1323,22 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
 
     return { params: [...pathParameters, filterBindValue(clause, kind)], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
 };
+
+/** Declared kinds stored as epoch milliseconds, which a date-prefix search range-matches. */
+const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
+
+/**
+ * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
+ * at any depth — never its keys.
+ *
+ * Testing the raw JSON text matched field names too: searching `status` hit
+ * every row with a `status` field, and "delete matching" then removed them all.
+ * `json_tree` walks every leaf (nested objects and arrays included) and exposes
+ * its value apart from its key; booleans are compared as `true`/`false`, the text
+ * the raw JSON carried. One bound parameter, like {@link containsSql}.
+ */
+const documentValuesContainSql = (documentExpression: string): string =>
+    `EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")})`;
 
 /** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
 const DATE_PREFIX = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
@@ -1360,9 +1407,11 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
  * so the assembled `where` can never inject SQL.
  *
  * The search conjunct is a case-insensitive substring test OR'd across every PHYSICAL
- * column — for doc-stored tables `__doc__` holds every field value, so this
- * still covers all user fields — plus, when the term parses as a date or a
- * date-time prefix, a typed RANGE predicate (see {@link datePrefixRange}).
+ * column — for `__doc__` over its field VALUES (see
+ * {@link documentValuesContainSql}), so every user field is covered without its
+ * name matching — plus, when the term parses as a date or a date-time prefix, a
+ * typed RANGE predicate (see {@link datePrefixRange}) over the physical columns
+ * and the doc fields `kinds` declares as `timestamp`/`date`.
  * Without the range half, searching `2026-07` only matches rows whose stored
  * text happens to contain that substring, which for an epoch-millis or ISO
  * timestamp is an accident rather than a month filter.
@@ -1377,7 +1426,7 @@ const buildTablePredicate = (
     const parameters: unknown[] = [];
 
     if (needle !== "" && columns.length > 0) {
-        const disjuncts = columns.map((name) => containsSql(quoteIdentifier(name)));
+        const disjuncts = columns.map((name) => (name === DOC_COLUMN ? documentValuesContainSql(quoteIdentifier(name)) : containsSql(quoteIdentifier(name))));
 
         parameters.push(...columns.map(() => needle));
 
@@ -1390,6 +1439,19 @@ const buildTablePredicate = (
             for (const name of columns) {
                 disjuncts.push(`(${quoteIdentifier(name)} >= ? AND ${quoteIdentifier(name)} < ?)`);
                 parameters.push(range.from, range.to);
+            }
+
+            // …and the schema's `v.timestamp()`/`v.date()` fields inside `__doc__`,
+            // which are epoch millis too. The field names ride as ONE JSON
+            // parameter, so the disjunct costs three bound parameters however many
+            // date fields the table declares.
+            const dateFields = Object.keys(kinds ?? {}).filter((field) => !columns.includes(field) && DATE_KINDS.has(kinds?.[field] ?? ""));
+
+            if (dateFields.length > 0 && columns.includes(DOC_COLUMN)) {
+                disjuncts.push(
+                    `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}) AS j WHERE j.key IN (SELECT value FROM json_each(?)) AND j.type IN ('integer', 'real') AND j.value >= ? AND j.value < ?)`,
+                );
+                parameters.push(JSON.stringify(dateFields), range.from, range.to);
             }
         }
 
@@ -1572,15 +1634,23 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
  * validate a faceted column without trusting the caller. Physical/meta columns
  * come from PRAGMA; for a doc-stored table (`__doc__` present) the user fields are
  * the union of the JSON object keys across a bounded sample of rows — the same
- * keys {@link expandDocumentRows} lifts to top-level columns. So a typo'd column
+ * keys {@link expandDocumentRows} lifts to top-level columns — plus every field the
+ * schema declares (`kinds`), which the sample can miss. So a typo'd column
  * (e.g. a doc field that no row has) is rejected up front rather than silently
  * faceting a column of all-NULLs.
  */
-const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns: string[]): Set<string> => {
+const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns: string[], kinds: ColumnKinds | undefined): Set<string> => {
     const known = new Set(physicalColumns.filter((name) => name !== DOC_COLUMN));
 
     if (!physicalColumns.includes(DOC_COLUMN)) {
         return known;
+    }
+
+    // Every schema-declared field is a real column even when no sampled row
+    // carries it yet — an optional field added after the first rows were written
+    // lives only in newer rows, past the sample.
+    for (const field of Object.keys(kinds ?? {})) {
+        known.add(field);
     }
 
     const sample = sql.exec<{ doc: unknown }>(`SELECT ${quoteIdentifier(DOC_COLUMN)} AS doc FROM ${quotedTable} LIMIT ?`, MAX_PAGE_SIZE).toArray();
@@ -1621,7 +1691,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     const quoted = quoteIdentifier(table);
     const physicalColumns = physicalColumnNames(sql, quoted);
 
-    if (!knownDisplayColumns(sql, quoted, physicalColumns).has(column)) {
+    if (!knownDisplayColumns(sql, quoted, physicalColumns, options.columnKinds).has(column)) {
         throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
@@ -1703,7 +1773,7 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
     const references: Record<string, StorageReference[]> = {};
 
     // Seed every requested key so the caller can distinguish orphan (empty) from
-    // not-requested (absent), and cap the IN-list so a huge page can't bloat the
+    // not-requested (absent), and cap the list so a huge page can't bloat the
     // query — keys beyond the cap simply aren't resolved this call.
     const scanned = keys.slice(0, MAX_PAGE_SIZE);
 
@@ -1715,10 +1785,8 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
         return { references, storageColumns };
     }
 
-    const placeholders = scanned.map(() => "?").join(", ");
-
     for (const [table, columns] of Object.entries(storageColumns)) {
-        if (isInternalTable(table) || !tableExists(sql, table)) {
+        if (isInternalTableName(table) || !tableExists(sql, table)) {
             continue;
         }
 
@@ -1732,19 +1800,17 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
                 continue;
             }
 
-            // The column expression appears twice (SELECT … AS ref, then WHERE …
-            // IN), so its bound path params are supplied twice, ahead of the key
-            // list — matching the SQL textual order.
+            // `sqliteInList` binds a list wider than its budget as ONE JSON
+            // parameter — a placeholder per key put a 100-key page over workerd's
+            // 100-bound-parameter cap. The column expression appears twice
+            // (SELECT … AS ref, then WHERE … IN), so its bound path params are
+            // supplied twice, ahead of the list's — matching the SQL textual order.
+            const inList = renderSql("sqlite", sqliteInList(dsql.raw(resolved.expression), scanned, false));
             const rows = sql
                 .exec<{
                     id: string;
                     ref: string;
-                }>(
-                    `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`,
-                    ...resolved.params,
-                    ...resolved.params,
-                    ...scanned,
-                )
+                }>(`SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${inList.sql}`, ...resolved.params, ...resolved.params, ...inList.params)
                 .toArray();
 
             for (const row of rows) {
@@ -2029,6 +2095,8 @@ export {
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
+    isInternalTableName,
+    isVacuousFilterClause,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,

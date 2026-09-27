@@ -20,6 +20,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
+import { isInternalTableName } from "@lunora/shard-engine";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "@lunora/sql-store";
 
 import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
@@ -120,18 +121,17 @@ const MAX_FACET_LIMIT = 200;
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 /**
- * Bookkeeping tables that must never surface in the browser: SQLite internals
- * (`sqlite_*`), Cloudflare D1 internals (`_cf_*`, `d1_*`), and Lunora index
- * companions (`__agg_`/`__rank_`/`__fts_` infixes, the `__cdc_log`, and the
- * `__lunora_*` migration bookkeeping). Everything else — the schema's `.global()`
- * tables and any external/auth tables — is fair game.
+ * Bookkeeping tables that must never surface in the browser: everything the
+ * shard browser also hides ({@link isInternalTableName} — SQLite and Cloudflare
+ * internals, every `__`-prefixed framework table, every index companion), plus
+ * D1's own `d1_*` internals and the migration-tracking table. Everything else —
+ * the schema's `.global()` tables and any external/auth tables — is fair game.
  *
  * The migration-tracking table is spelled from {@link TRACKING_TABLE_NAME}
- * rather than hard-coded, so renaming it there cannot leave it browsable here.
+ * rather than relying on its `__` prefix, so renaming it there cannot leave it
+ * browsable here.
  */
-const INTERNAL_TABLE = new RegExp(`^sqlite_|^_cf_|^d1_|^__cdc|^__lunora_|^${TRACKING_TABLE_NAME}$|__agg_|__rank_|__fts_`, "u");
-
-const isInternalTable = (name: string): boolean => INTERNAL_TABLE.test(name);
+const isInternalTable = (name: string): boolean => isInternalTableName(name) || name.startsWith("d1_") || name === TRACKING_TABLE_NAME;
 
 /** Column names whose values are redacted in non-schema tables, so auth secrets can't leak through the browser. */
 const SENSITIVE_COLUMN = /password|secret|token|hash|salt|credential/iu;

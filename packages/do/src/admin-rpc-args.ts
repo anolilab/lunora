@@ -29,7 +29,7 @@ import type {
     RecordQueueMessageInput,
     WorkflowInstanceStatusResult,
 } from "@lunora/shard-engine";
-import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
+import { ADMIN_FUNCTION_PREFIX, isVacuousFilterClause, tableFromDepKey } from "@lunora/shard-engine";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
@@ -487,8 +487,11 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
 /**
  * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
  * dropping any malformed entry (non-object, missing/blank column, unknown
- * operator). Returns `undefined` when nothing valid remains so `readTablePage`
- * takes its no-predicate fast path.
+ * operator) and any clause that constrains nothing ({@link isVacuousFilterClause}
+ * — an empty `contains`, an empty range bound), which the SQL builder drops too.
+ * Returns `undefined` when nothing valid remains so `readTablePage` takes its
+ * no-predicate fast path — and so `deleteRows`' predicate guard sees an empty
+ * `contains` for what it is.
  * @returns the validated filter clauses, or `undefined` when no valid clauses remain
  */
 const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
@@ -510,7 +513,11 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
             continue;
         }
 
-        clauses.push({ column, operator: operator as FilterOperator, value: record["value"] });
+        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"] };
+
+        if (!isVacuousFilterClause(clause)) {
+            clauses.push(clause);
+        }
     }
 
     return clauses.length > 0 ? clauses : undefined;
