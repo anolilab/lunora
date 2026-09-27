@@ -236,7 +236,12 @@ public final class Submit {
         try {
             reply =
                     client.rpcFull(
-                            options.functionPath, options.args, options.shardKey, writeId, null);
+                            options.functionPath,
+                            options.args,
+                            options.shardKey,
+                            writeId,
+                            null,
+                            client.authToken());
         } catch (Client.ResultDecodeException undecodable) {
             // Committed, with a result that will not decode: the overlay confirms like any other
             // committed write's, and the caller still learns the result is unreadable.
@@ -277,7 +282,8 @@ public final class Submit {
     static FlushReport flush(Client client, String shardKey) {
         FlushReport report = new FlushReport();
         OfflineQueue queue;
-        String current;
+        Identity current;
+        String token;
         List<QueuedMutation> snapshot;
 
         synchronized (client.lock) {
@@ -293,7 +299,8 @@ public final class Submit {
             }
 
             queue = client.offlineQueue;
-            current = client.identity();
+            current = client.identityFingerprint();
+            token = client.authToken();
             snapshot = queue.items();
         }
 
@@ -312,13 +319,26 @@ public final class Submit {
         }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated burst, so every
-        // write in it necessarily runs under one identity.
+        // write in it runs under one identity — and is SENT with the token snapshotted beside it,
+        // never the one held when its request goes out, or a token swapped mid-flush would carry
+        // the rest of the pass. A write whose owner cannot be told (nobody signed in) is HELD:
+        // back on the queue in its place, still persisted, unsettled.
         List<QueuedMutation> sendable = new ArrayList<>();
+        List<QueuedMutation> held = new ArrayList<>();
         List<Offline.Discarded> mismatched = new ArrayList<>();
 
         for (QueuedMutation item : drained) {
-            if (Offline.identityAllowsReplay(item.identity, current)) {
+            Offline.ReplayVerdict verdict =
+                    Offline.replayIdentityVerdict(item.identity, current, token);
+
+            if (verdict == Offline.ReplayVerdict.MATCH) {
                 sendable.add(item);
+
+                continue;
+            }
+
+            if (verdict == Offline.ReplayVerdict.UNKNOWN) {
+                held.add(item);
 
                 continue;
             }
@@ -330,10 +350,49 @@ public final class Submit {
                             "offline mutation skipped: auth identity changed before replay"));
         }
 
-        settleTerminal(client, queue, mismatched, report);
-        replay(client, queue, encodableOrSettleTerminal(client, queue, sendable, report), report);
+        try {
+            settleTerminal(client, queue, mismatched, report);
+            replay(
+                    client,
+                    queue,
+                    encodableOrSettleTerminal(client, queue, sendable, report),
+                    report,
+                    token);
+        } finally {
+            requeueHeld(client, queue, drained, held, report);
+        }
 
         return report;
+    }
+
+    /**
+     * Puts the held writes back, keeping every unsettled write of this pass in its original place
+     * in line: whatever the replay re-queued is drained back out and re-queued together with the
+     * held writes, in drain order.
+     */
+    private static void requeueHeld(
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> drained,
+            List<QueuedMutation> held,
+            FlushReport report) {
+        if (held.isEmpty()) {
+            return;
+        }
+
+        Set<String> requeued = new HashSet<>(report.requeued);
+
+        synchronized (client.lock) {
+            List<QueuedMutation> back = queue.drain(item -> requeued.contains(item.id));
+
+            back.addAll(held);
+            back.sort(java.util.Comparator.comparingInt(drained::indexOf));
+            queue.requeue(back);
+        }
+
+        for (QueuedMutation item : held) {
+            report.requeued.add(item.id);
+        }
     }
 
     /**
@@ -441,11 +500,15 @@ public final class Submit {
      * guard must leave alone.
      */
     private static void replay(
-            Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
         boolean completed = false;
 
         try {
-            replayAll(client, queue, sendable, report);
+            replayAll(client, queue, sendable, report, token);
             completed = true;
         } finally {
             if (!completed) {
@@ -479,12 +542,16 @@ public final class Submit {
     }
 
     private static void replayAll(
-            Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
         // A lone write rides the single-call path, which is the proven one. Two or more coalesce
         // into batch round trips — the flaky-reconnect win, where N queued writes cost a handful
         // of hops instead of N.
         if (sendable.size() < 2) {
-            replaySequential(client, queue, sendable, report);
+            replaySequential(client, queue, sendable, report, token);
 
             return;
         }
@@ -495,7 +562,7 @@ public final class Submit {
         for (int index = 0; index < chunks.size(); index++) {
             // Chunks replay sequentially, which is what preserves FIFO across a flush longer than
             // one batch.
-            BatchOutcome outcome = replayBatched(client, queue, chunks.get(index), report);
+            BatchOutcome outcome = replayBatched(client, queue, chunks.get(index), report, token);
 
             toRequeue.addAll(outcome.requeue());
 
@@ -627,7 +694,11 @@ public final class Submit {
 
     /** Replays writes one at a time. FIFO is preserved by the loop itself. */
     private static void replaySequential(
-            Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
         for (int index = 0; index < sendable.size(); index++) {
             QueuedMutation item = sendable.get(index);
             RpcReply reply;
@@ -639,7 +710,8 @@ public final class Submit {
                                 item.args,
                                 item.shardKey,
                                 item.id,
-                                item.clientId);
+                                item.clientId,
+                                token);
             } catch (Client.ResultDecodeException undecodable) {
                 // The server COMMITTED it; only the result is unreadable, and a replay can only
                 // return the same one.
@@ -723,7 +795,11 @@ public final class Submit {
      * cannot land twice in the queue.
      */
     private static BatchOutcome replayBatched(
-            Client client, OfflineQueue queue, List<QueuedMutation> items, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> items,
+            FlushReport report,
+            String token) {
         List<Object> calls = new ArrayList<>();
 
         for (int index = 0; index < items.size(); index++) {
@@ -750,7 +826,7 @@ public final class Submit {
         Client.BatchReply reply;
 
         try {
-            reply = client.rpcBatch(calls);
+            reply = client.rpcBatch(calls, token);
         } catch (RuntimeException error) {
             // Transport failure — nothing committed, so retry everything.
             return new BatchOutcome(new ArrayList<>(items), true);
@@ -775,7 +851,8 @@ public final class Submit {
         // and only the answer can.
         if (Offline.PAYLOAD_TOO_LARGE.equals(error.code) && items.size() > 1) {
             int middle = items.size() / 2;
-            BatchOutcome left = replayBatched(client, queue, items.subList(0, middle), report);
+            BatchOutcome left =
+                    replayBatched(client, queue, items.subList(0, middle), report, token);
 
             if (left.stop()) {
                 List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
@@ -786,7 +863,8 @@ public final class Submit {
             }
 
             BatchOutcome right =
-                    replayBatched(client, queue, items.subList(middle, items.size()), report);
+                    replayBatched(
+                            client, queue, items.subList(middle, items.size()), report, token);
             List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
 
             requeue.addAll(right.requeue());
@@ -1016,8 +1094,7 @@ public final class Submit {
         // than whatever a later session minted.
         entry.clientId = client.clientId;
         // Bound at enqueue time, so the write can only ever replay as whoever made it.
-        entry.identity =
-                client.identity() == null ? Identity.signedOut() : Identity.of(client.identity());
+        entry.identity = client.identityFingerprint();
         entry.liveAwaiter = true;
         entry.precondition = options.precondition;
         entry.onSettled = options.onSettled;
