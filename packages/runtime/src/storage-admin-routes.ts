@@ -276,7 +276,11 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         return new Response(object.body, {
             headers: {
+                // The stored type is whatever an uploader pinned, and this answers
+                // from the app origin: always a download, never a page.
+                "content-disposition": "attachment",
                 "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+                "x-content-type-options": "nosniff",
                 ...(object.size === undefined ? {} : { "content-length": String(object.size) }),
             },
             status: 200,

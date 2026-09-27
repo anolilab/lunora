@@ -155,7 +155,9 @@ const object = await storage.download("avatars/abc.png");
 
 if (object) {
     const bytes = await object.arrayBuffer();
-    // or: return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? "" } });
+    // To serve it over HTTP, use `serveStorageObject` from `@lunora/server` rather than
+    // echoing the stored content type: it adds `nosniff` and turns any non-image/media
+    // type into a download, so an uploaded `text/html` never renders on your origin.
 }
 ```
 

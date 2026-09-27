@@ -463,6 +463,26 @@ describe("createWorker — storage admin object read", () => {
         expect(body.error.code).toBe("STORAGE_DOWNLOAD_NOT_CONFIGURED");
     });
 
+    // The stored content type is whatever an uploader pinned, and this route
+    // answers from the app origin: it must never render as a page there.
+    it("serves a stored object as a non-executable download", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf("<script>alert(1)</script>"), httpMetadata: { contentType: "text/html" } };
+            },
+        });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+
     it("streams the object body back, with its bucket and content type", async () => {
         expect.assertions(4);
 
