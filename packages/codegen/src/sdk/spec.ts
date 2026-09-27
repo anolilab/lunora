@@ -147,12 +147,12 @@ const verbForKind = (kind: string | undefined): RuntimeVerb => {
 /**
  * True when a schema contains a value the generated models cannot carry.
  *
- * `v.bigint()` schemas as `{format:"int64",type:"integer"}` and `v.bytes()` as
+ * `v.bigint()` schemas as `{format:"int64",type:"string"}` and `v.bytes()` as
  * `{contentEncoding:"base64",type:"string"}`, because JSON Schema has no better
- * carrier. quicktype faithfully renders those as a plain integer and a plain
- * string — but the wire needs the TAGGED forms, `[TAG,"bigint","…"]` and
+ * carrier. quicktype faithfully renders both as a plain string — but the wire
+ * needs the TAGGED forms, `[TAG,"bigint","…"]` and
  * `[TAG,"bytes","…"]`, which no generated field can produce. A model built from
- * such a schema sends a number where the server's validator demands a bigint,
+ * such a schema sends a string where the server's validator demands a bigint,
  * and every call fails validation.
  *
  * `v.date()` is deliberately NOT in this set: it schemas as an integer and is
@@ -175,7 +175,12 @@ const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
 
     const node = schema as Record<string, unknown>;
 
-    if (node["type"] === "integer" && node["format"] === "int64") {
+    // `format` alone, whatever the `type`: `v.bigint()` schemas as
+    // `{format:"int64",type:"string"}` (its decimal-string payload), and it
+    // schemaed as `type:"integer"` before that. Keying on the pair missed the
+    // new spelling, so every bigint got a plain `String` field that sent `"5"` —
+    // which the validator rejects as a string where it demands a bigint.
+    if (node["format"] === "int64") {
         return true;
     }
 
@@ -697,6 +702,38 @@ const generatedHeaderLines = (languageId: string): ReadonlyArray<string> => [
 ];
 
 /**
+ * A line that is only a comment, in any of the eight target languages: `#`
+ * (Ruby, Python — and Rust attributes, which never name a model), `//` and
+ * `///`, or a block comment's opening or continuation line.
+ */
+const COMMENT_LINE = /^\s*(?:#|\/\/|\/\*|\*)/u;
+
+/**
+ * The model source with its comment-only lines removed.
+ *
+ * quicktype heads every file with usage comments naming each TOP-LEVEL type —
+ * `// let itemsFindResult = try ItemsFindResult(json)`,
+ * `#   items_find_result = ItemsFindResult.from_json! "…"` — whether or not that
+ * name was then declared. A nullable-object result is exactly that case: Swift
+ * and Ruby declare `ItemsFindResultClass` and nothing called `ItemsFindResult`,
+ * so a search over the raw text found the name in the comment and the surface
+ * referenced a type that does not exist ("cannot find type", NameError).
+ */
+const withoutCommentLines = (models: string): string =>
+    models
+        .split("\n")
+        .filter((line) => !COMMENT_LINE.test(line))
+        .join("\n");
+
+/**
+ * Word-bounded: a bare `includes` counts `FooArgs` as present whenever
+ * `FooArgsResult` appears — reachable when one function is named `list` and a
+ * sibling `listArgs` — and a false positive references a type the backend never
+ * declared.
+ */
+const mentions = (code: string, name: string): boolean => new RegExp(String.raw`\b${name}\b`, "u").test(code);
+
+/**
  * Clear model references the rendered models do not actually declare.
  *
  * {@link parseMethod} predicts a name for every typed schema, but quicktype —
@@ -708,8 +745,10 @@ const generatedHeaderLines = (languageId: string): ReadonlyArray<string> => [
  *
  * So the prediction is reconciled against the rendered source rather than
  * trusted. The test is deliberately the weakest one that is still sound: a name
- * that appears nowhere in the models text is certainly not declared, and that
- * is exactly the failure. Anything stricter would mean parsing generated source
+ * that appears nowhere in the models' CODE is certainly not declared, and that
+ * is exactly the failure. Comments are not code — see
+ * {@link withoutCommentLines} for the usage comment that made the unstripped
+ * test unsound. Anything stricter would mean parsing generated source
  * per language — nine more things to get wrong — and anything that instead
  * narrowed the prediction would bake one backend's current behaviour into the
  * language-neutral layer.
@@ -719,12 +758,8 @@ const generatedHeaderLines = (languageId: string): ReadonlyArray<string> => [
  * never a broken build.
  */
 const withDeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
-    // Word-bounded: a bare `includes` counts `FooArgs` as declared whenever
-    // `FooArgsResult` appears in the text — reachable when one function is
-    // named `list` and a sibling `listArgs` — and a false positive emits a
-    // reference to a type the backend never declared.
-    const declared = (name: string | undefined): string | undefined =>
-        name !== undefined && new RegExp(String.raw`\b${name}\b`, "u").test(models) ? name : undefined;
+    const code = withoutCommentLines(models);
+    const declared = (name: string | undefined): string | undefined => (name !== undefined && mentions(code, name) ? name : undefined);
 
     return namespaces.map((namespace) => {
         return {
@@ -749,14 +784,17 @@ const unrepresentableFunctions = (document: OpenRpcDocument): ReadonlyArray<stri
         .toSorted((a, b) => a.localeCompare(b));
 
 /** Model names that were predicted but not declared — reported by the CLI. */
-const undeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<string> =>
-    [
+const undeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<string> => {
+    const code = withoutCommentLines(models);
+
+    return [
         ...new Set(
             allMethods(namespaces)
                 .flatMap((method) => [method.argsType, method.resultType])
-                .filter((name): name is string => name !== undefined && !new RegExp(String.raw`\b${name}\b`, "u").test(models)),
+                .filter((name): name is string => name !== undefined && !mentions(code, name)),
         ),
     ].toSorted((a, b) => a.localeCompare(b));
+};
 
 /** The model names a surface actually references, de-duplicated and sorted. */
 const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArray<string> =>

@@ -7,7 +7,7 @@ import { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir } from "./golden-fi
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-for (const [fixture, goldenDirectory] of GOLDEN_FIXTURES) {
+for (const [fixture, goldenDirectory, only] of GOLDEN_FIXTURES) {
     const fixtureRoot = join(here, "fixtures", fixture);
     const workdir = makeFixtureWorkdir(fixtureRoot);
 
@@ -18,7 +18,7 @@ for (const [fixture, goldenDirectory] of GOLDEN_FIXTURES) {
 
     mkdirSync(expectedDirectory, { recursive: true });
 
-    for (const [file, key] of GOLDEN_OUTPUTS) {
+    for (const [file, key] of GOLDEN_OUTPUTS.filter(([name]) => only === undefined || only.includes(name))) {
         writeFileSync(join(expectedDirectory, file), result.generated[key], "utf8");
     }
 

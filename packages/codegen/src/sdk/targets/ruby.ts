@@ -179,7 +179,42 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+/**
+ * Keep a model reference only where quicktype declared an OBJECT `Dry::Struct`
+ * for it.
+ *
+ * The call sites need `from_dynamic!` / `to_dynamic`, and quicktype gives those
+ * to struct classes alone. A top level that is an id, number, array, record or
+ * null renders as a bare class carrying nothing but `from_json!`, so a typed
+ * call on one raised NoMethodError — including `{}` arguments, which render as a
+ * Hash alias and made a no-argument function uncallable. A union of scalars
+ * does render a struct, but its `from_dynamic!` indexes `schema[:double]`, which
+ * current dry-struct rejects ("can't convert Symbol into Hash"). So the test is
+ * the object form's first statement, `d = Types::Hash[d]`, inside that class.
+ * Everything else degrades to the untyped forms: the decoded result is returned
+ * as-is, and the arguments are a plain Hash (`{}`).
+ */
+const structsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
+    const struct = (name: string | undefined): string | undefined =>
+        name !== undefined &&
+        new RegExp(String.raw`^class ${name} < Dry::Struct\n(?:(?!^(?:class|module) )[^])*?def self\.from_dynamic!\(d\)\n\s*d = Types::Hash\[d\]`, "mu").test(
+            models,
+        )
+            ? name
+            : undefined;
+
+    return namespaces.map((namespace) => {
+        return {
+            methods: namespace.methods.map((method) => {
+                return { ...method, argsType: struct(method.argsType), resultType: struct(method.resultType) };
+            }),
+            name: namespace.name,
+        };
+    });
+};
+
+const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
+    const namespaces = structsOnly(declared, models);
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");
 

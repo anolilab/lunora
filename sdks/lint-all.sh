@@ -183,7 +183,7 @@ lint_suite() {
             # from the FILE — outside this directory it would silently fall back to
             # defaults and hold the smoke to a narrower width than everything else.
             cargo fmt --check && cargo clippy --all-targets -- -D warnings \
-                && rustfmt --check --edition 2021 --config-path rustfmt.toml "$ROOT/sdks/smoke/rust/generated_smoke.rs"
+                && rustfmt --check --edition 2021 --config-path rustfmt.toml "$ROOT"/sdks/smoke/rust/*.rs
             ;;
         swift)
             # The one linter here with no install step, because there is nothing
