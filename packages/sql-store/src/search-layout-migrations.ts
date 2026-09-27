@@ -498,5 +498,5 @@ const migrateInvertedCompanion = async (exec: SqlCtxExec, dialect: SqlDialect, t
     return { uniqueKeyMissing: !(await buildInvertedUniqueKey(exec, dialect, target)), unmappedSkipped: 0 };
 };
 
-export type { MigrationMode, MigrationReport, MigrationTarget, UnmappedPass };
-export { ensureInvertedUniqueKey, migrateFts5Companion, migrateInvertedCompanion, migrateUnmappedEntries };
+export type { MigrationMode, MigrationReport, MigrationTarget };
+export { ensureInvertedUniqueKey, migrateFts5Companion, migrateInvertedCompanion };

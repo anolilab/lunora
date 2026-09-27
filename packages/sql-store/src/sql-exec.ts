@@ -571,7 +571,6 @@ export {
     indexState,
     nextRowVersion,
     nullSafeEqualsSql,
-    physicalColumn,
     qualifiedColumnRefSql,
     queryAll,
     queryBatch,
