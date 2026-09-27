@@ -1,3 +1,17 @@
+## @lunora/d1 [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.145...@lunora/d1@1.0.0-alpha.146) (2026-09-27)
+
+### Bug Fixes
+
+* **sql-store:** make .global() values and D1 migrations behave alike on every engine ([#879](https://github.com/anolilab/lunora/issues/879)) ([119c979](https://github.com/anolilab/lunora/commit/119c9792baec2b2772d971d219d65c7e699d04b9))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.147
+* **@lunora/do:** upgraded to 1.0.0-alpha.176
+
 ## @lunora/d1 [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.144...@lunora/d1@1.0.0-alpha.145) (2026-09-27)
 
 
