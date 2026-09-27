@@ -2,6 +2,7 @@ import type { Expression, Node as TsNode, ObjectLiteralExpression } from "ts-mor
 import { Node } from "ts-morph";
 
 import { globalTtlMessage } from "../../../../../../shared/global-ttl";
+import { isInternalTableName } from "../../../../../../shared/internal-table-name";
 import { diagnosticAt } from "../../../diagnostics";
 import type {
     ExternalSourceIR,
@@ -173,6 +174,13 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
         throw diagnosticAt(
             node,
             `table name ${JSON.stringify(name)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
+        );
+    }
+
+    if (isInternalTableName(name)) {
+        throw diagnosticAt(
+            node,
+            `table name ${JSON.stringify(name)} is reserved for framework tables — a leading \`__\` and the \`__agg_\`/\`__rank_\`/\`__geo_\`/\`__fts_\` infixes name Lunora's own bookkeeping and index companions, so the Studio and the admin API hide and refuse such a table. Rename the table.`,
         );
     }
 };

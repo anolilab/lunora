@@ -1,11 +1,15 @@
 import { LunoraError } from "@lunora/errors";
+// Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
+import { sql as dsql } from "drizzle-orm";
 
+import { isInternalTableName } from "../../../shared/internal-table-name";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire } from "../../../shared/wire-codec";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
 import { DOC_ORIGINALS_KEY } from "./do-sql";
+import { renderSql, sqliteInList } from "./drizzle";
 import type { SortDirection } from "./schema-types";
 import { serializeSqlValue } from "./serialize-sql";
 import { decodeBigintSqlKey } from "./sql-projection";
@@ -1105,16 +1109,6 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
  */
 const containsSql = (expression: string): string => `instr(lower(CAST(${expression} AS TEXT)), lower(?)) > 0`;
 
-/**
- * Tables the data browser must never surface: SQLite's own bookkeeping
- * (`sqlite_*`), Cloudflare's Durable Object KV mirror (`_cf_*`), the Lunora FTS
- * capability probe and any FTS5 shadow tables (whose names carry the reserved
- * `__fts_` infix, e.g. `messages__fts_body` and its internal `*_data` / `*_idx`
- * siblings).
- */
-const isInternalTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
-
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 const countRows = (sql: SqlExec, quotedTable: string): number => {
@@ -1133,7 +1127,7 @@ const listTables = (sql: SqlExec): TableInfo[] => {
     const tables: TableInfo[] = [];
 
     for (const { name } of names) {
-        if (isInternalTable(name)) {
+        if (isInternalTableName(name)) {
             continue;
         }
 
@@ -1148,7 +1142,7 @@ const tableExists = (sql: SqlExec, table: string): boolean =>
 
 /** Reject an internal or unknown table with the data browser's typed 404 before any SQL interpolation. */
 const assertUserTable = (sql: SqlExec, table: string): void => {
-    if (isInternalTable(table) || !tableExists(sql, table)) {
+    if (isInternalTableName(table) || !tableExists(sql, table)) {
         throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 };
@@ -1171,6 +1165,32 @@ const filterValueText = (value: unknown): string => {
 
     return typeof value === "number" || typeof value === "boolean" ? String(value) : "";
 };
+
+const RANGE_OPERATORS: ReadonlySet<FilterOperator> = new Set<FilterOperator>(["gt", "gte", "lt", "lte"]);
+
+/**
+ * Whether `clause` is an unfilled input rather than a condition, so it is
+ * dropped instead of compiled.
+ *
+ * `contains ""` compiled to `instr(x, '') > 0`, which holds for every row where
+ * the column is non-NULL — in effect "field present", and for a required field
+ * every row. Dropped, it constrains nothing.
+ *
+ * A range bound of `""` compared under SQLite's cross-type order, where every
+ * number sorts below every text: `gt`/`gte ""` matched no number and every text
+ * value, `lt`/`lte ""` matched every number and (for `lt`) no text. None of that
+ * is what an empty box means. Dropped, it constrains nothing.
+ *
+ * `eq ""`/`ne ""` are kept: an empty string is a real value to compare against.
+ *
+ * Only a "delete matching" request carrying nothing but such a clause changes
+ * outcome: it used to delete every row the clause happened to match while
+ * passing the predicate-required guard; now the admin argument parser drops the
+ * clause too, so the guard sees the missing predicate and refuses.
+ * @returns `true` when the clause is an empty input the builder drops
+ */
+const isVacuousFilterClause = (clause: FilterClause): boolean =>
+    clause.operator === "contains" ? filterValueText(clause.value) === "" : RANGE_OPERATORS.has(clause.operator) && clause.value === "";
 
 /**
  * Resolve a displayed column to its SQL expression plus any bound path params —
@@ -1269,7 +1289,7 @@ const decodeFacetValue = (value: unknown, kind: string | undefined): unknown =>
 const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kinds: ColumnKinds | undefined): { params: unknown[]; sql: string } | undefined => {
     const resolved = resolveColumnExpression(clause.column, physicalColumns);
 
-    if (resolved === undefined) {
+    if (resolved === undefined || isVacuousFilterClause(clause)) {
         return undefined;
     }
 
@@ -1292,6 +1312,64 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[], kind
 
     return { params: [...pathParameters, filterBindValue(clause, kind)], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
 };
+
+/** Declared kinds stored as epoch milliseconds, which a date-prefix search range-matches. */
+const DATE_KINDS: ReadonlySet<string> = new Set(["date", "timestamp"]);
+
+/**
+ * Excludes the leaves under the {@link DOC_ORIGINALS_KEY} object. SQLite builds
+ * disagree on whether `fullkey` quotes a key starting with `_` (`$."__originals__"`
+ * vs `$.__originals__`), so both spellings are tested. A constant — no bound
+ * parameter, and no `LIKE`, whose `_` is a wildcard.
+ */
+const ORIGINALS_SUBTREE_EXCLUSION = [`$.${DOC_ORIGINALS_KEY}`, `$."${DOC_ORIGINALS_KEY}"`]
+    .map((prefix) => `substr(j.fullkey, 1, ${String(prefix.length + 1)}) NOT IN ('${prefix}.', '${prefix}[')`)
+    .join(" AND ");
+
+/**
+ * A case-insensitive substring test over the VALUES of a `__doc__` JSON object,
+ * at any depth — never its keys.
+ *
+ * Testing the raw JSON text matched field names too: searching `status` hit
+ * every row with a `status` field, and "delete matching" then removed them all.
+ * `json_tree` walks every leaf (nested objects and arrays included) and exposes
+ * its value apart from its key; booleans are compared as `true`/`false`, the text
+ * the raw JSON carried.
+ *
+ * The {@link DOC_ORIGINALS_KEY} object is skipped: it holds the wire-tagged
+ * originals of projected `v.bigint()`/`v.bytes()` fields (`["$lunora.wire$",
+ * "bigint", "123"]`), so without the skip `bigint` or `wire` matched every row
+ * with such a field. Those fields are matched through their projected value at
+ * `$.field` instead — the zero-padded sort key for a bigint (so `0000` still
+ * matches small bigints), base64 text for bytes. A non-object value under that
+ * key is a user field and is searched like any other.
+ *
+ * `json_tree` costs several times a plain `instr` over the text, so the raw text
+ * is tested first as a cheap pre-filter: a value containing the term makes the
+ * JSON text contain it too — unless the term holds a character JSON escapes
+ * (`"`, `\`, a control character), for which {@link rawTextPrefilter} binds `''`
+ * and the pre-filter passes every row. Two bound parameters: the pre-filter term,
+ * then the term. The value test runs before the originals check, so `fullkey` —
+ * a string built per leaf — is only materialised for leaves that matched.
+ */
+const documentValuesContainSql = (documentExpression: string): string =>
+    `(${containsSql(documentExpression)} AND EXISTS (SELECT 1 FROM json_tree(${documentExpression}) AS j WHERE j.type IN ('text', 'integer', 'real', 'true', 'false') AND ${containsSql("CASE WHEN j.type IN ('true', 'false') THEN j.type ELSE j.value END")} AND ${ORIGINALS_SUBTREE_EXCLUSION}))`;
+
+/** A character `JSON.stringify` escapes, so it never appears literally in stored JSON text. */
+// eslint-disable-next-line no-control-regex -- matching the control characters JSON escapes is the point
+const JSON_ESCAPED_CHARACTER = /["\\\u0000-\u001F]/u;
+
+/**
+ * The term the raw-text pre-filter of {@link documentValuesContainSql} binds: the
+ * search term itself, or `''` (which every row contains) when the term holds a
+ * character the stored JSON only carries escaped.
+ *
+ * ponytail: a number SQLite renders differently from its JSON text (`1e+21` is
+ * `1.0e+21` to `CAST`) can fail the pre-filter on the rendering-only characters;
+ * searching those is not a real use.
+ * @returns the pre-filter term
+ */
+const rawTextPrefilter = (needle: string): string => (JSON_ESCAPED_CHARACTER.test(needle) ? "" : needle);
 
 /** `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` — the prefixes worth treating as a range. */
 const DATE_PREFIX = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
@@ -1360,9 +1438,11 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
  * so the assembled `where` can never inject SQL.
  *
  * The search conjunct is a case-insensitive substring test OR'd across every PHYSICAL
- * column — for doc-stored tables `__doc__` holds every field value, so this
- * still covers all user fields — plus, when the term parses as a date or a
- * date-time prefix, a typed RANGE predicate (see {@link datePrefixRange}).
+ * column — for `__doc__` over its field VALUES (see
+ * {@link documentValuesContainSql}), so every user field is covered without its
+ * name matching — plus, when the term parses as a date or a date-time prefix, a
+ * typed RANGE predicate (see {@link datePrefixRange}) over the physical columns
+ * and the doc fields `kinds` declares as `timestamp`/`date`.
  * Without the range half, searching `2026-07` only matches rows whose stored
  * text happens to contain that substring, which for an epoch-millis or ISO
  * timestamp is an accident rather than a month filter.
@@ -1377,9 +1457,9 @@ const buildTablePredicate = (
     const parameters: unknown[] = [];
 
     if (needle !== "" && columns.length > 0) {
-        const disjuncts = columns.map((name) => containsSql(quoteIdentifier(name)));
+        const disjuncts = columns.map((name) => (name === DOC_COLUMN ? documentValuesContainSql(quoteIdentifier(name)) : containsSql(quoteIdentifier(name))));
 
-        parameters.push(...columns.map(() => needle));
+        parameters.push(...columns.flatMap((name) => (name === DOC_COLUMN ? [rawTextPrefilter(needle), needle] : [needle])));
 
         // A date-shaped term additionally matches timestamp columns by RANGE, so
         // `2026-07` finds July's rows rather than only those whose rendered text
@@ -1390,6 +1470,19 @@ const buildTablePredicate = (
             for (const name of columns) {
                 disjuncts.push(`(${quoteIdentifier(name)} >= ? AND ${quoteIdentifier(name)} < ?)`);
                 parameters.push(range.from, range.to);
+            }
+
+            // …and the schema's `v.timestamp()`/`v.date()` fields inside `__doc__`,
+            // which are epoch millis too. The field names ride as ONE JSON
+            // parameter, so the disjunct costs three bound parameters however many
+            // date fields the table declares.
+            const dateFields = Object.keys(kinds ?? {}).filter((field) => !columns.includes(field) && DATE_KINDS.has(kinds?.[field] ?? ""));
+
+            if (dateFields.length > 0 && columns.includes(DOC_COLUMN)) {
+                disjuncts.push(
+                    `EXISTS (SELECT 1 FROM json_each(${quoteIdentifier(DOC_COLUMN)}) AS j WHERE j.key IN (SELECT value FROM json_each(?)) AND j.type IN ('integer', 'real') AND j.value >= ? AND j.value < ?)`,
+                );
+                parameters.push(JSON.stringify(dateFields), range.from, range.to);
             }
         }
 
@@ -1535,7 +1628,23 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const columns = physicalColumnNames(sql, quoted);
 
     const needle = options.search?.trim() ?? "";
+
+    // This scan selects the rows a bulk delete/patch then writes, so a clause the
+    // builder would silently drop must fail the op instead: a filter on a column
+    // the table does not have, or clauses that compile to nothing at all, would
+    // otherwise leave the scan unfiltered — a whole-table write under the verb of
+    // a filtered one.
+    for (const clause of options.filters ?? []) {
+        if (resolveColumnExpression(clause.column, columns) === undefined) {
+            throw new LunoraError("BAD_REQUEST", `unknown column: ${clause.column}`);
+        }
+    }
+
     const predicate = buildTablePredicate(columns, needle, options.filters, options.columnKinds);
+
+    if (predicate === undefined && (options.filters?.length ?? 0) > 0) {
+        throw new LunoraError("BAD_REQUEST", `the filters on ${table} are all empty, so the predicate constrains no rows — refusing to select the whole table`);
+    }
 
     const conditions: string[] = [];
     const parameters: unknown[] = [];
@@ -1572,15 +1681,23 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
  * validate a faceted column without trusting the caller. Physical/meta columns
  * come from PRAGMA; for a doc-stored table (`__doc__` present) the user fields are
  * the union of the JSON object keys across a bounded sample of rows — the same
- * keys {@link expandDocumentRows} lifts to top-level columns. So a typo'd column
+ * keys {@link expandDocumentRows} lifts to top-level columns — plus every field the
+ * schema declares (`kinds`), which the sample can miss. So a typo'd column
  * (e.g. a doc field that no row has) is rejected up front rather than silently
  * faceting a column of all-NULLs.
  */
-const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns: string[]): Set<string> => {
+const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns: string[], kinds: ColumnKinds | undefined): Set<string> => {
     const known = new Set(physicalColumns.filter((name) => name !== DOC_COLUMN));
 
     if (!physicalColumns.includes(DOC_COLUMN)) {
         return known;
+    }
+
+    // Every schema-declared field is a real column even when no sampled row
+    // carries it yet — an optional field added after the first rows were written
+    // lives only in newer rows, past the sample.
+    for (const field of Object.keys(kinds ?? {})) {
+        known.add(field);
     }
 
     const sample = sql.exec<{ doc: unknown }>(`SELECT ${quoteIdentifier(DOC_COLUMN)} AS doc FROM ${quotedTable} LIMIT ?`, MAX_PAGE_SIZE).toArray();
@@ -1621,7 +1738,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     const quoted = quoteIdentifier(table);
     const physicalColumns = physicalColumnNames(sql, quoted);
 
-    if (!knownDisplayColumns(sql, quoted, physicalColumns).has(column)) {
+    if (!knownDisplayColumns(sql, quoted, physicalColumns, options.columnKinds).has(column)) {
         throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
@@ -1703,7 +1820,7 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
     const references: Record<string, StorageReference[]> = {};
 
     // Seed every requested key so the caller can distinguish orphan (empty) from
-    // not-requested (absent), and cap the IN-list so a huge page can't bloat the
+    // not-requested (absent), and cap the list so a huge page can't bloat the
     // query — keys beyond the cap simply aren't resolved this call.
     const scanned = keys.slice(0, MAX_PAGE_SIZE);
 
@@ -1715,10 +1832,8 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
         return { references, storageColumns };
     }
 
-    const placeholders = scanned.map(() => "?").join(", ");
-
     for (const [table, columns] of Object.entries(storageColumns)) {
-        if (isInternalTable(table) || !tableExists(sql, table)) {
+        if (isInternalTableName(table) || !tableExists(sql, table)) {
             continue;
         }
 
@@ -1732,19 +1847,17 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
                 continue;
             }
 
-            // The column expression appears twice (SELECT … AS ref, then WHERE …
-            // IN), so its bound path params are supplied twice, ahead of the key
-            // list — matching the SQL textual order.
+            // `sqliteInList` binds a list wider than its budget as ONE JSON
+            // parameter — a placeholder per key put a 100-key page over workerd's
+            // 100-bound-parameter cap. The column expression appears twice
+            // (SELECT … AS ref, then WHERE … IN), so its bound path params are
+            // supplied twice, ahead of the list's — matching the SQL textual order.
+            const inList = renderSql("sqlite", sqliteInList(dsql.raw(resolved.expression), scanned, false));
             const rows = sql
                 .exec<{
                     id: string;
                     ref: string;
-                }>(
-                    `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`,
-                    ...resolved.params,
-                    ...resolved.params,
-                    ...scanned,
-                )
+                }>(`SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${inList.sql}`, ...resolved.params, ...resolved.params, ...inList.params)
                 .toArray();
 
             for (const row of rows) {
@@ -2029,6 +2142,7 @@ export {
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
+    isVacuousFilterClause,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
@@ -2099,3 +2213,4 @@ export type {
     WorkflowMetadata,
     WorkflowsResult,
 };
+export { isInternalTableName } from "../../../shared/internal-table-name";

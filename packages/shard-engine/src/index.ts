@@ -250,6 +250,8 @@ export {
     ADMIN_FUNCTIONS,
     facetColumn,
     FLAGS_FUNCTION_PREFIX,
+    isInternalTableName,
+    isVacuousFilterClause,
     listTables,
     readTablePage,
     RELATION_FUNCTION_PREFIX,

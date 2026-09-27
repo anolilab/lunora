@@ -615,6 +615,24 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "query" is reserved/u);
     });
 
+    it.each(["__drafts", "posts__agg_x", "posts__rank_x", "posts__geo_x", "posts__fts_x"])(
+        "throws a diagnostic for the framework-reserved table name %s",
+        (name) => {
+            expect.assertions(2);
+
+            const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                ${name}: defineTable({ text: v.string() }),
+            });
+        `);
+
+            expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+            expect(() => discoverSchema(project, schemaPath)).toThrow(/reserved for framework tables/u);
+        },
+    );
+
     it("throws a diagnostic when a table name is not a valid JS identifier", () => {
         expect.assertions(3);
 

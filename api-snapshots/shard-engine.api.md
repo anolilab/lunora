@@ -4199,6 +4199,12 @@ const isDevEnvironment: (rawEnv: unknown) => boolean;
 const isFtsAvailable: (sql: SqlExec) => boolean;
 ```
 
+### `isInternalTableName` (const)
+
+```ts
+const isInternalTableName: (name: string) => boolean;
+```
+
 ### `isLossyBody` (const)
 
 ```ts
@@ -4233,6 +4239,12 @@ const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
 
 ```ts
 const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
+```
+
+### `isVacuousFilterClause` (const)
+
+```ts
+const isVacuousFilterClause: (clause: FilterClause) => boolean;
 ```
 
 ### `jsonPath` (const)
