@@ -1989,7 +1989,7 @@ export type { RlsDatabase };
  * package root does not re-export them.
  * @internal
  */
-export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, permissionName, readIdentityRoles, resolveCan, resolvePolicyAuth };
+export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, readIdentityRoles, resolveCan, resolvePolicyAuth };
 export type { AuthLike };
 
 // `matchesWhere` moved to `./where-match` (the declared JS twin of the SQL

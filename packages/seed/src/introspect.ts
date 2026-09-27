@@ -199,5 +199,5 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
     return result;
 };
 
-export { describeField, fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
-export type { FieldSpec, TableSpec, ValidatorMeta };
+export { fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
+export type { FieldSpec };

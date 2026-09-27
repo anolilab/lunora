@@ -41,4 +41,4 @@ const narrowSafeIntegers = <T>(rows: ReadonlyArray<Record<string, unknown>>): T[
         return (narrowed ?? row) as T;
     });
 
-export { narrowSafeInteger, narrowSafeIntegers };
+export { narrowSafeIntegers };
