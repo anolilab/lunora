@@ -230,6 +230,4 @@ const rlsSearchCases = (target: RlsSearchTarget): [string, () => Promise<void>][
     ]),
     ...POLICIES.map((policy): [string, () => Promise<void>] => [`a guarded take(5) under a ${policy.name} policy`, costCase(target, policy)]),
 ];
-
-export type { RlsSearchTarget };
 export default rlsSearchCases;
