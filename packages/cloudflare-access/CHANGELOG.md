@@ -1,3 +1,14 @@
+## @lunora/cloudflare-access [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.149...@lunora/cloudflare-access@1.0.0-alpha.150) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/cloudflare-access [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.148...@lunora/cloudflare-access@1.0.0-alpha.149) (2026-09-27)
 
 ### ⚠ BREAKING CHANGES
