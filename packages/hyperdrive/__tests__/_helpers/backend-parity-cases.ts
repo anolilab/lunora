@@ -215,6 +215,4 @@ const backendParityCases = (target: BackendParityTarget): [string, () => Promise
     ["matches a wide string list under the column's own collation", legacyCollationCase(target)],
     ["refuses U+0000 only where the engine cannot store it, and never on an existing row", nulCase(target)],
 ];
-
-export type { BackendParityTarget };
 export default backendParityCases;

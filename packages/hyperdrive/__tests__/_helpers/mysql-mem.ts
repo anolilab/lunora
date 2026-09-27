@@ -96,4 +96,4 @@ const tryCreateMysqlHarness = async (): Promise<{ harness?: MysqlHarness; unavai
 };
 
 export type { MysqlHarness };
-export { createMysqlHarness, tryCreateMysqlHarness };
+export { tryCreateMysqlHarness };
