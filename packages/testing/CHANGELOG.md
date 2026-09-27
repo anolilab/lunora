@@ -1,3 +1,16 @@
+## @lunora/testing [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.203...@lunora/testing@1.0.0-alpha.204) (2026-09-27)
+
+### Miscellaneous Chores
+
+* drop unused devdependencies and a dead script ([#876](https://github.com/anolilab/lunora/issues/876)) ([e2e947f](https://github.com/anolilab/lunora/commit/e2e947f842c7115b99481c08dd7ca9ed49961f9f))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.148
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.93
+* **@lunora/server:** upgraded to 1.0.0-alpha.155
+
 ## @lunora/testing [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.202...@lunora/testing@1.0.0-alpha.203) (2026-09-27)
 
 
