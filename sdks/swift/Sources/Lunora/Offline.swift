@@ -92,35 +92,84 @@ public let lunoraMaxRetryAfterMs = 60_000
 
 /// Who made a queued write.
 ///
-/// Three cases, not two, and the third is load-bearing. `absent` is a record that
-/// carries no stamp at all — written before stamping existed — and replays
-/// ambiently under whatever identity is current. `signedOut` is a write made with
-/// nobody signed in, which must replay signed out. `subject` names who made it.
-/// Collapsing the first two would either strand every old record or silently push
-/// one user's queued writes as another.
+/// `absent` is a record that carries no stamp at all — written before stamping
+/// existed — and replays ambiently under whatever identity is current.
+/// `signedOut` is a write made with no identity and no token, which must replay
+/// signed out; collapsing it into `absent` would either strand every old record
+/// or silently push one user's queued writes as another. `subject` is
+/// ``LunoraClient/identity``, stored as given. `token` is a write made with no
+/// identity but a bearer token, stamped with ``lunoraTokenDigest(_:)`` of it — a
+/// digest, never the token, so the queue store is not somewhere a credential sits
+/// at rest. A case of its own rather than the digest as a subject: an identity is
+/// any string the app chooses, and one spelled like a digest must never match
+/// that token's writes, nor a token stamp an identity's.
 public enum LunoraIdentity: Equatable {
     case absent
     case signedOut
     case subject(String)
+    case token(digest: String)
 
-    /// The identity a live write is stamped with; nil means signed out.
-    public static func stamp(_ subject: String?) -> LunoraIdentity {
-        guard let subject else { return .signedOut }
-
-        return .subject(subject)
-    }
-
-    /// Whether a write stamped this way may replay under `current` (nil = signed out).
+    /// Who a write made now belongs to: `identity` when set, else a digest of
+    /// `token`, else signed out — the reference client's `identityFingerprint`.
     ///
-    /// A method on the sum rather than a free function taking it: the three cases
-    /// are the whole of the answer, so the switch belongs where they are declared.
-    public func allowsReplay(under current: String?) -> Bool {
-        switch self {
-        case .absent: return true
-        case .signedOut: return current == nil
-        case .subject(let subject): return subject == current
-        }
+    /// Without the token branch every write made with no identity was stamped
+    /// signed out and matched any token, so a flush after an account switch sent
+    /// the previous user's writes with the new user's credential.
+    public static func stamp(identity: String?, token: String?) -> LunoraIdentity {
+        if let identity { return .subject(identity) }
+        if let token { return .token(digest: lunoraTokenDigest(token)) }
+
+        return .signedOut
     }
+
+    /// Whether a write stamped this way may replay now. `current` is the identity
+    /// in effect (``stamp(identity:token:)`` of the client's state) and `token` the
+    /// bearer held now. Mirrors the reference's `replayIdentityVerdict`:
+    ///
+    /// - `.match` — the same identity, signed out included, or a token stamp of the
+    ///   very token held now (queued under this credential before an identity named
+    ///   it). A token stamp only ever equals a token stamp, a subject only a
+    ///   subject. An `absent` stamp predates stamping and replays ambiently.
+    /// - `.unknown` — nobody is signed in, so whose write it is cannot be told. The
+    ///   write is HELD, neither sent nor dropped, until someone is.
+    /// - `.mismatch` — someone else is signed in. Terminal: replaying would
+    ///   attribute one user's write to another.
+    public func replayVerdict(current: LunoraIdentity, token: String?) -> LunoraReplayVerdict {
+        if self == .absent || self == current { return .match }
+        if case .token(let digest) = self, let token, lunoraTokenDigest(token) == digest { return .match }
+
+        return current == .signedOut ? .unknown : .mismatch
+    }
+}
+
+/// The identity gate's answer for one queued write; see
+/// ``LunoraIdentity/replayVerdict(current:token:)``.
+public enum LunoraReplayVerdict: Equatable {
+    case match
+    case unknown
+    case mismatch
+}
+
+/// The reference client's `hashToken`: who a bearer token stamps a write as.
+///
+/// FNV-1a and djb2 side by side over UTF-16 code UNITS — JavaScript's `charCodeAt`
+/// walk, hence `token.utf16` rather than the scalars or the UTF-8 bytes — each
+/// base36 and prefixed by the length in code units, so the two cannot encode to
+/// one string through variable-width concatenation. A Swift `String` cannot hold
+/// a lone surrogate, so a token carrying one has no Swift spelling at all; every
+/// token Swift can hold digests exactly as the reference digests it.
+public func lunoraTokenDigest(_ token: String) -> String {
+    var fnv: UInt32 = 0x811C_9DC5
+    var djb2: UInt32 = 5381
+    var length = 0
+
+    for code in token.utf16 {
+        fnv = (fnv ^ UInt32(code)) &* 0x0100_0193
+        djb2 = djb2 &* 33 &+ UInt32(code)
+        length += 1
+    }
+
+    return [length, Int(fnv), Int(djb2)].map { String($0, radix: 36) }.joined(separator: ":")
 }
 
 /// Durable storage for queued writes. Injected, and synchronous.
@@ -204,6 +253,7 @@ public final class LunoraQueuedMutation {
         case .absent: break
         case .signedOut: record["identity"] = NSNull()
         case .subject(let subject): record["identity"] = subject
+        case .token(let digest): record["identity"] = ["tokenDigest": digest]
         }
 
         if let shardKey { record["shardKey"] = shardKey }
@@ -217,7 +267,8 @@ public final class LunoraQueuedMutation {
     /// The restored entry carries no settle handler: the caller that submitted it
     /// did not survive the restart. A missing `identity` key restores as `.absent`
     /// (a legacy record) while a stored null restores as `.signedOut` — the
-    /// distinction the identity gate turns on.
+    /// distinction the identity gate turns on — and `{"tokenDigest": …}` as
+    /// `.token`.
     ///
     /// Throws when the stored args are not wire values. It never substitutes: a
     /// record hydrated with empty args replays SUCCESSFULLY with the wrong
@@ -233,8 +284,13 @@ public final class LunoraQueuedMutation {
 
         entry.clientID = record["clientId"] as? String
 
-        if let raw = record["identity"] {
-            entry.identity = (raw as? String).map(LunoraIdentity.subject) ?? .signedOut
+        switch record["identity"] {
+        case nil: break
+        case let subject as String: entry.identity = .subject(subject)
+        // An object that is not a readable token stamp restores as one no token
+        // can match: a digest is never empty, so it is never replayed.
+        case let stamp as [String: Any]: entry.identity = .token(digest: stamp["tokenDigest"] as? String ?? "")
+        default: entry.identity = .signedOut
         }
 
         return entry
@@ -307,11 +363,11 @@ public func lunoraIsStaleVersion(_ current: String?, _ stamped: String?) -> Bool
 /// thread.
 ///
 /// **Divergences from `@lunora/client`**, all recorded in `sdks/README.md`: the
-/// persistence adapter is SYNCHRONOUS; the identity stamp is an opaque string the
-/// CONSUMER sets (``LunoraClient/identity``) rather than a fingerprint derived
-/// from an auth token, because these SDKs do not manage auth sessions and a
-/// derived stamp would mean persisting a hash of a bearer token in the consumer's
-/// storage; and nothing here holds a rejection callback — every method that
+/// persistence adapter is SYNCHRONOUS; the identity stamp is the CONSUMER's
+/// ``LunoraClient/identity`` when set, stored as given rather than under the
+/// reference's `subj:` namespace, and with none set a typed
+/// ``LunoraIdentity/token(digest:)`` stamp rather than the reference's bare digest
+/// string, so no identity string can equal it; and nothing here holds a rejection callback — every method that
 /// discards a write RETURNS the discarded entries and the client reports them.
 public final class LunoraOfflineQueue {
     private var entries: [LunoraQueuedMutation] = []

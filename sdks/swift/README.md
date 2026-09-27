@@ -147,10 +147,26 @@ verdict.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another. Changing
-it from one set value to another (or to nil) also evicts the previous session:
-every subscription drops its resume cursor and epoch, and every shape view is
-emptied, its `onRows` told `[]`.
+replays, so a restart cannot push one user's queued writes as another. Left
+nil, a write is stamped `.token(digest:)` with a digest of `client.authToken`
+instead (the reference client's, `lunoraTokenDigest`, never the token itself),
+and signed out only when there is no token either — so a write queued under one
+token is never sent with another. Under a different token it is rejected
+`OFFLINE_IDENTITY_CHANGED`; with no token at all it is held, unsettled and still
+persisted, until one is set. A flush sends each write with the token its
+identity was checked against, so a token set mid-flush applies from the next
+flush, never to the rest of the current one. Setting `identity` is what lets a
+token refresh keep the queue. A record persisted by an earlier build with a
+null stamp is rejected the same way once a token is held, since null then said
+nothing about whose write it was. `identity` may be any string: a token stamp is
+its own case, persisted as `{"tokenDigest": …}`, so no identity, however it is
+spelled, can match a token's writes, nor a token stamp an identity's.
+Changing it from one set value to another (or to nil) also evicts the previous
+session: every subscription drops its resume cursor and epoch, and every shape
+view is emptied, its `onRows` told `[]`. With `identity` unset, setting a
+different `authToken` (or clearing it) evicts the same way, since the token's
+digest is then the identity. Nothing flushes on its own when the token changes:
+call `flushOfflineQueue` after setting it, as on a reconnect.
 
 `LunoraOfflineQueue` is not internally locked: the client already holds a
 **non-recursive** `NSLock` over the registry the queue is settled against, so

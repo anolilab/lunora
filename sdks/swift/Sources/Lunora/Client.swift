@@ -83,12 +83,40 @@ public final class LunoraClient {
 
     /// The bearer token sent on every RPC. Behind the lock like everything else,
     /// so an app thread can rotate it while a socket reader is mid-frame.
+    ///
+    /// With ``identity`` unset, a digest of this token is who a queued write
+    /// belongs to, so a new token is a new identity: writes queued under the old
+    /// one are rejected `OFFLINE_IDENTITY_CHANGED` on the next flush, and setting a
+    /// different token (or clearing it) evicts the previous session as an identity
+    /// change does. With ``identity`` set the token is not consulted, and a refresh
+    /// is not a change of user. Nothing flushes on its own here: after setting it,
+    /// call ``flushOfflineQueue(shardKey:)`` as on a reconnect.
     public var authToken: String? {
         get { withLock { storedAuthToken } }
-        set { withLock { storedAuthToken = newValue } }
+        set {
+            let emptied = withLock { () -> [([Any]) -> Void] in
+                let previous = identityFingerprintLocked()
+
+                storedAuthToken = newValue
+
+                guard previous != .signedOut, previous != identityFingerprintLocked() else { return [] }
+
+                return evictSessionLocked()
+            }
+
+            for onRows in emptied {
+                onRows([])
+            }
+        }
     }
 
-    private var storedAuthToken: String?
+    /// Who a write queued now belongs to; call with the lock held. See
+    /// ``LunoraIdentity/stamp(identity:token:)``.
+    func identityFingerprintLocked() -> LunoraIdentity {
+        LunoraIdentity.stamp(identity: storedIdentity, token: storedAuthToken)
+    }
+
+    var storedAuthToken: String?
     /// Internal rather than private: the offline-capable write path is an
     /// extension in `Submit.swift`, and a Swift extension in another file sees a
     /// type's internal members but not its private ones.
@@ -241,8 +269,12 @@ public final class LunoraClient {
     /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
     /// not a bearer token. It is persisted alongside every queued write and
     /// re-checked before that write replays, so a restart cannot push one user's
-    /// queued writes as another. Nil means signed out, which is itself an identity
-    /// a write can be stamped with.
+    /// queued writes as another. Left nil, a write is stamped with a digest of
+    /// ``authToken`` instead (signed out with no token either), so a new token is
+    /// a new identity: a token refresh rejects the writes queued under the old
+    /// one and evicts its session. Set this to keep them across a refresh. Any
+    /// string is accepted: a token write is stamped ``LunoraIdentity/token(digest:)``,
+    /// which no identity string can equal.
     ///
     /// Changing it FROM a set value to a different one — a sign-out, or another
     /// user signing in — evicts what the previous identity left live: every
@@ -262,25 +294,31 @@ public final class LunoraClient {
 
                 guard previous != nil, previous != newValue else { return [] }
 
-                for entry in subscriptions.values {
-                    entry.cursor = nil
-                    entry.epoch = nil
-                }
-
-                for shape in shapes.values {
-                    shape.rows.removeAll()
-                    shape.order.removeAll()
-                    shape.checkpoint = nil
-                    shape.epoch = nil
-                }
-
-                return shapes.values.compactMap(\.onRows)
+                return evictSessionLocked()
             }
 
             for onRows in emptied {
                 onRows([])
             }
         }
+    }
+
+    /// Drops every resume cursor and shape row; call with the lock held. Returns
+    /// the shape callbacks for the caller to tell `[]` once it has released it.
+    private func evictSessionLocked() -> [([Any]) -> Void] {
+        for entry in subscriptions.values {
+            entry.cursor = nil
+            entry.epoch = nil
+        }
+
+        for shape in shapes.values {
+            shape.rows.removeAll()
+            shape.order.removeAll()
+            shape.checkpoint = nil
+            shape.epoch = nil
+        }
+
+        return shapes.values.compactMap(\.onRows)
     }
 
     /// The durable write queue backing ``submit(_:)``.
@@ -515,17 +553,22 @@ public final class LunoraClient {
     /// overlay must still be confirmed against that cursor and a queued write
     /// settled `committed` — never retried, since a replay can only return the
     /// same undecodable result.
+    ///
+    /// `bearer` is the token to send: left out (`.none`), the one held now. A
+    /// replay passes the token its identity gate judged the pass against — `nil`
+    /// included — so a token swapped mid-flush cannot carry the rest of it.
     func rpcFull(
         _ functionPath: String,
         args: Any?,
         shardKey: String?,
         mutationID: String?,
-        issuingClientID: String? = nil
+        issuingClientID: String? = nil,
+        bearer: String?? = .none
     ) throws -> (result: Any, commitCursor: Int?, decodeError: LunoraAPIError?) {
         guard let post else { throw LunoraClient.noPoster }
 
         var headers = ["content-type": "application/json"]
-        if let authToken { headers["authorization"] = "Bearer \(authToken)" }
+        if let token = bearer ?? authToken { headers["authorization"] = "Bearer \(token)" }
 
         if let mutationID {
             headers["x-lunora-mutation-id"] = mutationID
@@ -571,11 +614,12 @@ public final class LunoraClient {
     /// Throws only what the poster throws (transport). An unreadable body comes
     /// back EMPTY with its status, so the caller can still classify it — a 413
     /// edge page splits the batch rather than re-queuing it whole.
-    func rpcBatch(_ calls: [Any]) throws -> (status: Int, body: [String: Any]) {
+    /// `bearer` as for ``rpcFull(_:args:shardKey:mutationID:issuingClientID:bearer:)``.
+    func rpcBatch(_ calls: [Any], bearer: String?? = .none) throws -> (status: Int, body: [String: Any]) {
         guard let post else { throw LunoraClient.noPoster }
 
         var headers = ["content-type": "application/json"]
-        if let authToken { headers["authorization"] = "Bearer \(authToken)" }
+        if let token = bearer ?? authToken { headers["authorization"] = "Bearer \(token)" }
 
         let payload = Data(Wire.stableStringify(["calls": calls]).utf8)
         // The status is returned, not discarded: a whole-batch envelope is only
