@@ -112,5 +112,4 @@ const runBin = async (environment: BinEnvironment, dependencies: RunBinDependenc
     }
 };
 
-export type { BinEnvironment, RunBinDependencies };
 export { BinError, runBin };

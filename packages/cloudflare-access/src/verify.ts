@@ -235,4 +235,4 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions, ac
     }
 };
 
-export { accessIssuer, assertJwtFallbackOptions, assertVerifyOptions, verifyAccessJwt, verifyRequest };
+export { accessIssuer, assertJwtFallbackOptions, verifyAccessJwt, verifyRequest };

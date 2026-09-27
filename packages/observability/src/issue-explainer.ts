@@ -248,7 +248,7 @@ export interface ExplainIssueGrounding {
  * `reason`, which the studio silently renders as the generic AI-error copy.
  */
 /** The arm returned when no inference happened, or it failed. */
-export interface ExplainIssueDegraded extends ExplainIssueGrounding {
+interface ExplainIssueDegraded extends ExplainIssueGrounding {
     /** The AI path was unavailable or failed — render the grounded hint instead. */
     degraded: true;
     /** Why the AI path degraded, for the client to surface. */
@@ -256,7 +256,7 @@ export interface ExplainIssueDegraded extends ExplainIssueGrounding {
 }
 
 /** The arm returned when the model ran and produced text. */
-export interface ExplainIssueSuccess extends ExplainIssueGrounding {
+interface ExplainIssueSuccess extends ExplainIssueGrounding {
     /** The AI path ran and produced text. */
     degraded: false;
     /** The AI-generated plain-language explanation. */

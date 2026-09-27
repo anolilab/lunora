@@ -74,8 +74,6 @@
     "devDependencies": {
         "@ai-sdk/anthropic": "catalog:ai",
         "@ai-sdk/openai": "catalog:ai",
-        "@cloudflare/vitest-plugin": "catalog:cloudflare",
-        "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -83,8 +81,7 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
+        "vitest": "catalog:test"
     },
     "peerDependencies": {
         "@ai-sdk/anthropic": "^4.0.0",

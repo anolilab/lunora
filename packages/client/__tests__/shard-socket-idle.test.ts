@@ -20,9 +20,6 @@ interface MockSocket {
 
 const sockets: MockSocket[] = [];
 
-/** When set, the next `unsubscribe` frame any socket sends throws, as a socket closing mid-send does. */
-const sendFaults = { unsubscribe: false };
-
 const createMockWebSocket = (): typeof WebSocket => {
     class WS {
         public readonly url: string;
@@ -56,15 +53,7 @@ const createMockWebSocket = (): typeof WebSocket => {
                 return;
             }
 
-            const frame = JSON.parse(data) as { id?: string; type: string };
-
-            if (frame.type === "unsubscribe" && sendFaults.unsubscribe) {
-                sendFaults.unsubscribe = false;
-
-                throw new Error("socket closed mid-send");
-            }
-
-            this.frames.push(frame);
+            this.frames.push(JSON.parse(data) as { id?: string; type: string });
         }
 
         public close(): void {
@@ -319,88 +308,62 @@ describe("idle shard sockets and writes", () => {
         client.close();
     });
 
-    it("delivers a durable stream's cancel queued while the socket was down, even after the shard idles", async () => {
+    it("closes a shard held only by a durable stream once it is cancelled while the socket is down", async () => {
         expect.hasAssertions();
 
         vi.useFakeTimers();
 
         const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-        const unsubscribe = subscribeOn(client, "d");
         const stream = client.stream(generate, {}, { durable: true, shardKey: "d" });
+
+        socketsFor("d")[0]?.open();
+
         const started = socketsFor("d")[0]?.frames.find((frame) => frame.type === "stream");
 
         expect(started).toBeDefined();
 
+        // The socket drops; the server detaches this consumer as it closes. The
+        // consumer then gives up before any reconnect.
         socketsFor("d")[0]?.close();
         await stream[Symbol.asyncIterator]().return?.();
-        unsubscribe();
+        await vi.advanceTimersByTimeAsync(60_000);
 
-        // Down for longer than the idle window, then the network returns.
-        await vi.advanceTimersByTimeAsync(8000);
+        // Nothing holds the shard any more: it stops reconnecting.
+        const attempts = socketsFor("d").length;
 
-        for (let tick = 0; tick < 200; tick += 1) {
-            // eslint-disable-next-line no-await-in-loop -- each reconnect attempt must run before the next socket is opened
-            await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(300_000);
 
-            for (const socket of socketsFor("d")) {
-                if (socket.readyState === 0) {
-                    socket.open();
-                }
-            }
-        }
-
-        const cancels = socketsFor("d")
-            .flatMap((socket) => socket.frames)
-            .filter((frame) => frame.type === "unsubscribe" && frame.id === started?.id);
-
-        expect(cancels).toHaveLength(1);
+        expect(socketsFor("d")).toHaveLength(attempts);
+        expect(liveShards()).toStrictEqual([]);
+        // And no cancel went out on a later socket, where it would reach nothing.
+        expect(
+            socketsFor("d")
+                .slice(1)
+                .flatMap((socket) => socket.frames)
+                .some((frame) => frame.type === "unsubscribe"),
+        ).toBe(false);
 
         client.close();
     });
 
-    it("keeps a durable stream's queued cancel when sending it on reconnect fails", async () => {
+    it("sends a durable stream's cancel on its live socket, then closes the idle shard", async () => {
         expect.hasAssertions();
 
         vi.useFakeTimers();
 
         const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-
-        subscribeOn(client, "d");
-
         const stream = client.stream(generate, {}, { durable: true, shardKey: "d" });
+
+        socketsFor("d")[0]?.open();
+
         const started = socketsFor("d")[0]?.frames.find((frame) => frame.type === "stream");
 
-        socketsFor("d")[0]?.close();
         await stream[Symbol.asyncIterator]().return?.();
+        await vi.advanceTimersByTimeAsync(60_000);
 
-        const reopen = async (): Promise<void> => {
-            for (let tick = 0; tick < 40; tick += 1) {
-                // eslint-disable-next-line no-await-in-loop -- each reconnect attempt must run before the next socket is opened
-                await vi.advanceTimersByTimeAsync(250);
-
-                const pending = socketsFor("d").find((socket) => socket.readyState === 0);
-
-                if (pending) {
-                    pending.open();
-
-                    return;
-                }
-            }
-        };
-
-        // The reconnect's drain fails to send the cancel (the socket closed under it).
-        sendFaults.unsubscribe = true;
-        await reopen();
-        socketsFor("d").at(-1)?.close();
-
-        // The next reconnect must still carry it.
-        await reopen();
-
-        const cancels = socketsFor("d")
-            .flatMap((socket) => socket.frames)
-            .filter((frame) => frame.type === "unsubscribe" && frame.id === started?.id);
-
-        expect(cancels).toHaveLength(1);
+        expect(socketsFor("d")[0]?.frames.filter((frame) => frame.type === "unsubscribe" && frame.id === started?.id)).toHaveLength(1);
+        expect(liveShards()).toStrictEqual([]);
+        expect(socketsFor("d")).toHaveLength(1);
 
         client.close();
     });

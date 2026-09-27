@@ -72,8 +72,7 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
+        "vitest": "catalog:test"
     },
     "peerDependencies": {
         "@cloudflare/playwright": ">=1.0.0"

@@ -172,4 +172,4 @@ const onQueryChange = <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>):
 };
 
 export { onQueryChange };
-export type { ReactorDispatchArgs, ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor };
+export type { ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor };

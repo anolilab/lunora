@@ -328,5 +328,4 @@ const screenWriteConfirmation = async (client: LunoraClient, proposal: ProposedW
     );
 };
 
-export type { ProposedWrite, WriteConfirmation };
 export { CONFIRMATION_TTL_MS, readConfirmation, screenWriteConfirmation, WRITE_CONFIRMATION_PROPERTIES };

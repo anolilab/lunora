@@ -215,5 +215,5 @@ const upsertIssueState = (sql: SqlExec, hash: string, patch: IssueStatePatch, up
     return row === undefined ? { hash, status: status ?? "open", updatedAt, ...(updatedBy === undefined ? {} : { updatedBy }) } : hydrate(row);
 };
 
-export { DEFAULT_HASH_QUERY_BATCH, ensureIssueStateTable, ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, readIssueStates, upsertIssueState };
+export { ensureIssueStateTable, ISSUE_SEVERITIES, ISSUE_STATE_TABLE, ISSUE_STATUSES, readIssueStates, upsertIssueState };
 export type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus };

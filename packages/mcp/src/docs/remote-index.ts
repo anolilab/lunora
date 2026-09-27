@@ -261,4 +261,4 @@ const createRemoteDocsIndex = (options: RemoteDocsIndexOptions = {}): DocsIndex 
 };
 
 export type { RemoteDocsIndexOptions };
-export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL, DEFAULT_REQUEST_TIMEOUT_MS, parseIndexLine };
+export { createRemoteDocsIndex, DEFAULT_DOCS_BASE_URL, parseIndexLine };

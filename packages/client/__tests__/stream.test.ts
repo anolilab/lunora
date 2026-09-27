@@ -421,8 +421,8 @@ describe("stream", () => {
             client.close();
         });
 
-        it("queues the unsubscribe when a started durable stream is cancelled while disconnected", async () => {
-            expect.assertions(3);
+        it("drops the cancel of a durable stream made while disconnected, and never resumes it", async () => {
+            expect.assertions(2);
 
             vi.useFakeTimers();
 
@@ -435,16 +435,16 @@ describe("stream", () => {
 
             const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
 
-            // A seq-bearing chunk marks the run durable — it now outlives the
-            // socket, and the server keeps producing and persisting it.
+            // A seq-bearing chunk marks the run durable — it outlives the socket.
             first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
 
-            // Socket drops. The disconnect path queues a resume frame.
+            // Socket drops. The disconnect path queues a resume frame, and the
+            // server detaches this consumer from the run as the socket closes.
             first.close();
 
-            // Consumer gives up while still disconnected. Dropping the cancel here
-            // is right for an ephemeral run but leaks a durable one: the resume
-            // frame is removed and nothing else ever tells the server to stop.
+            // Consumer gives up while still disconnected. There is nothing left
+            // to tell the server: an `unsubscribe` on the next socket would reach
+            // a socket the run was never attached to.
             iterable.cancel();
 
             vi.runOnlyPendingTimers();
@@ -454,13 +454,10 @@ describe("stream", () => {
             second.open();
 
             const frames = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
-            const unsubscribeAt = frames.findIndex((f) => f.type === "unsubscribe" && f.id === id);
 
-            expect(unsubscribeAt).toBeGreaterThanOrEqual(0);
+            expect(frames.some((f) => f.type === "unsubscribe" && f.id === id)).toBe(false);
             // And no resume may be sent for a run we just cancelled.
             expect(frames.some((f) => f.type === "stream" && f.id === id)).toBe(false);
-            // Teardown has to precede anything that could restart it.
-            expect(frames.slice(0, unsubscribeAt).some((f) => f.type === "stream")).toBe(false);
 
             client.close();
         });
