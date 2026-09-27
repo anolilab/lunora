@@ -6087,9 +6087,9 @@ export type {
     AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
-export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
+export type { AuthAuditEntry, AuthAuditReader } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
-export type { AuthJurisdictionMove, AuthMoveTableReport } from "./auth-jurisdiction-move-rpc";
+export type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 export { COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
 // Identity-resolver layer lives in its own module; re-export the public names
 // here so `@lunora/runtime`'s import surface is unchanged.
