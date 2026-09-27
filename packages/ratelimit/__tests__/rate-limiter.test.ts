@@ -249,6 +249,33 @@ describe("normalize", () => {
         // A genuinely different key is untouched.
         await expect(limiter.limit("send", { key: "bob" })).resolves.toMatchObject({ ok: true });
     });
+
+    it("keys an IPv6 address on its /64, so a caller cannot rotate within its prefix for fresh buckets", async () => {
+        expect.assertions(2);
+
+        const limiter = new RateLimiter({ config, now: () => 0, store: createMemoryStore() });
+
+        // `ctx.ip`-keyed limits (`ctx.auth.userId ?? ctx.ip`) hand the raw address in.
+        await limiter.limit("send", { count: 5, key: "2001:db8:1:2::1" });
+
+        await expect(limiter.limit("send", { key: "2001:db8:1:2::abcd" })).resolves.toMatchObject({ ok: false });
+        await expect(limiter.limit("send", { key: "2001:db8:1:3::1" })).resolves.toMatchObject({ ok: true });
+    });
+
+    it("applies the /64 collapse after a custom normalize and to deny-list entries", async () => {
+        expect.assertions(2);
+
+        const limiter = new RateLimiter({
+            config,
+            denyList: ["2001:db8:dead:beef::1"],
+            normalize: (key) => key.trim(),
+            now: () => 0,
+            store: createMemoryStore(),
+        });
+
+        await expect(limiter.limit("send", { key: " 2001:db8:dead:beef::2 " })).resolves.toMatchObject({ ok: false, reason: "deny" });
+        await expect(limiter.limit("send", { key: "2001:db8:dead:bee0::1" })).resolves.toMatchObject({ ok: true });
+    });
 });
 
 describe("clock progression", () => {

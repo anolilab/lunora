@@ -117,6 +117,11 @@ correct inside a single Durable Object — but constructing a `RateLimiter` with
 no explicit `store` now warns once so that choice is visible instead of
 silent.
 
+A key that is an IPv6 address (for example `ctx.ip`) is bucketed by its /64
+prefix, and an IPv4-mapped address by the IPv4 address it wraps. An IPv6 client
+usually controls a whole /64, so a per-address bucket would let it pick a fresh
+address for every request. A deny-list IPv6 entry bans its /64.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 
 ## Related
