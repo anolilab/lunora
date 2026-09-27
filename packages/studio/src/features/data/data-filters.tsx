@@ -62,6 +62,15 @@ const coerceFilterValue = (value: string): number | string => {
     return trimmed !== "" && Number.isFinite(asNumber) && String(asNumber) === trimmed ? asNumber : value;
 };
 
+/** A typed row whose value is blank under an operator that needs one — see {@link toFilterClauses}. */
+const isVacuous = (filter: EditableFilter): boolean => {
+    if (filter.operator === "contains") {
+        return filter.value === "";
+    }
+
+    return filter.operator !== "eq" && filter.operator !== "ne" && filter.literal === undefined && filter.value.trim() === "";
+};
+
 /**
  * Convert the UI's string-valued filter rows into wire {@link FilterClause}s:
  * drops rows with no column, and coerces a canonical numeric string to a number for
@@ -75,11 +84,18 @@ const coerceFilterValue = (value: string): number | string => {
  * typed, so its type is already known and guessing one from its text can only
  * lose. `contains` is the exception — it is a substring test over text, so it
  * takes the text either way.
+ *
+ * A row with nothing to test against is dropped too: a `contains ""` matches
+ * every row, and an empty range bound (`age > ""`) compares a column against the
+ * empty string rather than narrowing it. Such a row is only ever a half-edited
+ * one, and sending it would put "Delete N matching" over the whole table. An
+ * empty `eq` / `ne` stays — "is (not) the empty string" is a real test, and
+ * `eq ""` is what a freshly added row starts as.
  */
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
     // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the operator's own filter rows — a handful, edited by hand
     filters
-        .filter((filter) => filter.column !== "")
+        .filter((filter) => filter.column !== "" && !isVacuous(filter))
         .map((filter) => {
             if (filter.operator === "contains") {
                 return { column: filter.column, operator: filter.operator, value: filter.value };

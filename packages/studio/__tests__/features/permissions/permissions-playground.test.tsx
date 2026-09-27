@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -158,5 +158,42 @@ describe("permissionsPlayground", () => {
         expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
         expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
         expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("drops a probe verdict that lands after a matrix prefill selected another function", async () => {
+        expect.assertions(1);
+
+        let finishProbe: (rows: unknown) => void = () => {};
+        const mock = createMockClient({
+            query: runAsServer(
+                async () =>
+                    new Promise((resolve) => {
+                        finishProbe = resolve;
+                    }),
+            ),
+        });
+        const functions: FunctionDescriptor[] = [...FUNCTIONS, { args: [], kind: "query", path: "listSecrets" }];
+        const withPrefill = (prefill?: { functionPath: string; nonce: number }): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={functions} prefill={prefill} runAsIdentity />
+            </LunoraProvider>
+        );
+
+        const { rerender } = render(withPrefill());
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+        rerender(withPrefill({ functionPath: "listSecrets", nonce: 1 }));
+
+        await act(async () => {
+            await Promise.resolve();
+            finishProbe([{ _id: "doc_1" }]);
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        // The verdict is `listDocuments`'; the prefill cleared the outcome for `listSecrets`.
+        expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
     });
 });

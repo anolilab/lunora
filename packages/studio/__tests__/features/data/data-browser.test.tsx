@@ -1783,6 +1783,29 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect(screen.getByTestId("db-clear-table")).toBeDefined();
     });
 
+    it('does not offer "Delete N matching" for a `contains` row with no value yet', async () => {
+        expect.assertions(3);
+
+        // Switching the operator to `contains` before typing a value leaves a
+        // substring test for "" — which every row satisfies. The bulk ops must not
+        // treat that as a predicate and offer to delete the whole table under it.
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-operator"), { target: { value: "contains" } });
+        await screen.findByTestId("db-page");
+
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+        expect(screen.getByTestId("db-clear-table")).toBeDefined();
+    });
+
     it("loops the bounded deleteRows call until the server reports no more", async () => {
         expect.assertions(2);
 
@@ -3305,5 +3328,64 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         // No tagged leaves → the encode is identity, so the editor shows the
         // same plain document it always did.
         expect(JSON.parse(screen.getByTestId<HTMLTextAreaElement>("db-editor-doc").value)).toEqual({ text: "hello" });
+    });
+});
+
+describe("dataBrowser — AI filter reply after a table switch", () => {
+    it("does not apply a suggestion asked for one table onto the next", async () => {
+        expect.assertions(1);
+
+        let finishAi: (clauses: { column: string; operator: string; value: unknown }[]) => void = () => {};
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return new Promise((resolve) => {
+                        finishAi = (clauses) => {
+                            resolve({ result: { clauses, degraded: false } });
+                        };
+                    });
+                }
+
+                const { table } = args as PageArgs;
+
+                return table === "users"
+                    ? { columns: ["__id__", "name"], rows: [{ __id__: "u1", name: "ada" }], total: 1 }
+                    : { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "only hello" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        fireEvent.click(screen.getByTestId("db-table-users"));
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length !== 1) {
+                throw new Error("users page not shown yet");
+            }
+        });
+
+        // The reply names `messages.text`; `users` is open now.
+        await act(async () => {
+            finishAi([{ column: "text", operator: "eq", value: "hello" }]);
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        const filteredUserReads = mock.query.mock.calls.filter((call) => {
+            const args = call[1] as { filters?: unknown[]; table?: string };
+
+            return call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage && args.table === "users" && (args.filters?.length ?? 0) > 0;
+        });
+
+        expect(filteredUserReads).toStrictEqual([]);
     });
 });

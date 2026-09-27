@@ -13,6 +13,29 @@ const STATUS_FILTER: ReadonlyArray<EditableFilter> = [{ column: "status", operat
 const noop = (): ((...args: unknown[]) => void) => vi.fn<(...args: unknown[]) => void>();
 
 describe("toFilterClauses", () => {
+    it('drops clauses with no value to test against, but keeps an `eq ""` / `ne ""`', () => {
+        expect.assertions(1);
+
+        // An empty `contains` matches every row, and an empty range bound compares a
+        // column against "" — neither narrows anything the operator meant to narrow.
+        // An empty `eq` / `ne` is a real test (the column is, or is not, the empty
+        // string), and `eq ""` is what a freshly added row starts as.
+        const filters: EditableFilter[] = [
+            { column: "status", operator: "contains", value: "" },
+            { column: "age", operator: "gt", value: "" },
+            { column: "age", operator: "lte", value: "  " },
+            { column: "status", operator: "eq", value: "" },
+            { column: "status", operator: "ne", value: "" },
+            { column: "status", operator: "contains", value: " " },
+        ];
+
+        expect(toFilterClauses(filters)).toStrictEqual([
+            { column: "status", operator: "eq", value: "" },
+            { column: "status", operator: "ne", value: "" },
+            { column: "status", operator: "contains", value: " " },
+        ]);
+    });
+
     it("drops rows with no column", () => {
         expect.assertions(1);
 

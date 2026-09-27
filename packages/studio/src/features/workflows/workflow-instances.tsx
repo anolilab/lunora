@@ -1,7 +1,7 @@
 import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -74,6 +74,13 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const [error, setError] = useState<null | string>(null);
     const [notConfigured, setNotConfigured] = useState(false);
     const [busyId, setBusyId] = useState<null | string>(null);
+    // Staleness guards, compared after each await. `scopeSeq` bumps when the
+    // workflow or status filter changes; `listSeq` / `detailSeq` bump per request.
+    // Without them a slow response for the previous workflow (its list, an open
+    // step timeline, or an action's follow-up reload) painted over the current one.
+    const scopeSeq = useRef(0);
+    const listSeq = useRef(0);
+    const detailSeq = useRef(0);
 
     const detailImpl = loadDetail ?? ((arguments_: { id: string; name: string }) => client.getWorkflowInstance(arguments_));
     // Lifecycle actions are available only when the list is client-sourced (a
@@ -85,6 +92,9 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const actionImpl = readOnly ? undefined : (runAction ?? clientAction);
 
     const load = async (): Promise<void> => {
+        listSeq.current += 1;
+        const seq = listSeq.current;
+
         setError(null);
         setNotConfigured(false);
 
@@ -100,6 +110,10 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
             if (loadInstances === undefined) {
                 const page = await client.listWorkflowInstances({ name: workflowName, status });
 
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
                 if (page.configured === false) {
                     setInstances(null);
                     setNotConfigured(true);
@@ -112,8 +126,16 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                 return;
             }
 
-            setInstances(await loadInstances({ name: workflowName, status }));
+            const instancesPage = await loadInstances({ name: workflowName, status });
+
+            if (seq === listSeq.current) {
+                setInstances(instancesPage);
+            }
         } catch (error_) {
+            if (seq !== listSeq.current) {
+                return;
+            }
+
             setInstances(null);
 
             if (isNotConfigured(error_)) {
@@ -126,6 +148,8 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
 
     useEffect(() => {
         /* eslint-disable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter) */
+        scopeSeq.current += 1;
+        detailSeq.current += 1;
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect, react-doctor/no-chain-state-updates -- async reload; the coupled detail close is justified in the eslint-disable above
         setDetail(null);
         fireAndForget(load());
@@ -134,13 +158,27 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     }, [workflowName, statusFilter]);
 
     const openDetail = async (id: string): Promise<void> => {
+        detailSeq.current += 1;
+        const seq = detailSeq.current;
+
         setError(null);
 
         try {
-            setDetail(await detailImpl({ id, name: workflowName }));
+            const next = await detailImpl({ id, name: workflowName });
+
+            if (seq === detailSeq.current) {
+                setDetail(next);
+            }
         } catch (error_) {
-            setError(errorMessage(error_));
+            if (seq === detailSeq.current) {
+                setError(errorMessage(error_));
+            }
         }
+    };
+
+    const closeDetail = (): void => {
+        detailSeq.current += 1;
+        setDetail(null);
     };
 
     const act = async (id: string, action: WorkflowInstanceAction): Promise<void> => {
@@ -148,12 +186,19 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
             return;
         }
 
+        const scope = scopeSeq.current;
+
         setBusyId(id);
         setError(null);
 
         try {
             await actionImpl({ action, id, name: workflowName });
-            await load();
+
+            // Reload only while the same workflow + filter is on screen: this
+            // closure's `load` would list the one the action started in.
+            if (scope === scopeSeq.current) {
+                await load();
+            }
         } catch (error_) {
             setError(errorMessage(error_));
         }
@@ -272,15 +317,7 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                             <span className="font-mono text-xs">
                                 {t("Steps")} · {detail.id}
                             </span>
-                            <Button
-                                data-testid="workflow-instance-detail-close"
-                                onClick={() => {
-                                    setDetail(null);
-                                }}
-                                size="xs"
-                                type="button"
-                                variant="ghost"
-                            >
+                            <Button data-testid="workflow-instance-detail-close" onClick={closeDetail} size="xs" type="button" variant="ghost">
                                 {t("Close")}
                             </Button>
                         </div>
