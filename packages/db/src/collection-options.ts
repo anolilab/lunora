@@ -161,6 +161,36 @@ const attachedRegistries = new WeakSet<CheckpointRegistry>();
  */
 const registryResets = new WeakMap<CheckpointRegistry, () => void>();
 
+/** Registries returned by a scope-following collection — see {@link followScopeCheckpoints}. */
+const scopeFollowingRegistries = new WeakSet<CheckpointRegistry>();
+
+/**
+ * A stable registry that forwards every call to whichever shard's registry
+ * `current` names at that moment. What a scope-following collection hands out
+ * as `checkpoints`: callers destructure it once, at creation, before any scope
+ * exists, and must still gate on the shard the collection is scoped to now.
+ */
+const followScopeCheckpoints = (current: () => CheckpointRegistry): CheckpointRegistry => {
+    const registry: CheckpointRegistry = {
+        acknowledge: (watermark) => {
+            current().acknowledge(watermark);
+        },
+        awaitCheckpoint: async (cursor) => current().awaitCheckpoint(cursor),
+        awaitMutationId: async (id) => current().awaitMutationId(id),
+        dispose: () => {
+            current().dispose();
+        },
+        resolve: (watermark) => {
+            current().resolve(watermark);
+        },
+        stats: () => current().stats(),
+    };
+
+    scopeFollowingRegistries.add(registry);
+
+    return registry;
+};
+
 /** A watermark pair — the two monotonic lines a checkpoint registry gates on. */
 export interface CheckpointWatermark {
     /** Op-log cursor the server has durably applied. */
@@ -515,6 +545,15 @@ export const scopedShardKey = (scopeBy: string, source: Record<string, unknown>,
     throw new LunoraError("BAD_REQUEST", `@lunora/db: ${what} has no "${scopeBy}" — a \`scopeBy\` collection routes by that field's value`);
 };
 
+/**
+ * Whether `registry` follows a collection's scope rather than naming one shard.
+ * `bindMutators` must then route each write by the same `scopeBy`, and gate it
+ * on the registry of the shard that write went to.
+ *
+ * Package-internal: deliberately not re-exported from `index.ts`.
+ */
+export const isScopeFollowingCheckpoints = (registry: CheckpointRegistry): boolean => scopeFollowingRegistries.has(registry);
+
 /** Mark `registry` as fed by a live sync source. */
 export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
     attachedRegistries.add(registry);
@@ -714,6 +753,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // a replication-`shape` poke subscription — with one uniform callback shape.
     // `onReady` is invoked on the first rowset so the collection leaves `loading`.
     const openSubscription = (args: Record<string, unknown>, onReady: (() => void) | undefined): (() => void) => {
+        // The shard this subscription reads now has a sync source: mark its
+        // registry attached before the first frame, so a write gated on it at
+        // once is held for the echo instead of dropping on the server's ack.
+        resolveCheckpoints();
+
         // Typed `unknown` so the one callback satisfies both sync sources: a `list`
         // query's `(data: ReturnOf<F>)` and a shape's `(rows: Record<string, unknown>[])`.
         const onRows = (data: unknown): void => {
@@ -867,10 +911,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     };
 
     return {
-        // A getter: a scope-following collection's registry moves with its shard.
-        get checkpoints() {
-            return currentCheckpoints();
-        },
+        checkpoints: followsScope && options.checkpoints === undefined ? followScopeCheckpoints(currentCheckpoints) : currentCheckpoints(),
         config,
         scope,
     };

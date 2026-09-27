@@ -423,6 +423,11 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         if (insert) {
             mutationFns[name] = async ({ idempotencyKey, transaction }) => {
                 const meta = transaction.metadata as WriteProvenance | undefined;
+                // A scope-following write stamped with no shard was queued by an
+                // older build, which sent every such write to the default shard.
+                // Its row still names its real shard; its baseline, though, is the
+                // default shard's cursor, which means nothing on that shard.
+                const unrouted = meta !== undefined && meta.shardKey === undefined && definition.shardKey === undefined && definition.scopeBy !== undefined;
 
                 for (const [mutationIndex, mutation] of transaction.mutations.entries()) {
                     const row = mutation.modified as unknown as Row;
@@ -452,12 +457,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                                 // `null` pins "composed with no baseline"; omitting the
                                 // option entirely would sample the current cursor instead.
                                 // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: meta?.baselineSeq ?? null,
+                                replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
                                 // Sent with the bearer the verdict judged; under a cookie
                                 // session the worker also refuses the write if the cookie
                                 // now belongs to someone else.
                                 replayCredential,
-                                shardKey: meta?.shardKey,
+                                shardKey: unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey,
                             });
 
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering

@@ -16,6 +16,7 @@ interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap
     checkpoints?: CheckpointRegistry | false;
     collections: TCollections;
     onWriteRejected?: (event: MutatorRejectedEvent) => void;
+    scopeBy?: string;
     shardKey?: string;
 }
 ```

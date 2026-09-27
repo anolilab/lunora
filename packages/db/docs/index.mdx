@@ -248,12 +248,70 @@ Name the table's `.shardBy(...)` column in `scopeBy`: the scoped value **is** th
 shard key. `scope({ channelId })` subscribes to that channel's shard, re-scoping
 moves the subscription, and each `insert` goes to the shard its own row's
 `channelId` names — captured when the write is queued, so an offline write
-replays to its own shard even after the app has re-scoped. Scope args or an
-inserted row without the field throw rather than fall back to the default shard.
+replays to its own shard even after the app has re-scoped.
+
+Scope args or an inserted row without the field throw a `BAD_REQUEST`
+`LunoraError` rather than fall back to the default shard. The throw is
+synchronous — out of `db.scope.<table>(…)` or `db.actions.<table>(…)` itself,
+before any optimistic row or queued write exists — so it never reaches
+`onWriteRejected`, which reports the server's verdicts on writes that were sent.
+Treat it like any other invalid argument: fix the call.
 
 An explicit `shardKey` takes precedence and pins every scope to one shard — set
 both only when all scopes live on one shard (a per-tenant shard scoped by a
 non-shard column).
+
+Each scoped shard is its own Durable Object, reached over its own WebSocket. The
+client closes a shard's socket a few seconds after the last subscription on it
+goes away, so moving between channels does not accumulate open connections.
+
+Naming a non-default shard is gated on the worker: configure `authorizeShard`
+(or, only when every table is protected by row-level security,
+`allowUnauthenticatedShardAccess: true`). Without either, the worker refuses
+scoped subscriptions and writes with a `403` `FORBIDDEN_SHARD`.
+
+## Upgrading: scoped collections now use their shard
+
+Earlier alphas sent every subscription and insert of a `scopeBy` collection
+without its own `shardKey` to the **default shard** (`__root__`). They now go to
+the shard the scoped value names. Two things to do when you upgrade:
+
+**1. Authorize shard access.** A scoped collection now names a shard, so the
+worker needs `authorizeShard` (or `allowUnauthenticatedShardAccess: true`) — see
+above. Without it every scoped subscription and write fails with `403`
+`FORBIDDEN_SHARD`.
+
+**2. Move the rows already written.** Rows written before the upgrade are still
+in the default shard, where scoped reads no longer look. There is no read
+fallback to the default shard; move them:
+
+```bash
+# 1. Dump the table. Run this BEFORE the upgraded client writes to any channel
+#    shard: an export reaches a table's registered shards, and falls back to the
+#    default shard only while none are registered. Check the file holds your rows.
+#    (The export route needs a `queryCoordinator` on the worker.)
+lunora export --tables messages --out messages.ndjson
+
+# 2. Re-import it. Import buckets every row by the table's `.shardBy` field, so
+#    each lands in its channel's shard, with its `_id` kept. It only appends: a
+#    row whose `_id` already exists in that shard's table is skipped and counted
+#    as a conflict, so a re-run is safe.
+lunora import messages.ndjson
+```
+
+Import does not delete anything, so the old copies stay in the default shard.
+Once the import reports no errors, remove them with a one-off mutation run
+against the default shard, e.g. one that deletes up to 500 rows of the table per
+call (`ctx.db.query("messages").take(500)`, then `ctx.db.delete` each):
+
+```bash
+lunora run cleanup:purgeRootMessages --shard __root__   # repeat until it deletes 0
+```
+
+(`__root__` is the default shard unless your worker sets `defaultShardKey`.)
+
+Offline writes an older build queued, and that replay after the upgrade, go to
+the shard their row names, not the default shard.
 
 ## When collections load
 
@@ -313,7 +371,7 @@ import { createCollection } from "@tanstack/db";
 const { config, scope, checkpoints } = lunoraCollectionOptions({
     client,
     shape: { name: "messagesByChannel", args: { channelId } },
-    scopeBy: "channelId", // optional — makes the collection re-pointable
+    scopeBy: "channelId", // the `.shardBy` column — each scope syncs that channel's shard
 });
 
 const messages = createCollection(config);
@@ -324,7 +382,10 @@ scope({ channelId: "general" }); // re-point a scoped collection (or call with n
 it returns `{ config, scope, checkpoints }`. Pass exactly one of `list` (full
 table) or `shape` (partial replication). The `checkpoints` registry resolves
 optimistic-overlay drops against the server's confirmed watermarks; it's what
-`bindMutators` uses below.
+`bindMutators` uses below. On a `scopeBy` collection it follows the scope — safe
+to destructure once, as above, before anything is scoped — and `bindMutators`
+must then be given the same `scopeBy`, so its pushes reach the shard those
+checkpoints gate on (it throws at bind time otherwise).
 
 ## Custom mutators
 
@@ -353,12 +414,20 @@ const mutators = {
     }),
 };
 
-const send = bindMutators(client, { collections, checkpoints }, mutators);
+// `scopeBy` routes each call to the shard its own `channelId` names — the shard the
+// scoped `messages` collection above syncs, so the echo resolves `checkpoints`.
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
 
 // Calling a bound handle applies the optimistic overlay + pushes the server write.
 const tx = send.sendMessage({ channelId: "general", text: "hi" });
 await tx.isPersisted.promise; // resolves on confirm, rejects on rollback
 ```
+
+A mutator bound with `scopeBy` pushes to the shard named by that call's args, not
+by the collection's current scope, and keeps a separate `clientSeq` line per
+shard. Pin every push to one shard with `shardKey` instead (it takes precedence).
+A call whose args lack the `scopeBy` field throws synchronously, before any
+optimistic write — a caller error, like any other bad argument.
 
 Each call opens a TanStack DB optimistic transaction, runs `apply` against the
 local collections, and pushes the authoritative write under a monotonic

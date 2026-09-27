@@ -835,7 +835,7 @@ describe("lunoraCollectionOptions (scoped lifecycle)", () => {
         expect(writer.ops).toStrictEqual([{ type: "insert", value: { _creationTime: 0, _id: "m1", channelId: "c1", text: "hi" } }]);
     });
 
-    it("routes a scoped collection to the shard named by its scoped value, and moves it on re-scope", () => {
+    it("routes a scoped collection to the shard named by its scoped value, and moves it on re-scope", async () => {
         expect.assertions(5);
 
         const { client } = makeClient();
@@ -864,7 +864,13 @@ describe("lunoraCollectionOptions (scoped lifecycle)", () => {
 
         expect(unsubscribeC1).toHaveBeenCalledTimes(1);
         expect(subscribeMock.mock.calls[1]?.[3]).toMatchObject({ shardKey: "c2" });
-        expect(options.checkpoints).toBe(getShardCheckpoints(client, "c2"));
+
+        // The returned registry follows the scope: it resolves on the new shard's line.
+        const gate = options.checkpoints.awaitMutationId(4);
+
+        getShardCheckpoints(client, "c2").resolve({ mutationId: 4 });
+
+        await expect(gate).resolves.toBeUndefined();
     });
 
     it("keeps an explicit shardKey over the scoped value", () => {

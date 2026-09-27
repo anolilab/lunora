@@ -708,6 +708,73 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation.mock.calls[0]![2]).toMatchObject({ shardKey: "acme" });
     });
 
+    it("replays a scoped write queued with no shard (by an older build) to its row's shard, unpinned", { timeout: 10_000 }, async () => {
+        const scopedDefinition = {
+            temp: {
+                insert: {
+                    mutation: temporarySend,
+                    optimistic: (input: { roomId: string; text: string }, id: string) => {
+                        return { _creationTime: 0, _id: id, roomId: input.roomId, text: input.text };
+                    },
+                    toArgs: (row: Record<string, unknown> & { _id: string }) => {
+                        return { id: row._id, roomId: row.roomId, text: row.text };
+                    },
+                },
+                list: temporaryList,
+                scopeBy: "roomId",
+            },
+        };
+
+        // An older build stamped the write with no shard, and a baseline read off
+        // the default shard's cursor — then the tab died before it landed.
+        const { client: oldClient } = makeClient({
+            mutation: () =>
+                new Promise(() => {
+                    /* in-flight forever — the write stays persisted */
+                }),
+        });
+        const oldDatabase = defineCollections(oldClient, scopedDefinition);
+
+        await oldDatabase.executor.waitForInit();
+
+        const legacy = oldDatabase.executor.createOfflineTransaction({
+            autoCommit: false,
+            metadata: { baselineSeq: 10, identity: "user-a" },
+            mutationFnName: "temp",
+        }) as { commit: () => Promise<unknown>; mutate: (callback: () => void) => unknown };
+
+        legacy.mutate(() => {
+            (oldDatabase.collections.temp as unknown as { insert: (row: Record<string, unknown>) => void }).insert({
+                _creationTime: 0,
+                _id: "legacy-1",
+                roomId: "room-1",
+                text: "queued before the upgrade",
+            });
+        });
+        legacy.commit().catch(() => undefined);
+
+        await vi.waitFor(() => {
+            expect(oldDatabase.executor.getPendingCount()).toBeGreaterThan(0);
+        });
+
+        oldDatabase.executor.dispose();
+
+        const { client, mutation } = makeClient();
+        const database = defineCollections(client, scopedDefinition);
+
+        executors.push(database.executor);
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
+
+        // The row's own shard; and no baseline, since the stamped one was the default shard's cursor.
+        expect(mutation.mock.calls[0]![2]).toMatchObject({ replayBaseline: null, shardKey: "room-1" });
+    });
+
     it("replays an offline-queued scoped write to its own shard, not the scope the app reloads into", { timeout: 10_000 }, async () => {
         const scopedDefinition = {
             temp: {

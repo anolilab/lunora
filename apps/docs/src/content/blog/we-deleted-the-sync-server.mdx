@@ -103,8 +103,10 @@ import { bindMutators } from "@lunora/db/mutators";
 import { useMutator } from "@lunora/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
-// wire once: bindMutators owns the optimistic transaction and the watermarked push
-const send = bindMutators(client, { collections, checkpoints }, mutators);
+// wire once: bindMutators owns the optimistic transaction and the watermarked push.
+// `scopeBy` routes each push to the shard its own `channelId` names — the same
+// shard the scoped `messages` collection syncs from, so its checkpoints line up.
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
 
 // in a component:
 const { data: messages } = useLiveQuery((q) => q.from({ m: collections.messages }));

@@ -103,6 +103,36 @@ every sync tick). The framework adapters add a `useMutator` / `createMutator` /
 `mutator` hook over a bound handle. See the
 **[local-first guide](https://lunora.sh/docs/concepts/local-first)**.
 
+On a `scopeBy` shape collection, give `bindMutators` the same `scopeBy` so each
+push reaches the shard its args name — the shard the collection syncs:
+
+```ts
+const { checkpoints, config, scope } = lunoraCollectionOptions({ client, shape: { name: "messagesByChannel" }, scopeBy: "channelId" });
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
+```
+
+## Upgrading: scoped collections now use their shard
+
+Earlier alphas sent every subscription and insert of a `scopeBy` collection with
+no `shardKey` to the default shard (`__root__`); they now go to the shard the
+scoped value names.
+
+- **Authorize shard access.** Configure `authorizeShard` on the worker (or
+  `allowUnauthenticatedShardAccess: true` when every table has row-level
+  security); otherwise scoped subscriptions and writes fail with `403`
+  `FORBIDDEN_SHARD`.
+- **Move existing rows.** Rows written before the upgrade are still in the
+  default shard, and scoped reads do not look there. Before the upgraded client
+  writes to any channel shard, run `lunora export --tables <table>` (it reaches
+  the default shard while the table has no registered shard keys) and then
+  `lunora import` the file: import re-buckets each row by the table's `.shardBy`
+  field and keeps its `_id`, skipping any `_id` the target shard already holds.
+  Import deletes nothing, so then remove the default shard's copies with a
+  one-off mutation run via `lunora run <fn> --shard __root__`.
+
+See [Upgrading](https://lunora.sh/docs/packages/db#upgrading-scoped-collections-now-use-their-shard)
+for the full recipe.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/db)**.
 
 ## Related
