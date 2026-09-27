@@ -1002,16 +1002,21 @@ const kotlinClassDeclaration = (model: JvmClass): ReadonlyArray<string> => {
 
     const adds = model.fields.map((field) => {
         const key = kotlinLiteral(field.wireKey);
+        // Qualified, because `buildList`'s receiver is the list being built: a
+        // bare `size` there is `MutableList.size`, not the model's field, and a
+        // `v.number()` field named `size` failed to compile ("actual type is
+        // 'Int', but 'Double' was expected").
+        const own = `this@${model.name}.${field.name}`;
 
         if (field.optional) {
-            return `                ${field.name}?.let { add("${key}" to ${kotlinEncode(field.type, "it", 0)}) }`;
+            return `                ${own}?.let { add("${key}" to ${kotlinEncode(field.type, "it", 0)}) }`;
         }
 
         if (field.nullable) {
-            return `                add("${key}" to (${field.name}?.let { ${kotlinEncode(field.type, "it", 0)} } ?: WireValue.Null))`;
+            return `                add("${key}" to (${own}?.let { ${kotlinEncode(field.type, "it", 0)} } ?: WireValue.Null))`;
         }
 
-        return `                add("${key}" to ${kotlinEncode(field.type, field.name, 0)})`;
+        return `                add("${key}" to ${kotlinEncode(field.type, own, 0)})`;
     });
 
     const reads = model.fields.map((field) => {

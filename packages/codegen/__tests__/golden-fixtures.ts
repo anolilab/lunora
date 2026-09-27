@@ -68,13 +68,22 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * `cdc` flag: the substring tests construct the writers directly with CDC on, so
  * the one thing nobody asserted was what codegen actually wires.
  *
+ * `sdk-surface` commits ONLY `openrpc.json`: it is the second spec
+ * `sdks/generated-check.sh` generates every SDK target from, one function per
+ * result shape and argument form a model backend handles differently. It is the
+ * real emitter's output rather than a hand-written document on purpose — a
+ * hand-written schema for `v.bigint()` went stale when the emitter changed its
+ * spelling, and every SDK kept passing against the stale one.
+ *
  * Shared by `capture-expected.ts` (which writes the goldens) and the tests that
- * assert them, so a new fixture is registered once.
+ * assert them, so a new fixture is registered once. The optional third element
+ * limits a fixture to those golden files.
  */
-const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string]> = [
+const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<string>?]> = [
     ["simple", "expected/_generated"],
     ["delta-sync", "lunora/_generated"],
     ["hyperdrive-shape", "lunora/_generated"],
+    ["sdk-surface", "expected/_generated", ["openrpc.json"]],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */

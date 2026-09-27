@@ -685,6 +685,13 @@ func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey s
 		return zero, err
 	}
 
+	// An untyped call (T is `any`) takes the decoded tree as-is. Re-marshalling
+	// it would flatten every tagged value into a plain object — a bigint result
+	// came back as {"Value":5} rather than a BigInt.
+	if typed, ok := result.(T); ok {
+		return typed, nil
+	}
+
 	// Re-marshal through JSON so the decoded wire tree lands in T's fields.
 	// The generated models are plain structs with json tags, so this is the
 	// same path a hand-written client would take.

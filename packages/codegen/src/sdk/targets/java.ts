@@ -116,7 +116,7 @@
 
 import { javaModelFiles, MODEL_PACKAGE } from "../jvm-models";
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase } from "../spec";
+import { assertDistinctMembers, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("java")
@@ -261,6 +261,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
 };
 
 const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(namespaces, "Java", (method) => [memberName(method.functionName)]);
     const fields = namespaces.map((namespace) => `    public final ${toPascalCase(namespace.name)}Api ${memberName(namespace.name)};`).join("\n");
     const assignments = namespaces
         .map((namespace) => `        this.${memberName(namespace.name)} = new ${toPascalCase(namespace.name)}Api(client);`)

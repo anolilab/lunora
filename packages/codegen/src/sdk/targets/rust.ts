@@ -39,7 +39,7 @@
  */
 
 import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
-import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { argsChoice, assertDistinctMembers, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("rust")
@@ -130,9 +130,26 @@ const RUST_KEYWORDS = new Set([
     "yield",
 ]);
 
-/** `listMessages` → `list_messages`; a keyword takes Rust's `r#` raw form. */
+/**
+ * The keywords rustc refuses as raw identifiers ("`self` cannot be a raw
+ * identifier"). `Self` is listed for completeness; snake-casing lowers it first.
+ */
+const NON_RAW_KEYWORDS = new Set(["crate", "self", "Self", "super"]);
+
+/**
+ * `listMessages` → `list_messages`; a keyword takes Rust's `r#` raw form, and the
+ * four that have none take a trailing `_`.
+ *
+ * Only for a name that stands ALONE. A derived name (`subscribe_…`) is built
+ * from {@link toSnakeCase} directly, because a keyword is no longer one once it
+ * is prefixed — and `subscribe_r#match` is not an identifier at all.
+ */
 const memberName = (raw: string): string => {
     const snake = toSnakeCase(raw);
+
+    if (NON_RAW_KEYWORDS.has(snake)) {
+        return `${snake}_`;
+    }
 
     return RUST_KEYWORDS.has(snake) ? `r#${snake}` : snake;
 };
@@ -207,7 +224,7 @@ const renderSubscribe = (method: SdkMethod): string => {
 
     return [
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
-        `    pub fn subscribe_${memberName(method.functionName)}(`,
+        `    pub fn subscribe_${toSnakeCase(method.functionName)}(`,
         `        &mut self,`,
         // The crate's own aliases rather than the boxed closure spelt out: they
         // carry a `Send` bound (without which `Client` is not `Send` and cannot be
@@ -244,6 +261,7 @@ const renderNamespaceStruct = (namespace: SdkNamespace): string => {
 };
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(namespaces, "Rust", (method) => [memberName(method.functionName), `subscribe_${toSnakeCase(method.functionName)}`]);
     const accessors = namespaces
         .map((namespace) =>
             [

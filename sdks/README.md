@@ -1232,10 +1232,21 @@ program (go, rust) then ran a project with no tests in it. `cargo test` reported
 `cargo test --test generated_smoke` names the target instead, so its absence is
 "no test target named `generated_smoke`" and a non-zero exit.
 
-The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
-a generated call reaches the wire as
+The smoke programs are `sdks/smoke/<lang>/`, two per language. `generated_smoke`
+asserts that a generated call reaches the wire as
 `{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}` — note the absent
-`limit`, which is what makes this assertion catch the unset-optional bug at all. They sit outside
+`limit`, which is what makes this assertion catch the unset-optional bug at all.
+`surface_smoke` runs against a second spec,
+`packages/codegen/__tests__/fixtures/sdk-surface/expected/_generated/openrpc.json`
+— the emitter's own golden, never a hand-written document — with one function per
+shape a model backend renders differently: a no-arg function; object, id, number,
+array, record and null results; a nullable object; an array of objects; two
+functions sharing one non-object shape; a union; an unset optional; `v.bigint()`
+arguments and results at the top level and nested; and functions named `match`,
+`type` and `self`. It calls each one and asserts both the frame and the decoded
+result, because the first spec's untyped results never reach the parts of a
+backend that differ by shape — six generator defects shipped there with every leg
+green. They sit outside
 every transport's tree because that is what they are — consumer code, importing
 `lunorasdk/lunoraapi` and `import LunoraApi`, which resolve only against generated
 output. `--from sdks` is passed for them, because the default fetch is the CLI's

@@ -56,7 +56,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { argsChoice, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase } from "../spec";
+import { argsChoice, assertDistinctMembers, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("dart")
@@ -407,7 +407,53 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+/**
+ * Keep a result model only where the result IS that class.
+ *
+ * The call site casts the decoded value to `Map<String, dynamic>` and calls
+ * `fromJson`, which is right only for an object top level. For a list or record
+ * result quicktype gives the predicted name to the ELEMENT class
+ * (`List<ItemsPageResult>`), and for a nullable object it declares the class
+ * but decodes `ItemsFindResult?` — so an array-of-objects result failed with
+ * "List<Object?> is not a subtype of Map…" and a null one with "Null is not a
+ * subtype…", on the first call and not before. quicktype's own top-level
+ * decoder states the real shape in its return type, so the test is that it
+ * returns exactly the class; anything else degrades to the untyped result.
+ */
+const objectResultsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
+    const objectResult = (name: string | undefined): string | undefined => {
+        if (name === undefined) {
+            return undefined;
+        }
+
+        const decoder = `${name.charAt(0).toLowerCase()}${name.slice(1)}FromJson`;
+
+        // quicktype emits one `<lowerFirst>FromJson` per top-level type, and a
+        // name reaching here was found in the models. A missing decoder means
+        // its naming changed, and the test below would then quietly untype every
+        // result — so fail generation instead.
+        if (!new RegExp(String.raw`^\S+ ${decoder}\(String str\) =>`, "mu").test(models)) {
+            throw new Error(
+                `sdk: the dart models declare "${name}" but no top-level decoder "${decoder}" — quicktype's Dart naming has changed; update objectResultsOnly in targets/dart.ts.`,
+            );
+        }
+
+        return new RegExp(String.raw`^${name} ${decoder}\(String str\) => ${name}\.fromJson\(`, "mu").test(models) ? name : undefined;
+    };
+
+    return namespaces.map((namespace) => {
+        return {
+            methods: namespace.methods.map((method) => {
+                return { ...method, resultType: objectResult(method.resultType) };
+            }),
+            name: namespace.name,
+        };
+    });
+};
+
+const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(declared, "Dart", (method) => [memberName(method.functionName)]);
+    const namespaces = objectResultsOnly(declared, models);
     const fields = namespaces.map((namespace) => `  final ${toPascalCase(namespace.name)}Api ${memberName(namespace.name)};`).join("\n");
     const initialisers = namespaces.map((namespace) => `        ${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api(client)`).join(",\n");
 

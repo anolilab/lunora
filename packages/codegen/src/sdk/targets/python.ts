@@ -21,7 +21,17 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { allMethods, argsChoice, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import {
+    allMethods,
+    argsChoice,
+    assertDistinctMembers,
+    commentText,
+    generatedHeaderLines,
+    referencedModels,
+    stringLiteral,
+    toPascalCase,
+    toSnakeCase,
+} from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 /** Python reserved words a function name could collide with. */
@@ -165,6 +175,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
 const narrowBareExcept = (models: string): string => models.replaceAll(/^([ \t]*)except:$/gmu, "$1except Exception:");
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+    assertDistinctMembers(namespaces, "Python", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
     const referenced = referencedModels(namespaces);
     const modelImport = referenced.length > 0 ? `from .models import ${referenced.join(", ")}\n` : "";
 
