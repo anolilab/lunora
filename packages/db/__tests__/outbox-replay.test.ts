@@ -708,6 +708,59 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation.mock.calls[0]![2]).toMatchObject({ shardKey: "acme" });
     });
 
+    it("replays an offline-queued scoped write to its own shard, not the scope the app reloads into", { timeout: 10_000 }, async () => {
+        const scopedDefinition = {
+            temp: {
+                insert: {
+                    mutation: temporarySend,
+                    optimistic: (input: { roomId: string; text: string }, id: string) => {
+                        return { _creationTime: 0, _id: id, roomId: input.roomId, text: input.text };
+                    },
+                    toArgs: (row: Record<string, unknown> & { _id: string }) => {
+                        return { id: row._id, roomId: row.roomId, text: row.text };
+                    },
+                },
+                list: temporaryList,
+                scopeBy: "roomId",
+            },
+        };
+
+        // Queued while pointed at room-1, never lands, and the tab dies.
+        const { client: oldClient } = makeClient({
+            mutation: () =>
+                new Promise(() => {
+                    /* in-flight forever — the write stays persisted */
+                }),
+        });
+        const oldDatabase = defineCollections(oldClient, scopedDefinition);
+
+        await oldDatabase.executor.waitForInit();
+        oldDatabase.scope.temp({ roomId: "room-1" });
+        oldDatabase.actions.temp({ roomId: "room-1", text: "queued offline" });
+
+        await vi.waitFor(() => {
+            expect(oldDatabase.executor.getPendingCount()).toBeGreaterThan(0);
+        });
+
+        oldDatabase.executor.dispose();
+
+        // The reload comes back pointed at room-2.
+        const { client, mutation } = makeClient();
+        const database = defineCollections(client, scopedDefinition);
+
+        executors.push(database.executor);
+        database.scope.temp({ roomId: "room-2" });
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
+
+        expect(mutation.mock.calls[0]![2]).toMatchObject({ shardKey: "room-1" });
+    });
+
     /** The "new deploy": `temp` became read-only — its insert binding (and so its mutationFn) is gone. */
     const buildReadOnlyDeploy = (client: never, options?: Parameters<typeof defineCollections>[2]) => {
         const database = defineCollections(client, { temp: { list: temporaryList }, users: { list: usersList } }, options);

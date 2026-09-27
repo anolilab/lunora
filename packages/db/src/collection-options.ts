@@ -497,6 +497,24 @@ export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, opt
     return registry;
 };
 
+/**
+ * The shard a `scopeBy` collection's `source` (scope args, or a row being
+ * written) belongs to: the value of its scoped column, which names the table's
+ * `.shardBy(...)` shard. The server derives no shard from args, so a missing
+ * value would silently route to the default shard — refused here instead.
+ *
+ * Package-internal: deliberately not re-exported from `index.ts`.
+ */
+export const scopedShardKey = (scopeBy: string, source: Record<string, unknown>, what: string): string => {
+    const value = source[scopeBy];
+
+    if (typeof value === "string" || typeof value === "number") {
+        return String(value);
+    }
+
+    throw new LunoraError("BAD_REQUEST", `@lunora/db: ${what} has no "${scopeBy}" — a \`scopeBy\` collection routes by that field's value`);
+};
+
 /** Mark `registry` as fed by a live sync source. */
 export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {
     attachedRegistries.add(registry);
@@ -549,7 +567,14 @@ export interface LunoraCollectionConfig<TRow extends Row> {
     load?: "eager" | "lazy";
     /** Notified when the underlying subscription errors; the collection always leaves `loading` regardless. */
     onError?: (error: SubscriptionError) => void;
-    /** When set, the collection stays empty until {@link LunoraCollectionOptions.scope} points it at args (sharded). */
+
+    /**
+     * When set, the collection stays empty until {@link LunoraCollectionOptions.scope}
+     * points it at args. Name the table's `.shardBy(...)` column: unless
+     * {@link LunoraCollectionConfig.shardKey} pins a shard, the scoped value IS the
+     * shard key, so `scope({ channelId })` subscribes to that channel's shard and
+     * re-scoping moves the subscription. Scope args without the field throw.
+     */
     scopeBy?: string;
 
     /** A replication shape as the sync source (partial replication). Mutually exclusive with {@link LunoraCollectionConfig.list}. */
@@ -563,13 +588,18 @@ export interface LunoraCollectionConfig<TRow extends Row> {
      * default ("") watermark bucket, which must not be compared against a
      * per-shard mutator's sequence line (it would drop a sharded overlay early or
      * hang it forever).
+     *
+     * Takes precedence over {@link LunoraCollectionConfig.scopeBy}: set both only
+     * when every scope lives on one shard (e.g. a per-tenant shard scoped by a
+     * non-shard column). Leave it unset on a `scopeBy` collection over a
+     * `.shardBy(...)` table so the shard follows the scope.
      */
     shardKey?: string;
 }
 
 /** The result of {@link lunoraCollectionOptions}: a TanStack collection config plus its sync controls. */
 export interface LunoraCollectionOptions<TRow extends Row> {
-    /** Resolves optimistic-overlay drops against the server's confirmed watermarks. */
+    /** Resolves optimistic-overlay drops against the server's confirmed watermarks — the current scope's shard for a `scopeBy` collection. */
     checkpoints: CheckpointRegistry;
     /** Pass to TanStack's `createCollection`. */
     config: CollectionConfig<TRow, string>;
@@ -594,10 +624,17 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     }
 
     const getKey = options.getKey ?? ((row: TRow) => row._id);
+    // An explicit shard key (the shape's, else the top-level one) pins the shard.
+    // Without one, a `scopeBy` collection follows its scope: the shard is the
+    // scoped value, re-derived by every `scope(...)` call.
+    const explicitShardKey = options.shape?.shardKey ?? options.shardKey;
+    const followsScope = options.scopeBy !== undefined && explicitShardKey === undefined;
+    let scopedShard: string | undefined;
+    const currentShardKey = (): string | undefined => explicitShardKey ?? scopedShard;
+    const currentCheckpoints = (): CheckpointRegistry => options.checkpoints ?? getShardCheckpoints(options.client, currentShardKey());
     // Shared per-shard by default — a per-collection registry hangs any shard with
-    // more than one collection (see `getShardCheckpoints`). A `shape` carries its
-    // own shard key; the `list` path uses the top-level one. The sync callbacks
-    // re-resolve rather than close over the capture below, because
+    // more than one collection (see `getShardCheckpoints`). The sync callbacks
+    // re-resolve rather than close over a capture, because
     // {@link releaseShardCheckpoints} drops the whole per-client map: a
     // collection still mounted across that teardown must advance the registry a
     // later {@link getShardCheckpoints} mints, not the disposed one it was built
@@ -606,7 +643,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
     // rewinds each registry IN PLACE precisely so captures stay valid; see
     // {@link registryResets}.
     const resolveCheckpoints = (): CheckpointRegistry => {
-        const registry = options.checkpoints ?? getShardCheckpoints(options.client, options.shape?.shardKey ?? options.shardKey);
+        const registry = currentCheckpoints();
 
         // This collection's subscription is what advances the registry — record
         // that so `bindMutators` knows gating an overlay on it will actually
@@ -617,7 +654,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         return registry;
     };
 
-    const checkpoints = resolveCheckpoints();
+    // A scope-following collection has no shard until it is scoped, so nothing
+    // is marked attached yet: the default registry would never be advanced by it.
+    if (!followsScope) {
+        resolveCheckpoints();
+    }
     // JSON-serialized form of each last-synced row, keyed by row id — the
     // `makeDiffEmit` base for one sync session. Owned outside `sync.sync` only so
     // `scope(...)` can reach the live `emit`; it is CLEARED in the sync cleanup
@@ -695,7 +736,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             // threshold is reached instead of `awaitMutationId` hanging
             // forever after the write is accepted.
             if (options.shape === undefined) {
-                resolveCheckpoints().resolve({ mutationId: pendingFrameWatermark ?? options.client.confirmedMutationWatermark(options.shardKey) });
+                resolveCheckpoints().resolve({ mutationId: pendingFrameWatermark ?? options.client.confirmedMutationWatermark(currentShardKey()) });
                 pendingFrameWatermark = undefined;
             }
         };
@@ -727,11 +768,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             return options.client.subscribeShape({ args, name: options.shape.name }, onRows, {
                 onCheckpoint,
                 onError,
-                shardKey: options.shape.shardKey,
+                shardKey: currentShardKey(),
             });
         }
 
-        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onCheckpoint, onError, shardKey: options.shardKey });
+        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onCheckpoint, onError, shardKey: currentShardKey() });
     };
 
     const config: CollectionConfig<TRow, string> = {
@@ -798,11 +839,17 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             return;
         }
 
-        // Remember the target so a later sync (re)start re-opens it.
+        // Validated before anything is torn down, so a bad call leaves the current scope intact.
+        const nextShard = followsScope && args !== undefined ? scopedShardKey(options.scopeBy, args, "scope args") : scopedShard;
+
+        // Remember the target so a later sync (re)start re-opens it — on its own shard.
         scopedArgs = args;
+        scopedShard = nextShard;
 
         unsubscribe?.();
         unsubscribe = undefined;
+        // A watermark stashed for the previous shard's frame must not resolve this one's gate.
+        pendingFrameWatermark = undefined;
         // Clear the previous scope's rows from the synced view.
         emit?.(new Map());
 
@@ -819,5 +866,12 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         }
     };
 
-    return { checkpoints, config, scope };
+    return {
+        // A getter: a scope-following collection's registry moves with its shard.
+        get checkpoints() {
+            return currentCheckpoints();
+        },
+        config,
+        scope,
+    };
 };

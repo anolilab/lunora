@@ -15,6 +15,7 @@ interface SubscribeCall {
     args: { channelId?: string };
     cb: (rows: unknown[]) => void;
     onError?: (error: { code?: string; message: string }) => void;
+    options?: { shardKey?: string };
     ref: unknown;
     unsubscribe: ReturnType<typeof vi.fn>;
 }
@@ -48,12 +49,12 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
                 reference: unknown,
                 args: { channelId?: string },
                 cb: (rows: unknown[]) => void,
-                options?: { onError?: (error: { code?: string; message: string }) => void },
+                options?: { onError?: (error: { code?: string; message: string }) => void; shardKey?: string },
             ) => () => void
         >((reference, args, cb, options) => {
             const unsubscribe = vi.fn<() => void>();
 
-            subscribes.push({ args, cb, onError: options?.onError, ref: reference, unsubscribe });
+            subscribes.push({ args, cb, onError: options?.onError, options, ref: reference, unsubscribe });
 
             return unsubscribe;
         }),
@@ -245,12 +246,36 @@ describe(defineCollections, () => {
         // `replayBaseline: null` pins "composed with no baseline" — this fixture's
         // client carries no subscription cursor. Omitting the option would instead
         // let the replay sample whatever cursor the client had reached by then.
+        // `shardKey: "c1"` — a `scopeBy` collection's row lives in the shard its
+        // scoped column names, so the write goes there, not to the default shard.
         expect(mutation).toHaveBeenCalledWith(
             messagesSend,
             { channelId: "c1", id, text: "hi" },
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
-            { mutationId: expect.any(String), replayBaseline: null, replayCredential: { judged: null }, shardKey: undefined },
+            { mutationId: expect.any(String), replayBaseline: null, replayCredential: { judged: null }, shardKey: "c1" },
         );
+    });
+
+    it("routes a scoped write to its row's shard even while scoped to another channel", async () => {
+        expect.hasAssertions();
+
+        const { client, mutation, subscribes } = makeClient();
+        const database = build(client);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c2" });
+        await database.executor.waitForInit();
+        await flush();
+
+        expect(subscribes.find((s) => s.ref === messagesList)?.options?.shardKey).toBe("c2");
+
+        database.actions.messages({ channelId: "c1", text: "cross-post" });
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ shardKey: "c1" });
     });
 
     it("passes a stable idempotency key on the insert replay so a retry dedupes", async () => {

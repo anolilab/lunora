@@ -7,6 +7,8 @@ import { createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions,
 /** A fake `FunctionReference` — the binding only forwards it to the client. */
 const ref = (name: string) => ({ __lunoraRef: name }) as never;
 
+const SCOPED_FIELD_RE = /channelId/u;
+
 interface ShapeSubscribeCall {
     name: string;
     onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
@@ -831,5 +833,61 @@ describe("lunoraCollectionOptions (scoped lifecycle)", () => {
         (subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void)([{ _creationTime: 0, _id: "m1", channelId: "c1", text: "hi" }]);
 
         expect(writer.ops).toStrictEqual([{ type: "insert", value: { _creationTime: 0, _id: "m1", channelId: "c1", text: "hi" } }]);
+    });
+
+    it("routes a scoped collection to the shard named by its scoped value, and moves it on re-scope", () => {
+        expect.assertions(5);
+
+        const { client } = makeClient();
+        const { confirmedMutationWatermark, subscribe: subscribeMock } = client as unknown as {
+            confirmedMutationWatermark: ReturnType<typeof vi.fn>;
+            subscribe: ReturnType<typeof vi.fn>;
+        };
+        const unsubscribeC1 = vi.fn<() => void>();
+
+        subscribeMock.mockReturnValueOnce(unsubscribeC1).mockReturnValue(vi.fn<() => void>());
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), scopeBy: "channelId" });
+
+        syncStarterOf(options.config)(recordingWriter().writer as never);
+        options.scope({ channelId: "c1" });
+
+        // The channel's own shard, not the default one: the server derives no shard from args.
+        expect(subscribeMock.mock.calls[0]?.[3]).toMatchObject({ shardKey: "c1" });
+
+        // A frame advances the checkpoint gate from THAT shard's watermark line.
+        (subscribeMock.mock.calls[0]?.[2] as (data: unknown) => void)([]);
+
+        expect(confirmedMutationWatermark).toHaveBeenLastCalledWith("c1");
+
+        options.scope({ channelId: "c2" });
+
+        expect(unsubscribeC1).toHaveBeenCalledTimes(1);
+        expect(subscribeMock.mock.calls[1]?.[3]).toMatchObject({ shardKey: "c2" });
+        expect(options.checkpoints).toBe(getShardCheckpoints(client, "c2"));
+    });
+
+    it("keeps an explicit shardKey over the scoped value", () => {
+        expect.assertions(1);
+
+        const { client } = makeClient();
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), scopeBy: "channelId", shardKey: "tenant-1" });
+
+        syncStarterOf(options.config)(recordingWriter().writer as never);
+        options.scope({ channelId: "c1" });
+
+        expect(subscribeMock.mock.calls[0]?.[3]).toMatchObject({ shardKey: "tenant-1" });
+    });
+
+    it("rejects scope args that do not carry the scoped field", () => {
+        expect.assertions(1);
+
+        const { client } = makeClient();
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list"), scopeBy: "channelId" });
+
+        expect(() => {
+            options.scope({ roomId: "c1" });
+        }).toThrow(SCOPED_FIELD_RE);
     });
 });

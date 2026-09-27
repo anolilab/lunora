@@ -65,7 +65,7 @@ export const createCollections = (client: LunoraClient) =>
     defineCollections(client, {
         messages: {
             list: api.messages.list,
-            scopeBy: "channelId", // sharded — re-point with db.scope.messages({ channelId })
+            scopeBy: "channelId", // the .shardBy column — db.scope.messages({ channelId }) syncs that channel's shard
             insert: {
                 mutation: api.messages.send,
                 optimistic: (input: Omit<Doc<"messages">, "_id" | "_creationTime">, id) => ({

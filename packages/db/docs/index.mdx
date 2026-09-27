@@ -244,6 +244,17 @@ db.scope.messages({ channelId }); // sync this channel
 db.scope.messages(); // detach (e.g. on unmount)
 ```
 
+Name the table's `.shardBy(...)` column in `scopeBy`: the scoped value **is** the
+shard key. `scope({ channelId })` subscribes to that channel's shard, re-scoping
+moves the subscription, and each `insert` goes to the shard its own row's
+`channelId` names — captured when the write is queued, so an offline write
+replays to its own shard even after the app has re-scoped. Scope args or an
+inserted row without the field throw rather than fall back to the default shard.
+
+An explicit `shardKey` takes precedence and pins every scope to one shard — set
+both only when all scopes live on one shard (a per-tenant shard scoped by a
+non-shard column).
+
 ## When collections load
 
 Each collection chooses _when_ it starts syncing. Together with `scopeBy` that
@@ -420,12 +431,14 @@ clears only once every concurrent call settles.
 
 - `list`: the Lunora query that lists the rows (the sync source). **Required.**
 - `getKey?`: row key extractor; defaults to `row._id`.
-- `scopeBy?`: a field that scopes the list (a shard key); makes the collection
-  re-pointable via `db.scope.<table>`.
-- `shardKey?`: routes the `list` subscription — and the confirmed-mutation
+- `scopeBy?`: the table's `.shardBy(...)` column; makes the collection
+  re-pointable via `db.scope.<table>`, and — unless `shardKey` is set — routes
+  the subscription to the scoped value's shard and each `insert` to its row's
+  shard (see [Scoped (sharded) collections](#scoped-sharded-collections)).
+- `shardKey?`: pins the `list` subscription — and the confirmed-mutation
   watermark its frames advance the checkpoint gate from, and the `insert`
-  writes — to a specific shard's Durable Object. **Set this on any collection
-  whose table is `.shardBy()`'d.** Without it the overlay gate compares against
+  writes — to one shard's Durable Object. Takes precedence over `scopeBy`.
+  **A `.shardBy()`'d table needs one of the two.** Without either the overlay gate compares against
   the default `""` watermark bucket, which that shard's sequence line never
   advances, so optimistic rows are held or dropped against a watermark that is
   not theirs, and the writes themselves land in the default shard while the
