@@ -1,3 +1,14 @@
+## @lunora/mail [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.91...@lunora/mail@1.0.0-alpha.92) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
 ## @lunora/mail [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.90...@lunora/mail@1.0.0-alpha.91) (2026-09-27)
 
 
