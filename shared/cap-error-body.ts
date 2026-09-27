@@ -9,7 +9,7 @@
  * on `cause`, which `toErrorBody` never serialises, so a server-side log still
  * has all of it.
  */
-export const MAX_ERROR_BODY_CHARS = 256;
+const MAX_ERROR_BODY_CHARS = 256;
 
 /** Trim `body` to {@link MAX_ERROR_BODY_CHARS}, marking that it was cut. */
 export const capErrorBody = (body: string): string => (body.length > MAX_ERROR_BODY_CHARS ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)` : body);
