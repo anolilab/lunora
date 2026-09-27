@@ -214,4 +214,4 @@ const buildSettings = (rawEnv: unknown): SettingsResult => {
     return { deploy: readDeployInfo(env), settings };
 };
 
-export { bindingType, buildSettings, isDevEnvironment, looksSecret, readDeployInfo, redact };
+export { buildSettings, isDevEnvironment, readDeployInfo };

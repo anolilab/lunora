@@ -542,4 +542,3 @@ const guardWriter = <W>(
 };
 
 export { guardWriter, LOOP_GATED_METHODS, RLS_UNWRAP_SYMBOL, RlsRequiredError, WRITER_METHOD_GATING };
-export type { WriterGating };

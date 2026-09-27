@@ -346,13 +346,3 @@ const selectIndexForGroupBy = (
 };
 
 export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy };
-
-export {
-    type AggregateIndexDefinitionLike,
-    type AggregateOp,
-    type AggregateOptions,
-    type AggregateResult,
-    type GroupByEntry,
-    type GroupByOptions,
-    type RestrictableQueryOptions,
-} from "./schema-types";

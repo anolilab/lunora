@@ -587,5 +587,3 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 
 export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators };
 export type { ApplyOnDeleteOptions };
-
-export { type NestedWith, type OnDeleteActionLike, type RelationDefinitionLike, type ResolveWithOptions, type WithInput } from "./schema-types";

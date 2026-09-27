@@ -141,5 +141,5 @@ const siblingStub = (env: unknown, binding: string | undefined, name: string, ju
     return typeof namespace.getByName === "function" ? namespace.getByName(name) : namespace.get(namespace.idFromName(name));
 };
 
-export type { SiblingNamespaceLike, SiblingStub };
-export { asSiblingNamespace, RELAY_SECRET_KEY, RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody };
+export type { SiblingStub };
+export { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody };

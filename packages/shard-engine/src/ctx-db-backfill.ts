@@ -512,12 +512,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export {
-    backfillAggregateIndexes,
-    backfillRankIndexes,
-    backfillSearchIndexes,
-    backfillSearchIndexesForTable,
-    drainUnmappedFtsRows,
-    readKeysetPage,
-    searchIndexCoversTable,
-};
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, readKeysetPage, searchIndexCoversTable };

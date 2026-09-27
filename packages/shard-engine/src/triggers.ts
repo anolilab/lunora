@@ -21,15 +21,7 @@
 
 import type { SchemaLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./schema-types";
 
-export type {
-    SchedulableWorkflowReferenceLike,
-    SchedulerLike,
-    TriggerContextLike,
-    TriggerDefinitionLike,
-    TriggerEventLike,
-    TriggerOpLike,
-    TriggerTimingLike,
-} from "./schema-types";
+export type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./schema-types";
 
 export interface RunTriggersOptions {
     ctx: TriggerContextLike;

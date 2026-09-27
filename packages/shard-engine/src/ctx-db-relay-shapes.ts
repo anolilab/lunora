@@ -239,7 +239,6 @@ export {
     deleteRelayShapesForRelay,
     migrateRelayShapes,
     readRelayShapes,
-    RELAY_SHAPES_TABLE,
     writeRelayShape,
     writeRelayShapeCursor,
 };
