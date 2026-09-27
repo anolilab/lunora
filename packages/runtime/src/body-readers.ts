@@ -180,8 +180,10 @@ const withBodyLimit = (request: Request, limit: number = MAX_BODY_BYTES): { over
 
                 if (total > limit) {
                     overflowed = true;
-                    await reader.cancel().catch(() => {});
+                    // Error first: a source whose cancel never settles must not hold
+                    // the handler's pending read open.
                     controller.error(new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 }));
+                    reader.cancel().catch(() => {});
 
                     return;
                 }

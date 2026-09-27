@@ -24,7 +24,18 @@ describe(ipRateLimitKey, () => {
         expect(ipRateLimitKey(input)).toBe(expected);
     });
 
-    it.each(["203.0.113.7", "user_123", "alice@example.com", "anon", "", "team:42", "2001:db8::g", "1:2:3:4:5:6:7:8:9"])("leaves %s unchanged", (input) => {
+    it.each([
+        "203.0.113.7",
+        "user_123",
+        "alice@example.com",
+        "anon",
+        "",
+        "team:42",
+        "2001:db8::g",
+        "1:2:3:4:5:6:7:8:9",
+        "tenant:alice]@example.com/#",
+        "[::1]",
+    ])("leaves %s unchanged", (input) => {
         expect.assertions(1);
 
         expect(ipRateLimitKey(input)).toBe(input);

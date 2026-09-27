@@ -14,11 +14,16 @@
  * Parsing is delegated to the WHATWG `URL` host parser, which validates the
  * literal and serialises it to one canonical, lower-case, hex-only form.
  */
+const IPV6_CHARS = /^[\d.:a-f]+$/iu;
+
 export const ipRateLimitKey = (key: string): string => {
     const percent = key.indexOf("%");
     const address = percent === -1 ? key : key.slice(0, percent);
 
-    if (!address.includes(":")) {
+    // Only hex digits, `:` and `.` may reach the URL parser. Anything else could
+    // restructure the URL (`a]@example.com/#` makes the hostname `example.com`)
+    // and fold distinct non-IP keys into one bucket.
+    if (!address.includes(":") || !IPV6_CHARS.test(address)) {
         return key;
     }
 
