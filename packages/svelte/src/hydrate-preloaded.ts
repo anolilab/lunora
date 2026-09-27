@@ -27,6 +27,12 @@ import { getLunoraClient } from "./context";
  * opened behind an explicit `isBrowser()` guard rather than left to the store's
  * laziness. On the server the store simply holds the seeded value. The token's
  * `value` is the single source of truth for the first paint either way.
+ *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires that identity
+ * (`client.identityEpoch() > 0`), every `hydratePreloaded` store on the client
+ * (subscribed then or later) stops using it and holds `undefined` until the live
+ * value arrives — matching `@lunora/react`'s `usePreloadedQuery`.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every store by name; a default here would break the `import { hydratePreloaded } from "@lunora/svelte"` surface.
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClient, options: { onError?: SubscriptionErrorCallback } = {}): Readable<T> => {
@@ -36,12 +42,23 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClie
 
     // Seed `readable` with the preloaded value so the synchronous first read
     // already has data; the WS opens only in the browser, after hydration.
-    return readable<T>(value, (set) => {
+    return readable<T>(resolvedClient.identityEpoch() === 0 ? value : undefined, (set) => {
         if (!isBrowser()) {
             return () => {};
         }
 
-        return resolvedClient.subscribe(
+        const blank = (): void => {
+            set(undefined as T);
+        };
+
+        // The store may have been created before an identity was retired and
+        // only subscribed to after it.
+        if (resolvedClient.identityEpoch() !== 0) {
+            blank();
+        }
+
+        const offIdentity = resolvedClient.onIdentityChange(blank);
+        const unsubscribe = resolvedClient.subscribe(
             functionRef,
             args,
             (next: unknown) => {
@@ -49,5 +66,10 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClie
             },
             { onError: options.onError, shardKey },
         );
+
+        return () => {
+            offIdentity();
+            unsubscribe();
+        };
     });
 };

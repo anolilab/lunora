@@ -122,6 +122,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
         // The identity store declares itself on attach; the fake has nothing
         // to gate, so this only has to exist.
         expectIdentityResolution: (): void => undefined,
+        identityEpoch: (): number => 0,
         onIdentityChange: (): Unsubscribe => () => undefined,
         getAuthToken: () => authToken,
         getCurrentUser: () => Promise.resolve(currentUser),

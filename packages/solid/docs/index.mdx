@@ -235,6 +235,12 @@ during hydration returns the server-rendered value with no loading flash and no
 mount, a WebSocket subscription attaches in an effect and every subsequent delta
 flows into the same signal, so the UI goes live with zero refetch.
 
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch.
+
 Pass `{ onError }` as the second argument to observe a subscription-scoped error
 the server pushes after hydration (a session expiry, an RLS denial). Without it
 such an error is dropped and the accessor keeps rendering the SSR snapshot as if
