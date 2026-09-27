@@ -29,10 +29,10 @@ import { subscribeToQuery } from "./use-query";
  * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (mounted
  * then or later) stops using it and holds `undefined` until the live value
  * arrives — matching `@lunora/react`'s `usePreloadedQuery`. The ref is typed
- * `Ref<T>` like every other adapter's return, so guard for that window.
+ * `Ref<T | undefined>` like `useQuery`, so guard for that window.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@lunora/vue"` surface.
-export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Ref<T> => {
+export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Ref<T | undefined> => {
     const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
@@ -57,5 +57,5 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?
         );
     }
 
-    return data as Ref<T>;
+    return data;
 };

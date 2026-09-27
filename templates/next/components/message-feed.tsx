@@ -13,7 +13,8 @@ const channelId = "channel:demo" as const;
  * `usePreloadedQuery` seeds TanStack Query's cache with the server value — the
  * first render shows it with no loading flash and no hydration mismatch — then
  * attaches a live WebSocket subscription that updates `data` on every server
- * delta.
+ * delta. `data` is typed `T | undefined`: after a sign-out or user switch the
+ * preloaded value is dropped until the new identity's subscription answers.
  */
 export function MessageFeed({ preloaded }: { preloaded: Preloaded<ReturnOf<typeof api.messages.list>> }) {
     const data = usePreloadedQuery(preloaded);
@@ -23,7 +24,8 @@ export function MessageFeed({ preloaded }: { preloaded: Preloaded<ReturnOf<typeo
 
     return (
         <section>
-            <pre>{JSON.stringify(data, undefined, 2)}</pre>
+            {/* `undefined` after a sign-out or user switch, until the new identity's subscription answers. */}
+            {data === undefined ? <p>Loading…</p> : <pre>{JSON.stringify(data, undefined, 2)}</pre>}
             <form
                 onSubmit={(event) => {
                     event.preventDefault();
