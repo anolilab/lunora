@@ -1,6 +1,6 @@
 import type { VectorIndexSummary, VectorQueryMatch } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -92,5 +92,32 @@ describe("vectorBrowser", () => {
         await screen.findByTestId("vector-table");
 
         expect(mock.listVectorIndexes).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("vectorBrowser search after switching index", () => {
+    it("drops a result that lands after the operator selected another index", async () => {
+        expect.assertions(1);
+
+        let finish: (matches: VectorQueryMatch[]) => void = () => {};
+        const runQuery = async (): Promise<VectorQueryMatch[]> =>
+            new Promise((resolve) => {
+                finish = resolve;
+            });
+
+        render(withProvider(createMockClient(), <VectorBrowser loadIndexes={loadIndexes} runQuery={runQuery} />));
+
+        await screen.findByTestId("vector-table");
+        fireEvent.change(screen.getByTestId("vector-query-input"), { target: { value: "cats" } });
+        fireEvent.click(screen.getByTestId("vector-search"));
+        fireEvent.click(screen.getByTestId("vector-row-abstracts"));
+
+        await act(async () => {
+            finish([{ id: "docs-row-7", score: 0.9 }]);
+            await Promise.resolve();
+        });
+
+        // The match came from `by_body`; `abstracts` is selected now.
+        expect(screen.queryByTestId("vector-match-docs-row-7")).toBeNull();
     });
 });

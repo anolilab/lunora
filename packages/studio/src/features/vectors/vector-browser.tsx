@@ -1,7 +1,7 @@
 import type { VectorIndexSummary, VectorQueryMatch } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -61,6 +61,10 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
     const [matches, setMatches] = useState<VectorQueryMatch[] | null>(null);
     const [queryError, setQueryError] = useState<null | string>(null);
     const [searching, setSearching] = useState<boolean>(false);
+    // Bumped by every search and every index switch: a search whose id is no
+    // longer the latest was superseded, so its matches (another index's rows)
+    // must not render under the current selection.
+    const searchSeq = useRef(0);
 
     useEffect(() => {
         const token = { cancelled: false };
@@ -92,9 +96,11 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
     const selectedIndex = indexes?.find((index) => index.name === selected) ?? null;
 
     const onSelect = (event: React.MouseEvent<HTMLTableRowElement>): void => {
+        searchSeq.current += 1;
         setSelected(event.currentTarget.dataset.index ?? null);
         setMatches(null);
         setQueryError(null);
+        setSearching(false);
     };
 
     const onQueryTextChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -108,6 +114,9 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
             return;
         }
 
+        searchSeq.current += 1;
+        const seq = searchSeq.current;
+
         setSearching(true);
         setQueryError(null);
 
@@ -118,8 +127,16 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
                 topK: DEFAULT_TOP_K,
             });
 
+            if (seq !== searchSeq.current) {
+                return;
+            }
+
             setMatches(result);
         } catch (error_) {
+            if (seq !== searchSeq.current) {
+                return;
+            }
+
             setMatches(null);
             setQueryError(errorMessage(error_));
         }
