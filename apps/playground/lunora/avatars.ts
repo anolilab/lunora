@@ -11,6 +11,8 @@ const limits = {
     uploadAvatar: { kind: "token bucket", period: 60_000, rate: 20 },
 } satisfies RateLimitConfigMap;
 
+const AVATAR_CONTENT_TYPES = new Set(["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"]);
+
 /**
  * Issue a short-lived PUT signed URL so the browser can upload an avatar
  * directly to R2 without proxying through the Worker. The key is namespaced
@@ -27,6 +29,13 @@ export const uploadAvatar = action
     })
     .use(dbRateLimit(limits, "uploadAvatar", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .action(async ({ args, ctx }): Promise<{ key: string; url: string }> => {
+        // The bytes come back from this app's own origin with the type pinned
+        // here, so only raster images: a caller-chosen `text/html` (or
+        // `image/svg+xml`, which runs script) would be a stored page on it.
+        if (!AVATAR_CONTENT_TYPES.has(args.contentType)) {
+            throw new LunoraError("BAD_REQUEST", `unsupported avatar content type: ${args.contentType}`);
+        }
+
         const userId = ctx.auth.userId ?? "anonymous";
         const scopedKey = `avatars/${userId}/${args.key}`;
 
