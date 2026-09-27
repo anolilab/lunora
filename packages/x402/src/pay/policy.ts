@@ -371,8 +371,11 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
     // `state` is a single atomic-unit total, so it only means something while every
     // payment in the run scales the same way. All allowed assets are dollar-pegged, so
     // uniform decimals is sufficient — USDC on Base and USDC on Solana sum correctly —
-    // but a 6- and an 18-decimal asset in one run would not. Lock the run to the first
-    // payment's decimals and refuse a mismatch (a per-asset ledger would lift this).
+    // but a 6- and an 18-decimal asset in one run would not. Lock the run to the
+    // decimals of what the ledger holds and refuse a mismatch (a per-asset ledger would
+    // lift this). The lock is only as real as the ledger: while `spentAtomic` is 0n
+    // nothing is held, so a payment that was declined, over the cap, or released after
+    // a failed signature leaves the run free to pay in any allowed precision.
     let runDecimals: number | undefined;
 
     return async (context) => {
@@ -386,9 +389,7 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
             };
         }
 
-        if (runDecimals === undefined) {
-            runDecimals = asset.decimals;
-        } else if (runDecimals !== asset.decimals) {
+        if (state.spentAtomic > 0n && runDecimals !== asset.decimals) {
             return {
                 abort: true,
                 reason: `x402 policy: this payment is in a ${String(asset.decimals)}-decimal asset but the run's spend is tracked in ${String(runDecimals)}-decimal units. One wallet cannot mix asset precisions under a single per-run cap.`,
@@ -414,8 +415,10 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
         }
 
         // Reserve atomically (no `await` since the check above) so a concurrent
-        // guard invocation for another in-flight payment sees this reservation.
+        // guard invocation for another in-flight payment sees this reservation — and
+        // the precision it was reserved in.
         state.add(amount);
+        runDecimals = asset.decimals;
 
         // Only ONE of the release sites below can fire per invocation: the decline
         // branch RETURNS (it never reaches the catch), and only the throw branch
