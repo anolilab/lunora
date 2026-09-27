@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -275,5 +275,70 @@ describe("pitrPanel", () => {
 
         expect(screen.getByTestId("pitr-current").textContent).not.toContain("bm-from-old-host");
         expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("ignores the previous shard's bookmark read after the shard prop changes", async () => {
+        expect.assertions(1);
+
+        let answerA: ((value: PitrBookmarkResult) => void) | undefined;
+        const mock = createMockClient({
+            query: (_reference, _args, options): unknown => {
+                if ((options as { shardKey?: string }).shardKey === "room-a") {
+                    return new Promise<PitrBookmarkResult>((resolve) => {
+                        answerA = resolve;
+                    });
+                }
+
+                return { current: "bm-room-b" } satisfies PitrBookmarkResult;
+            },
+        });
+
+        const { rerender } = render(renderPanel(mock, "room-a"));
+
+        rerender(renderPanel(mock, "room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("pitr-current").textContent !== "bm-room-b") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        await act(async () => {
+            answerA?.({ current: "bm-room-a" });
+        });
+
+        expect(screen.getByTestId("pitr-current").textContent).toBe("bm-room-b");
+    });
+
+    it("drops the previous shard's preview when the shard prop changes", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (_reference, args, options): unknown => {
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+                const { time } = args as { time?: number };
+
+                return { current: `bm-${shard}`, ...(time === undefined ? {} : { forTime: `bm-${shard}-for-time` }) } satisfies PitrBookmarkResult;
+            },
+        });
+
+        const { rerender } = render(renderPanel(mock, "room-a"));
+
+        await screen.findByTestId("pitr-current");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await screen.findByTestId("pitr-preview-bookmark");
+
+        rerender(renderPanel(mock, "room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("pitr-current").textContent !== "bm-room-b") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        // room-a's nearest bookmark is not a bookmark of room-b.
+        expect(screen.queryByTestId("pitr-preview-bookmark")).toBeNull();
     });
 });

@@ -20,8 +20,8 @@ interface DestinationCard {
     readonly title: string;
 }
 
-/** Outcome of a client-side webhook test send. */
-type WebhookResult = { kind: "error"; message: string } | { kind: "success"; latencyMs: number; status: number };
+/** Outcome of a client-side webhook test send, tagged with the URL it was sent to. */
+type WebhookResult = ({ kind: "error"; message: string } | { kind: "success"; latencyMs: number; status: number }) & { url: string };
 
 /** One destination card: title + explainer + a copyable setup snippet. Extracted so its copy handler is a stable `useCallback`. */
 const DestinationRow = ({ destination }: { readonly destination: DestinationCard }): ReactElement => {
@@ -98,7 +98,7 @@ const LogDrainsPanel = (): ReactElement => {
         const fetchFunction = "fetch" in globalThis ? globalThis.fetch : undefined;
 
         if (fetchFunction === undefined) {
-            setResult({ kind: "error", message: t("fetch is unavailable in this environment.") });
+            setResult({ kind: "error", message: t("fetch is unavailable in this environment."), url });
 
             return;
         }
@@ -126,13 +126,17 @@ const LogDrainsPanel = (): ReactElement => {
                 method: "POST",
             });
 
-            setResult({ kind: "success", latencyMs: Math.round(performance.now() - startedAt), status: response.status });
+            setResult({ kind: "success", latencyMs: Math.round(performance.now() - startedAt), status: response.status, url });
         } catch (error) {
-            setResult({ kind: "error", message: errorMessage(error) });
+            setResult({ kind: "error", message: errorMessage(error), url });
         }
 
         setSending(false);
     };
+
+    // A result answers for the URL it was sent to. Once the input names another
+    // one (edited mid-flight or after), it is not that URL's answer, so hide it.
+    const shownResult = result?.url === webhookUrl.trim() ? result : null;
 
     const onSendTest = (): void => {
         fireAndForget(sendTest());
@@ -189,15 +193,15 @@ const LogDrainsPanel = (): ReactElement => {
                             </Button>
                         </div>
 
-                        {result !== null && (
+                        {shownResult !== null && (
                             <p
-                                className={result.kind === "success" ? "mt-2 text-sm text-muted-foreground" : "mt-2 text-sm text-destructive"}
+                                className={shownResult.kind === "success" ? "mt-2 text-sm text-muted-foreground" : "mt-2 text-sm text-destructive"}
                                 data-testid="drain-webhook-result"
-                                role={result.kind === "error" ? "alert" : undefined}
+                                role={shownResult.kind === "error" ? "alert" : undefined}
                             >
-                                {result.kind === "success"
-                                    ? t("Delivered — status {status} in {latency}ms", { latency: result.latencyMs, status: result.status })
-                                    : t("Failed: {message}", { message: result.message })}
+                                {shownResult.kind === "success"
+                                    ? t("Delivered — status {status} in {latency}ms", { latency: shownResult.latencyMs, status: shownResult.status })
+                                    : t("Failed: {message}", { message: shownResult.message })}
                             </p>
                         )}
                     </section>
