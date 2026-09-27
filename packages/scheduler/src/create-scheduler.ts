@@ -46,7 +46,11 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // The DO's `scheduledFor` echoes what the caller passed, so nothing is lost;
     // `get(id)` returns the full record for a caller that wants it back.
     const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
-        const scheduledFor = date instanceof Date ? date.getTime() : date;
+        // Rounded UP to a whole millisecond: the SchedulerDO's time index takes
+        // integers only, so a fractional instant (`runAfter(1500.5)`, or
+        // `Date.now() + 1000 / 3`) used to pass the guard below and be refused
+        // by the DO. Up, never down, so a job never fires before it was asked to.
+        const scheduledFor = Math.ceil(date instanceof Date ? date.getTime() : date);
 
         // The bound `runAfter` has always applied, restated for the absolute form.
         // Without it `runAt` was the door a `NaN`/`Infinity` instant walked through

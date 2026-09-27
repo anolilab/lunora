@@ -25,7 +25,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DISPATCH_LEASE_MS } from "../src/scheduler-do";
+import { DISPATCH_LEASE_MS, MAX_CONCURRENT_DISPATCHES } from "../src/scheduler-do";
 import { BlockingScheduler, indexedAt, indexKeysFor, isIndexed, post, scheduleDue, settle } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
@@ -345,6 +345,174 @@ describe("schedulerDO dispatch lease", () => {
 
         expect(state.storageMap.get("pool:p")).toMatchObject({ inFlight: 0 });
         expect(isIndexed(state.storageMap, "job-0")).toBe(false);
+    });
+});
+
+/**
+ * A `/cancel` that lands while the job's dispatch is in flight.
+ *
+ * The cancel answers `{ cancelled: true }` and deletes the job's rows, but the
+ * attempt is already running, and whatever it settles to used to write the job
+ * back: a failed attempt re-armed it through the retry path, so the job came
+ * back (with `attempts: 1`) and fired again.
+ */
+describe("schedulerDO dispatch lease — cancelled mid-dispatch", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** Every durable row the job owns — `id:`, `retry:`, `dead:` and `t:` all end in `:<id>`. */
+    const rowsFor = (storageMap: Map<string, unknown>, id: string): string[] => [...storageMap.keys()].filter((key) => key.endsWith(`:${id}`));
+
+    it.each([
+        ["fails", false],
+        ["succeeds", true],
+    ])("stays cancelled when the in-flight attempt %s", async (_label, ok) => {
+        expect.hasAssertions();
+
+        pinClock(Date.now());
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+
+        expect(scheduler.started).toStrictEqual(["job-0"]);
+
+        const cancelled = await scheduler.fetch(post("/cancel", { id: "job-0" }));
+
+        await expect(cancelled.json()).resolves.toStrictEqual({ cancelled: true });
+
+        scheduler.release("job-0", ok);
+        await drain;
+
+        expect(rowsFor(state.storageMap, "job-0")).toStrictEqual([]);
+
+        const get = await scheduler.fetch(new Request("https://scheduler.internal/get?id=job-0"));
+
+        await expect(get.json()).resolves.toStrictEqual({});
+
+        // Nothing re-fires on a later pass either.
+        await scheduler.alarm();
+
+        expect(scheduler.started).toStrictEqual(["job-0"]);
+    });
+
+    it.each([
+        ["fails", false],
+        ["succeeds", true],
+    ])("leaves a new job that reused the id alone when the cancelled attempt %s", async (_label, ok) => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-0" }));
+        // The id is free again while the old attempt is still in flight.
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.fresh", id: "job-0", scheduledFor: at + 60_000 }));
+
+        scheduler.release("job-0", ok);
+        await drain;
+
+        expect(state.storageMap.get("id:job-0")).toMatchObject({ functionPath: "jobs.fresh" });
+        expect(state.storageMap.has("retry:job-0")).toBe(false);
+        expect(indexedAt(state.storageMap, "job-0")).toBe(at + 60_000);
+    });
+
+    it("releases a pooled job's slot when its cancelled attempt fails, without re-arming it", async () => {
+        expect.hasAssertions();
+
+        pinClock(Date.now());
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1, { maxConcurrency: 1, pool: "p" });
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-0" }));
+        scheduler.release("job-0", false);
+        await drain;
+
+        expect(state.storageMap.get("pool:p")).toMatchObject({ inFlight: 0 });
+        expect(rowsFor(state.storageMap, "job-0")).toStrictEqual([]);
+    });
+
+    it("never dispatches a due job cancelled while it waited behind the busy lanes", async () => {
+        expect.hasAssertions();
+
+        pinClock(Date.now());
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        // One more due job than there are lanes, so `job-6` waits in the drain's
+        // queue (already read by `alarm()`) while the six ahead of it dispatch.
+        await scheduleDue(scheduler, MAX_CONCURRENT_DISPATCHES + 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+
+        expect(scheduler.started).toHaveLength(MAX_CONCURRENT_DISPATCHES);
+
+        await scheduler.fetch(post("/cancel", { id: "job-6" }));
+
+        scheduler.releaseAll(true);
+        await settle();
+        // Releases `job-6` too if it did start, so a regression fails the
+        // assertion below instead of hanging the drain.
+        scheduler.releaseAll(true);
+        await drain;
+
+        expect(scheduler.started).not.toContain("job-6");
+        expect(rowsFor(state.storageMap, "job-6")).toStrictEqual([]);
+    });
+
+    it("leaves a new job that reused a cancelled queued job's id untouched", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+
+        pinClock(at);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, MAX_CONCURRENT_DISPATCHES + 1);
+
+        const drain = scheduler.alarm();
+
+        await settle();
+        await scheduler.fetch(post("/cancel", { id: "job-6" }));
+        // The id is free again, so a caller can schedule a different job under it.
+        await scheduler.fetch(post("/schedule", { args: { fresh: true }, functionPath: "jobs.fresh", id: "job-6", scheduledFor: at + 60_000 }));
+
+        scheduler.releaseAll(true);
+        await settle();
+        scheduler.releaseAll(true);
+        await drain;
+
+        // The cancelled copy `alarm()` read is not dispatched, and the new job
+        // keeps its header and its own index entry.
+        expect(scheduler.started).not.toContain("job-6");
+        expect(state.storageMap.get("id:job-6")).toMatchObject({ functionPath: "jobs.fresh" });
+        expect(indexedAt(state.storageMap, "job-6")).toBe(at + 60_000);
     });
 });
 

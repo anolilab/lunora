@@ -8,6 +8,7 @@
  * harness suite (`@lunora/testing`) pins the same guarantees end to end; this
  * suite pins the ordering itself, which a row count cannot see.
  */
+import { createScheduler, SchedulerDO } from "@lunora/scheduler";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
@@ -353,6 +354,75 @@ describe("withDeferredSchedules", () => {
         await settle(true);
 
         expect(calls).toHaveLength(1);
+    });
+
+    it("schedules the job whose id it handed out for a fractional delay", async () => {
+        expect.assertions(3);
+
+        // The real client over the real SchedulerDO, whose time index takes whole
+        // milliseconds. A fractional delay used to pass the call-site guard, hand
+        // the handler an id, and then be refused at the flush, after the commit.
+        const storage = new Map<string, unknown>();
+        let alarm: number | null = null;
+        const durableObject = new SchedulerDO(
+            {
+                storage: {
+                    delete: async (keys: string | string[]) => [keys].flat().filter((key) => storage.delete(key)).length,
+                    deleteAlarm: () => {
+                        alarm = null;
+                    },
+                    get: async <T>(key: string) => storage.get(key) as T | undefined,
+                    getAlarm: async () => alarm,
+                    list: async <T>(options: { limit?: number; prefix?: string } = {}) =>
+                        new Map(
+                            [...storage.entries()]
+                                .filter(([key]) => key.startsWith(options.prefix ?? ""))
+                                .toSorted(([left], [right]) => (left < right ? -1 : 1))
+                                .slice(0, options.limit ?? storage.size) as [string, T][],
+                        ),
+                    put: async (entries: Record<string, unknown> | string, value?: unknown) => {
+                        for (const [key, entry] of typeof entries === "string" ? [[entries, value] as const] : Object.entries(entries)) {
+                            storage.set(key, entry);
+                        }
+                    },
+                    setAlarm: (time: Date | number) => {
+                        alarm = Number(time);
+                    },
+                },
+            },
+            { LUNORA_ORIGIN_URL: "https://app.test" },
+        );
+        const client = createScheduler({
+            namespace: {
+                get: () => {
+                    return { fetch: async (input: Request | string, init?: RequestInit) => durableObject.fetch(new Request(input, init)) };
+                },
+                idFromName: (name: string) => name,
+            },
+        });
+        const facade = withDeferredSchedules(client);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        const id = await facade.runAfter(1500.5, { __lunoraRef: "mail:send" } as never, {} as never);
+
+        await expect(settle(true)).resolves.toBeUndefined();
+        await expect(client.list()).resolves.toHaveLength(1);
+        await expect(client.get(id)).resolves.toMatchObject({ id });
+    });
+
+    it("rejects a delay past the latest schedulable instant at the call site rather than at the flush", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        expect(() => facade.runAfter(Number.MAX_SAFE_INTEGER, "mail:send")).toThrow("later than the latest schedulable instant");
+
+        await settle(true);
+
+        expect(calls).toHaveLength(0);
     });
 
     it("keeps the rest of the scheduler surface reachable", async () => {

@@ -76,6 +76,9 @@ class TestSchedulerDO extends DurableObject<Env> {
     /** What every dispatch reports back. `false` drives the retry ladder. */
     public dispatchOk = true;
 
+    /** When set, every dispatch `/cancel`s its own record while it is in flight. */
+    public cancelDuringDispatch = false;
+
     private readonly scheduler: ConcreteScheduler;
 
     public constructor(context: DurableObjectState, env: Env) {
@@ -96,6 +99,11 @@ class TestSchedulerDO extends DurableObject<Env> {
     /** Arm the `hold()` barrier. A setter, so a test never assigns to the instance directly. */
     public setBarrier(value: number): void {
         this.barrier = value;
+    }
+
+    /** Make every dispatch cancel its own record mid-flight. A setter, for the same reason as `setBarrier`. */
+    public setCancelDuringDispatch(value: boolean): void {
+        this.cancelDuringDispatch = value;
     }
 
     /** Make every dispatch report `ok`, or not. A setter, for the same reason as `setBarrier`. */
@@ -152,6 +160,17 @@ class ConcreteScheduler extends SchedulerDO {
         this.outer.dispatched.push(record);
 
         await this.outer.sampleIndex(record.id);
+
+        if (this.outer.cancelDuringDispatch) {
+            await this.fetch(
+                new Request("https://scheduler.internal/cancel", {
+                    body: JSON.stringify({ id: record.id }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        }
+
         await this.outer.hold();
 
         return this.outer.dispatchOk;
