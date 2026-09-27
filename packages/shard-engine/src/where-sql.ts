@@ -241,36 +241,119 @@ const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
  * Both engines cap one statement at 65,535 bound parameters, so a literal list
  * past that failed outright — "bind message has … parameter formats but 0
  * parameters" on Postgres, "too many placeholders" on MySQL — where D1 took the
- * same filter as one `json_each` parameter. Under half the cap, leaving the rest
- * of the statement room, and shared between the lists the way the SQLite budget
- * is (see {@link serverInList}).
+ * same filter as one `json_each` parameter. Close to the cap, so a list that
+ * fits as placeholders keeps them, with the rest left for the other predicates,
+ * and shared between the lists the way the SQLite budget is (see
+ * {@link serverInList}).
  */
-const SERVER_LIST_PARAM_BUDGET = 30_000;
+const SERVER_LIST_PARAM_BUDGET = 60_000;
+
+/** A wide list split by the storage type of its values, each part JSON-safe. */
+interface WideListParts {
+    /** Bytes, hex-encoded, for the engine to decode back into the same BLOBs. */
+    bytes: string[];
+    hasNull: boolean;
+    numbers: number[];
+    strings: string[];
+}
+
+/**
+ * Split a wide list's serialized values by type, refusing one JSON cannot carry
+ * exactly (see `isJsonSafe`) — silently binding it as something else would
+ * change which rows match.
+ */
+const splitWideList = (items: ReadonlyArray<unknown>, literalMax: number): WideListParts => {
+    const parts: WideListParts = { bytes: [], hasNull: false, numbers: [], strings: [] };
+
+    for (const item of items) {
+        if (item === null) {
+            parts.hasNull = true;
+        } else if (item instanceof Uint8Array) {
+            parts.bytes.push(Array.from(item, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+        } else if (typeof item === "number" && isJsonSafe(item)) {
+            parts.numbers.push(item);
+        } else if (typeof item === "string" && isJsonSafe(item)) {
+            parts.strings.push(item);
+        } else {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `an "in" list of ${String(items.length)} values holds a value that cannot be bound as one parameter (a non-finite number, or malformed text). Narrow the list to ${String(literalMax)} values or fewer.`,
+            );
+        }
+    }
+
+    return parts;
+};
+
+/** One membership test per value type — a column holds one type, so only one ever matches. */
+const wideListTests = (engine: "mysql" | "postgres", reference: SQL, parts: WideListParts): SQL[] => {
+    const tests: SQL[] = [];
+    const value = sql.identifier("v");
+    const alias = sql.identifier("__in__");
+
+    // Postgres: `jsonb_array_elements_text` over ONE text parameter cast to
+    // `jsonb` on the server. A JS array bound to `= ANY($1)` depends on the
+    // driver inferring an array type: postgres.js with `fetch_types: false` — the
+    // setting Hyperdrive recommends — sends it as a malformed array literal, and
+    // a bytes array fails with any driver that sends it untyped.
+    //
+    // The parameter is declared `text` and only then cast: typed `jsonb`
+    // directly, a driver that reads parameter types (postgres.js does) serialises
+    // the already-JSON string as JSON again, and the server sees one scalar.
+    const postgresElements = (list: ReadonlyArray<unknown>): SQL => sql`jsonb_array_elements_text(CAST(CAST(${JSON.stringify(list)} AS text) AS jsonb))`;
+    // MySQL: `JSON_TABLE` over one JSON parameter — MySQL has no array type.
+    const mysqlRows = (list: ReadonlyArray<unknown>, type: string): SQL =>
+        sql`JSON_TABLE(${JSON.stringify(list)}, '$[*]' COLUMNS (${value} ${sql.raw(type)} PATH '$')) ${alias}`;
+
+    if (parts.strings.length > 0) {
+        // MySQL strings are converted to the connection character set, which
+        // leaves them comparable under the COLUMN's collation the way a bound
+        // literal is: a table created before its text columns were pinned to a
+        // binary collation keeps a case-folding `utf8mb4_0900_ai_ci`, and a
+        // binary comparison would silently drop the rows a literal list matches.
+        // A column on another legacy collation (`utf8mb4_general_ci`,
+        // `utf8mb4_unicode_ci`) is refused by MySQL with "Illegal mix of
+        // collations" — loudly, never as a wrong answer; `@lunora/hyperdrive`'s
+        // dialect documents the one-off conversion.
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT ${postgresElements(parts.strings)})`
+                : sql`${reference} IN (SELECT CONVERT(${value} USING utf8mb4) FROM ${mysqlRows(parts.strings, "LONGTEXT")})`,
+        );
+    }
+
+    if (parts.numbers.length > 0) {
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT CAST(${postgresElements(parts.numbers)} AS double precision))`
+                : sql`${reference} IN (SELECT ${value} FROM ${mysqlRows(parts.numbers, "DOUBLE")})`,
+        );
+    }
+
+    if (parts.bytes.length > 0) {
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT decode(${postgresElements(parts.bytes)}, 'hex'))`
+                : sql`${reference} IN (SELECT UNHEX(${value}) FROM ${mysqlRows(parts.bytes, "LONGTEXT")})`,
+        );
+    }
+
+    return tests;
+};
 
 /**
  * The `IN` / `NOT IN` rendering for Postgres and MySQL: one placeholder per
  * item while the list fits its share of {@link SERVER_LIST_PARAM_BUDGET}, and
- * past it the whole list as ONE bound parameter, the way SQLite's `json_each`
- * form carries it.
+ * past it the whole list as ONE bound JSON parameter the engine unpacks, the way
+ * SQLite's `json_each` form carries it (see {@link wideListTests}).
  *
  * The share is scaled off the SQLite `budget` `compileWhereSql` hands every
  * list — that budget is already the statement's list allowance divided by the
  * number of lists — so seven wide lists in one `where` switch early enough that
  * together they stay under the cap, instead of each fitting on its own.
  *
- * Postgres binds it as an array: `= ANY($1)` is the membership test Postgres
- * rewrites a literal `IN` list into anyway, and `<> ALL($1)` its complement
- * with the same NULL semantics as `NOT IN`.
- *
- * MySQL has no array parameter, so the list travels as a JSON array. Strings
- * are unpacked with `JSON_TABLE` and converted to the connection's character
- * set, which leaves them comparable under the COLUMN's collation the way a
- * bound literal is — a table created before its text columns were pinned to a
- * binary collation keeps a case-folding one, and a JSON `MEMBER OF` test would
- * silently compare case-sensitively there. Other values (numbers, NULL) carry no
- * collation and are tested with `MEMBER OF`. JSON cannot carry every value (see
- * `isJsonSafe`), so such a list is refused rather than bound as something else,
- * and a `NOT IN` list holding NULL keeps SQL's rule — it matches no row.
+ * NULL keeps SQL's rules: it matches nothing in an `IN` list, and a `NOT IN`
+ * list holding it matches no row.
  */
 const serverInList =
     (engine: "mysql" | "postgres") =>
@@ -286,36 +369,17 @@ const serverInList =
             return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
         }
 
-        if (engine === "postgres") {
-            return negated ? sql`${reference} <> ALL(${sql.param(items)})` : sql`${reference} = ANY(${sql.param(items)})`;
-        }
+        const parts = splitWideList(items, literalMax);
 
-        if (!items.every((item) => isJsonSafe(item))) {
-            throw new LunoraError(
-                "BAD_REQUEST",
-                `an "in" list of ${String(items.length)} values holds a value JSON cannot carry (bytes, a non-finite number, or malformed text), so it cannot be bound as one parameter on MySQL. Narrow the list to ${String(literalMax)} values or fewer.`,
-            );
-        }
-
-        // eslint-disable-next-line unicorn/no-null -- SQL NULL in the bound list, not a JS absence
-        if (negated && items.includes(null)) {
+        if (negated && parts.hasNull) {
             return sql`1 = 0`;
         }
 
-        const strings = items.filter((item) => typeof item === "string");
-        const others = items.filter((item) => typeof item !== "string");
-        const tests: SQL[] = [];
+        const tests = wideListTests(engine, reference, parts);
 
-        if (strings.length > 0) {
-            const value = sql.identifier("v");
-
-            tests.push(
-                sql`${reference} IN (SELECT CONVERT(${value} USING utf8mb4) FROM JSON_TABLE(${JSON.stringify(strings)}, '$[*]' COLUMNS (${value} LONGTEXT PATH '$')) ${sql.identifier("__in__")})`,
-            );
-        }
-
-        if (others.length > 0) {
-            tests.push(sql`${reference} MEMBER OF (CAST(${JSON.stringify(others)} AS JSON))`);
+        if (tests.length === 0) {
+            // Every value was NULL: an `IN` over nothing but NULL matches no row.
+            return sql`1 = 0`;
         }
 
         const members = tests.length === 1 ? (tests[0] as SQL) : sql`(${sql.join(tests, sql` OR `)})`;
