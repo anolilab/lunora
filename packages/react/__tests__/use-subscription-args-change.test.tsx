@@ -108,29 +108,4 @@ describe("useSubscription — args change", () => {
 
         expect(screen.getByTestId("view").textContent).toBe("loading");
     });
-
-    it("keeps an absent shard key apart from an empty one", () => {
-        expect.hasAssertions();
-
-        const Sharded = ({ shardKey }: { shardKey: string | undefined }): ReactElement => {
-            const { data } = useSubscription(REF, { id: "1" }, { shardKey });
-
-            return <div data-testid="view">{data ?? "loading"}</div>;
-        };
-        const mock = createMockClient();
-        const tree = (shardKey: string | undefined): ReactElement => (
-            <LunoraProvider client={mock.asClient}>
-                <Sharded shardKey={shardKey} />
-            </LunoraProvider>
-        );
-        const view = render(tree(undefined));
-
-        act(() => {
-            mock.emit("docs:get", "root-shard", isDocument("1"));
-        });
-
-        view.rerender(tree(""));
-
-        expect(screen.getByTestId("view").textContent).toBe("loading");
-    });
 });

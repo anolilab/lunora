@@ -102,8 +102,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // query + room + shard) and returned only while that room is current, so a
     // room change reads as "no members yet" from its first render instead of
     // listing the previous room's members until the new subscription answers.
-    // eslint-disable-next-line unicorn/no-null -- `null` keeps an absent shard key distinct from `""`, as `lunoraQueryKey` does
-    const roomKey = JSON.stringify([listPresent.__lunoraRef, roomId, shardKey ?? null]);
+    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+    const roomKey = JSON.stringify([listPresent.__lunoraRef, roomId, shardKey ?? ""]);
     const [listState, setListState] = useState<{
         client: typeof client;
         error: SubscriptionError | undefined;
