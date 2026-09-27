@@ -104,16 +104,20 @@ function useAdminAuthList<T>(
     // ever exposing the credential itself, and a same-user token refresh (same
     // `subj:`) keeps the same key instead of forcing a spurious refetch.
     //
-    // Residual caveat: `placeholderData: keepPreviousData` below (added for
-    // `loadMore`) shows the *previous* observer's data as a placeholder while
-    // any new key resolves, including the key produced by an identity swap —
-    // so a narrow placeholder-only window (never a persistent cache read) can
-    // still surface admin A's rows to admin B until the refetch lands. Scoping
-    // the placeholder to same-identity key changes would close that gap; left
-    // as a follow-up since this fold already satisfies the ask (an identity
-    // swap gets its own cache entry, not admin A's).
+    // Two signals move the identity: a bearer token swap fires
+    // `onAuthTokenChange`, and a cookie session's user switch or sign-out fires
+    // only `onIdentityChange` (no token changes hands). Both are subscribed, or
+    // admin A's list would stay on screen for user B under a cookie session.
     const identity = useSyncExternalStore(
-        (onChange) => client.onAuthTokenChange(onChange),
+        (onChange) => {
+            const offToken = client.onAuthTokenChange(onChange);
+            const offIdentity = client.onIdentityChange(onChange);
+
+            return () => {
+                offToken();
+                offIdentity();
+            };
+        },
         () => client.currentIdentity(),
         () => client.currentIdentity(),
     );
@@ -128,7 +132,10 @@ function useAdminAuthList<T>(
         // `limit` is part of it — is in flight. Without this, `loadMore()`
         // flashes the whole list to `undefined`/loading on every page grow,
         // because TanStack v5 has no cached entry for the new key yet.
-        placeholderData: keepPreviousData,
+        //
+        // Only within one identity: the previous identity's rows must never
+        // stand in for the next one's while its first read is in flight.
+        placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === queryKey[1] ? keepPreviousData(previous) : undefined),
         queryFn: () => fetchPage(limit),
         queryKey,
         // `<LunoraProvider>`'s default QueryClient sets `staleTime: Infinity`

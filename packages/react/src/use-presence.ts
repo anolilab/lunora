@@ -98,8 +98,19 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `randomSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
     const generatedSessionId = useMemo(() => options.sessionId ?? randomSessionId(), [options.sessionId]);
 
-    const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
-    const [error, setError] = useState<SubscriptionError | undefined>(undefined);
+    // The list and error are stored with the room they belong to (client +
+    // query + room + shard) and returned only while that room is current, so a
+    // room change reads as "no members yet" from its first render instead of
+    // listing the previous room's members until the new subscription answers.
+    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+    const roomKey = JSON.stringify([listPresent.__lunoraRef, roomId, shardKey ?? ""]);
+    const [listState, setListState] = useState<{
+        client: typeof client;
+        error: SubscriptionError | undefined;
+        key: string;
+        present: ReturnOf<L> | undefined;
+    }>();
+    const current = listState?.client === client && listState.key === roomKey ? listState : undefined;
 
     // The subscribe effect keys on the query ref + room + shard, so an inline
     // `onError` must not change its identity — read the latest through a ref.
@@ -152,6 +163,12 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // ReferenceError on mount (RN-01) instead of just skipping the
     // visibility-driven heartbeat, which is a web-only refinement anyway (the
     // interval heartbeat still covers RN).
+    //
+    // Re-armed when the heartbeat target (client, room, session, shard) changes,
+    // so a new room is joined at once rather than on the next interval tick.
+    // `sendHeartbeat` reads those from `inputsRef`, which the effect above has
+    // already refreshed by the time this one runs.
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: `client`/`roomId`/`generatedSessionId`/`shardKey` are read through `inputsRef`; they are listed so a change of target sends an immediate heartbeat and restarts the interval.
     useEffect(() => {
         sendHeartbeat();
 
@@ -174,7 +191,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
                 document.removeEventListener("visibilitychange", onVisible);
             }
         };
-    }, [sendHeartbeat, intervalMs]);
+    }, [sendHeartbeat, intervalMs, client, roomId, generatedSessionId, shardKey]);
 
     // Register this room/session as the socket's connection context so the
     // server's presence `onDisconnect` hook can delete the row the instant the
@@ -200,14 +217,20 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             { roomId } as ArgsOf<L>,
             (value) => {
                 if (!cancelled) {
-                    setPresent(value);
-                    setError(undefined);
+                    setListState({ client, error: undefined, key: roomKey, present: value });
                 }
             },
             {
                 onError: (subscriptionError) => {
                     if (!cancelled) {
-                        setError(subscriptionError);
+                        setListState((previous) => {
+                            return {
+                                client,
+                                error: subscriptionError,
+                                key: roomKey,
+                                present: previous?.client === client && previous.key === roomKey ? previous.present : undefined,
+                            };
+                        });
                     }
 
                     onErrorRef.current?.(subscriptionError);
@@ -219,11 +242,14 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         return () => {
             cancelled = true;
             unsubscribe();
+            // A retired subscription's list must not come back when the hook
+            // returns to this room before the next one answered.
+            setListState(undefined);
         };
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `onErrorRef` is a stable ref carrying the latest handler. `client` is provider-stable (swapping it remounts the provider subtree).
-    }, [client, listPresent.__lunoraRef, roomId, shardKey]);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `onErrorRef` is a stable ref carrying the latest handler. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
+    }, [client, listPresent.__lunoraRef, roomId, roomKey, shardKey]);
 
-    return { error, present, sessionId: generatedSessionId, setData };
+    return { error: current?.error, present: current?.present, sessionId: generatedSessionId, setData };
 };
 
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };

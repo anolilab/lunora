@@ -21,8 +21,9 @@ import type { UseQueryOptions } from "./types";
  * flash before the socket round-trip.
  *
  * Internally this routes through TanStack Query: the queryKey is
- * `["lunora", fn.__lunoraRef, args, shardKey]` (TanStack hashes structurally
- * so an args object built in a different key order still dedupes). The
+ * `["lunora", fn.__lunoraRef, stableWireKey(args), shardKey]` (the args are
+ * encoded key-order-independently, so an args object built in a different key
+ * order still dedupes, and wire-typed args get distinct entries). The
  * subscription registry shares a single WS subscription across every consumer
  * of the same queryKey; pushes call `queryClient.setQueryData(...)`.
  *
@@ -80,7 +81,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         ? undefined
         : (client.peekHydratedQuery(function_.__lunoraRef, argsRecord, shardKey) as ReturnOf<F> | undefined);
 
-    // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- neither flagged dependency can be a queryKey member: `client` is the provider-stable, non-serializable client the comment above covers, and `queryKey` IS this key — the queryFn reads the push counter and the cache entry under it, which is exactly the key it already belongs to. The rule only stopped seeing through this call because the body became a block with statements.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped && hydrated,
@@ -119,7 +120,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         const registry = getSubscriptionRegistry(client);
 
         return registry.attach(queryClient, queryKey, function_, argsRecord, shardKey, { onError: stableOnError });
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash), the client, or the skip flag changes — not on every fresh `function_`/`argsRecord`/`shardKey` object identity. `stableOnError` is ref-backed and never changes. `client` is provider-stable (swapping it remounts the provider subtree).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash), the client, or the skip flag changes — not on every fresh `function_`/`argsRecord`/`shardKey` object identity. `stableOnError` is ref-backed and never changes. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
     }, [client, queryClient, serializeQueryKey(queryKey), skipped, stableOnError]);
 
     // When skipped, the queryKey collapses to `["lunora", ref, {}, null]` — the

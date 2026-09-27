@@ -22,9 +22,17 @@ import { stableWireKey } from "../../../shared/wire-key";
 const keyHash = (queryKey: QueryKey): string => stableWireKey(queryKey);
 
 /**
- * Project a Lunora `(fn, args, shardKey)` triple into the structural query key
- * TanStack hashes for dedup. The `"lunora"` literal namespaces our entries so
- * an app's own queries can't collide with ours.
+ * Project a Lunora `(fn, args, shardKey)` triple into the query key TanStack
+ * hashes for dedup. The `"lunora"` literal namespaces our entries so an app's
+ * own queries can't collide with ours.
+ *
+ * `args` sits in the key already encoded by `stableWireKey`, not as the raw
+ * object. TanStack hashes keys with `JSON.stringify`, which maps `NaN` to
+ * `null`, `-0` to `0` and a `Date` to its ISO string (so distinct args shared
+ * one cache entry and served each other's rows) and throws on a `bigint`. A
+ * string slot hashes the same under any hash function, so every QueryClient
+ * agrees on it without configuration: a caller's own, a server-side one
+ * `prefetchQuery` seeds, and one driven through `lunoraQueryOptions`.
  *
  * This is the single source of truth for the key shape: `useQuery`,
  * `usePreloadedQuery`, and the server-side `prefetchQuery` all route through it
@@ -34,7 +42,7 @@ const keyHash = (queryKey: QueryKey): string => stableWireKey(queryKey);
 const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
     "lunora",
     function_.__lunoraRef,
-    args,
+    stableWireKey(args),
     // eslint-disable-next-line unicorn/no-null -- this literal is part of the JSON-serialized query key TanStack hashes for dedup; `null` keeps a stable, distinct slot from an absent shardKey across renders.
     shardKey ?? null,
 ];

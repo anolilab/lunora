@@ -2,7 +2,7 @@
 
 import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
@@ -57,8 +57,12 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     const registry = getSubscriptionRegistry(client);
     const identityEpoch = useSyncExternalStore(registry.subscribeIdentityEpoch, registry.identityEpoch, () => 0);
 
+    // Likewise bound to the client this hook mounted under: after a provider
+    // `client` swap the value belongs to the previous client, not the new one.
+    const [mountClient] = useState(client);
+
     const { args, functionPath, shardKey } = preloaded;
-    const value = identityEpoch === 0 ? preloaded.value : undefined;
+    const value = identityEpoch === 0 && client === mountClient ? preloaded.value : undefined;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
     // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
     // reference each render is fine — React Compiler auto-memoizes these
@@ -66,7 +70,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
     const queryKey = lunoraQueryKey(functionRef, args, shardKey);
 
-    // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
     const { data } = useTanStackQuery<T>({
         // Seed the cache with the server value so the first paint doesn't
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
@@ -79,7 +83,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
 
     useEffect(
         () => registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError }),
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is provider-stable (swapping it remounts the provider subtree).
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
         [client, queryClient, serializeQueryKey(queryKey), stableOnError],
     );
 
