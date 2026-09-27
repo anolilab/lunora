@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'errors.dart';
 import 'offline_queue.dart';
@@ -59,6 +60,31 @@ class OfflineReplayer {
 
   final Stopwatch _clock = Stopwatch()..start();
 
+  /// The pending re-flush per shard, and how many answered transient failures
+  /// in a row that shard has met — what the hintless backoff ramps on.
+  ///
+  /// A 429 or a 503 arrives over a socket that STAYS open, so nothing reconnects
+  /// to flush again: without a timer the write sat queued until the socket
+  /// happened to drop (protocol/README.md 4.3).
+  final Map<String, Timer> _retryTimers = <String, Timer>{};
+  final Map<String, int> _retryAttempts = <String, int>{};
+
+  /// Shards whose retry timer has just fired. That timer already waited out the
+  /// rate-limit window, so the flush it starts skips the check once rather than
+  /// racing the stopwatch by a millisecond.
+  final Set<String> _retryDue = <String>{};
+
+  final Random _random = Random();
+
+  /// Drop every scheduled re-flush: the client closed, or this shard's socket
+  /// went down and its reconnect flushes anyway.
+  void cancelRetries({String? shardKey, bool all = false}) {
+    for (final shard in all ? _retryTimers.keys.toList() : <String>[shardKey ?? '']) {
+      _retryTimers.remove(shard)?.cancel();
+      _retryAttempts.remove(shard);
+    }
+  }
+
   /// Replay every queued write, oldest first.
   ///
   /// Called for you on the transition to connected; public because a caller that
@@ -88,15 +114,19 @@ class OfflineReplayer {
     try {
       bool again;
       int? retryAfter;
+      _FlushState state;
 
       do {
         _flushAgain.remove(shard);
 
-        retryAfter = await _flushOnce(shardKey);
+        state = _FlushState();
+        retryAfter = await _flushOnce(shardKey, state);
         // Only while THIS shard is still connected, so a disconnect that lands
         // mid-pass ends the loop instead of retrying into a socket that is down.
         again = _flushAgain.contains(shard);
       } while (again && isConnected(shardKey));
+
+      _scheduleRetry(shardKey, state, retryAfter);
 
       return retryAfter;
     } finally {
@@ -115,9 +145,7 @@ class OfflineReplayer {
   /// did both. An unexpected failure is therefore treated as a transport one:
   /// every drained write not yet settled goes back on the queue, in order, for
   /// the next flush.
-  Future<int?> _flushOnce(String? shardKey) async {
-    final state = _FlushState();
-
+  Future<int?> _flushOnce(String? shardKey, _FlushState state) async {
     try {
       return await _replayPass(shardKey, state);
     } on Object {
@@ -148,7 +176,9 @@ class OfflineReplayer {
     // earns the same 429, indefinitely.
     final remaining = _flushNotBefore - _clock.elapsedMilliseconds;
 
-    if (remaining > 0) {
+    if (!_retryDue.remove(shardKey ?? '') && remaining > 0) {
+      state.waited = true;
+
       return remaining;
     }
 
@@ -284,8 +314,43 @@ class OfflineReplayer {
     return chunks;
   }
 
+  /// Re-flush a shard whose replay a server ANSWERED with a transient refusal,
+  /// after its hint or, lacking one, a bounded jittered backoff.
+  ///
+  /// Only while that shard is connected: a raw transport failure is what a
+  /// dropped socket looks like, and the reconnect flushes anyway. One timer per
+  /// shard, replaced rather than stacked; a pass with no answered failure resets
+  /// the backoff.
+  void _scheduleRetry(String? shardKey, _FlushState state, int? retryAfter) {
+    final shard = shardKey ?? '';
+
+    if (!state.answered && !state.waited) {
+      _retryAttempts.remove(shard);
+
+      return;
+    }
+
+    if (isClosed() || !isConnected(shardKey)) {
+      return;
+    }
+
+    final attempts = (_retryAttempts[shard] ?? 0) + (state.answered ? 1 : 0);
+
+    _retryAttempts[shard] = attempts;
+    _retryTimers.remove(shard)?.cancel();
+    _retryTimers[shard] = Timer(Duration(milliseconds: retryAfter ?? replayBackoffMs(attempts, _random.nextDouble)), () {
+      _retryTimers.remove(shard);
+      _retryDue.add(shard);
+      unawaited(flush(shardKey: shardKey));
+    });
+  }
+
   /// Record a rate limit's delay, and hold the next flush off until it passes.
   void _noteRetryAfter(_FlushState state, Object error) {
+    if (error is LunoraApiException && !authReplayErrorCodes.contains(error.code)) {
+      state.answered = true;
+    }
+
     final delay = retryAfterMs(error);
 
     if (delay == null) {
@@ -598,6 +663,13 @@ class OfflineReplayer {
 class _FlushState {
   /// Milliseconds the server asked the caller to wait before flushing again.
   int? retryAfterMs;
+
+  /// A server or edge ANSWERED a replay with a transient refusal — a raw
+  /// transport failure never landed, and a held credential waits for a token.
+  bool answered = false;
+
+  /// The pass met the rate-limit window and drained nothing.
+  bool waited = false;
 
   /// Every write this pass took off the queue, in order — what the guard in
   /// `_flushOnce` puts back if the pass fails before settling them.

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -96,6 +97,11 @@ MAX_BATCH_BYTES = 1_048_576 - 65_536
 #: a queue; the write is not dropped either way, only retried sooner.
 MAX_RETRY_AFTER_MS = 60_000
 
+#: The first wait of a hintless replay backoff, doubled per consecutive answered
+#: failure up to :data:`MAX_RETRY_AFTER_MS` (the reference's
+#: ``BASE_REPLAY_RETRY_DELAY_MS``).
+BASE_REPLAY_RETRY_DELAY_MS = 1_000
+
 Transform = Callable[[Any], Any]
 
 
@@ -156,7 +162,7 @@ class MutationSettled:
 class FlushReport:
     """What one :meth:`LunoraClient.flush_offline_queue` pass achieved."""
 
-    __slots__ = ("committed", "conflicted", "rejected", "requeued", "retry_after_ms")
+    __slots__ = ("_answered", "committed", "conflicted", "rejected", "requeued", "retry_after_ms")
 
     def __init__(self) -> None:
         #: Milliseconds the server asked the caller to wait before flushing
@@ -174,6 +180,10 @@ class FlushReport:
         self.requeued: list[str] = []
         #: Ids dropped because their precondition no longer held.
         self.conflicted: list[str] = []
+        #: A server or edge ANSWERED a replay with a transient refusal (a 429, a
+        #: 503, a shard blip), so the socket stays up and nothing reconnects to
+        #: flush again: ``connect_and_run`` schedules the retry off this.
+        self._answered = False
 
 
 @dataclass
@@ -250,6 +260,30 @@ def retry_after_ms(error: BaseException) -> Optional[int]:
         return None
 
     return min(delay, MAX_RETRY_AFTER_MS)
+
+
+def replay_backoff_ms(attempt: int, rand: Callable[[], float] = random.random) -> int:
+    """The wait before retrying a transient refusal that named no delay.
+
+    Exponential in ``attempt`` (1-based) from :data:`BASE_REPLAY_RETRY_DELAY_MS`,
+    capped at :data:`MAX_RETRY_AFTER_MS`, then jittered across the top half of
+    that ceiling so clients refused by one limiter do not return in lockstep —
+    the reference's ``defaultReplayRetryDelayMs``.
+    """
+
+    ceiling = min(BASE_REPLAY_RETRY_DELAY_MS * 2 ** max(attempt - 1, 0), MAX_RETRY_AFTER_MS)
+
+    return round(ceiling * (0.5 + rand() * 0.5))
+
+
+def _is_answered(error: BaseException) -> bool:
+    """Whether a transient failure came back FROM a server or an edge.
+
+    A raw transport exception never landed, so the reconnect that follows it
+    flushes anyway; a held credential waits for a new token instead.
+    """
+
+    return isinstance(error, LunoraError) and error.code not in AUTH_HOLD_ERROR_CODES
 
 
 async def submit_write(client: LunoraClient, options: SubmitOptions) -> MutationOutcome:
@@ -517,6 +551,9 @@ def _chunk_batches(items: list) -> list:
 
 def _note_retry_after(client: LunoraClient, report: FlushReport, error: BaseException) -> None:
     """Record a rate limit's delay, and hold the next flush off until it passes."""
+
+    if _is_answered(error):
+        report._answered = True
 
     delay = retry_after_ms(error)
 
