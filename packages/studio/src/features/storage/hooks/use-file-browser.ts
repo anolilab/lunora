@@ -231,6 +231,13 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // below discard any result whose id is no longer the latest.
     const listSeq = useRef(0);
     const orphanSeq = useRef(0);
+    // Bumped on every bucket switch. A write (upload / delete) captures it before
+    // its request and reloads afterwards only if it still matches: its closure's
+    // `list` is bound to the bucket the write started in, and reloading through it
+    // after a switch would supersede the new bucket's listing with the old one's
+    // rows — under a picker naming the new bucket, whose row actions then send the
+    // old bucket's keys to it.
+    const bucketEpoch = useRef(0);
 
     useEffect(() => {
         const token = { cancelled: false };
@@ -461,30 +468,46 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         setExpiry(seconds);
     };
 
-    // Delete every selected object (one schema-aware call each) then reload + clear.
-    const bulkDelete = (): void => {
+    // Run a write against the active bucket, then reload the listing — unless the
+    // operator switched bucket while it was in flight (see `bucketEpoch`); the
+    // switch already re-lists the new bucket and owns the busy flag from there.
+    const runWrite = (write: () => Promise<void>): void => {
+        const epoch = bucketEpoch.current;
+
         setError(undefined);
         setBusy(true);
 
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    for (const key of selected) {
-                        /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
-                        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
-                        await storageApi.remove(key);
-                        /* eslint-enable no-await-in-loop */
-                    }
+                    await write();
 
-                    await list(prefix, undefined, false);
-                    clearSelection();
+                    if (epoch === bucketEpoch.current) {
+                        await list(prefix, undefined, false);
+                    }
                 } catch (error_) {
                     setError(errorMessage(error_));
                 }
 
-                setBusy(false);
+                if (epoch === bucketEpoch.current) {
+                    setBusy(false);
+                }
             })(),
         );
+    };
+
+    // Delete every selected object (one schema-aware call each) then reload + clear.
+    const bulkDelete = (): void => {
+        runWrite(async () => {
+            for (const key of selected) {
+                /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
+                // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
+                await storageApi.remove(key);
+                /* eslint-enable no-await-in-loop */
+            }
+
+            clearSelection();
+        });
     };
 
     const onCopy = (key: string): void => {
@@ -543,21 +566,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     }, [copiedKey]);
 
     const onDelete = (key: string): void => {
-        setError(undefined);
-        setBusy(true);
-
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    await storageApi.remove(key);
-                    await list(prefix, undefined, false);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
-
-                setBusy(false);
-            })(),
-        );
+        runWrite(async () => {
+            await storageApi.remove(key);
+        });
     };
 
     const onFile = (file: File): void => {
@@ -565,23 +576,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         // operator is browsing.
         const key = `${prefix}${file.name}`;
 
-        setError(undefined);
-        setBusy(true);
+        runWrite(async () => {
+            const body = await file.arrayBuffer();
 
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const body = await file.arrayBuffer();
-
-                    await storageApi.upload({ body, contentType: file.type === "" ? undefined : file.type, key });
-                    await list(prefix, undefined, false);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
-
-                setBusy(false);
-            })(),
-        );
+            await storageApi.upload({ body, contentType: file.type === "" ? undefined : file.type, key });
+        });
     };
 
     // The orphan check spans the whole bucket against `referenceShard`'s records,
@@ -659,6 +658,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         // late response can't paint its rows or dangling report under the new bucket.
         listSeq.current += 1;
         orphanSeq.current += 1;
+        bucketEpoch.current += 1;
         setBucket(name);
         setPrefix(initialPrefix ?? "");
         setDraftPrefix(initialPrefix ?? "");
