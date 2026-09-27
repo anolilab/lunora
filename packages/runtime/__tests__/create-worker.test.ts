@@ -2717,6 +2717,99 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
         expect(authHandler).not.toHaveBeenCalled();
     });
 
+    it("caps a chunked `/api/auth/*` body with no Content-Length at 1 MiB while it streams", async () => {
+        expect.assertions(2);
+
+        let bytesSeen = 0;
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async (request) => {
+            const reader = request.body!.getReader();
+
+            try {
+                while (true) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential stream read
+                    const { done, value } = await reader.read();
+
+                    if (done) {
+                        break;
+                    }
+
+                    bytesSeen += value.byteLength;
+                }
+            } catch {
+                // A handler that swallows the read error and answers anyway must not win.
+            }
+
+            return new Response("ok", { status: 200 });
+        });
+        const worker = createWorker({ authHandler, shardDO: shard.namespace });
+        const chunk = new Uint8Array(64 * 1024).fill(0x61);
+        let sent = 0;
+        // 48 × 64 KiB = 3 MiB, streamed with no Content-Length.
+        const body = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                if (sent < 48) {
+                    sent += 1;
+                    controller.enqueue(chunk);
+                } else {
+                    controller.close();
+                }
+            },
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/api/auth/sign-in/email", { body, duplex: "half", method: "POST" } as RequestInit),
+            {},
+            collectingContext,
+        );
+
+        expect(bytesSeen).toBeLessThanOrEqual(1_048_576);
+        expect(res.status).toBe(413);
+    });
+
+    it("leaves the body readable for later routing when the auth handler declines without reading it", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response | undefined>>(async () => undefined);
+        const worker = createWorker({
+            authHandler,
+            routes: { "POST /api/auth/custom": async (request: Request) => new Response(await request.text()) },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/api/auth/custom", { body: "hello", method: "POST" }), {}, collectingContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("hello");
+    });
+
+    it("hands a normal sign-in body to the auth handler intact, with method, URL and headers preserved", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async (request) =>
+            Response.json({ body: await request.json(), contentType: request.headers.get("content-type"), method: request.method, url: request.url }),
+        );
+        const worker = createWorker({ authHandler, shardDO: shard.namespace });
+        const payload = { email: "a@example.com", password: "hunter22" };
+
+        const res = await worker.fetch(
+            new Request("https://app.example/api/auth/sign-in/email", {
+                body: JSON.stringify(payload),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            collectingContext,
+        );
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toStrictEqual({
+            body: payload,
+            contentType: "application/json",
+            method: "POST",
+            url: "https://app.example/api/auth/sign-in/email",
+        });
+    });
+
     it("does NOT record for a non-attempt auth route (get-session)", async () => {
         expect.assertions(2);
 
