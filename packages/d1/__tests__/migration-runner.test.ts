@@ -171,20 +171,50 @@ describe("migrationRunner", () => {
         expect(database.executed.some((e) => e.sql.startsWith("CREATE TABLE b"))).toBe(true);
     });
 
-    it("skips already-applied migrations", async () => {
+    it("skips already-applied migrations by version", async () => {
+        expect.assertions(3);
+
+        const sqlite = new DatabaseSync(":memory:");
+
+        try {
+            const database = createSqliteDatabase(sqlite);
+
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }]).run();
+
+            const result = await new MigrationRunner(database, [
+                { name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 },
+                { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
+            ]).run();
+
+            expect(result.applied.map((m) => m.version)).toEqual([2]);
+            expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            expect(sqlite.prepare("SELECT version FROM __drizzle_migrations ORDER BY id").all()).toEqual([{ version: 1 }, { version: 2 }]);
+        } finally {
+            sqlite.close();
+        }
+    });
+
+    it("refuses an applied version whose SQL changed, before applying anything", async () => {
         expect.assertions(2);
 
-        const initialSql = "CREATE TABLE a (id INTEGER);";
-        const database = await createDatabase([initialSql]);
-        const runner = new MigrationRunner(database, [
-            { name: "init", sql: initialSql, version: 1 },
-            { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
-        ]);
+        const sqlite = new DatabaseSync(":memory:");
 
-        const result = await runner.run();
+        try {
+            const database = createSqliteDatabase(sqlite);
 
-        expect(result.applied.map((m) => m.version)).toEqual([2]);
-        expect(result.skipped.map((m) => m.version)).toEqual([1]);
+            await new MigrationRunner(database, [{ name: "init", sql: "CREATE TABLE a (id INTEGER);", version: 1 }]).run();
+
+            const edited = new MigrationRunner(database, [
+                { name: "init", sql: "CREATE TABLE a (id INTEGER); -- reworded", version: 1 },
+                { name: "add_b", sql: "CREATE TABLE b (id INTEGER);", version: 2 },
+            ]);
+
+            await expect(edited.run()).rejects.toMatchObject({ code: "MIGRATION_DRIFT" });
+            // v2 was pending, and still did not run: the refusal comes first.
+            expect(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'b'").all()).toEqual([]);
+        } finally {
+            sqlite.close();
+        }
     });
 
     it("rejects duplicate versions at construction time", async () => {

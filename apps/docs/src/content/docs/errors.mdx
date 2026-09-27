@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 156 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 157 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -474,6 +474,15 @@ Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of
 ### `METHOD_NOT_ALLOWED`
 
 `405` — Method not allowed
+
+### `MIGRATION_DRIFT`
+
+`409` — Migration drift
+
+An applied SQL migration is never re-run, so the runner stopped before applying anything.
+
+- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.
+- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.
 
 ### `MIGRATION_ID_NOT_STATIC`
 

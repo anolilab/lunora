@@ -133,6 +133,17 @@ export const ERROR_CATALOG = {
         title: "Transaction limit exceeded",
     },
     MIGRATION_NOT_FOUND: { status: 404, title: "Data migration not found" },
+    /** `@lunora/d1`'s `MigrationRunner` refused to run: an applied migration's SQL changed, or the tracking table cannot say which migrations already ran. */
+    MIGRATION_DRIFT: {
+        hint: [
+            "An applied SQL migration is never re-run, so the runner stopped before applying anything.",
+            "",
+            "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
+            "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.",
+        ],
+        status: 409,
+        title: "Migration drift",
+    },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
     GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },
 

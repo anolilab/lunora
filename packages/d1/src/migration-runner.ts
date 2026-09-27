@@ -23,19 +23,27 @@ interface Migration {
  * `Number(created_at) < migration.folderMillis` of the newest row (its
  * `d1/migrator.js`; it never reads `hash`), and it stores `folderMillis` — the
  * moment the journal entry was *generated*. This runner stores wall-clock
- * millis at *apply* time and dedups by content hash instead, so after a swap
+ * millis at *apply* time and dedups by version instead, so after a swap
  * every journal migration generated before the last Lunora apply would be
  * skipped. Moving to drizzle-kit journals therefore needs a real data
  * migration (rewrite `created_at` from the journal), not just a call-site swap.
  *
- * - `hash` is the SHA-256 of the migration SQL — content-addressed dedup.
- * `UNIQUE` so two runners racing the same pending migration (parallel CI
- * deploys / two isolates on the migrate path) can't both insert the tracking
- * row: the loser's atomic batch rolls back and its body never double-applies.
+ * - `version` is the migration's version, and what decides whether it has run.
+ * `UNIQUE` (through {@link TRACKING_VERSION_INDEX}) so two runners racing the
+ * same pending migration (parallel CI deploys / two isolates on the migrate
+ * path) can't both insert the tracking row: the loser's atomic batch rolls back
+ * and its body never double-applies. Nullable only because a table written
+ * before it existed has rows without one; {@link MigrationRunner.run} backfills
+ * them from the hash.
+ * - `hash` is the SHA-256 of the migration SQL, recorded so an applied
+ * migration whose text later changes is caught as drift rather than applied a
+ * second time. `UNIQUE` as well, for the same race.
  * - `created_at` is wall-clock millis at apply time (NUMERIC per drizzle).
  */
 const TRACKING_TABLE_NAME = "__drizzle_migrations";
-const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC)`;
+const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, created_at NUMERIC, version INTEGER)`;
+/** The unique index on `version`: a named index rather than a column constraint, because `ADD COLUMN` cannot add a UNIQUE one to a table that predates it. */
+const TRACKING_VERSION_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS ${TRACKING_TABLE_NAME}_version ON ${TRACKING_TABLE_NAME} (version)`;
 
 /** Single whitespace char — used by the trailing-token scan. Hoisted to avoid per-call recompilation. */
 const WHITESPACE_RE = /\s/u;
@@ -82,7 +90,14 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
  * error, raised when a concurrent runner inserted the tracking row first. Built
  * from {@link TRACKING_TABLE_NAME} so it can't drift from the table it guards.
  */
-const TRACKING_HASH_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${TRACKING_TABLE_NAME}\.hash`, "iu");
+const TRACKING_HASH_UNIQUE_RE = new RegExp(String.raw`UNIQUE constraint failed:\s*${TRACKING_TABLE_NAME}\.(?:hash|version)`, "iu");
+
+/** One row of the tracking table as {@link MigrationRunner.run} reads it. */
+interface TrackingRow {
+    hash: string;
+    id: number;
+    version: null | number;
+}
 
 interface MigrationRunnerResult {
     applied: { name: string; version: number }[];
@@ -303,10 +318,16 @@ const hashMigration = async (text: string): Promise<string> => {
 
 /**
  * Sequentially applies pending migrations against a D1 database via the
- * drizzle-orm/d1 driver. Each migration is hashed (SHA-256 over its SQL
- * text); the hash is stored in `__drizzle_migrations`, so re-applying the
- * same SQL under a different `version` is rejected and identical migrations
- * are skipped idempotently.
+ * drizzle-orm/d1 driver, recording each one's `version` and SHA-256 in
+ * `__drizzle_migrations`.
+ *
+ * A migration is skipped when its VERSION is recorded, never by its text alone.
+ * Deduplicating by hash re-applied any migration whose text changed after it
+ * ran — a comment, a whitespace fix, a CRLF checkout — so a non-idempotent one
+ * (`SET balance = balance * 100`) ran twice. A recorded version whose hash no
+ * longer matches is refused as `MIGRATION_DRIFT` instead: the runner cannot
+ * tell a harmless edit from a changed migration, and running either again is
+ * the one outcome that is never right.
  */
 class MigrationRunner {
     private readonly client: D1Client;
@@ -326,22 +347,45 @@ class MigrationRunner {
     }
 
     public async run(): Promise<MigrationRunnerResult> {
-        await this.client.drizzle.run(sql.raw(TRACKING_TABLE_DDL));
-
-        const appliedRows = await this.client.drizzle.all<{ hash: string }>(sql.raw(`SELECT hash FROM ${TRACKING_TABLE_NAME}`));
-        const appliedHashes = new Set(appliedRows.map((row) => row.hash));
-
-        const applied: { name: string; version: number }[] = [];
-        const skipped: { name: string; version: number }[] = [];
+        await this.ensureTrackingTable();
 
         // Hashing is pure and order-independent, so compute every hash up front
         // in parallel; applying then proceeds strictly in version order below.
         const hashes = await Promise.all(this.migrations.map(async (migration) => hashMigration(migration.sql)));
+        const recorded = await this.readTrackingRows(hashes);
+        const recordedHashByVersion = new Map(recorded.filter((row) => row.version !== null).map((row) => [row.version as number, row.hash]));
+
+        // Every refusal is decided before the first migration runs, so a drift
+        // late in the list cannot leave the earlier ones applied and the run
+        // half-done.
+        const pending = this.migrations.filter((migration, index) => {
+            const recordedHash = recordedHashByVersion.get(migration.version);
+
+            if (recordedHash !== undefined && recordedHash !== hashes[index]) {
+                throw new LunoraError(
+                    "MIGRATION_DRIFT",
+                    `Migration "${migration.name}" (v${String(migration.version)}) was already applied from different SQL (recorded sha256 ${recordedHash}, now ${String(hashes[index])}). An applied migration is never re-run: revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new text as applied: UPDATE ${TRACKING_TABLE_NAME} SET hash = '${String(hashes[index])}' WHERE version = ${String(migration.version)};`,
+                );
+            }
+
+            return recordedHash === undefined;
+        });
+        const unresolved = recorded.filter((row) => row.version === null);
+
+        if (pending.length > 0 && unresolved.length > 0) {
+            throw new LunoraError(
+                "MIGRATION_DRIFT",
+                `${TRACKING_TABLE_NAME} holds ${String(unresolved.length)} row(s) recorded before versions were tracked whose SQL matches no current migration (id ${unresolved.map((row) => String(row.id)).join(", ")}), and ${pending.map((migration) => `v${String(migration.version)}`).join(", ")} ${pending.length === 1 ? "is" : "are"} not recorded as applied — one of them may be an edited copy of what already ran. Refusing to guess: give each row the version it recorded (UPDATE ${TRACKING_TABLE_NAME} SET version = <n> WHERE id = <id>; for a migration that no longer exists, any version no current migration uses), then run again.`,
+            );
+        }
+
+        const applied: { name: string; version: number }[] = [];
+        const skipped: { name: string; version: number }[] = [];
 
         for (const [index, migration] of this.migrations.entries()) {
             const hash = hashes[index] as string;
 
-            if (appliedHashes.has(hash)) {
+            if (!pending.includes(migration)) {
                 skipped.push({ name: migration.name, version: migration.version });
 
                 continue;
@@ -361,6 +405,53 @@ class MigrationRunner {
         }
 
         return { applied, skipped };
+    }
+
+    /**
+     * Create the tracking table, or bring one written before `version` existed
+     * up to the current shape. Idempotent: the column probe is one catalog read.
+     */
+    private async ensureTrackingTable(): Promise<void> {
+        await this.client.drizzle.run(sql.raw(TRACKING_TABLE_DDL));
+
+        const versionColumn = await this.client.drizzle.all<{ name: string }>(
+            sql.raw(`SELECT name FROM pragma_table_info('${TRACKING_TABLE_NAME}') WHERE name = 'version'`),
+        );
+
+        if (versionColumn.length === 0) {
+            await this.client.drizzle.run(sql.raw(`ALTER TABLE ${TRACKING_TABLE_NAME} ADD COLUMN version INTEGER`));
+        }
+
+        await this.client.drizzle.run(sql.raw(TRACKING_VERSION_INDEX));
+    }
+
+    /**
+     * Read the tracking rows, first giving every row recorded before versions
+     * were tracked the version whose SQL it hashed — the only link to a version
+     * such a row has. A row whose hash matches no current migration stays
+     * unversioned, and {@link run} refuses to guess around it.
+     */
+    private async readTrackingRows(hashes: ReadonlyArray<string>): Promise<TrackingRow[]> {
+        const select = sql.raw(`SELECT id, hash, version FROM ${TRACKING_TABLE_NAME} ORDER BY id`);
+        const rows = await this.client.drizzle.all<TrackingRow>(select);
+        const versionByHash = new Map(this.migrations.map((migration, index) => [hashes[index] as string, migration.version]));
+        const taken = new Set(rows.map((row) => row.version).filter((version) => version !== null));
+        let backfilled = false;
+
+        for (const row of rows) {
+            const version = row.version === null ? versionByHash.get(row.hash) : undefined;
+
+            if (version === undefined || taken.has(version)) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- one-off upgrade of a pre-version table, on the single D1 connection
+            await this.client.drizzle.run(sql`UPDATE ${sql.raw(TRACKING_TABLE_NAME)} SET version = ${version} WHERE id = ${row.id} AND version IS NULL`);
+            taken.add(version);
+            backfilled = true;
+        }
+
+        return backfilled ? await this.client.drizzle.all<TrackingRow>(select) : rows;
     }
 
     private async applyOne(migration: Migration, hash: string): Promise<boolean> {
@@ -387,16 +478,16 @@ class MigrationRunner {
         //
         // drizzle's d1 batch path crashes on a `SQLiteRaw` whose
         // `params.length > 0` (it has no `.stmt` to bind against), so the
-        // tracking row can't use bound `?` params here. We inline the two
-        // values into the `sql.raw` literal instead — safe because both are
-        // engine-controlled, not user-supplied: `hash` is a 64-char SHA-256
-        // hex string (asserted below) and `created_at` is a numeric clock
-        // reading. The hash assertion guarantees no quote/escape can slip in.
+        // tracking row can't use bound `?` params here. We inline the three
+        // values into the `sql.raw` literal instead — safe because none can
+        // carry a quote: `hash` is a 64-char SHA-256 hex string (asserted
+        // below), `created_at` is a numeric clock reading, and `version` is a
+        // safe integer (asserted at construction).
         if (!SHA256_HEX_RE.test(hash)) {
             throw new LunoraError("INTERNAL", `migration "${migration.name}" produced a non-hex hash; refusing to inline into SQL`);
         }
 
-        const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${String(Date.now())})`;
+        const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at, version) VALUES ('${hash}', ${String(Date.now())}, ${String(migration.version)})`;
 
         const items = [this.client.drizzle.run(sql.raw(statementText)), this.client.drizzle.run(sql.raw(trackingInsertSql))];
 
@@ -422,6 +513,10 @@ class MigrationRunner {
         const seen = new Set<number>();
 
         for (const m of this.migrations) {
+            if (!Number.isSafeInteger(m.version)) {
+                throw new LunoraError("INTERNAL", `Migration "${m.name}" has version ${String(m.version)}; a version must be an integer`);
+            }
+
             if (seen.has(m.version)) {
                 throw new LunoraError("INTERNAL", `Duplicate migration version ${String(m.version)}`);
             }
