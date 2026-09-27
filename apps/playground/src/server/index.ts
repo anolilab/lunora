@@ -7,9 +7,10 @@ import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction,
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
-import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
+import { buildSignedUrl, createStorage, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createShardClient } from "lunorash/runtime";
+import { serveStorageObject } from "lunorash/server";
 
 import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
@@ -52,8 +53,6 @@ interface Env extends Record<string, unknown> {
     LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
-    /** Public base URL R2 objects resolve against — used to mint signed URLs. */
-    PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
@@ -176,7 +175,10 @@ const app = defineApp<Env>()
     .storage({
         bucket: (env) => env.FILES,
         buckets: { avatars: (env) => env.AVATARS },
-        publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
+        // No `publicBaseUrl`: actions sign object URLs against the origin the
+        // request reached the worker on, which is also the host `verifySignedUrl`
+        // checks below. A fixed base binds every URL to one host and breaks the
+        // rest (a placeholder one breaks all of them).
         signingSecret: (env) => env.STORAGE_SECRET,
     })
     .scheduler({ namespace: (env) => env.SCHEDULER })
@@ -301,8 +303,8 @@ const handleTestReset = async (env: Env): Promise<Response> => {
 };
 
 const handleTestSign = async (request: Request, env: Env): Promise<Response> => {
-    if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
-        return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
+    if (!env.STORAGE_SECRET) {
+        return Response.json({ error: "STORAGE_SECRET must be configured", url: null }, { status: 500 });
     }
 
     const body = (await request.json().catch(() => null)) as {
@@ -317,7 +319,9 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
     }
 
     const signed = await buildSignedUrl({
-        baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // Signed against this request's own origin, exactly as the actions sign:
+        // `handleStorageAsset` verifies the host the URL comes back on.
+        baseUrl: new URL(request.url).origin,
         // PUT-only pin, forwarded so a harness upload can send a real
         // `content-type`: the PUT handler compares the header against the
         // signed value unconditionally, so an unpinned URL only accepts a body
@@ -427,23 +431,25 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
 };
 
 /**
- * Serve `@lunora/storage` signed URLs. The signer mints a URL under
- * `PUBLIC_STORAGE_BASE_URL` carrying the object key plus expiry/method/signature
- * query params; in production that base is a CDN/Worker route, but in dev the
- * Worker shares its origin, so the signed URL lands back here. We verify the
- * HMAC + expiry, then stream the R2 body (GET) or store the uploaded bytes
- * (PUT). The `avatars/` prefix is the only key namespace the playground signs,
- * and it can't collide with the `/_lunora`, `/api/auth`, `/test` routes the
- * Worker otherwise owns.
+ * Serve `@lunora/storage` signed URLs. The signer mints a URL under the origin
+ * the minting request reached this Worker on, carrying the object key plus
+ * bucket/expiry/method/signature query params, so the signed URL lands back
+ * here. We verify the HMAC + expiry, then store the uploaded bytes (PUT) or
+ * stream the object (GET) from the bucket the signature names.
+ *
+ * Routed on the signature, not on a key prefix: the studio signs keys in every
+ * declared bucket, whatever they look like. No other route here takes a `sig`.
  */
 const handleStorageAsset = async (request: Request, env: Env): Promise<null | Response> => {
     const url = new URL(request.url);
 
-    if (!url.pathname.startsWith("/avatars/")) {
+    if (!url.searchParams.has("sig")) {
         return null;
     }
 
-    if (!env.STORAGE_SECRET || !env.FILES) {
+    const secret = env.STORAGE_SECRET;
+
+    if (!secret) {
         return new Response("storage not configured", { status: 500 });
     }
 
@@ -453,30 +459,23 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
         return new Response("method not allowed", { status: 405 });
     }
 
-    const verdict = await verifySignedUrl(request.url, env.STORAGE_SECRET);
+    const verdict = await verifySignedUrl(request.url, secret);
 
-    if (!verdict.valid) {
+    // The bucket is HMAC-bound, so this is the URL's own claim about which
+    // binding to serve — never a caller-supplied parameter. `Object.hasOwn`
+    // keeps a prototype name (`constructor`) from resolving to an inherited member.
+    const buckets: Record<string, R2BucketLike | undefined> = { avatars: env.AVATARS, default: env.FILES };
+    const bucket = verdict.bucketName !== undefined && Object.hasOwn(buckets, verdict.bucketName) ? buckets[verdict.bucketName] : undefined;
+
+    if (!verdict.valid || verdict.key === undefined || verdict.bucketName === undefined || !bucket) {
         // Opaque 403 — never leak expired-vs-bad-signature (a signing oracle).
         return new Response("forbidden", { status: 403 });
     }
 
-    // The bucket is HMAC-bound, so this is the URL's own claim about which
-    // binding to serve — never a caller-supplied parameter. Only the default
-    // bucket is served here: the app also declares `avatars`, but nothing mints
-    // a URL against it (`lunora/avatars.ts` writes `avatars/`-prefixed keys into
-    // the default bucket), so a URL naming any other bucket was minted for an
-    // app we are not. Serving `avatars` means resolving the binding here first.
-    if (verdict.bucketName !== "default") {
-        return new Response("forbidden", { status: 403 });
-    }
-
-    const key = decodeURIComponent(url.pathname.slice(1));
-
     if (request.method === "PUT") {
         // The signed `Content-Type` pin is bound into the HMAC precisely so the
         // uploader can't swap it. Storing the request's header verbatim would let
-        // a URL pinned to `image/png` land a `text/html` body that the GET branch
-        // below then serves back as HTML from this origin — stored XSS.
+        // a URL pinned to `image/png` land a `text/html` body.
         //
         // The comparison is UNCONDITIONAL. Skipping it when the URL carries no
         // pin (`verdict.contentType === undefined`) hands the choice straight
@@ -490,20 +489,16 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
             return new Response("content-type does not match the signed URL", { status: 415 });
         }
 
-        await env.FILES.put(key, request.body, { httpMetadata: { contentType } });
+        await bucket.put(verdict.key, request.body, { httpMetadata: { contentType } });
 
         return new Response(null, { status: 200 });
     }
 
-    const object = await env.FILES.get(key);
-
-    if (!object) {
-        return new Response("not found", { status: 404 });
-    }
-
-    return new Response(object.body, {
-        headers: { "content-type": object.httpMetadata?.contentType ?? "application/octet-stream" },
-    });
+    // The stored type is whatever the minter pinned, and this answers from the
+    // app origin. `serveStorageObject` always sends `nosniff` and turns anything
+    // but a raster image or media type into a download, so a pinned `text/html`
+    // can never render here as a page. Its gate is the verdict checked above.
+    return serveStorageObject({ storage: createStorage({ bucket, bucketName: verdict.bucketName }) }, verdict.key, request, () => verdict.valid);
 };
 
 /**
@@ -516,8 +511,8 @@ export const { email } = app;
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
         // App-specific pre-worker routing: the e2e `/test/*` helpers and the
-        // `/avatars/*` signed-asset endpoint run ahead of the composed worker so
-        // it never sees those paths. Everything else (RPC, WebSocket, auth, admin)
+        // signed-asset endpoint (any `?sig=` URL) run ahead of the composed
+        // worker so it never sees those requests. Everything else (RPC, WebSocket, auth, admin)
         // is the builder's `app.fetch` — which also owns the auth lazy-init.
         const testResponse = await handleTestRoute(request, env);
 

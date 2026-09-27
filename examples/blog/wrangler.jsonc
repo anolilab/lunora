@@ -45,15 +45,19 @@
         "crons": ["0 3 * * *"],
     },
     "vars": {
-        "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE before deploying to production — this is the origin the Worker
-        // is called back on, and pointing it at localhost in production silently
-        // breaks scheduled jobs.
+        // SET to the deployed worker's public URL before deploying — this is the
+        // origin the Worker is called back on. `vars` is deployed config, so it
+        // ships empty rather than as a localhost or placeholder value that would
+        // silently point production elsewhere; in dev, `.dev.vars` supplies the
+        // local origin (see `.dev.vars.example`).
+        //
+        // There is no storage base URL: the featured-image upload URL is signed
+        // against the origin the request reached the worker on.
         //
         // The SchedulerDO takes its dispatch target from its OWN env and from
         // nowhere else — a caller-supplied one would be an SSRF vector — so
         // without this every `ctx.scheduler.runAfter` is refused with
         // `ORIGIN_NOT_CONFIGURED`.
-        "LUNORA_ORIGIN_URL": "http://localhost:8787",
+        "LUNORA_ORIGIN_URL": "",
     },
 }

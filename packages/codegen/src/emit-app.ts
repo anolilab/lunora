@@ -335,7 +335,7 @@ interface StorageDeclaration<Env> {
     bucket: Selector<Env, R2BucketLike>;
     /** Extra named buckets, reached via \`ctx.storage.bucket("name")\` and the studio's bucket picker. */
     buckets?: Record<string, Selector<Env, R2BucketLike>>;
-    /** Public base URL signed/public object URLs resolve against. Omit it and \`ctx.storage\` in a mutation, action or HTTP handler signs against the origin the request reached the worker on — no per-environment value to ship. Queries get no such fallback (a live query re-runs with no request behind it), so a query that signs URLs needs this set. */
+    /** Public base URL signed/public object URLs resolve against. Omit it and \`ctx.storage\` in a mutation, action or HTTP handler (and the studio's copy-URL) signs against the origin the request reached the worker on — no per-environment value to ship. Queries get no such fallback (a live query re-runs with no request behind it), so a query that signs URLs needs this set. */
     publicBaseUrl?: Selector<Env, string>;
     /** R2 S3-API credentials (\`{ accountId, accessKeyId, secretAccessKey, bucket, jurisdiction? }\`) enabling \`ctx.storage.getPresignedUrl\` — native S3 presigned URLs that hit R2 directly, bypassing the worker. Omit to use only the worker-signed \`getSignedUrl\` path. */
     s3?: Selector<Env, R2S3Credentials>;
@@ -1100,7 +1100,7 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
      * \`buckets\` key for every other.
      *
      * \`origin\` is the request's own origin, the base when no \`publicBaseUrl\` is
-     * declared. The studio admin ops pass none, and sign only when one is.
+     * declared.
      */
     private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string, origin?: string): Storage {
         return createStorage({
@@ -1157,40 +1157,39 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             return {};
         }
 
-        // Held separately from the map so \`pick\`'s fallback is a plain binding:
-        // under \`noUncheckedIndexedAccess\` a \`Record<string, Storage>\` lookup —
-        // including \`buckets.default\` — widens to \`Storage | undefined\`, which
-        // would not satisfy \`pick\`'s declared \`Storage\` return.
-        const fallbackStorage = this.makeStorage(env, declaration, defaultBucket, "default");
-        const buckets: Record<string, Storage> = { default: fallbackStorage };
+        const bindings: Record<string, R2BucketLike> = { default: defaultBucket };
 
         for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
             const bucket = selector(env);
 
             if (bucket) {
-                buckets[name] = this.makeStorage(env, declaration, bucket, name);
+                bindings[name] = bucket;
             }
         }
 
-        // \`Object.hasOwn\`, not a bare lookup: \`buckets\` is a plain object, so a
+        // \`Object.hasOwn\`, not a bare lookup: \`bindings\` is a plain object, so a
         // prototype key (\`?bucket=constructor\`, \`__proto__\`, \`toString\`) resolves
-        // to an inherited Object.prototype member, \`??\` never engages, and the
-        // caller gets a method-less value instead of the default bucket.
-        const pick = (name?: string): Storage => {
+        // to an inherited Object.prototype member instead of the default bucket.
+        //
+        // \`origin\` is the base when no \`publicBaseUrl\` is declared: the origin the
+        // admin request reached the worker on, which the signed-URL route hands
+        // over and then verifies. Only the secret gates signing.
+        const pick = (name?: string, origin?: string): Storage => {
             const wanted = name !== undefined && name !== "" ? name : "default";
+            const bucketName = Object.hasOwn(bindings, wanted) ? wanted : "default";
 
-            return (Object.hasOwn(buckets, wanted) ? buckets[wanted] : undefined) ?? fallbackStorage;
+            return this.makeStorage(env, declaration, bindings[bucketName] ?? defaultBucket, bucketName, origin);
         };
-        const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
+        const hasSigning = Boolean(declaration.signingSecret?.(env));
 
         return {
-            storageBuckets: Object.keys(buckets),
+            storageBuckets: Object.keys(bindings),
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
             storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
             storageSignedUrl: hasSigning
-                ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT" }) =>
-                      pick(opts?.bucket).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
+                ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
+                      pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
                 : undefined,
             storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };

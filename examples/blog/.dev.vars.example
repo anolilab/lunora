@@ -15,4 +15,13 @@ AUTH_URL="http://localhost:5173"
 # Required as soon as you use the featured-image upload: `@lunora/storage` signs
 # the direct-to-R2 PUT URL with it, and `getSignedUrl`/`generateUploadUrl` throw
 # without it. Any long random string — generate one the same way as AUTH_SECRET.
+# There is no storage base URL to set: the upload URL is signed against the
+# origin the request reached the worker on, which also serves the PUT.
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
+
+# The origin the SchedulerDO dispatches `ctx.scheduler` jobs back into — this
+# dev server. The DO reads it off its own env only (a caller-supplied target
+# would be an SSRF vector), so it cannot follow the request the way the upload
+# URL does. wrangler.jsonc ships it empty; set the deployed worker's public URL
+# there before deploying.
+LUNORA_ORIGIN_URL="http://localhost:5175"

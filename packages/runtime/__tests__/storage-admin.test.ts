@@ -463,6 +463,26 @@ describe("createWorker — storage admin object read", () => {
         expect(body.error.code).toBe("STORAGE_DOWNLOAD_NOT_CONFIGURED");
     });
 
+    // The stored content type is whatever an uploader pinned, and this route
+    // answers from the app origin: it must never render as a page there.
+    it("serves a stored object as a non-executable download", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf("<script>alert(1)</script>"), httpMetadata: { contentType: "text/html" } };
+            },
+        });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+
     it("streams the object body back, with its bucket and content type", async () => {
         expect.assertions(4);
 
@@ -555,7 +575,9 @@ describe("createWorker — storage admin signed URL", () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ key: "avatars/a.png", url: "https://cdn.example/avatars/a.png?sig=abc" });
         // No `expiresIn` query → the host gets `undefined` (its own default applies).
-        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined, expiresInSeconds: undefined });
+        // `origin` is the host the admin request reached: a signer with no declared
+        // base signs against it, and the signed-URL route verifies that same host.
+        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined, expiresInSeconds: undefined, origin: "https://app.example" });
     });
 
     it("forwards a positive expiresIn as the share-link lifetime", async () => {
@@ -574,7 +596,7 @@ describe("createWorker — storage admin signed URL", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 900 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 900, origin: "https://app.example" });
     });
 
     it("clamps an over-max expiresIn to the 7-day ceiling", async () => {
@@ -594,7 +616,7 @@ describe("createWorker — storage admin signed URL", () => {
 
         // The worker clamps to 7 days (604800s) instead of letting the host throw a 500.
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 604_800 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 604_800, origin: "https://app.example" });
     });
 
     it("signs a PUT URL with the pinned content-type for a large-blob upload", async () => {
@@ -613,7 +635,13 @@ describe("createWorker — storage admin signed URL", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.bin", { bucket: undefined, contentType: "image/png", expiresInSeconds: undefined, method: "PUT" });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.bin", {
+            bucket: undefined,
+            contentType: "image/png",
+            expiresInSeconds: undefined,
+            method: "PUT",
+            origin: "https://app.example",
+        });
     });
 
     it("refuses to sign a method outside the GET/PUT allowlist (400, nothing signed)", async () => {

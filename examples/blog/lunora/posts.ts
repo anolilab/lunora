@@ -92,9 +92,10 @@ export const requestImageUpload = action
 
             return { key, url };
         } catch (error) {
-            // Signing fails loudly when `STORAGE_SECRET` / `PUBLIC_STORAGE_BASE_URL`
-            // are missing (see `.dev.vars.example`). Naming the dependency here
-            // beats the caller receiving a bare 500.
+            // Signing fails loudly when `STORAGE_SECRET` is missing (see
+            // `.dev.vars.example`). The URL is signed against the origin this
+            // request reached the worker on, which serves the PUT. Naming the
+            // dependency here beats the caller receiving a bare 500.
             throw new LunoraError("INTERNAL", "could not mint an R2 upload URL", { cause: error });
         }
     });
