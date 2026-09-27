@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use lunora::client::{Client, ClientError};
 use lunora::offline::{
-    identity_allows_replay, is_stale_version, random_id, same_shard, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE,
-    CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
+    is_stale_version, random_id, replay_identity_verdict, same_shard, token_digest, token_stamp, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
+    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
 use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_DEPTH};
@@ -730,10 +730,12 @@ pub fn offline_queue_identity_gate_rejects_replay() {
             Value::String(subject) => Identity::Subject(subject.clone()),
             _ => Identity::SignedOut,
         };
-        let current = spec["current"].as_str();
+        let current = spec["current"]
+            .as_str()
+            .map_or(Identity::SignedOut, |subject| Identity::Subject(subject.to_string()));
 
         assert_eq!(
-            identity_allows_replay(&stamped, current),
+            replay_identity_verdict(&stamped, &current, None) == ReplayVerdict::Match,
             spec["replays"].as_bool().expect("verdict"),
             "identity gate: {}",
             spec["name"].as_str().unwrap_or("?")
@@ -1894,7 +1896,7 @@ pub fn offline_write_held_for_credential_replays_after_token_refresh() {
 
     client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
     client.set_identity(case["identity"].as_str().map(str::to_string));
-    client.auth_token = case["staleToken"].as_str().map(str::to_string);
+    client.set_auth_token(case["staleToken"].as_str().map(str::to_string));
     client.attach_socket(Box::new(|_frame| {}));
     client.detach_socket();
 
@@ -1927,7 +1929,7 @@ pub fn offline_write_held_for_credential_replays_after_token_refresh() {
 
     // A refresh, not an account switch: the identity is unchanged. This port
     // never flushes on its own, so the app flushes once more.
-    client.auth_token = case["freshToken"].as_str().map(str::to_string);
+    client.set_auth_token(case["freshToken"].as_str().map(str::to_string));
 
     let replayed = client.flush_offline_queue(None);
     let after_refresh = &case["afterRefresh"];
@@ -1940,4 +1942,276 @@ pub fn offline_write_held_for_credential_replays_after_token_refresh() {
         ids(&case["authorizationHeaders"]),
         "the token is read when the replay is sent"
     );
+}
+
+/// Every request a flush sent, as `(authorization header, writes carried)`.
+type Bearers = Arc<Mutex<Vec<(Option<String>, usize)>>>;
+
+/// A client committing every write, recording each request's bearer. It has
+/// connected once and is offline, so a submit queues.
+fn bearer_client(token: Option<&str>) -> (Client, Bearers) {
+    let bearers: Bearers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&bearers);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+
+            recorder
+                .lock()
+                .expect("bearers")
+                .push((headers.get("authorization").cloned(), call_count(&request)));
+
+            Ok(committing(&request))
+        })),
+    );
+
+    set_token(&mut client, token);
+    client.attach_socket(Box::new(|_frame| {}));
+    client.detach_socket();
+
+    (client, bearers)
+}
+
+fn set_token(client: &mut Client, token: Option<&str>) {
+    client.set_auth_token(token.map(str::to_string));
+}
+
+fn queue_writes(client: &mut Client, count: usize) {
+    for _ in 0..count {
+        assert_eq!(
+            client.submit(SubmitOptions::new(FUNCTION, args())).expect("queued").status,
+            MutationStatus::Queued
+        );
+    }
+}
+
+fn sent(bearers: &Bearers) -> Vec<Option<String>> {
+    bearers.lock().expect("bearers").iter().map(|(bearer, _)| bearer.clone()).collect()
+}
+
+/// With no identity set, a write is stamped with a digest of the bearer token,
+/// so the flush an app starts after an account switch rejects the previous
+/// user's write instead of sending it with the next user's token.
+pub fn offline_unset_identity_stamps_token_digest() {
+    let switch = &queue_case("tokenIdentity")["accountSwitch"];
+    let queued_under = switch["queuedUnder"].as_str().expect("queuedUnder");
+    let flushed_under = switch["flushedUnder"].as_str().expect("flushedUnder");
+    let code = queue_case("identityGate")["code"].as_str().expect("code").to_string();
+
+    // Switched: nothing reaches the wire, and the write is rejected.
+    let (mut client, bearers) = bearer_client(Some(queued_under));
+    let settled = record_settled(&mut client);
+
+    queue_writes(&mut client, 1);
+    set_token(&mut client, Some(flushed_under));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(
+        sent(&bearers).is_empty(),
+        "user A's write must not be sent with user B's bearer: {:?}",
+        sent(&bearers)
+    );
+    assert_eq!(report.rejected.len(), 1, "the switched write is rejected");
+    assert_eq!(settled_codes(&settled, &report.rejected), vec![Some(code)]);
+    assert_eq!(client.pending_mutation_count(), 0);
+
+    // Unswitched: the same write replays with the token it was queued under.
+    let (mut client, bearers) = bearer_client(Some(queued_under));
+
+    queue_writes(&mut client, 1);
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some(format!("Bearer {queued_under}"))]);
+    assert_eq!(report.committed.len(), 1);
+
+    token_digest_matches_the_reference_client();
+    token_write_is_held_while_no_token_is_set();
+    legacy_null_stamp_is_not_sent_under_a_token();
+    every_request_of_a_pass_carries_its_token();
+    an_identity_spelled_like_a_digest_never_matches_a_token_stamp();
+    a_token_stamp_survives_persistence();
+    verdicts_follow_the_reference();
+}
+
+/// The digest is the reference client's `hashToken`, read from the shared
+/// fixture every port asserts.
+fn token_digest_matches_the_reference_client() {
+    for spec in queue_case("tokenIdentity")["digests"].as_array().expect("digests") {
+        let token = spec["token"].as_str().expect("token");
+
+        assert_eq!(token_digest(token), spec["digest"].as_str().expect("digest"), "digest of {token:?}");
+    }
+}
+
+/// A token write is stamped as a token digest and an identity as itself, so
+/// neither can be taken for the other however the identity is spelled.
+fn an_identity_spelled_like_a_digest_never_matches_a_token_stamp() {
+    let digest = token_digest("token-a");
+
+    // Queued under the token, flushed under an identity spelled as its digest.
+    let (mut client, bearers) = bearer_client(Some("token-a"));
+
+    queue_writes(&mut client, 1);
+    set_token(&mut client, None);
+    client.set_identity(Some(digest.clone()));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
+    assert!(sent(&bearers).is_empty());
+
+    // Queued under that identity, flushed under the token with no identity.
+    let (mut client, bearers) = bearer_client(None);
+
+    client.set_identity(Some(digest.clone()));
+    queue_writes(&mut client, 1);
+    client.set_identity(None);
+    set_token(&mut client, Some("token-a"));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
+    assert!(sent(&bearers).is_empty());
+
+    assert_eq!(
+        replay_identity_verdict(&Identity::Token(digest.clone()), &Identity::Subject(digest.clone()), None),
+        ReplayVerdict::Mismatch
+    );
+    assert_eq!(
+        replay_identity_verdict(&Identity::Subject(digest.clone()), &token_stamp("token-a"), Some("token-a")),
+        ReplayVerdict::Mismatch
+    );
+}
+
+/// The typed stamp round-trips through the durable record, as JSON text.
+fn a_token_stamp_survives_persistence() {
+    let store = MemoryStore::default();
+    let (mut client, _bearers) = bearer_client(Some("token-a"));
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    queue_writes(&mut client, 1);
+
+    let record = serialised(&store.appended_at(0));
+
+    assert_eq!(record["identity"], json!({ "tokenDigest": token_digest("token-a") }));
+
+    let restored = QueuedMutation::from_record(&record, args());
+
+    assert_eq!(restored.identity, token_stamp("token-a"));
+    assert_eq!(
+        replay_identity_verdict(&restored.identity, &token_stamp("token-a"), Some("token-a")),
+        ReplayVerdict::Match
+    );
+}
+
+/// The reference's three verdicts over plain, signed-out and absent stamps.
+fn verdicts_follow_the_reference() {
+    let user = |name: &str| Identity::Subject(name.to_string());
+    let cases = [
+        (user("user-a"), user("user-a"), None, ReplayVerdict::Match),
+        (user("user-a"), user("user-b"), None, ReplayVerdict::Mismatch),
+        (user("user-a"), Identity::SignedOut, None, ReplayVerdict::Unknown),
+        (Identity::SignedOut, Identity::SignedOut, None, ReplayVerdict::Match),
+        (Identity::SignedOut, user("user-a"), None, ReplayVerdict::Mismatch),
+        (Identity::SignedOut, token_stamp("token-b"), Some("token-b"), ReplayVerdict::Mismatch),
+        (Identity::Absent, user("user-a"), None, ReplayVerdict::Match),
+        // A token stamp of the token held NOW matches even after an identity is named.
+        (token_stamp("token-a"), user("user-a"), Some("token-a"), ReplayVerdict::Match),
+        (token_stamp("token-a"), token_stamp("token-b"), Some("token-b"), ReplayVerdict::Mismatch),
+        (token_stamp("token-a"), Identity::SignedOut, None, ReplayVerdict::Unknown),
+    ];
+
+    for (stamped, current, token, verdict) in cases {
+        assert_eq!(replay_identity_verdict(&stamped, &current, token), verdict, "{stamped:?} under {current:?}");
+    }
+}
+
+/// Nobody is signed in, so whose write it is cannot be told: held, neither sent
+/// nor dropped, and replayed once the token is back.
+fn token_write_is_held_while_no_token_is_set() {
+    let store = MemoryStore::default();
+    let (mut client, bearers) = bearer_client(Some("token-a"));
+    let settled = record_settled(&mut client);
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    queue_writes(&mut client, 1);
+    set_token(&mut client, None);
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(sent(&bearers).is_empty(), "held: nothing is sent: {:?}", sent(&bearers));
+    assert!(report.rejected.is_empty() && report.committed.is_empty(), "held: nothing settles");
+    assert!(settled.lock().expect("settled").is_empty(), "held: nobody is told");
+    assert_eq!(client.pending_mutation_count(), 1, "held: still queued");
+    assert!(store.removed().is_empty(), "held: still persisted");
+
+    set_token(&mut client, Some("token-a"));
+    client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some("Bearer token-a".to_string())]);
+}
+
+/// A record persisted with a signed-out stamp says nothing about whose write it
+/// was once a token is held: a mismatch, as a `null` stamp is in the reference.
+fn legacy_null_stamp_is_not_sent_under_a_token() {
+    let (mut client, bearers) = bearer_client(Some("token-b"));
+    let mut queued = entry("m1", None);
+
+    queued.identity = Identity::SignedOut;
+    client.offline_queue.enqueue(queued, Ok(json!({})));
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(sent(&bearers).is_empty(), "a null stamp is not sent under a token: {:?}", sent(&bearers));
+    assert_eq!(report.rejected, vec!["m1".to_string()]);
+
+    // An unstamped legacy record still replays ambiently.
+    let (mut client, bearers) = bearer_client(Some("token-b"));
+
+    client.offline_queue.enqueue(entry("m2", None), Ok(json!({})));
+    client.attach_socket(Box::new(|_frame| {}));
+    client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some("Bearer token-b".to_string())]);
+}
+
+/// Every request of one pass — each batch chunk and each half of a 413 split —
+/// carries the token the pass was gated against. `&mut self` already makes a
+/// swap mid-pass unrepresentable here; this pins that no path reads another.
+fn every_request_of_a_pass_carries_its_token() {
+    let bearers: Bearers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&bearers);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+            let mut seen = recorder.lock().expect("bearers");
+
+            seen.push((headers.get("authorization").cloned(), call_count(&request)));
+
+            if seen.len() == 1 {
+                return Ok((413, br#"{"error":{"code":"PAYLOAD_TOO_LARGE","message":"too large"}}"#.to_vec()));
+            }
+
+            Ok(committing(&request))
+        })),
+    );
+
+    set_token(&mut client, Some("token-a"));
+    client.offline_queue = OfflineQueue::new().with_max_items(MAX_BATCH_ENTRIES + 1);
+    client.attach_socket(Box::new(|_frame| {}));
+    client.detach_socket();
+    queue_writes(&mut client, MAX_BATCH_ENTRIES + 1);
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed.len(), MAX_BATCH_ENTRIES + 1);
+    assert!(bearers.lock().expect("bearers").len() >= 4, "two halves of a split chunk, then the tail");
+    assert!(sent(&bearers).iter().all(|bearer| bearer.as_deref() == Some("Bearer token-a")));
 }

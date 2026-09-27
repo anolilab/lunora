@@ -16,10 +16,15 @@
 //! - The persistence adapter is SYNCHRONOUS. The browser client's is async
 //!   because IndexedDB is; a consumer here injects whatever it likes and owns its
 //!   own concurrency, exactly as it does for the HTTP poster and frame sender.
-//! - The identity stamp is an opaque string the CONSUMER sets (`Client::identity`),
-//!   not a fingerprint derived from an auth token. These SDKs do not manage auth
-//!   sessions, and a derived stamp would mean persisting a hash of a bearer token
-//!   in the consumer's storage.
+//! - The identity stamp is the consumer's own `Client::identity` when set (a
+//!   stable, non-secret subject such as a user id), stored as given rather than
+//!   under the reference's `subj:` namespace. With none set it is
+//!   [`token_stamp`], a typed [`Identity::Token`] over the reference's digest of
+//!   the bearer token (persisted as `{"tokenDigest": <digest>}`), so a different
+//!   token is a different identity; with neither it is [`Identity::SignedOut`].
+//!   The token stamp is its own variant rather than the reference's bare string
+//!   because the identity carries no `subj:` namespace: no identity string,
+//!   however it is spelled, can equal it.
 //! - Nothing here holds a rejection callback. The sibling ports store one per
 //!   entry; a closure that settles a write would have to capture the client it
 //!   settles against, which is the `&mut` borrow Rust will not let a field hold.
@@ -110,23 +115,97 @@ pub const DEFAULT_MAX_ITEMS: usize = 1000;
 
 /// Who made a queued write.
 ///
-/// Three cases, not two, and the third is load-bearing. `Absent` is a record that
-/// carries no stamp at all — written before stamping existed — and replays
-/// ambiently under whatever identity is current. `SignedOut` is a write made with
-/// nobody signed in, which must replay signed out. `Subject` names who made it.
-/// Collapsing the first two would either strand every old record or silently push
-/// one user's queued writes as another.
+/// `Absent` is a record that carries no stamp at all — written before stamping
+/// existed — and replays ambiently under whatever identity is current.
+/// `SignedOut` is a write made with no identity and no token. `Subject` names who
+/// made it; `Token` holds the [`token_digest`] of the bearer it was made with when
+/// no identity was set. Collapsing `Absent` into `SignedOut` would either strand
+/// every old record or silently push one user's queued writes as another, and a
+/// `Token` is never equal to a `Subject`, however the subject is spelled.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Identity {
     Absent,
     SignedOut,
     Subject(String),
+    Token(String),
 }
 
-impl Identity {
-    /// The identity a live write is stamped with; `None` means signed out.
-    pub fn stamp(subject: Option<String>) -> Self {
-        subject.map_or(Self::SignedOut, Self::Subject)
+/// Whether a queued write may replay now: see [`replay_identity_verdict`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayVerdict {
+    /// The same identity: send it.
+    Match,
+    /// Nobody is signed in, so whose write it is cannot be told: HOLD it, still
+    /// queued and persisted, unsettled, until someone is.
+    Unknown,
+    /// Someone else is signed in: reject it `OFFLINE_IDENTITY_CHANGED`.
+    Mismatch,
+}
+
+/// The reference client's `hashToken`: who a bearer token stamps a write as.
+///
+/// A digest, not the token, because the stamp is persisted and a queue store
+/// should not become somewhere a credential sits at rest. FNV-1a and djb2 side by
+/// side over UTF-16 code UNITS (JavaScript's `charCodeAt` walk), each base36 and
+/// prefixed by the length in code units: `<len>:<fnv>:<djb2>`. A `&str` cannot
+/// hold a lone surrogate, so every token this can see encodes to the code units
+/// JavaScript's string of it would hold.
+pub fn token_digest(token: &str) -> String {
+    let (mut fnv, mut djb2, mut length) = (0x811c_9dc5_u32, 5381_u32, 0_u32);
+
+    for code in token.encode_utf16() {
+        fnv = (fnv ^ u32::from(code)).wrapping_mul(0x0100_0193);
+        djb2 = djb2.wrapping_mul(33).wrapping_add(u32::from(code));
+        length += 1;
+    }
+
+    format!("{}:{}:{}", base36(length), base36(fnv), base36(djb2))
+}
+
+/// The stamp a write made with `token` and no identity carries.
+pub fn token_stamp(token: &str) -> Identity {
+    Identity::Token(token_digest(token))
+}
+
+fn base36(mut value: u32) -> String {
+    let mut digits = Vec::new();
+
+    loop {
+        digits.push(char::from(b"0123456789abcdefghijklmnopqrstuvwxyz"[(value % 36) as usize]));
+        value /= 36;
+
+        if value == 0 {
+            return digits.into_iter().rev().collect();
+        }
+    }
+}
+
+/// The verdict on a write stamped `stamped`, given the identity in effect now
+/// (`current`, see `Client`) and the bearer held now (`token`). Mirrors the
+/// reference's `replayIdentityVerdict`:
+///
+/// - `Match` — the same identity, signed out included, or a [`token_stamp`] of
+///   the very token held now (queued under this credential before an identity
+///   named it). A token stamp only ever equals a token stamp, and a subject only
+///   a subject. A record with no stamp at all predates stamping and replays.
+/// - `Unknown` — nobody is signed in, so the write is held.
+/// - `Mismatch` — someone else is signed in. Terminal: replaying would attribute
+///   one user's write to another.
+pub fn replay_identity_verdict(stamped: &Identity, current: &Identity, token: Option<&str>) -> ReplayVerdict {
+    if *stamped == Identity::Absent || stamped == current {
+        return ReplayVerdict::Match;
+    }
+
+    if let (Identity::Token(digest), Some(token)) = (stamped, token) {
+        if *digest == token_digest(token) {
+            return ReplayVerdict::Match;
+        }
+    }
+
+    if *current == Identity::SignedOut {
+        ReplayVerdict::Unknown
+    } else {
+        ReplayVerdict::Mismatch
     }
 }
 
@@ -151,15 +230,6 @@ pub type Precondition = Box<dyn Fn() -> bool + Send>;
 /// `""`, and makes its optimistic overlay miss the subscription it targets.
 pub fn same_shard(left: Option<&str>, right: Option<&str>) -> bool {
     left.unwrap_or_default() == right.unwrap_or_default()
-}
-
-/// Whether a write stamped `stamped` may replay under `current`.
-pub fn identity_allows_replay(stamped: &Identity, current: Option<&str>) -> bool {
-    match stamped {
-        Identity::Absent => true,
-        Identity::SignedOut => current.is_none(),
-        Identity::Subject(subject) => current == Some(subject.as_str()),
-    }
 }
 
 /// Durable storage for queued writes. Injected, and synchronous.
@@ -240,6 +310,7 @@ impl QueuedMutation {
                 "identity".into(),
                 match &self.identity {
                     Identity::Subject(subject) => json!(subject),
+                    Identity::Token(digest) => json!({ "tokenDigest": digest }),
                     _ => Value::Null,
                 },
             );
@@ -258,18 +329,23 @@ impl QueuedMutation {
 
     /// Rebuilds a queued write from durable storage.
     ///
-    /// A missing `identity` key restores as `None` (a legacy record, replays
-    /// ambiently) while a stored null restores as `Some(None)` (queued signed
-    /// out) — the distinction the identity gate turns on.
+    /// A missing `identity` key restores as [`Identity::Absent`] (a legacy record,
+    /// replays ambiently), a stored null as [`Identity::SignedOut`], a string as a
+    /// subject and `{"tokenDigest": …}` as a token stamp.
     pub fn from_record(record: &Value, args: WireValue) -> Self {
         Self {
             args,
             client_id: record.get("clientId").and_then(Value::as_str).map(str::to_string),
             function_path: record.get("functionPath").and_then(Value::as_str).unwrap_or_default().to_string(),
             id: record.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
-            identity: record
-                .get("identity")
-                .map_or(Identity::Absent, |stamp| Identity::stamp(stamp.as_str().map(str::to_string))),
+            identity: record.get("identity").map_or(Identity::Absent, |stamp| match stamp {
+                Value::String(subject) => Identity::Subject(subject.clone()),
+                Value::Object(typed) => typed
+                    .get("tokenDigest")
+                    .and_then(Value::as_str)
+                    .map_or(Identity::SignedOut, |digest| Identity::Token(digest.to_string())),
+                _ => Identity::SignedOut,
+            }),
             layers: Vec::new(),
             live_awaiter: false,
             on_settled: None,
