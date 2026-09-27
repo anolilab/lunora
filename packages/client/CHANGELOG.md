@@ -1,3 +1,30 @@
+## @lunora/client [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.156...@lunora/client@1.0.0-alpha.157) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** @lunora/client (and lunorash) no longer export
+`ClientServiceWorker`, `ClientSwOptions`, `ServiceWorkerStatus`, `sendToSw`,
+`createReply`, `ClientToSwMessage` or `SwToClientMessage`. Cross-tab sync is
+unaffected; an app-shell service worker (see the offline-first guide) is the
+app's own and needs none of these.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Code Refactoring
+
+* **client:** remove the unused service-worker relay ([#890](https://github.com/anolilab/lunora/issues/890)) ([4b12ca2](https://github.com/anolilab/lunora/commit/4b12ca2f1bc843844c252d009496e06a59e7877c))
+* **client:** remove unused barrel and exports ([#885](https://github.com/anolilab/lunora/issues/885)) ([bc4e1ac](https://github.com/anolilab/lunora/commit/bc4e1ac731cb315f84626602615ee859ff8aceb9))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.177
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.160
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+
 ## @lunora/client [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.155...@lunora/client@1.0.0-alpha.156) (2026-09-27)
 
 
