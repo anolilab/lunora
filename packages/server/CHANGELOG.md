@@ -1,3 +1,18 @@
+## @lunora/server [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.154...@lunora/server@1.0.0-alpha.155) (2026-09-27)
+
+### Bug Fixes
+
+* **scheduler:** keep cancelled jobs cancelled and accept fractional delays ([#871](https://github.com/anolilab/lunora/issues/871)) ([3a723fb](https://github.com/anolilab/lunora/commit/3a723fbee0f6a917bb9a0ad8ee9bc6fe66f71bcf))
+
+### Code Refactoring
+
+* stop exporting unused internals in server, observability, seed, replica ([#874](https://github.com/anolilab/lunora/issues/874)) ([73418de](https://github.com/anolilab/lunora/commit/73418de0b561cdf3ed7d1eba0d77831b7a0751d5))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.93
+
 ## @lunora/server [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.153...@lunora/server@1.0.0-alpha.154) (2026-09-27)
 
 
