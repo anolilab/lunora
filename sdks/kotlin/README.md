@@ -129,11 +129,28 @@ settled back at the front of the queue before the exception propagates.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another. Changing
-it from one set value to a different one (including `null`) evicts the previous
-session: every query and shape subscription drops its resume cursor and epoch, so
-the next resubscribe is cold, and every shape view is emptied and its callback
-told `[]`. A first sign-in and re-setting the same value evict nothing.
+replays, so a restart cannot push one user's queued writes as another. Left
+`null`, a write is stamped `Identity.Token` with a digest of `client.authToken`
+instead (the reference client's, never the token itself; persisted as
+`{"tokenDigest": …}`), and signed out only when there is no token either — so a
+write queued under one token is never sent with another. Under a different token
+it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token at all it is held,
+unsettled and still persisted, until one is set. A flush sends each write with
+the token its identity was checked against, so a token set mid-flush applies
+from the next flush, never to the rest of the current one. Setting `identity` is
+what lets a token refresh keep the queue. A record persisted by an earlier build
+with a `null` stamp is rejected the same way once a token is held, since `null`
+then said nothing about whose write it was. `identity` may be any string: a
+token stamp is its own type, so no identity, however it is spelled, can match a
+token's writes, nor a token stamp an identity's. Setting a token never flushes
+on its own; call `flushOfflineQueue()` after it, as on a reconnect.
+
+Changing `identity` from one set value to a different one (including `null`)
+evicts the previous session: every query and shape subscription drops its resume
+cursor and epoch, so the next resubscribe is cold, and every shape view is
+emptied and its callback told `[]`. A first sign-in and re-setting the same value
+evict nothing. With `identity` unset, setting a different `authToken` (or
+clearing it) evicts the same way, since the token's digest is then the identity.
 
 `synchronized` is reentrant, so a consumer callback invoked under the client's
 monitor would not deadlock — it would instead run inside the critical section

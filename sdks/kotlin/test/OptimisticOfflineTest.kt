@@ -827,8 +827,10 @@ private fun offlineQueueIdentityGateRejectsReplay() {
             else -> Identity.Of(stampedRaw as String)
         }
 
+        val current = (spec["current"] as String?)?.let { Identity.Of(it) } ?: Identity.SignedOut
+
         check(
-            identityAllowsReplay(stamped, spec["current"] as String?) == spec["replays"] as Boolean,
+            (replayIdentityVerdict(stamped, current, null) == Verdict.MATCH) == spec["replays"] as Boolean,
             "identity gate: ${spec["name"]}",
         )
     }
@@ -1603,6 +1605,227 @@ private fun offlineWriteHeldForCredentialReplaysAfterTokenRefresh() {
     check(authorizations == ids(case["authorizationHeaders"]), "authorization headers in order: $authorizations")
 }
 
+/**
+ * A client holding ONE write submitted under [token] and [identity], a recording
+ * durable store, and every authorization header it sends.
+ */
+private class TokenQueued(token: String?, identity: String? = null) {
+    val authorizations = mutableListOf<String?>()
+    val settled = mutableListOf<MutationSettled>()
+    val store = MemoryStore()
+    val client = Client(
+        "https://app.example",
+        { _, headers, body ->
+            authorizations.add(headers["authorization"])
+            HttpResponse(200, echoBatchSlots(body))
+        },
+        authToken = token,
+        identity = identity,
+    )
+
+    init {
+        client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+        client.onMutationSettled { settled.add(it) }
+        check(client.submit(SubmitOptions("messages:send")).status == MutationStatus.QUEUED, "the write is queued")
+    }
+}
+
+/**
+ * With no identity set, a write belongs to the token it was queued under: an
+ * account switch rejects it rather than sending user A's write with user B's
+ * bearer (a null stamp used to match a null identity), and the same token
+ * replays it.
+ */
+private fun offlineUnsetIdentityStampsTokenDigest() {
+    covers("offline_unset_identity_stamps_token_digest")
+
+    val tokenIdentity = scenario("offlineQueue", "tokenIdentity")
+
+    for (raw in tokenIdentity["digests"] as List<*>) {
+        val spec = raw as Map<*, *>
+
+        check(tokenDigest(spec["token"] as String) == spec["digest"], "digest of a ${(spec["token"] as String).length}-unit token")
+    }
+
+    val switch = tokenIdentity["accountSwitch"] as Map<*, *>
+    val queuedUnder = switch["queuedUnder"] as String
+    val switched = TokenQueued(queuedUnder)
+
+    switched.client.authToken = switch["flushedUnder"] as String
+
+    val report = switched.client.flushOfflineQueue()
+
+    check(switched.authorizations.isEmpty(), "user A's write is never sent with user B's bearer: ${switched.authorizations}")
+    check(report.rejected.size == 1 && switched.client.offlineQueue.items().isEmpty(), "the write is rejected, not held")
+    check(settledCodes(switched.settled) == listOf(scenario("offlineQueue", "identityGate")["code"]), "with the identity-changed code")
+
+    val same = TokenQueued(queuedUnder)
+    val replayed = same.client.flushOfflineQueue()
+
+    check(same.authorizations == listOf("Bearer $queuedUnder"), "the same token replays it: ${same.authorizations}")
+    check(replayed.committed.size == 1, "and it commits")
+}
+
+/** Nobody signed in, so whose write it is cannot be told: held, then replayed once the token is back. */
+private fun tokenStampedWriteIsHeldWhileNoTokenIsSet() {
+    val queued = TokenQueued("token-a")
+
+    queued.client.authToken = null
+
+    val report = queued.client.flushOfflineQueue()
+
+    check(queued.authorizations.isEmpty() && queued.settled.isEmpty() && report.rejected.isEmpty(), "held: nothing sent, nothing settled")
+    check(queued.client.offlineQueue.items().size == 1 && queued.store.removed.isEmpty(), "still queued and persisted")
+
+    queued.client.authToken = "token-a"
+    queued.client.flushOfflineQueue()
+
+    check(queued.authorizations == listOf("Bearer token-a"), "replayed once the token is back: ${queued.authorizations}")
+}
+
+/**
+ * A held write keeps its place in line: a signed-out write ahead of it that the
+ * flush re-queues on a transport failure goes back AHEAD of it, not behind.
+ */
+private fun heldWriteKeepsItsPlaceBesideARequeuedOne() {
+    val client = Client("https://app.example", { _, _, _ -> throw IOException("connection reset") })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true)
+    client.submit(SubmitOptions("messages:signedOut"))
+    client.authToken = "token-a"
+    client.submit(SubmitOptions("messages:tokenA"))
+    client.authToken = null
+
+    client.flushOfflineQueue()
+
+    val order = client.offlineQueue.items().map { it.functionPath }
+
+    check(order == listOf("messages:signedOut", "messages:tokenA"), "queue order after the flush: $order")
+}
+
+/** A write queued with no token and no identity is signed out, and replays signed out. */
+private fun signedOutWriteReplaysWithNoToken() {
+    val queued = TokenQueued(null)
+    val report = queued.client.flushOfflineQueue()
+
+    check(queued.authorizations == listOf<String?>(null) && report.committed.size == 1, "replayed with no bearer: ${queued.authorizations}")
+}
+
+/** An identity spelled like a token's digest never matches that token's writes, in either direction. */
+private fun identitySpelledLikeADigestNeverMatchesATokenStamp() {
+    val digest = "7:lbbjyc:1ujs3qs" // tokenIdentity's digest of "token-a"
+    val tokenWrite = TokenQueued("token-a")
+
+    tokenWrite.client.authToken = null
+    tokenWrite.client.identity = digest
+    tokenWrite.client.flushOfflineQueue()
+
+    check(tokenWrite.authorizations.isEmpty(), "a token write is not sent under an identity spelled like its digest")
+
+    val identityWrite = TokenQueued(null, identity = digest)
+
+    identityWrite.client.identity = null
+    identityWrite.client.authToken = "token-a"
+    identityWrite.client.flushOfflineQueue()
+
+    check(identityWrite.authorizations.isEmpty(), "an identity write is not sent under the token its spelling digests")
+}
+
+/** The typed stamp survives the durable record's JSON round trip. */
+private fun tokenStampSurvivesPersistence() {
+    val queued = TokenQueued("token-a")
+    val record = queued.store.records.single()
+
+    check(record["identity"] == mapOf("tokenDigest" to "7:lbbjyc:1ujs3qs"), "persisted as a typed stamp: ${record["identity"]}")
+
+    val restored =
+        Flush { _, headers, body -> HttpResponse(200, echoBatchSlots(body)).also { check(headers["authorization"] == "Bearer token-a", "sent with token-a") } }
+
+    restored.client.authToken = "token-a"
+    restored.store.records.add(record)
+    restored.client.hydrateOfflineQueue()
+
+    check(restored.client.flushOfflineQueue().committed.size == 1, "a restored token-stamped write replays under that token")
+}
+
+/** A record an earlier build stamped null is not sent under a token; an unstamped one still replays. */
+private fun legacyStampsAgainstAHeldToken() {
+    val legacyNull = Flush { _, _, body -> HttpResponse(200, echoBatchSlots(body)) }
+    val posts = AtomicInteger()
+    val legacyAbsent = Flush { _, _, body ->
+        posts.incrementAndGet()
+        HttpResponse(200, echoBatchSlots(body))
+    }
+
+    legacyNull.client.authToken = "token-b"
+    legacyNull.store.records.add(mapOf("args" to emptyMap<String, Any?>(), "functionPath" to "messages:send", "id" to "m1", "identity" to null))
+    legacyNull.client.hydrateOfflineQueue()
+    check(legacyNull.client.flushOfflineQueue().rejected == listOf("m1"), "a null stamp under a held token is a mismatch")
+
+    legacyAbsent.client.authToken = "token-b"
+    legacyAbsent.store.records.add(mapOf("args" to emptyMap<String, Any?>(), "functionPath" to "messages:send", "id" to "m2"))
+    legacyAbsent.client.hydrateOfflineQueue()
+    check(legacyAbsent.client.flushOfflineQueue().committed == listOf("m2") && posts.get() == 1, "an unstamped record replays")
+}
+
+/**
+ * The gate judged the pass against one token, so every request of that pass —
+ * each batch chunk and each 413 half — carries it, never one set mid-flush.
+ */
+private fun tokenSwappedMidFlushDoesNotCarryTheRestOfThePass() {
+    var client: Client? = null
+    val sent = mutableListOf<String?>()
+    var refused = false
+    val poster: (String, Map<String, String>, ByteArray) -> HttpResponse = { _, headers, body ->
+        sent.add(headers["authorization"])
+        client!!.authToken = "token-b"
+
+        if (!refused) {
+            refused = true
+            HttpResponse(413, "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"too big\"}}")
+        } else {
+            HttpResponse(200, echoBatchSlots(body))
+        }
+    }
+
+    client = Client("https://app.example", poster, authToken = "token-a")
+    client.offlineQueue = OfflineQueue(MAX_BATCH_ENTRIES + 4, queueBeforeFirstConnect = true)
+
+    repeat(MAX_BATCH_ENTRIES + 4) { client.submit(SubmitOptions("messages:send")) }
+
+    val report = client.flushOfflineQueue()
+
+    check(report.committed.size == MAX_BATCH_ENTRIES + 4, "every write commits")
+    check(sent.size >= 3 && sent.all { it == "Bearer token-a" }, "every request of the pass carries token-a: $sent")
+}
+
+/** Kotlin strings are UTF-16, so a lone surrogate is a real token and is digested by code unit. */
+private fun tokenDigestWalksLoneSurrogates() {
+    check(tokenDigest("\uD800") == "1:190qvz:4zol", "a lone high surrogate")
+    check(tokenDigest("a\uDC00b") == "3:2wutaq:38auaw", "a lone low surrogate")
+}
+
+/** The three verdicts, a token stamp only ever matching a token stamp. */
+private fun replayIdentityVerdicts() {
+    val a = Identity.Token(tokenDigest("token-a"))
+    val cases = listOf(
+        Triple(Identity.Of("user-a"), Identity.Of("user-a"), null) to Verdict.MATCH,
+        Triple(Identity.Of("user-a"), Identity.Of("user-b"), null) to Verdict.MISMATCH,
+        Triple(Identity.Of("user-a"), Identity.SignedOut, null) to Verdict.UNKNOWN,
+        Triple(Identity.SignedOut, Identity.SignedOut, null) to Verdict.MATCH,
+        Triple(Identity.SignedOut, Identity.Of("user-a"), null) to Verdict.MISMATCH,
+        Triple(Identity.SignedOut, Identity.Token(tokenDigest("token-b")), "token-b") to Verdict.MISMATCH,
+        Triple(Identity.Absent, Identity.Of("user-a"), null) to Verdict.MATCH,
+        Triple(a, Identity.Of("user-a"), "token-a") to Verdict.MATCH,
+        Triple(a, Identity.Of(a.digest), null) to Verdict.MISMATCH,
+        Triple(Identity.Of(a.digest), a, "token-a") to Verdict.MISMATCH,
+    )
+
+    for ((input, verdict) in cases) {
+        check(replayIdentityVerdict(input.first, input.second, input.third) == verdict, "verdict for $input")
+    }
+}
+
 /** Runs every optimistic-layer and offline-queue case. */
 internal fun runOptimisticOfflineCases() {
     optimisticLayerRebasesOntoServerFrame()
@@ -1630,4 +1853,14 @@ internal fun runOptimisticOfflineCases() {
     offlineFlushClassifiesSingleAndBatchAlike()
     offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge()
     offlineWriteHeldForCredentialReplaysAfterTokenRefresh()
+    offlineUnsetIdentityStampsTokenDigest()
+    tokenStampedWriteIsHeldWhileNoTokenIsSet()
+    heldWriteKeepsItsPlaceBesideARequeuedOne()
+    signedOutWriteReplaysWithNoToken()
+    identitySpelledLikeADigestNeverMatchesATokenStamp()
+    tokenStampSurvivesPersistence()
+    legacyStampsAgainstAHeldToken()
+    tokenSwappedMidFlushDoesNotCarryTheRestOfThePass()
+    tokenDigestWalksLoneSurrogates()
+    replayIdentityVerdicts()
 }

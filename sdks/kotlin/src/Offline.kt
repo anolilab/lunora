@@ -109,12 +109,15 @@ class OfflineException(val code: String, message: String) : RuntimeException(mes
 /**
  * Who made a queued write.
  *
- * Three states, not two, and the third is load-bearing. [Absent] is a record that
- * carries no stamp at all — written before stamping existed — and replays
- * ambiently under whatever identity is current. [SignedOut] is a write made with
- * nobody signed in, which must replay signed out. [Of] names the subject.
- * Collapsing the first two would either strand every old record or silently push
- * one user's queued writes as another.
+ * [Absent] is a record that carries no stamp at all — written before stamping
+ * existed — and replays ambiently under whatever identity is current. [SignedOut]
+ * is a write made with no identity and no token, which must replay signed out.
+ * [Of] names the subject the app set ([Client.identity]). [Token] is a write made
+ * with no identity but a bearer token: [tokenDigest] of it, never the token, since
+ * the stamp is persisted. Collapsing the first two would either strand every old
+ * record or silently push one user's queued writes as another; [Token] is its own
+ * case rather than an [Of] holding the digest so that no identity string, however
+ * it is spelled, can equal a token's stamp.
  */
 sealed class Identity {
     object Absent : Identity()
@@ -123,10 +126,54 @@ sealed class Identity {
 
     data class Of(val subject: String) : Identity()
 
-    companion object {
-        /** The identity a live write is stamped with; null means signed out. */
-        fun stamp(subject: String?): Identity = if (subject == null) SignedOut else Of(subject)
+    data class Token(val digest: String) : Identity()
+}
+
+/** What the replay gate decides for one queued write. */
+enum class Verdict {
+    /** The write belongs to whoever is signed in now: send it. */
+    MATCH,
+
+    /** Nobody is signed in, so whose write it is cannot be told: hold it, neither sent nor dropped. */
+    UNKNOWN,
+
+    /** Someone else is signed in: reject it [OFFLINE_IDENTITY_CHANGED]. */
+    MISMATCH,
+}
+
+/**
+ * The reference client's `hashToken`: who a bearer token stamps a write as.
+ *
+ * FNV-1a and djb2 side by side over UTF-16 code UNITS (a Kotlin string's own
+ * units, lone surrogates included), each base36 and prefixed by the length in code
+ * units, so the two cannot encode to one string through variable-width
+ * concatenation.
+ */
+fun tokenDigest(token: String): String {
+    var fnv = 0x811C9DC5.toInt()
+    var djb2 = 5381
+
+    for (unit in token) {
+        fnv = (fnv xor unit.code) * 0x01000193
+        djb2 = djb2 * 33 + unit.code
     }
+
+    return "${token.length.toString(36)}:${(fnv.toLong() and 0xFFFFFFFFL).toString(36)}:${(djb2.toLong() and 0xFFFFFFFFL).toString(36)}"
+}
+
+/**
+ * The verdict on a write stamped [stamped], judged against the identity in effect
+ * now ([current], see [Client.identity]) and the bearer held now ([token]).
+ *
+ * A token stamp only ever equals a token stamp, and an identity only an identity.
+ * A token stamp of the very token held now matches even once an identity is set:
+ * the write was queued under this credential before the identity named it.
+ */
+fun replayIdentityVerdict(stamped: Identity, current: Identity, token: String?): Verdict = when {
+    stamped is Identity.Absent || stamped == current -> Verdict.MATCH
+    stamped is Identity.Token && token != null && tokenDigest(token) == stamped.digest -> Verdict.MATCH
+    current is Identity.SignedOut -> Verdict.UNKNOWN
+    else -> Verdict.MISMATCH
 }
 
 /**
@@ -139,13 +186,6 @@ sealed class Identity {
  * a shard named `""`.
  */
 fun sameShard(left: String?, right: String?): Boolean = (left ?: "") == (right ?: "")
-
-/** Whether a write stamped [stamped] may replay under [current] (null = signed out). */
-fun identityAllowsReplay(stamped: Identity, current: String?): Boolean = when (stamped) {
-    is Identity.Absent -> true
-    is Identity.SignedOut -> current == null
-    is Identity.Of -> stamped.subject == current
-}
 
 /**
  * Durable storage for queued writes. Injected, and synchronous.
@@ -248,6 +288,7 @@ class QueuedMutation(
             is Identity.Absent -> Unit
             is Identity.SignedOut -> record["identity"] = null
             is Identity.Of -> record["identity"] = stamp.subject
+            is Identity.Token -> record["identity"] = mapOf("tokenDigest" to stamp.digest)
         }
 
         shardKey?.let { record["shardKey"] = it }
@@ -263,7 +304,8 @@ class QueuedMutation(
          * The restored entry carries no resolve/reject: the caller that submitted
          * it did not survive the restart. A missing `identity` key restores as
          * [Identity.Absent] (a legacy record) while a stored null restores as
-         * [Identity.SignedOut] — the distinction the identity gate turns on.
+         * [Identity.SignedOut] — the distinction the identity gate turns on. A
+         * stored `{"tokenDigest": …}` restores as [Identity.Token].
          *
          * Throws [WireFormatException] when the stored args are not wire values.
          * It never substitutes: a record hydrated as empty args replays
@@ -282,7 +324,11 @@ class QueuedMutation(
             entry.identity = if (!record.containsKey("identity")) {
                 Identity.Absent
             } else {
-                (record["identity"] as? String)?.let { Identity.Of(it) } ?: Identity.SignedOut
+                when (val stamp = record["identity"]) {
+                    is String -> Identity.Of(stamp)
+                    is Map<*, *> -> Identity.Token(stamp["tokenDigest"] as? String ?: "")
+                    else -> Identity.SignedOut
+                }
             }
 
             return entry
@@ -353,11 +399,11 @@ fun isStaleVersion(current: String?, stamped: String?): Boolean = current != nul
  * See [Discarded] for what the alternative cost.
  *
  * **Divergences from `@lunora/client`**, all recorded in `sdks/README.md`: the
- * persistence adapter is SYNCHRONOUS; the identity stamp is an opaque string the
- * CONSUMER sets ([Client.identity]) rather than a fingerprint derived from an auth
- * token, because these SDKs do not manage auth sessions and a derived stamp would
- * mean persisting a hash of a bearer token in the consumer's storage; and there is
- * no multi-tab leader election, because there are no tabs.
+ * persistence adapter is SYNCHRONOUS; the identity stamp is the CONSUMER's own
+ * [Client.identity] when set, stored as given rather than under the reference's
+ * `subj:` namespace, and otherwise a typed [Identity.Token] digest of the bearer
+ * token, so no identity string can equal it; and there is no multi-tab leader
+ * election, because there are no tabs.
  */
 class OfflineQueue(
     maxItems: Int = DEFAULT_MAX_ITEMS,
