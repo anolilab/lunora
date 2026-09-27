@@ -103,6 +103,9 @@ Future<void> main() async {
   await run(caseLoneQueuedWriteSurvivesAnEnvelopeLess502);
   await run(caseRateLimitedReplayRequeuesAndDefers);
   await run(caseRateLimitedBatchSlotIsTransient);
+  await run(caseTransientRefusalOnAHealthySocketIsRetried);
+  await run(caseRetryTimerIsCancelledOnDisconnectAndClose);
+  await run(caseCancelledRetryDoesNotSkipTheRateLimitWindow);
   await run(caseEmptyShardKeyRoutesToDefault);
   await run(caseUndecodableResultSettlesCommitted);
   await run(caseReplayClassifiesSingleAndBatchAlike);
@@ -156,7 +159,11 @@ Future<void> main() async {
   if (failures.isEmpty) {
     exitCode = 0;
     stdout.writeln('PASS  $executed cases, covering all ${required.length} in the shared manifest');
-    return;
+    await stdout.flush();
+    // Explicitly, rather than falling off the end: a case that leaves a client
+    // connected with a write the server keeps refusing leaves its retry timer
+    // armed, exactly as it would in an app, and a live Timer keeps the VM up.
+    exit(0);
   }
 
   for (final failure in failures) {

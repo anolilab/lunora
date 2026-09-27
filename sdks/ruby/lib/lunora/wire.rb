@@ -325,7 +325,7 @@ module Lunora
     seen = {}
 
     payload_of(value, "set", ::Array).each do |entry|
-      item = decode_wire(entry, depth + 1)
+      item = positive_zero(decode_wire(entry, depth + 1))
       identity = map_key_identity(item)
 
       next if !identity.nil? && seen.key?(identity)
@@ -349,7 +349,7 @@ module Lunora
     payload_of(value, "map", ::Array).each do |entry|
       raise WireFormatError, "wire-codec: malformed map entry" unless entry.is_a?(::Array) && entry.length == 2
 
-      key = decode_wire(entry[0], depth + 1)
+      key = positive_zero(decode_wire(entry[0], depth + 1))
       item = decode_wire(entry[1], depth + 1)
       identity = map_key_identity(key)
 
@@ -372,6 +372,13 @@ module Lunora
     WireMap.new(pairs)
   end
 
+  # Store a signed zero as +0, as +Set.prototype.add+ and +Map.prototype.set+
+  # do on INSERT — so a lone -0 member or key re-encodes (and keys, per §3's
+  # bare +-0+ token) as 0 in the reference, not only when it collides.
+  def positive_zero(value)
+    value.is_a?(::Float) && value.zero? ? 0 : value
+  end
+
   # A map key's collapse identity, or nil when it never collapses.
   #
   # The reference's Map compares keys by SameValueZero: primitives by value (NaN
@@ -386,7 +393,10 @@ module Lunora
     # key. `(-0.0).to_f.to_s` is "-0.0", which split the two; `+ 0.0` is the
     # IEEE-754 identity that clears the sign of a zero and changes nothing else.
     when ::Numeric then key.is_a?(::Float) && key.nan? ? "num:nan" : "num:#{key.to_f + 0.0}"
-    when ::String then "str:#{key}"
+    # A BINARY String is decoded bytes (a Uint8Array), which the reference
+    # compares by reference like every other non-scalar; comparing it by value
+    # merged bytes "a" into the text key "a" and dropped an entry.
+    when ::String then key.encoding == ::Encoding::BINARY ? nil : "str:#{key}"
     else key.equal?(UNDEFINED) ? "undefined" : nil
     end
   end

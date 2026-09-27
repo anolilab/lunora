@@ -454,7 +454,7 @@ public final class Wire {
                     Set<String> seen = new HashSet<>();
 
                     for (Object item : asList(payload(items, "set"), "set")) {
-                        Object value = decode(item, depth + 1);
+                        Object value = positiveZero(decode(item, depth + 1));
                         String identity = mapKeyIdentity(value);
 
                         if (identity != null && !seen.add(identity)) {
@@ -523,7 +523,7 @@ public final class Wire {
                 throw new WireFormatException("wire-codec: malformed map entry");
             }
 
-            Object key = decode(pair.get(0), depth + 1);
+            Object key = positiveZero(decode(pair.get(0), depth + 1));
             // SimpleEntry, not Map.entry: the latter is documented as rejecting
             // nulls in EITHER slot, and JSON carries null in both. `new Map([["k",
             // null]])` is an ordinary return value that the DO encodes and seven
@@ -563,6 +563,15 @@ public final class Wire {
         }
 
         return new WireMap(entries);
+    }
+
+    /**
+     * A signed zero stored as {@code +0}, as {@code Set.prototype.add} and {@code
+     * Map.prototype.set} do on INSERT — so a lone {@code -0} member or key re-encodes (and keys,
+     * per §3's bare {@code -0} token) as {@code 0} in the reference, not only when it collides.
+     */
+    private static Object positiveZero(Object value) {
+        return value instanceof Double number && number == 0.0 ? (Object) 0.0 : value;
     }
 
     /**

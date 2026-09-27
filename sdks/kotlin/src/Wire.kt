@@ -171,7 +171,7 @@ object Wire {
                 throw WireFormatException("wire-codec: malformed map entry")
             }
 
-            val key = decode(entry[0], depth + 1)
+            val key = positiveZero(decode(entry[0], depth + 1))
             val pair = key to decode(entry[1], depth + 1)
             val identity = mapKeyIdentity(key)
 
@@ -214,7 +214,7 @@ object Wire {
         val seen = mutableSetOf<String>()
 
         for (entry in payloadList(items, "set")) {
-            val value = decode(entry, depth + 1)
+            val value = positiveZero(decode(entry, depth + 1))
             val identity = mapKeyIdentity(value)
 
             if (identity != null && !seen.add(identity)) {
@@ -226,6 +226,13 @@ object Wire {
 
         return WireValue.WireSet(decoded)
     }
+
+    /**
+     * A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+     * do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+     * bare `-0` token) as `0` in the reference, not only when it collides.
+     */
+    private fun positiveZero(value: WireValue): WireValue = if (value is WireValue.Num && value.value == 0.0) WireValue.Num(0.0) else value
 
     /**
      * A map key's collapse identity, or `null` when it never collapses.

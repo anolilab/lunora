@@ -104,6 +104,12 @@
         },
         { "name": "set-arg", "wireArgs": { "s": ["$lunora.wire$", "set", [3, 1]] }, "key": "{\"s\":[\"$lunora.wire$\",\"set\",[3,1]]}" },
         {
+            "$comment": "The `-0` token of stableStringify meeting a Set/Map: both store +0 for a -0 member or key, so the key spells `0`. A port that carries the sign into the decoded collection keys `-0` and opens a different subscription than the TS client for the same args.",
+            "name": "set-and-map-negative-zero-arg",
+            "wireArgs": { "m": ["$lunora.wire$", "map", [[-0.0, 1]]], "s": ["$lunora.wire$", "set", [-0.0]] },
+            "key": "{\"m\":[\"$lunora.wire$\",\"map\",[[0,1]]],\"s\":[\"$lunora.wire$\",\"set\",[0]]}"
+        },
+        {
             "name": "undefined-in-array-arg",
             "wireArgs": { "a": [1, ["$lunora.wire$", "undefined"], 2] },
             "key": "{\"a\":[1,[\"$lunora.wire$\",\"undefined\"],2]}"

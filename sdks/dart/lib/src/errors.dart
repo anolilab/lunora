@@ -145,6 +145,22 @@ const Set<String> authReplayErrorCodes = <String>{'TOKEN_EXPIRED', 'UNAUTHENTICA
 /// able to shorten it.
 const int maxRetryAfterMs = 60000;
 
+/// The first wait of a hintless replay backoff, doubled per consecutive answered
+/// failure up to [maxRetryAfterMs] — the reference's `BASE_REPLAY_RETRY_DELAY_MS`.
+const int baseReplayRetryDelayMs = 1000;
+
+/// The wait before retrying a transient refusal that named no delay: exponential
+/// in [attempt] (1-based), capped at [maxRetryAfterMs], then jittered across the
+/// top half of that ceiling so clients refused by one limiter do not come back
+/// in lockstep. [random] returns a value in `[0, 1)`.
+int replayBackoffMs(int attempt, double Function() random) {
+  final exponent = attempt < 1 ? 0 : (attempt - 1 > 16 ? 16 : attempt - 1);
+  final raw = baseReplayRetryDelayMs * (1 << exponent);
+  final ceiling = raw < maxRetryAfterMs ? raw : maxRetryAfterMs;
+
+  return (ceiling * (0.5 + random() * 0.5)).round();
+}
+
 /// How long a rate-limited replay asks the caller to wait, if the envelope said,
 /// clamped to [maxRetryAfterMs].
 ///
