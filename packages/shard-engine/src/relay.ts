@@ -288,4 +288,4 @@ export type {
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`
 // stays the single import surface for the relay tier inside `@lunora/do`.
-export { parseRelayName, RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
+export { parseRelayName, relayName } from "../../../shared/relay-name";

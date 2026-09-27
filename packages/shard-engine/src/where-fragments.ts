@@ -181,4 +181,4 @@ const textFragments: WhereFragments<TextFragment> = {
 };
 
 export type { TextFragment, WhereFragments };
-export { bound, drizzleFragments, identifierText, joinText, rawText, textFragments };
+export { drizzleFragments, identifierText, joinText, rawText, textFragments };

@@ -4639,39 +4639,21 @@ export {
     readCdcEpoch,
     trimCdcChanges,
 } from "./ctx-db-cdc";
-export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
-export {
-    deleteGlobalShapeSnapshot,
-    deleteGlobalShapeSnapshotsForConnection,
-    GLOBAL_SHAPE_SNAPSHOT_TABLE,
-    migrateGlobalShapeSnapshot,
-    readGlobalShapeSnapshot,
-    writeGlobalShapeSnapshot,
-} from "./ctx-db-global-shape-snapshot";
+export { advanceClientWatermark, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
-export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
-export type { ShapeRow } from "./ctx-db-shapes";
 export { assertNoExplicitUndefined, stripReservedPatchFields };
 export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,
     type ColumnMetaLike,
     type DatabaseWriterLike,
-    type GeoFilterBuilderLike,
-    type GeoIndexDefinitionLike,
-    type IndexDefinitionLike,
-    type IndexRangeBuilderLike,
-    type PaginationOptions,
-    type ReadHook,
     type SchemaLike,
-    type SearchFilterBuilderLike,
     type SearchIndexDefinitionLike,
     type ServerDefaultContextLike,
     type TableDefinitionLike,
-    type TableReaderLike,
     type ValidatorLike,
 } from "./schema-types";
 export type { Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook };
 
-export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
+export type { SchedulerLike, TriggerContextLike, TriggerEventLike } from "./triggers";

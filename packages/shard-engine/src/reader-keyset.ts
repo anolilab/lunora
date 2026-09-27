@@ -353,4 +353,4 @@ const paginateStage = (
 };
 
 export type { KeysetStage, RowFilter };
-export { compileOrderByText, doWhereTextStrategy, paginateOrderKeys, paginateStage, scanKeyset, selectPageSql };
+export { compileOrderByText, doWhereTextStrategy, paginateStage, scanKeyset, selectPageSql };

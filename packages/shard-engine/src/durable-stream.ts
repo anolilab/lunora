@@ -264,16 +264,5 @@ const trimStreamRuns = (sql: SqlExec, now: number, live: ReadonlySet<string>): v
     }
 };
 
-export {
-    appendStreamChunk,
-    claimStreamRun,
-    deleteStreamRun,
-    finishStreamRun,
-    migrateDurableStreams,
-    readStreamChunks,
-    readStreamRun,
-    STREAM_CHUNKS_TABLE,
-    STREAM_RUNS_TABLE,
-    trimStreamRuns,
-};
+export { appendStreamChunk, claimStreamRun, deleteStreamRun, finishStreamRun, migrateDurableStreams, readStreamChunks, readStreamRun, trimStreamRuns };
 export type { DurableStreamChunk, DurableStreamRun, DurableStreamStatus };
