@@ -1,3 +1,15 @@
+## @lunora/observability [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.103...@lunora/observability@1.0.0-alpha.104) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in server, observability, seed, replica ([#874](https://github.com/anolilab/lunora/issues/874)) ([73418de](https://github.com/anolilab/lunora/commit/73418de0b561cdf3ed7d1eba0d77831b7a0751d5))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+
 ## @lunora/observability [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.102...@lunora/observability@1.0.0-alpha.103) (2026-09-27)
 
 
