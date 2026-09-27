@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.230...@lunora/codegen@1.0.0-alpha.231) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** drop the placeholder storage base url ([#867](https://github.com/anolilab/lunora/issues/867)) ([252abce](https://github.com/anolilab/lunora/commit/252abce0c92d6d355fe52bffeb1157e200fb97ff))
+
 ## @lunora/codegen [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.229...@lunora/codegen@1.0.0-alpha.230) (2026-09-27)
 
 ### ⚠ BREAKING CHANGES
