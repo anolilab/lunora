@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.92...@lunora/scheduler@1.0.0-alpha.93) (2026-09-27)
+
+### Bug Fixes
+
+* **scheduler:** keep cancelled jobs cancelled and accept fractional delays ([#871](https://github.com/anolilab/lunora/issues/871)) ([3a723fb](https://github.com/anolilab/lunora/commit/3a723fbee0f6a917bb9a0ad8ee9bc6fe66f71bcf))
+
 ## @lunora/scheduler [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.91...@lunora/scheduler@1.0.0-alpha.92) (2026-09-27)
 
 
