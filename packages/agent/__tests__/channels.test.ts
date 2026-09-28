@@ -63,15 +63,45 @@ describe(verifyDiscord, () => {
         const body = '{"type":1}';
         const signature = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, encoder.encode(timestamp + body))));
 
-        await expect(verifyDiscord({ body, publicKey, signature, timestamp })).resolves.toBe(true);
+        const now = 1_700_000_010; // 10s later — fresh
+
+        await expect(verifyDiscord({ body, now, publicKey, signature, timestamp })).resolves.toBe(true);
         // Tampered body.
-        await expect(verifyDiscord({ body: '{"type":2}', publicKey, signature, timestamp })).resolves.toBe(false);
+        await expect(verifyDiscord({ body: '{"type":2}', now, publicKey, signature, timestamp })).resolves.toBe(false);
 
         // A different public key.
         const other = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
         const otherKey = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", other.publicKey)));
 
-        await expect(verifyDiscord({ body, publicKey: otherKey, signature, timestamp })).resolves.toBe(false);
+        await expect(verifyDiscord({ body, now, publicKey: otherKey, signature, timestamp })).resolves.toBe(false);
+    });
+
+    // The timestamp is inside the signed message, so a captured request verifies
+    // forever unless its age is bounded — the same 300s window Slack gets.
+    it.each([
+        ["exactly at the window edge (300s old)", 1_700_000_300, true],
+        ["exactly at the window edge (300s ahead)", 1_699_999_700, true],
+        ["stale (301s old)", 1_700_000_301, false],
+        ["future-skewed (301s ahead)", 1_699_999_699, false],
+        ["a day old", 1_700_086_400, false],
+    ])("verifies a validly signed timestamp %s (now=%i) as %s", async (_label, now, expected) => {
+        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+        const publicKey = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+        const timestamp = "1700000000";
+        const body = '{"type":2}';
+        const signature = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, encoder.encode(timestamp + body))));
+
+        await expect(verifyDiscord({ body, now, publicKey, signature, timestamp })).resolves.toBe(expected);
+    });
+
+    it("rejects a validly signed non-numeric timestamp", async () => {
+        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+        const publicKey = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+        const timestamp = "soon";
+        const body = '{"type":2}';
+        const signature = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, encoder.encode(timestamp + body))));
+
+        await expect(verifyDiscord({ body, publicKey, signature, timestamp })).resolves.toBe(false);
     });
 });
 
@@ -124,8 +154,7 @@ const githubRequest = async (secret: string, body: string): Promise<Request> =>
         method: "POST",
     });
 
-const discordRequest = async (privateKey: CryptoKey, body: string): Promise<Request> => {
-    const timestamp = "1700000000";
+const discordRequest = async (privateKey: CryptoKey, body: string, timestamp = String(Math.floor(Date.now() / 1000))): Promise<Request> => {
     const signature = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, encoder.encode(timestamp + body))));
 
     return new Request("https://app/webhooks/agent", {
@@ -274,6 +303,32 @@ describe(dispatchAgentChannel, () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toStrictEqual({ type: 1 });
         expect(created).toStrictEqual([]);
+    });
+
+    it.each([
+        ["fresh", 0, 200, 1],
+        ["stale (10 minutes old)", -600, 401, 0],
+        ["future-skewed beyond the window (10 minutes ahead)", 600, 401, 0],
+    ])("dispatches a validly signed Discord interaction only when its timestamp is fresh: %s", async (_label, skewSeconds, status, runs) => {
+        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+        const publicKey = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "discord" as const,
+                map: () => {
+                    return { input: "x", threadKey: "t" };
+                },
+                secret: "DISCORD_KEY",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_D" }]);
+        const timestamp = String(Math.floor(Date.now() / 1000) + skewSeconds);
+
+        const response = await handler(await discordRequest(pair.privateKey, '{"id":"i-1","type":2}', timestamp), { AGENT_D: binding, DISCORD_KEY: publicKey });
+
+        expect(response.status).toBe(status);
+        expect(created).toHaveLength(runs);
     });
 
     it("dedupes a redelivered webhook (same delivery id) to a single run", async () => {
