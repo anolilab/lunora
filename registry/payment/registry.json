@@ -14,8 +14,7 @@
     "envVars": [
         {
             "name": "APP_BASE_URL",
-            "description": "Public origin of this deployment (e.g. https://app.example.com). Used to build the checkout success/cancel and billing-portal return URLs — a Lunora context carries no Request to derive an origin from.",
-            "value": "http://localhost:8787",
+            "description": "Public origin of this deployment (e.g. https://app.example.com). Used to build the checkout success/cancel and billing-portal return URLs — a Lunora context carries no Request to derive an origin from. Scaffolded EMPTY: set it to the origin your app is served on — locally that is your dev server's URL (e.g. http://localhost:5173 under Vite).",
             "secret": false
         },
         {

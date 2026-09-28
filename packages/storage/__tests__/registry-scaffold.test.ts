@@ -57,16 +57,19 @@ const itemRequireEnv = async (env: Record<string, unknown>): Promise<(name: stri
     return loaded.build(env);
 };
 
-const scaffoldedBaseUrl = ((): string => {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { envVars: { name: string; value?: string }[] };
+const scaffoldedBaseUrlEntry = ((): { secret?: boolean; value?: string } => {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { envVars: { name: string; secret?: boolean; value?: string }[] };
     const entry = manifest.envVars.find((variable) => variable.name === "STORAGE_PUBLIC_BASE_URL");
 
-    if (entry?.value === undefined) {
+    if (entry === undefined) {
         throw new Error("registry/storage/registry.json no longer scaffolds STORAGE_PUBLIC_BASE_URL");
     }
 
-    return entry.value;
+    return entry;
 })();
+
+/** An app origin as a developer would set it — the Vite dev server here. */
+const appOrigin = "http://localhost:5173";
 
 /** The shape the item's `requireOwner` produces: `storage/<userId>/<key>`. */
 const scaffoldedKey = "storage/u_42/avatar.png";
@@ -90,11 +93,25 @@ describe("storage registry item scaffold", () => {
         expect(ok("STORAGE_SIGNING_SECRET", 32)).toBe("s".repeat(32));
     });
 
-    it("mints and verifies a signed URL from the base URL the item scaffolds", async () => {
+    it("scaffolds the public base URL empty, so an unset one fails loudly instead of signing for a port nothing serves", async () => {
+        expect.assertions(3);
+
+        // The host and port are part of the signed canonical, so a guessed dev
+        // origin (`:8787` while Vite serves `:5173`) mints URLs that 404 and cannot
+        // be fixed by rewriting the port. Only the developer knows the origin.
+        expect(scaffoldedBaseUrlEntry.value ?? "").toBe("");
+        expect(scaffoldedBaseUrlEntry.secret).toBe(false);
+
+        const requireEnv = await itemRequireEnv({ STORAGE_PUBLIC_BASE_URL: "" });
+
+        expect(() => requireEnv("STORAGE_PUBLIC_BASE_URL")).toThrow(/missing env var `STORAGE_PUBLIC_BASE_URL`/u);
+    });
+
+    it("mints and verifies a signed URL from a bare app origin", async () => {
         expect.assertions(3);
 
         const url = await buildSignedUrl({
-            baseUrl: scaffoldedBaseUrl,
+            baseUrl: appOrigin,
             bucketName: "default",
             contentType: "image/png",
             key: scaffoldedKey,
