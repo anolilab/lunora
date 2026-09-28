@@ -24,6 +24,8 @@
 import matchesMetadataFilter from "./metadata-filter";
 import type { RagSqlExec } from "./sql";
 import { assertSafeIdentifier, cosineSimilarity, inListBatches, placeholderList, readJsonColumn } from "./sql";
+import type { SqliteVecIndex } from "./sqlite-vec-index";
+import { sqliteVecIndex } from "./sqlite-vec-index";
 import type { RagVectorMatch, RagVectorMatches, RagVectorQueryInput, RagVectorRecord, RagVectorUpsertInput } from "./types";
 import type { RagVectorStore, RagVectorStoreCapabilities } from "./vector-store";
 
@@ -94,12 +96,6 @@ const SQL_NULL = null;
 /** `undefined` and `""` are the same namespace — the un-namespaced one. */
 const namespaceKey = (namespace: string | undefined): string => namespace ?? "";
 
-/** The `vec0` row key: one text primary key for the table's `(namespace, id)`. */
-const annKey = (namespace: string, id: string): string => JSON.stringify([namespace, id]);
-
-/** Rows copied per statement when an index is backfilled from an existing table. */
-const BACKFILL_BATCH = 500;
-
 const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore => {
     if (typeof options.exec !== "function") {
         throw new TypeError("@lunora/ai/rag: sqliteVectorStore requires an `exec` function");
@@ -113,7 +109,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         throw new TypeError("@lunora/ai/rag: sqliteVectorStore `ann.dimensions` must be a positive integer");
     }
 
-    const annTable = `${table}_ann`;
+    const annIndex = ann === undefined ? undefined : sqliteVecIndex({ dimensions: ann.dimensions, exec, table });
 
     const capabilities: RagVectorStoreCapabilities = {
         // A vec0 column has one fixed width; a wider embedding cannot be indexed.
@@ -139,55 +135,6 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
      */
     let ready: Promise<void> | undefined;
 
-    /** Create the `vec0` index, backfilling it from the table the first time. */
-    const ensureAnnIndex = async (dimensions: number): Promise<void> => {
-        const existing = await exec("SELECT name FROM sqlite_master WHERE name = ?", [annTable]);
-
-        if (existing.length > 0) {
-            return;
-        }
-
-        try {
-            await exec(
-                `CREATE VIRTUAL TABLE ${annTable} USING vec0(ref TEXT PRIMARY KEY, namespace TEXT PARTITION KEY, embedding FLOAT[${String(dimensions)}] distance_metric=cosine)`,
-                [],
-            );
-        } catch (error) {
-            if (error instanceof Error && error.message.includes("vec0")) {
-                throw new Error(
-                    "@lunora/ai/rag: sqliteVectorStore `ann` needs the sqlite-vec extension in this SQLite (`no such module: vec0`) — on celld set the `sqlite_vec` compatibility flag, on node:sqlite load the extension",
-                    { cause: error },
-                );
-            }
-
-            throw error;
-        }
-
-        // Keyset pagination over rowid, so a large table is copied in bounded
-        // statements rather than one read that materialises every vector.
-        let after = 0;
-
-        for (;;) {
-            // eslint-disable-next-line no-await-in-loop -- one bounded page at a time; the next page starts after this one's last rowid
-            const rows = await exec(`SELECT rowid, id, namespace, vector FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`, [after, BACKFILL_BATCH]);
-
-            for (const row of rows) {
-                // eslint-disable-next-line no-await-in-loop -- vec0 takes one row per INSERT; the page is already bounded
-                await exec(`INSERT INTO ${annTable} (ref, namespace, embedding) VALUES (?, ?, ?)`, [
-                    annKey(String(row["namespace"]), String(row["id"])),
-                    String(row["namespace"]),
-                    String(row["vector"]),
-                ]);
-            }
-
-            if (rows.length < BACKFILL_BATCH) {
-                return;
-            }
-
-            after = Number(rows.at(-1)?.["rowid"]);
-        }
-    };
-
     const ensureTable = async (): Promise<void> => {
         ready ??= (async (): Promise<void> => {
             await exec(
@@ -196,9 +143,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             );
             await exec(`CREATE INDEX IF NOT EXISTS ${table}_namespace ON ${table} (namespace)`, []);
 
-            if (ann !== undefined) {
-                await ensureAnnIndex(ann.dimensions);
-            }
+            await annIndex?.ensure();
         })().catch((error: unknown) => {
             ready = undefined;
 
@@ -218,16 +163,8 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         const vector = await input.embed(input.input);
         const namespace = namespaceKey(input.namespace);
 
-        // The index is written BEFORE the table: an interrupted pair then leaves
-        // an index entry the table does not hold, which a query drops, rather
-        // than a stored chunk no KNN lookup can find. vec0 has no upsert, so a
-        // re-index is DELETE then INSERT.
-        if (ann !== undefined) {
-            const reference = annKey(namespace, input.id);
-
-            await exec(`DELETE FROM ${annTable} WHERE ref = ?`, [reference]);
-            await exec(`INSERT INTO ${annTable} (ref, namespace, embedding) VALUES (?, ?, ?)`, [reference, namespace, JSON.stringify([...vector])]);
-        }
+        // Before the table write — see `sqlite-vec-index.ts` for the order.
+        await annIndex?.put(namespace, input.id, vector);
 
         // ON CONFLICT rather than DELETE+INSERT: re-indexing a source rewrites
         // the same ids, and the two-statement form would leave a window where a
@@ -278,30 +215,28 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
      * index; a match whose row is gone (an interrupted upsert or delete) is
      * dropped rather than returned without its record.
      */
-    const queryAnn = async (values: ReadonlyArray<number>, input: RagVectorQueryInput): Promise<RagVectorMatches> => {
+    const queryIndex = async (index: SqliteVecIndex, values: ReadonlyArray<number>, input: RagVectorQueryInput): Promise<RagVectorMatches> => {
         const namespace = namespaceKey(input.namespace);
-        const nearest = await exec(`SELECT ref, distance FROM ${annTable} WHERE embedding MATCH ? AND k = ? AND namespace = ?`, [
-            JSON.stringify([...values]),
-            input.topK ?? 10,
+        const nearest = await index.nearest(namespace, values, input.topK ?? 10);
+        const stored = await getByIds(
+            nearest.map((match) => match.id),
             namespace,
-        ]);
-        const ids = nearest.map((row) => (JSON.parse(String(row["ref"])) as [string, string])[1]);
-        const stored = await getByIds(ids, namespace);
+        );
         const records = new Map(stored.map((record) => [record.id, record]));
         const matches: RagVectorMatch[] = [];
 
-        for (const [index, row] of nearest.entries()) {
-            const record = records.get(ids[index] as string);
+        for (const { distance, id } of nearest) {
+            const record = records.get(id);
 
             if (record === undefined) {
                 continue;
             }
 
             matches.push({
-                id: record.id,
+                id,
                 // vec0's cosine distance is `1 - similarity`, so this is the
                 // same score the scan path computes.
-                score: 1 - Number(row["distance"]),
+                score: 1 - distance,
                 ...(input.returnMetadata === "none" || record.metadata === undefined ? {} : { metadata: record.metadata }),
             });
         }
@@ -320,8 +255,8 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             throw new TypeError("@lunora/ai/rag: sqliteVectorStore query requires both `input` and `embed`");
         }
 
-        if (ann !== undefined && input.filter === undefined) {
-            return queryAnn(values, input);
+        if (annIndex !== undefined && input.filter === undefined) {
+            return queryIndex(annIndex, values, input);
         }
 
         // `LIMIT maxScan + 1` rather than an unbounded SELECT: the overflow row
@@ -379,15 +314,9 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         for (const batch of inListBatches(ids)) {
             // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
             await exec(`DELETE FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [namespaceKey(namespace), ...batch]);
-
-            // After the table, for the reason `upsert` writes the index first.
-            if (ann !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
-                await exec(
-                    `DELETE FROM ${annTable} WHERE ref IN (${placeholderList(batch.length)})`,
-                    batch.map((id) => annKey(namespaceKey(namespace), id)),
-                );
-            }
+            // After the table delete — see `sqlite-vec-index.ts` for the order.
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
+            await annIndex?.remove(namespaceKey(namespace), batch);
         }
 
         return undefined;

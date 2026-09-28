@@ -1026,6 +1026,19 @@ interface ToolchainCommand {
 }
 ```
 
+### `ToolchainInvocation` (interface)
+
+```ts
+interface ToolchainInvocation {
+    command: ToolchainCommand;
+    commit: () => void;
+    projection: {
+        configPath: string;
+        dropped: ReadonlyArray<string>;
+    } | undefined;
+}
+```
+
 ### `WireResult` (type)
 
 ```ts
@@ -1407,6 +1420,12 @@ const planDevVariablesScaffold: (input: {
 }) => ScaffoldPlan;
 ```
 
+### `planToolchainInvocation` (const)
+
+```ts
+const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
 ### `projectUsesUmbrella` (const)
 
 ```ts
@@ -1571,6 +1590,12 @@ const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[]
 
 ```ts
 const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
+```
+
+### `targetRunsOwnDevServer` (const)
+
+```ts
+const targetRunsOwnDevServer: (target: string) => boolean;
 ```
 
 ### `toolchainExecArgs` (const)

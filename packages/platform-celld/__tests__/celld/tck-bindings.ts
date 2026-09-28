@@ -25,6 +25,8 @@ import { createStorage } from "@lunora/storage";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 
+import { describeFailure } from "./tck-legs";
+
 /**
  * The bindings the TCK worker declares for these checks (see wrangler.jsonc),
  * typed as Lunora's structural projections — the shapes its adapters accept,
@@ -41,6 +43,8 @@ type BindingEnv = {
 };
 
 const QUEUE_NAME = "tck-jobs";
+
+const toHex = (bytes: ArrayBuffer): string => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const check = (condition: boolean, message: string): void => {
     if (!condition) {
@@ -140,9 +144,7 @@ const checkR2 = async (env: BindingEnv): Promise<void> => {
 
     same(stored?.customMetadata, { owner: "tck" }, "customMetadata");
 
-    const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("segment")))]
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
+    const sha256 = toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("segment")));
 
     await env.R2.put("cdc/0002", "segment", { httpMetadata: { contentType: "application/json" }, sha256 });
     await env.R2.put("cdc/0001", "segment", { sha256 });
@@ -232,12 +234,9 @@ class TckWorkflow extends WorkflowEntrypoint<BindingEnv, { seed: number }> {
     }
 }
 
-const toHex = (bytes: ArrayBuffer): string => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-
 /**
  * Discord channel verification (`verifyDiscord`): Ed25519 over `timestamp +
- * body`, the public key imported in `raw` form. celld gained Ed25519 in v0.6.0;
- * before that the import threw and every Discord interaction was rejected.
+ * body`, the public key imported in `raw` form.
  */
 const checkEd25519 = async (): Promise<void> => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
@@ -325,67 +324,56 @@ type BindingResult = { message?: string; status: "failed" | "passed" | "pending"
  * `GET /binding/<name>` for the synchronous checks, and the start/poll pairs
  * for the asynchronous ones.
  */
+const passed = async (work: Promise<unknown>): Promise<BindingResult> => {
+    await work;
+
+    return { status: "passed" };
+};
+
+/** A recorded outcome, or `pending` while the delivery / run / tick has not happened yet. */
+const recorded = async (env: BindingEnv, key: string): Promise<BindingResult> => {
+    const value = await env.KV.get(key, "json");
+
+    return value === null ? { status: "pending" } : { status: "passed", value };
+};
+
+/** Every `/binding/<name>` route: the synchronous checks, and the start/poll pairs for the asynchronous ones. */
+const BINDING_ROUTES: Record<string, (env: BindingEnv, id: string) => Promise<BindingResult>> = {
+    "cron/status": async (env) => recorded(env, "tck:cron"),
+    d1: async (env) => passed(checkD1(env)),
+    ed25519: async () => passed(checkEd25519()),
+    kv: async (env) => passed(checkKv(env)),
+    loader: async (env) => passed(checkWorkerLoader(env)),
+    "queue/start": async (env, id) => passed(startQueue(env, id)),
+    "queue/status": async (env, id) => recorded(env, `tck:queue:${id}`),
+    r2: async (env) => passed(checkR2(env)),
+    vec: async (env) => passed(checkVectorIndex(env)),
+    "workflow/event": async (env, id) => passed(env.TCK_FLOW.get(id).then(async (instance) => instance.sendEvent({ payload: { ok: true }, type: "approve" }))),
+    "workflow/start": async (env, id) => {
+        const instance = await env.TCK_FLOW.create({ id, params: { seed: 21 } });
+
+        return { status: "passed", value: instance.id };
+    },
+    "workflow/status": async (env, id) => {
+        const instance = await env.TCK_FLOW.get(id);
+
+        return { status: "passed", value: await instance.status() };
+    },
+};
+
 const handleBindingRoute = async (request: Request, env: BindingEnv): Promise<BindingResult> => {
     const url = new URL(request.url);
     const name = url.pathname.slice("/binding/".length);
-    const id = url.searchParams.get("id") ?? "";
-    const synchronous: Record<string, (env: BindingEnv) => Promise<void>> = {
-        d1: checkD1,
-        ed25519: checkEd25519,
-        kv: checkKv,
-        loader: checkWorkerLoader,
-        r2: checkR2,
-        vec: checkVectorIndex,
-    };
+    const route = BINDING_ROUTES[name];
+
+    if (route === undefined) {
+        return { message: `no binding check "${name}"`, status: "failed" };
+    }
 
     try {
-        const run = synchronous[name];
-
-        if (run !== undefined) {
-            await run(env);
-
-            return { status: "passed" };
-        }
-
-        switch (name) {
-            case "cron/status": {
-                const recorded = await env.KV.get("tck:cron", "json");
-
-                return recorded === null ? { status: "pending" } : { status: "passed", value: recorded };
-            }
-            case "queue/start": {
-                await startQueue(env, id);
-
-                return { status: "passed" };
-            }
-            case "queue/status": {
-                const recorded = await env.KV.get(`tck:queue:${id}`, "json");
-
-                return recorded === null ? { status: "pending" } : { status: "passed", value: recorded };
-            }
-            case "workflow/event": {
-                const instance = await env.TCK_FLOW.get(id);
-
-                await instance.sendEvent({ payload: { ok: true }, type: "approve" });
-
-                return { status: "passed" };
-            }
-            case "workflow/start": {
-                const instance = await env.TCK_FLOW.create({ id, params: { seed: 21 } });
-
-                return { status: "passed", value: instance.id };
-            }
-            case "workflow/status": {
-                const instance = await env.TCK_FLOW.get(id);
-
-                return { status: "passed", value: await instance.status() };
-            }
-            default: {
-                return { message: `no binding check "${name}"`, status: "failed" };
-            }
-        }
+        return await route(env, url.searchParams.get("id") ?? "");
     } catch (error) {
-        return { message: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error), status: "failed" };
+        return { message: describeFailure(error), status: "failed" };
     }
 };
 

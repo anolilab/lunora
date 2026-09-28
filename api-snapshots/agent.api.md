@@ -299,7 +299,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ```ts
 interface JsCodeToolOptions {
-    binding?: string;
     cpuMs?: number;
     description?: string;
 }
@@ -396,28 +395,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `VoiceTurnResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
-### `WorkerLoaderLike` (interface)
-
-```ts
-interface WorkerLoaderLike {
-    load: (code: {
-        compatibilityDate: string;
-        env: Record<string, never>;
-        globalOutbound: null;
-        limits: {
-            cpuMs: number;
-            subRequests: number;
-        };
-        mainModule: string;
-        modules: Record<string, string>;
-    }) => {
-        getEntrypoint: () => {
-            fetch: (input: string) => Promise<Response>;
-        };
-    };
-}
-```
 
 ### `adaptMcpResult` (const)
 

@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveDeployDriver, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds, targetRunsOwnDevServer } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -215,7 +215,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // so composing the Cloudflare plugin is right for `vite build` — but
         // `vite dev` then serves the worker in workerd, not on the target. Say
         // so instead of letting it pass for the target.
-        if (resolveDeployDriver(resolved.target).toolchain?.devServer === "own") {
+        if (targetRunsOwnDevServer(resolved.target)) {
             plugins.push({
                 configureServer(server) {
                     server.config.logger.warn(

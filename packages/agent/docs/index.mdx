@@ -581,7 +581,7 @@ not a throw, so the durable step does not retry a script that will fail the same
 way again.
 
 Importing `jsCodeTool` in `lunora/` makes codegen provision the
-`worker_loaders` binding (`LOADER`, or pass `binding`) and gate the target on
+`worker_loaders` binding (`LOADER`) and gate the target on
 the `workerLoaders` capability: Cloudflare and celld rate it `native`, and the
 Node host has no isolate sandbox, so `target: "node"` refuses it with a
 `platform_unsupported_feature` diagnostic.
@@ -599,7 +599,9 @@ Node host has no isolate sandbox, so `target: "node"` refuses it with a
   discards it, so module-level state does not survive to the next call.
 - **The result must be JSON.** A `bigint`, a cycle or a function comes back as
   `error`, and a `Date` as its ISO string.
-- **`console` output is capped** at 100 entries per run.
+- **Output is capped.** A result over 256 KiB comes back as `error` (the whole
+  result is memoized as a durable step result, which the host caps at 1 MiB),
+  and `console` output at 100 entries of 2,000 characters each.
 - **The isolate is a V8 boundary, not a process or VM one.** It scopes what the
   script can address; it is not a claim about V8 escape safety. Run code that
   needs a kernel boundary in a container (`containerTool`) instead.

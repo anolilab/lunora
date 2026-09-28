@@ -359,10 +359,10 @@ batch_cap:
     - ".github/file-filters.yml"
 
 # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in
-# packages/platform/src/capabilities.ts. Separate from `packages` per the self-listing
+# packages/platform/src/capabilities/node.ts. Separate from `packages` per the self-listing
 # rule at the top.
 node_capabilities_docs:
-    - "packages/platform/src/capabilities.ts"
+    - "packages/platform/src/capabilities/node.ts"
     - "packages/platform-node/docs/index.mdx"
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"

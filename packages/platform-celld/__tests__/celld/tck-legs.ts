@@ -71,5 +71,8 @@ const collectLegs = (suite: SuiteName, factories: Factories, expect: unknown): L
     return legs;
 };
 
+/** A failed leg or check's message: V8's `stack` already starts with the message, so it is the whole report. */
+const describeFailure = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
+
 export type { Factories, Leg, LegContext, LegResult, SuiteName };
-export { collectLegs, LegSkipped };
+export { collectLegs, describeFailure, LegSkipped };

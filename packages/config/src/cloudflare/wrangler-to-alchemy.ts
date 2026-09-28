@@ -202,6 +202,7 @@ const UNSUPPORTED_FIELDS = [
     "services",
     "tail_consumers",
     "vectorize",
+    "worker_loaders",
     "workflows",
 ] as const;
 

@@ -34,6 +34,7 @@ import {
     resolveDeployDriver,
     resolveProjectTarget,
     streamContainerLogs,
+    targetRunsOwnDevServer,
     updateDevServerState,
 } from "@lunora/config";
 import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc, resolveRemoteEnabled } from "@lunora/config/cloudflare";
@@ -450,11 +451,19 @@ const planWorkerSidecar = (options: DevCommandOptions, cwd: string, manager: Ret
     // The toolchain is the target's, not always wrangler's. `options.target` is
     // the resolved target when `runDevCommand` plans; the config's otherwise,
     // for a direct caller.
-    const devCommand = resolveDeployDriver(options.target ?? resolveProjectTarget(cwd)).toolchain?.dev({
+    const driver = resolveDeployDriver(options.target ?? resolveProjectTarget(cwd));
+
+    // `runDevCommand` refuses a toolchain-less target before planning, so this
+    // only guards a direct caller — and must not fall back to a bare `wrangler`.
+    if (driver.toolchain === undefined) {
+        throw new Error(`deploy target "${driver.id}" has no dev server to run the worker sidecar`);
+    }
+
+    const devCommand = driver.toolchain.dev({
         configPath: DEV_WRANGLER_CONFIG,
         extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
     });
-    const exec = devCommand === undefined ? execArgsFor(manager, "wrangler", []) : toolchainExecArgs(manager, devCommand);
+    const exec = toolchainExecArgs(manager, devCommand);
 
     return { args: exec.args, command: exec.command, cwd, tag: "worker" };
 };
@@ -1034,6 +1043,20 @@ const emitDevBindingManifest = (options: {
  */
 const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan> => {
     const cwd = options.cwd ?? process.cwd();
+
+    // A host with its own dev server (celld) runs the standalone flavor
+    // `resolveTargetFlavor` already picked, but none of the `wrangler dev`
+    // planning below applies to it.
+    if (options.target !== undefined && targetRunsOwnDevServer(options.target)) {
+        return planOwnDevServer({
+            cwd,
+            driver: resolveDeployDriver(options.target),
+            options,
+            studioPort: options.port ?? DEFAULT_STUDIO_PORT,
+            workerPort: await resolveWorkerPort(options, cwd),
+        });
+    }
+
     const flavor = options.flavor ?? detectDevFlavor(cwd);
     // The vite flavor lets Vite resolve its own port; only the wrangler flavor
     // needs a pre-picked free port passed through as `--port`.
@@ -1041,12 +1064,6 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
     // Same split for the inspector: the other flavors get the flag back as a
     // warning (see `planDevCommand`), so the wrangler-config fallback is only
     // read where a `wrangler dev` argv exists to carry it.
-    const driver = resolveDeployDriver(options.target);
-
-    if (driver.toolchain?.devServer === "own") {
-        return planOwnDevServer({ cwd, driver, options, studioPort: options.port ?? DEFAULT_STUDIO_PORT, workerPort: workerPort ?? DEFAULT_WORKER_PORT });
-    }
-
     const inspectorPort = flavor === "wrangler" ? resolveInspectorPort(options, cwd) : options.inspectorPort;
 
     return planDevCommand({ ...options, cwd, flavor, inspectorPort, workerPort });

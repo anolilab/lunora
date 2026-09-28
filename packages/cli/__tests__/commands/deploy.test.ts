@@ -261,18 +261,22 @@ describe("lunora deploy", () => {
 
             // The refusal lives in the driver's argv builder, which runs before
             // the projection is written: a refused deploy changes nothing.
-            it("refuses --preview for celld before writing the projection", async () => {
-                expect.assertions(2);
+            it("refuses --preview for celld before the pipeline writes anything", async () => {
+                expect.assertions(4);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-                const { spawner } = createRecordingSpawner();
+                const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                await expect(
-                    runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" }),
-                ).rejects.toThrow(/no preview versions/u);
+                const result = await runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/no preview versions/u) });
+                // Refused before provisioning, so the committed config is untouched —
+                // not merely the projection left unwritten.
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
                 expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+                expect(calls).toHaveLength(0);
             });
         });
 

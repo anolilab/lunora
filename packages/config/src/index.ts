@@ -66,7 +66,16 @@ export {
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
-export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
+export type { ToolchainInvocation } from "./driver-registry";
+export {
+    DEFAULT_DEPLOY_TARGET,
+    deployTargetIds,
+    isRunnableTarget,
+    planToolchainInvocation,
+    resolveDeployDriver,
+    runnableTargetIds,
+    targetRunsOwnDevServer,
+} from "./driver-registry";
 export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";

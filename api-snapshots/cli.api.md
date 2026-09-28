@@ -153,12 +153,12 @@ interface DeployCommandResult {
         ok: boolean;
         url: string;
     };
+    logsAvailable?: boolean;
     mintedSecretsFile?: string;
     schemaDrift?: {
         blocked: boolean;
         reason: string;
     };
-    target?: string;
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;

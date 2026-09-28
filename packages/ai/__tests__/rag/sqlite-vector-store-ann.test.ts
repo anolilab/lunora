@@ -8,6 +8,8 @@ import { sqliteVectorStore } from "../../src/rag/sqlite-vector-store";
 
 const databases: DatabaseSync[] = [];
 
+const WIDTH_PATTERN = /the existing index is 3-dimension but the `ann` index is 4-dimension/u;
+
 /** A `node:sqlite` database with sqlite-vec loaded — what a celld cell with `sqlite_vec` has. */
 const open = (options: { vec?: boolean } = {}): { exec: RagSqlExec; statements: string[] } => {
     const database = new DatabaseSync(":memory:", { allowExtension: true });
@@ -126,6 +128,50 @@ describe("sqliteVectorStore with a vec0 index", () => {
         const result = await store.query({ embed: fixed([1, 0, 0]), input: "q", topK: 3 });
 
         expect(result.matches.map((match) => match.id)).toStrictEqual(["z", "y"]);
+    });
+
+    it("rebuilds an index whose backfill was interrupted instead of trusting it", async () => {
+        expect.assertions(2);
+
+        const { exec } = open();
+
+        await seed(sqliteVectorStore({ exec }));
+        // What a build cut off after its first row leaves: the vec0 table, no marker.
+        await exec(
+            "CREATE VIRTUAL TABLE lunora_rag_vectors_ann USING vec0(ref TEXT PRIMARY KEY, namespace TEXT PARTITION KEY, embedding FLOAT[3] distance_metric=cosine, +id TEXT)",
+            [],
+        );
+        await exec("INSERT INTO lunora_rag_vectors_ann (ref, namespace, embedding, id) VALUES (?, ?, ?, ?)", ['["","x"]', "", "[1,0,0]", "x"]);
+
+        const store = sqliteVectorStore({ ann: { dimensions: 3 }, exec });
+        const result = await store.query({ embed: fixed([0, 1, 0]), input: "q", topK: 3 });
+
+        expect(result.matches.map((match) => match.id)).toStrictEqual(["y", "z", "x"]);
+
+        const [marker] = await exec("SELECT dimensions FROM lunora_rag_vectors_ann_ready", []);
+
+        expect(Number(marker?.["dimensions"])).toBe(3);
+    });
+
+    it("names a width mismatch — on upsert, on backfill, and against an index built at another width", async () => {
+        expect.assertions(3);
+
+        const { exec } = open();
+        const store = sqliteVectorStore({ ann: { dimensions: 3 }, exec });
+
+        await expect(store.upsert({ embed: fixed([1, 0]), id: "w", input: "w" })).rejects.toMatchObject({ code: "RAG_DIMENSION_MISMATCH" });
+
+        await seed(store);
+
+        await expect(sqliteVectorStore({ ann: { dimensions: 4 }, exec }).query({ embed: fixed([1, 0, 0, 0]), input: "q" })).rejects.toThrow(WIDTH_PATTERN);
+
+        const other = open();
+
+        await seed(sqliteVectorStore({ exec: other.exec }));
+
+        await expect(sqliteVectorStore({ ann: { dimensions: 4 }, exec: other.exec }).query({ embed: fixed([1, 0, 0, 0]), input: "q" })).rejects.toMatchObject({
+            code: "RAG_DIMENSION_MISMATCH",
+        });
     });
 
     it("names the missing extension when the SQLite has no vec0", async () => {

@@ -29,7 +29,7 @@ import type { BindingEnv } from "./tck-bindings";
 import { consumeQueue, handleBindingRoute, recordCron } from "./tck-bindings";
 import { createLegExpect } from "./tck-expect";
 import type { Factories, LegContext, LegResult, SuiteName } from "./tck-legs";
-import { collectLegs, LegSkipped } from "./tck-legs";
+import { collectLegs, describeFailure, LegSkipped } from "./tck-legs";
 
 type Env = BindingEnv & { ECHO: unknown; TCK: DurableObjectNamespace };
 
@@ -161,7 +161,7 @@ const runLeg = async (suite: SuiteName, index: number): Promise<LegResult> => {
             return { message: error.message, status: "skipped" };
         }
 
-        return { message: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error), status: "failed" };
+        return { message: describeFailure(error), status: "failed" };
     }
 };
 

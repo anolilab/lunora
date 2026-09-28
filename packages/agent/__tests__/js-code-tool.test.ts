@@ -11,6 +11,7 @@ const NOPE_PATTERN = /nope/u;
 const BIGINT_PATTERN = /BigInt/u;
 const MISSING_BINDING_PATTERN = /no Worker Loader binding "LOADER"/u;
 const CPU_MS_PATTERN = /`cpuMs` must be a positive integer/u;
+const OVERSIZED_PATTERN = /result is over 262144 bytes/u;
 
 /**
  * A Worker Loader double that really runs the generated module — imported from
@@ -76,6 +77,18 @@ describe(jsCodeTool, () => {
         await jsCodeTool({ cpuMs: 250 }).execute({ code: "return 1;" }, contextWith({ LOADER: fakeLoader(loaded) }));
 
         expect(loaded[0]).toMatchObject({ env: {}, globalOutbound: null, limits: { cpuMs: 250, subRequests: 0 } });
+    });
+
+    it("refuses an oversized result and caps logs the script pushed past the wrapper", async () => {
+        expect.assertions(4);
+
+        const huge = await run('return "x".repeat(300 * 1024);');
+        const flooded = await run('for (let i = 0; i < 110; i++) logs.push("y".repeat(2100));\nreturn 1;');
+
+        expect(huge.error).toMatch(OVERSIZED_PATTERN);
+        expect(huge.value).toBeUndefined();
+        expect(flooded.logs).toHaveLength(100);
+        expect(flooded.logs[0]).toHaveLength(2000);
     });
 
     it("names the missing binding instead of throwing", async () => {

@@ -442,6 +442,10 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
         write: () => {
             writeFileSync(configPath, contents);
 
+            // Removed on a `--dry-run` too: celld refuses the file outright, so
+            // keeping it would fail every dry run instead of checking the bundle a
+            // real deploy ships. It is a Vite build artifact whose patterns match
+            // nothing here (see `inertAssetsIgnore`), and the next build rewrites it.
             if (build.assetsIgnore !== undefined) {
                 rmSync(build.assetsIgnore);
             }

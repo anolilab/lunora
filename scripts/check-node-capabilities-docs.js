@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Guards against `packages/platform-node/docs/index.mdx`'s capability table
- * and `NODE_CAPABILITIES` (`packages/platform/src/capabilities.ts`) drifting
+ * and `NODE_CAPABILITIES` (`packages/platform/src/capabilities/node.ts`) drifting
  * apart.
  *
  * The docs page states plainly (plan 329) that it reproduces the matrix
@@ -10,7 +10,7 @@
  * exists to catch for the tier taxonomy. This is the same guard for the
  * feature-by-feature ratings.
  *
- * Imports `capabilities.ts` directly via Node's built-in TypeScript type
+ * Imports `capabilities/node.ts` directly via Node's built-in TypeScript type
  * stripping (no build step: the file is a plain `const` object with type
  * annotations) rather than regex-parsing the source text, because several
  * notes contain quotes, apostrophes and mixed quoting styles that a
@@ -33,10 +33,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-const capabilitiesPath = join(rootDir, "packages", "platform", "src", "capabilities.ts");
+const capabilitiesPath = join(rootDir, "packages", "platform", "src", "capabilities", "node.ts");
 const docsPath = join(rootDir, "packages", "platform-node", "docs", "index.mdx");
 
-const { NODE_CAPABILITIES } = await import(pathToFileURL(capabilitiesPath).href);
+const { default: NODE_CAPABILITIES } = await import(pathToFileURL(capabilitiesPath).href);
 
 const docsSource = readFileSync(docsPath, "utf8");
 
@@ -82,7 +82,7 @@ for (const feature of rows.keys()) {
 
 if (problems.length > 0) {
     process.stderr.write(
-        `packages/platform-node/docs/index.mdx and NODE_CAPABILITIES (packages/platform/src/capabilities.ts) disagree on ${String(problems.length)} row(s).\n` +
+        `packages/platform-node/docs/index.mdx and NODE_CAPABILITIES (packages/platform/src/capabilities/node.ts) disagree on ${String(problems.length)} row(s).\n` +
             `The matrix is the source of truth; update the docs table to match it (or, if the code changed on purpose, the notes above it):\n` +
             `${problems.join("\n")}\n`,
     );

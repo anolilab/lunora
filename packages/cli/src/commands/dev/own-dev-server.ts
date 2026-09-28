@@ -4,7 +4,7 @@
  * server on the projected wrangler config as the worker.
  */
 import type { DeployDriver } from "@lunora/config";
-import { resolveDeployDriver } from "@lunora/config";
+import { planToolchainInvocation, targetRunsOwnDevServer } from "@lunora/config";
 
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
@@ -22,7 +22,7 @@ import { codegenRequested } from "./lifecycle";
  * app on Cloudflare's runtime.
  */
 const resolveTargetFlavor = (target: string, detected: DevFlavor, logger: Logger): DevFlavor => {
-    if (resolveDeployDriver(target).toolchain?.devServer !== "own") {
+    if (!targetRunsOwnDevServer(target)) {
         return detected;
     }
 
@@ -63,12 +63,13 @@ const planOwnDevServer = (inputs: {
         options.logger.warn(`--inspector-port is a wrangler dev flag; ${driver.name} dev has no inspector to pin`);
     }
 
-    const projection = projectConfig(cwd, "dev");
-    const command = toolchain.dev({ configPath: projection.configPath, extraArgs: ["--port", String(workerPort)] });
+    const { command, commit, projection } = planToolchainInvocation(driver, cwd, "dev", (configPath) =>
+        toolchain.dev({ configPath, extraArgs: ["--port", String(workerPort)] }),
+    );
 
-    projection.write();
+    commit();
 
-    if (projection.dropped.length > 0) {
+    if (projection !== undefined && projection.dropped.length > 0) {
         options.logger.info(`${driver.name} ignores these wrangler keys, so its dev server runs without them: ${projection.dropped.join(", ")}`);
     }
 

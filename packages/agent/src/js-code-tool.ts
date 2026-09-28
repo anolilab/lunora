@@ -43,18 +43,23 @@ interface JsCodeToolResult {
 
 /** Options for {@link jsCodeTool}. */
 interface JsCodeToolOptions {
-    /** The Worker Loader binding name. Default `LOADER`, which codegen provisions. */
-    binding?: string;
     /** CPU budget per run, enforced by the loader. Default 1000 ms. */
     cpuMs?: number;
     /** Tool description shown to the model. */
     description?: string;
 }
 
+/** The binding `@lunora/config` provisions in `worker_loaders` when it sees this tool. */
+const LOADER_BINDING = "LOADER";
+
 /** Pinned so the loaded isolate's runtime behavior does not drift with the host's date. */
 const SANDBOX_COMPATIBILITY_DATE = "2026-04-07";
 const DEFAULT_CPU_MS = 1000;
 const MAX_LOG_ENTRIES = 100;
+const MAX_LOG_ENTRY_CHARS = 2000;
+
+/** Well under the 1 MiB step-result cap, which the result's JSON shares with the rest of the step. */
+const MAX_RESULT_BYTES = 256 * 1024;
 
 /**
  * Wall-clock ceiling for one run. The CPU limit stops a busy loop, not a script
@@ -101,6 +106,54 @@ export default {
 
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/**
+ * Read the sandbox's response, giving up past `limit` bytes. The script builds
+ * its result inside its own budget, but parsing it happens HERE, in the agent's
+ * isolate — and the whole result is then memoized as a step result, which the
+ * host caps at 1 MiB and retries (not fails) when exceeded. So an oversized
+ * result is cut off while streaming and becomes an `error`, never a parse.
+ */
+const readCapped = async (response: Response, limit: number): Promise<string | undefined> => {
+    const reader = response.body?.getReader();
+
+    if (reader === undefined) {
+        return "";
+    }
+
+    const decoder = new TextDecoder();
+    let text = "";
+    let size = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- a stream is read one chunk at a time
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        size += value.byteLength;
+
+        if (size > limit) {
+            // eslint-disable-next-line no-await-in-loop -- the loop ends here; cancel releases the rest of the stream
+            await reader.cancel();
+
+            return undefined;
+        }
+
+        text += decoder.decode(value, { stream: true });
+    }
+
+    return text + decoder.decode();
+};
+
+/**
+ * Enforce the log caps on the host: the wrapper's `record` bounds honest
+ * scripts, but `logs` is in the script's own scope, so a script can push past it.
+ */
+const capLogs = (logs: unknown): string[] =>
+    (Array.isArray(logs) ? logs : []).slice(0, MAX_LOG_ENTRIES).map((entry) => String(entry).slice(0, MAX_LOG_ENTRY_CHARS));
+
 const runInLoader = async (loader: WorkerLoaderLike, code: string, cpuMs: number): Promise<JsCodeToolResult> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<JsCodeToolResult>((resolve) => {
@@ -123,8 +176,16 @@ const runInLoader = async (loader: WorkerLoaderLike, code: string, cpuMs: number
             modules: { "main.js": sandboxModule(code) },
         });
         const response = await worker.getEntrypoint().fetch("https://sandbox/");
+        const text = await readCapped(response, MAX_RESULT_BYTES);
 
-        return (await response.json()) as JsCodeToolResult;
+        if (text === undefined) {
+            return { error: `the script's result is over ${String(MAX_RESULT_BYTES)} bytes — return less`, logs: [] };
+        }
+
+        const parsed = JSON.parse(text) as { error?: unknown; logs?: unknown; value?: unknown };
+        const logs = capLogs(parsed.logs);
+
+        return typeof parsed.error === "string" ? { error: parsed.error, logs } : { logs, value: parsed.value };
     };
 
     try {
@@ -162,7 +223,6 @@ const runInLoader = async (loader: WorkerLoaderLike, code: string, cpuMs: number
  * @experimental
  */
 const jsCodeTool = (options: JsCodeToolOptions = {}): AgentToolDefinition<JsCodeToolInput, JsCodeToolResult> => {
-    const binding = options.binding ?? "LOADER";
     const cpuMs = options.cpuMs ?? DEFAULT_CPU_MS;
 
     if (!Number.isInteger(cpuMs) || cpuMs <= 0) {
@@ -172,11 +232,11 @@ const jsCodeTool = (options: JsCodeToolOptions = {}): AgentToolDefinition<JsCode
     return {
         description: options.description ?? DEFAULT_DESCRIPTION,
         execute: async (input, context: AgentToolContext) => {
-            const loader = context.env[binding] as WorkerLoaderLike | undefined;
+            const loader = context.env[LOADER_BINDING] as WorkerLoaderLike | undefined;
 
             if (typeof loader?.load !== "function") {
                 return {
-                    error: `jsCodeTool: no Worker Loader binding "${binding}" on env — declare \`"worker_loaders": [{ "binding": "${binding}" }]\` in wrangler.jsonc`,
+                    error: `jsCodeTool: no Worker Loader binding "${LOADER_BINDING}" on env — declare \`"worker_loaders": [{ "binding": "${LOADER_BINDING}" }]\` in wrangler.jsonc`,
                     logs: [],
                 };
             }

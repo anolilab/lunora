@@ -31,6 +31,8 @@ import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { escapeRegExp } from "./dev-variables-format";
 import { discoverFlagsInfo } from "./flags-info";
+import type { SandboxToolName } from "./infer-sandbox-tools";
+import { SANDBOX_TOOLS, sandboxToolImports, TYPE_ONLY_IMPORT_PATTERN } from "./infer-sandbox-tools";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
@@ -159,97 +161,6 @@ const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
 // Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
 // `ctx.r2sql` failed silently on the deployed worker.
 const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
-const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
-
-/**
- * The specifiers the batteries-included `browserTool` sandbox detector treats
- * as `@lunora/agent` — mirrors `discover/sandbox.ts`'s identical constant
- * exactly (both the main entry and the `/sandbox` subpath re-export the tool).
- */
-const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
-
-/**
- * Extracts the specifier list between the FIRST `{` and its matching `}` in
- * an import declaration's sliced text via plain index scans (not a regex),
- * so the two capability checks below each scan that single bounded slice
- * once instead of two overlapping `[^}]*` quantifiers around a shared
- * anchor — the super-linear-backtracking shape `sonarjs/slow-regex` flags.
- */
-const extractImportSpecifierList = (statementText: string): string => {
-    const openBraceIndex = statementText.indexOf("{");
-
-    if (openBraceIndex === -1) {
-        return "";
-    }
-
-    const closeBraceIndex = statementText.indexOf("}", openBraceIndex + 1);
-
-    return closeBraceIndex === -1 ? statementText.slice(openBraceIndex + 1) : statementText.slice(openBraceIndex + 1, closeBraceIndex);
-};
-
-/**
- * Per sandbox tool: its name in the extracted specifier list, a
- * specifier-level `{ type <tool> }` inside an otherwise-value import (compiles
- * away, mirroring `discover/sandbox.ts`'s `named.isTypeOnly()` guard), and the
- * whole-file fallback used ONLY when `es-module-lexer` can't parse the file
- * (e.g. mid-edit) — same degrade-gracefully contract as
- * `capabilitiesFromSource`'s `lexCapabilities`/`regexCapabilities` split, and
- * the same comment-blindness every other capability's regex fallback has.
- *
- * `browserTool` provisions `BROWSER`; `jsCodeTool` provisions `LOADER`.
- */
-const SANDBOX_TOOL_PATTERNS = {
-    browserTool: {
-        fallback: /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/,
-        name: /\bbrowserTool\b/,
-        typeSpecifier: /\btype\s+browserTool\b/,
-    },
-    jsCodeTool: {
-        fallback: /import\s+\{[^}]*\bjsCodeTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/,
-        name: /\bjsCodeTool\b/,
-        typeSpecifier: /\btype\s+jsCodeTool\b/,
-    },
-} as const satisfies Record<string, { fallback: RegExp; name: RegExp; typeSpecifier: RegExp }>;
-
-type SandboxToolName = keyof typeof SANDBOX_TOOL_PATTERNS;
-
-/**
- * True when the sliced text of a SINGLE import declaration is a VALUE
- * (non-type-only) named import of `tool` — mirrors `discover/sandbox.ts`'s
- * `declaration.isTypeOnly()` (whole import) and `named.isTypeOnly()` (single
- * specifier) guards exactly.
- */
-const isValueToolImport = (statementText: string, tool: SandboxToolName): boolean => {
-    if (TYPE_ONLY_IMPORT_PATTERN.test(statementText)) {
-        return false; // `import type { browserTool } from …` — the whole import compiles away.
-    }
-
-    const specifierList = extractImportSpecifierList(statementText);
-    const patterns = SANDBOX_TOOL_PATTERNS[tool];
-
-    return patterns.name.test(specifierList) && !patterns.typeSpecifier.test(specifierList);
-};
-
-/**
- * Whether `code` contains a VALUE import of the sandbox `tool` from
- * `@lunora/agent` (main entry or `/sandbox`). Walks `es-module-lexer`'s PARSED
- * import records and tests only the sliced text of each matching declaration —
- * a commented-out import is never parsed as a declaration at all, so it can
- * never match, and a `type`-prefixed specifier is rejected by
- * {@link isValueToolImport}. This is what makes the detector agree with
- * `discover/sandbox.ts`'s AST-based one on the same fixture matrix.
- */
-const hasSandboxToolImport = (code: string, tool: SandboxToolName): boolean => {
-    try {
-        const [imports] = lexModule(code);
-
-        return imports.some(
-            (entry) => entry.n !== undefined && SANDBOX_MODULE_SPECIFIERS.has(entry.n) && isValueToolImport(code.slice(entry.ss, entry.se), tool),
-        );
-    } catch {
-        return SANDBOX_TOOL_PATTERNS[tool].fallback.test(code);
-    }
-};
 
 /**
  * The single source of truth for import-driven capabilities: each capability
@@ -427,10 +338,10 @@ interface InferredBindings {
  * one capability not driven by an import (it comes from `env.DB` / a `.global()`
  * schema), so it is added explicitly.
  */
-type Capabilities = Record<CapabilityFlag | "needsD1", boolean>;
+type Capabilities = Record<CapabilityFlag | "needsD1" | "usesWorkerLoader", boolean>;
 
 /** Every capability key, including the non-import-driven `needsD1`. */
-const ALL_CAPABILITY_KEYS: ReadonlyArray<keyof Capabilities> = [...CAPABILITY_FLAGS, "needsD1"];
+const ALL_CAPABILITY_KEYS: ReadonlyArray<keyof Capabilities> = [...CAPABILITY_FLAGS, "needsD1", "usesWorkerLoader"];
 
 /** Build a fresh all-`false` capability set keyed by {@link ALL_CAPABILITY_KEYS}. */
 const emptyCapabilities = (): Capabilities => {
@@ -921,7 +832,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
  */
 const scanSandboxToolUsage = (projectRoot: string, lunoraDirectory: string): Record<SandboxToolName, boolean> => {
     const absolute = join(projectRoot, lunoraDirectory);
-    const found: Record<SandboxToolName, boolean> = { browserTool: false, jsCodeTool: false };
+    const found = Object.fromEntries(SANDBOX_TOOLS.map((tool) => [tool, false])) as Record<SandboxToolName, boolean>;
 
     if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
         return found;
@@ -932,10 +843,11 @@ const scanSandboxToolUsage = (projectRoot: string, lunoraDirectory: string): Rec
     collectSourceFiles(absolute, files);
 
     for (const file of files) {
-        const code = readFileSync(file, "utf8");
+        const imported = sandboxToolImports(readFileSync(file, "utf8"));
 
-        found.browserTool ||= hasSandboxToolImport(code, "browserTool");
-        found.jsCodeTool ||= hasSandboxToolImport(code, "jsCodeTool");
+        for (const tool of SANDBOX_TOOLS) {
+            found[tool] ||= imported[tool];
+        }
     }
 
     return found;
@@ -984,6 +896,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         [capabilities.usesBrowser, "browser (@lunora/browser imported) — self-describing { binding: BROWSER }"],
         [capabilities.usesImages, "images (@lunora/bindings/images imported) — self-describing { binding: IMAGES }"],
         [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/bindings/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
+        [capabilities.usesWorkerLoader, "worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }"],
         // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
         // as hints — never an auto-write — exactly like R2's user-defined bucket name.
@@ -1057,6 +970,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const capabilities: Capabilities = {
         ...scannedCapabilities,
         usesBrowser: scannedCapabilities.usesBrowser || sandboxTools.browserTool,
+        usesWorkerLoader: sandboxTools.jsCodeTool,
     };
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -1106,10 +1020,6 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows, agents);
 
-    if (sandboxTools.jsCodeTool) {
-        signals.push("worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }");
-    }
-
     if (flagshipBinding !== undefined) {
         signals.push(
             `hint: lunora/flags.ts uses Flagship in binding mode; add a flagship binding ({ binding: "${flagshipBinding}", app_id }) — the app_id can't be auto-provisioned`,
@@ -1125,7 +1035,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         queues,
         signals,
         usesFlags: flags !== undefined,
-        usesWorkerLoader: sandboxTools.jsCodeTool,
+        usesWorkerLoader: capabilities.usesWorkerLoader,
         workflows,
         ...capabilityFlags,
     };

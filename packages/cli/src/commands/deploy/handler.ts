@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { discoverMigrations, runCodegen } from "@lunora/codegen";
-import type { ToolchainCommand } from "@lunora/config";
+import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
 import {
     COMPOSED_WORKER_ENTRY,
     DEV_VARS_FILE,
@@ -13,6 +13,7 @@ import {
     isMintableSecretKey,
     packageNamesFromBindings,
     parseDevVariableEntries,
+    planToolchainInvocation,
     requiredSecrets,
     resolveDeployDriver,
     upsertDevVariableLine,
@@ -279,6 +280,9 @@ interface DeployCommandResult {
      */
     healthCheck?: { error?: string; ok: boolean; url: string };
 
+    /** Whether the target a successful deploy shipped to has a log tail for `lunora logs`. */
+    logsAvailable?: boolean;
+
     /**
      * The `.dev.vars`-shaped filename (never a full path, never a value) a
      * secret minted during this run was recorded into, when the missing-
@@ -287,11 +291,8 @@ interface DeployCommandResult {
      * nothing was minted this run.
      */
     mintedSecretsFile?: string;
-
     /** The schema-drift gate verdict, when it ran (skipped on `--skip-codegen`). */
     schemaDrift?: { blocked: boolean; reason: string };
-    /** The target a successful deploy shipped to. */
-    target?: string;
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
@@ -650,7 +651,7 @@ const provisionBindings = async (
  * never aborts the deploy; it does not prompt, so it's safe under
  * `--yes`/non-interactive flows.
  */
-const warnDevVariablesNotPushed = (cwd: string, logger: Logger, target: string): void => {
+const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDriver): void => {
     const devVariablesPath = join(cwd, DEV_VARS_FILE);
 
     if (!existsSync(devVariablesPath)) {
@@ -670,7 +671,6 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, target: string):
         return;
     }
 
-    const driver = resolveDeployDriver(target);
     // `lunora env push` needs a secret store. Without one (celld), only the dev
     // server reads `.dev.vars` — a deployed value has to live in wrangler `vars`.
     const hasSecretStore = driver.toolchain?.secretPut !== undefined;
@@ -745,14 +745,13 @@ const pushMintableSecrets = async (
     cwd: string,
     options: DeployCommandOptions,
     keys: ReadonlyArray<string>,
-    target: string,
+    driver: DeployDriver,
 ): Promise<{ minted: ReadonlyArray<{ key: string; value: string }>; ok: boolean }> => {
     const { logger } = options;
     const spawner = options.spawner ?? defaultSpawner;
     const manager = detectPackageManager(cwd);
     const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
 
-    const driver = resolveDeployDriver(target);
     const secretPut = driver.toolchain?.secretPut;
 
     if (secretPut === undefined) {
@@ -944,7 +943,7 @@ interface MissingSecretsOutcome {
  * secret list can't be read — we proceed rather than guess. Any pushing happens
  * BEFORE the deploy spawn so the new version boots with the secrets present.
  */
-const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, target: string): Promise<MissingSecretsOutcome> => {
+const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean, driver: DeployDriver): Promise<MissingSecretsOutcome> => {
     if (options.dryRun === true || options.preview === true) {
         return {};
     }
@@ -1004,7 +1003,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         // deploy anyway, shipping a worker still missing the secret it just
         // failed to set — the exact outcome the non-interactive branch above
         // refuses to risk.
-        const { minted, ok } = await pushMintableSecrets(cwd, options, mintable, target);
+        const { minted, ok } = await pushMintableSecrets(cwd, options, mintable, driver);
 
         // Persist whatever WAS minted even on a partial failure — a pushed
         // secret this function doesn't record is permanently lost (Cloudflare
@@ -1492,15 +1491,52 @@ const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command:
 };
 
 /**
- * Assemble the `wrangler deploy …` argv (the wrangler subcommand + flags): the
- * class-B composed-entry positional (when present), `--env`, and `--dry-run`.
- * The package-manager launcher (`pnpm exec` / `npx --` / …) is prepended by the
- * caller via {@link execArgsFor}. Extracted from {@link executeDeploy} to keep
- * its cognitive complexity within budget.
+ * The neutral deploy request these options describe. The projection's
+ * `configPath` is added when the command is planned
+ * ({@link planToolchainInvocation}).
  */
-const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: string): ToolchainCommand => {
-    // Class-B composition: bundle the `src/worker.ts` wrapper (which the
-    // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployRequest => {
+    return {
+        dryRun: options.dryRun,
+        // Class-B composition: bundle the `src/worker.ts` wrapper (which the
+        // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+        entry: resolveComposedWorkerEntry(cwd),
+        environment: options.env,
+        outDir: options.outDir,
+        preview: options.preview,
+        temporary: options.temporary,
+    };
+};
+
+/**
+ * Plan the target's deploy command without writing anything. The argv builder
+ * is where a host refuses an option it has no equivalent for (celld has no
+ * `--env`, `--preview`, …), so the pre-deploy pipeline plans once up front — a
+ * refusal then stops the deploy before codegen or provisioning has touched a
+ * file — and {@link buildDeployCommand} plans again, against the provisioned
+ * config, to run it.
+ */
+const planDeploy = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): ReturnType<typeof planToolchainInvocation> => {
+    const { toolchain } = driver;
+
+    // `resolveRunnableTargetOrError` rejects a toolchain-less target (Node) at
+    // selection; this is the backstop for a direct caller that skipped it.
+    if (toolchain === undefined) {
+        throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
+    }
+
+    const request = deployRequestFor(cwd, options);
+
+    return planToolchainInvocation(driver, cwd, "deploy", (configPath) => toolchain.deploy({ ...request, configPath }));
+};
+
+/**
+ * Assemble the target's deploy argv (the package-manager launcher is prepended
+ * by the caller via {@link toolchainExecArgs}), write the config projection it
+ * reads, and say what that projection left out.
+ */
+const buildDeployCommand = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): ToolchainCommand => {
+    const invocation = planDeploy(cwd, options, driver);
     const composedEntry = resolveComposedWorkerEntry(cwd);
 
     if (composedEntry !== undefined) {
@@ -1525,50 +1561,17 @@ const buildDeployCommand = (cwd: string, options: DeployCommandOptions, target: 
         options.logger.info(`build artifact: emitting bundle to ${options.outDir}`);
     }
 
-    // The target's own CLI decides the flags; this command only says what it
-    // wants done. Logging stays here because it is the CLI's voice, not the
-    // driver's.
-    const driver = resolveDeployDriver(target);
+    invocation.commit();
 
-    // A host with a strict config reader deploys a projection of wrangler.jsonc
-    // (celld refuses the Cloudflare-only keys Lunora's reconcilers write). Say
-    // what the projection left out: those keys configure nothing on that host,
-    // and an operator reading the Cloudflare config should not assume otherwise.
-    const projected = driver.projectConfig?.(cwd, "deploy");
-    const request = {
-        configPath: projected?.configPath,
-        dryRun: options.dryRun,
-        entry: composedEntry,
-        environment: options.env,
-        outDir: options.outDir,
-        preview: options.preview,
-        temporary: options.temporary,
-    };
-
-    // Not every registered driver ships a toolchain — the Node driver has none,
-    // because there is no control plane to deploy to. `runDeployCommand` rejects
-    // such a target at selection (`resolveRunnableTargetOrError`), so this is the
-    // backstop for a direct caller that skipped that path, not the primary guard.
-    if (driver.toolchain === undefined) {
-        throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
+    // Those keys configure nothing on that host, and an operator reading the
+    // Cloudflare config should not assume otherwise.
+    if (invocation.projection !== undefined && invocation.projection.dropped.length > 0) {
+        options.logger.warn(
+            `${driver.name} ignores these wrangler keys, so they were left out of ${invocation.projection.configPath}: ${invocation.projection.dropped.join(", ")}`,
+        );
     }
 
-    // The argv builder is where a host refuses an option it has no equivalent
-    // for, so it runs before the projection touches the disk: a refused deploy
-    // leaves nothing behind.
-    const command = driver.toolchain.deploy(request);
-
-    if (projected !== undefined) {
-        projected.write();
-
-        if (projected.dropped.length > 0) {
-            options.logger.warn(
-                `${driver.name} ignores these wrangler keys, so they were left out of ${projected.configPath}: ${projected.dropped.join(", ")}`,
-            );
-        }
-    }
-
-    return command;
+    return invocation.command;
 };
 
 /**
@@ -1629,7 +1632,7 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; r
  * document on stdout and corrupt it. A dry run has nothing to read, so its
  * stdout is left alone (mapped to stderr in json mode).
  */
-const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: string): SpawnDescriptor => {
+const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): SpawnDescriptor => {
     const jsonFormat = options.format === "json";
     // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
     // preview and a `--format json` deploy need to report where the thing went
@@ -1637,7 +1640,7 @@ const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: st
     // CHANGED url gets noticed.
     const publishes = options.dryRun !== true;
 
-    const deployCommand = buildDeployCommand(cwd, options, target);
+    const deployCommand = buildDeployCommand(cwd, options, driver);
     const exec = toolchainExecArgs(detectPackageManager(cwd), deployCommand);
 
     return {
@@ -1723,6 +1726,28 @@ const completeDeploy = async ({
 };
 
 /**
+ * {@link runPreDeployPipeline}'s outcome. Split on `error` so a passing run
+ * always carries its resolved `target` — the caller must never fall back to
+ * `resolveDeployDriver`'s default (Cloudflare) for a target it did not resolve.
+ */
+type PreDeployPipelineResult =
+    | {
+          /** Set when a check resolved its own exit code — otherwise the caller's default applies. */
+          code?: ExitCode;
+          error: string;
+          schemaDrift?: { blocked: boolean; reason: string };
+          target?: string;
+          validation: DeployCommandResult["validation"];
+      }
+    | {
+          codegen?: CodegenResult;
+          error?: never;
+          reblessSchemaBaseline?: () => void;
+          target: string;
+          validation: DeployCommandResult["validation"];
+      };
+
+/**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
  * ships: resolve the target, run codegen (with its post-hook, platform
  * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
@@ -1746,19 +1771,7 @@ const completeDeploy = async ({
  * the line between the two commands: `prepare` answers "would this deploy?"
  * without pushing an image or a bundle.
  */
-const runPreDeployPipeline = async (
-    options: DeployCommandOptions,
-    command: PreDeployCommand,
-): Promise<{
-    /** Set when a check resolved its own exit code — otherwise the caller's default applies. */
-    code?: ExitCode;
-    codegen?: CodegenResult;
-    error?: string;
-    reblessSchemaBaseline?: () => void;
-    schemaDrift?: { blocked: boolean; reason: string };
-    target?: string;
-    validation: DeployCommandResult["validation"];
-}> => {
+const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreDeployCommand): Promise<PreDeployPipelineResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
     const strictAdvisories = resolveStrictAdvisories(options);
@@ -1788,6 +1801,19 @@ const runPreDeployPipeline = async (
     }
 
     const { target } = resolvedTarget;
+
+    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    // stop the deploy HERE, before codegen rewrites `_generated/*` and
+    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
+    try {
+        planDeploy(cwd, options, resolveDeployDriver(target));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        options.logger.error(message);
+
+        return { error: message, target, validation: empty };
+    }
 
     let codegen: CodegenResult | undefined;
 
@@ -1879,7 +1905,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     }
 
     const { reblessSchemaBaseline, validation } = pipeline;
-    const target = pipeline.target as string;
+    const driver = resolveDeployDriver(pipeline.target);
 
     const migratePreflightError = validateMigrateDeployPreflight(options);
 
@@ -1892,7 +1918,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // run (enforced inside `buildContainerImages`).
     // railpack builds and pushes to the Cloudflare registry; celld builds each
     // container from its Dockerfile itself during `celld deploy`.
-    const buildError = resolveDeployDriver(target).toolchain?.prebuildsContainerImages === true ? await buildContainerImages(cwd, options) : undefined;
+    const buildError = driver.toolchain?.prebuildsContainerImages === true ? await buildContainerImages(cwd, options) : undefined;
 
     if (buildError !== undefined) {
         return abortResult(buildError);
@@ -1901,14 +1927,14 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
     // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
     // deployed worker with stale/missing secrets silently (Supabase #45242).
-    warnDevVariablesNotPushed(cwd, options.logger, target);
+    warnDevVariablesNotPushed(cwd, options.logger, driver);
 
     // Detect required secrets not yet set on the target. Interactive: offer to
     // generate + push the mintable ones (provider keys flagged to set by hand).
     // Non-interactive (CI): a missing required secret aborts rather than shipping
     // a worker that will crash. Best-effort detection — skips dry-run/preview and
     // stays quiet when the worker can't be queried yet (first deploy / not authed).
-    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, target);
+    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver);
 
     if (secretAbort !== undefined) {
         options.logger.error(secretAbort);
@@ -1920,7 +1946,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
-    const descriptor = buildDeploySpawn(cwd, options, target);
+    const descriptor = buildDeploySpawn(cwd, options, driver);
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);
 
@@ -1940,7 +1966,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     const completed = await completeDeploy({ cwd, descriptor, mintedSecretsFile, options, reblessSchemaBaseline, stdout: result.stdout, validation });
 
-    return { ...completed, target };
+    return { ...completed, logsAvailable: driver.toolchain?.tail !== undefined };
 };
 
 /**
@@ -1989,7 +2015,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             cwd: options.cwd ?? process.cwd(),
             env: options.env,
             logger: options.logger,
-            logsAvailable: result.target === undefined || resolveDeployDriver(result.target).toolchain?.tail !== undefined,
+            logsAvailable: result.logsAvailable === true,
             mintedSecretsFile: result.mintedSecretsFile,
             // From the deploy that just ran, not the link file — the link can be
             // stale (or absent on a first deploy), and this run knows the truth.

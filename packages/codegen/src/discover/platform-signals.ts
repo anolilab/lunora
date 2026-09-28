@@ -96,7 +96,7 @@ const calleeName = (call: CallExpression): string => {
 };
 
 /** The option keys that make each signal call a declaration. */
-const SIGNAL_CALLS: ReadonlyMap<string, { keys: ReadonlySet<string>; signal: "containerEgressPolicy" | "durableStreams" | "workflowRollback" }> = new Map([
+const SIGNAL_CALLS: ReadonlyMap<string, { keys: ReadonlySet<string>; signal: Exclude<keyof PlatformCodeSignals, "secrets"> }> = new Map([
     ["defineContainer", { keys: EGRESS_POLICY_KEYS, signal: "containerEgressPolicy" }],
     // `defineStep(name, { handler, rollback })` — the compensation
     // `@lunora/workflow` forwards to the host's `step.do`.
