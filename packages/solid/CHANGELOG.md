@@ -1,3 +1,9 @@
+## @lunora/solid [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.162...@lunora/solid@1.0.0-alpha.163) (2026-09-28)
+
+### Bug Fixes
+
+* **solid:** make swapping the provider client take effect ([#899](https://github.com/anolilab/lunora/issues/899)) ([61510df](https://github.com/anolilab/lunora/commit/61510dfad7afb233b109cb845e839b6ab27a7f69))
+
 ## @lunora/solid [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.161...@lunora/solid@1.0.0-alpha.162) (2026-09-28)
 
 
