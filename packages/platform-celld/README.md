@@ -70,6 +70,10 @@ A celld node gives a worker no identity of its own, so this moves the problem to
 
 Non-secret configuration (feature switches, public URLs, region names), and values whose exposure is bounded by what the bucket already exposes. Put them in `wrangler.jsonc` `vars` — the projection keeps them — and keep local-only values in `.dev.vars` for `celld dev`.
 
+## Upgrading celld
+
+Moving a fleet from v0.5.1 to v0.6.0 cannot be a rolling update when it runs with `fleet` durability: stop every v0.5.1 node, then start the v0.6.0 nodes. A v0.6.0 node recovers its previous log session only from a follower that returns the ranged tail format, which a v0.5.1 follower does not, so a v0.6.0 node started beside v0.5.1 followers refuses to start. A fleet with `bucket` durability has no followers and can roll node by node. Check the upgrade notes in celld's `docs/README.md` before any other version bump: v0.4.0 → v0.4.1 rolls, but once the last v0.4.0 node stops, a v0.4.0 binary must not be started again.
+
 ## Conformance
 
 `pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.6.0 the contract legs pass except 15 skips, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
