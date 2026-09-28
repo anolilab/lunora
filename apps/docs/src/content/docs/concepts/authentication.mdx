@@ -288,6 +288,28 @@ gets the same code as a socket close (`4001`) once its credential lapses.
 write: a queued offline write stays queued, `onTokenExpired` fires, and the
 write is sent again after `setAuthToken`.
 
+The held write survives the refresh only if the identity is keyed on a
+`subject`. Pass the user id with the new token (or have passed it before; the
+subject is sticky):
+
+```ts
+client.onTokenExpired(async () => {
+    const { token, userId } = await refreshSession();
+
+    client.setAuthToken(token, userId); // same subject: the held writes are kept
+});
+```
+
+Without a subject the identity is a hash of the token, so a refresh looks the
+same as switching accounts, and the held writes are rejected
+`OFFLINE_IDENTITY_CHANGED` rather than sent as someone else. The client logs a
+warning when this happens right after a refusal.
+
+A cookie session, such as a Cloudflare Access edge, has no token to
+replace. Renew the cookie, and the held write is sent again on a backoff with
+whatever cookie the browser then holds. In `@lunora/db` that backoff runs for
+the same one-minute window a bearer refresh gets.
+
 The worker can only answer this if your resolver tells it the credential
 expired. Returning `null` for an expired token makes the call anonymous, and
 the `UNAUTHORIZED` your own check then throws reads to the client as a verdict

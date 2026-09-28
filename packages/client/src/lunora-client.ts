@@ -1824,6 +1824,7 @@ class LunoraClient {
         // `adoptCookieSubject`. Distinct from a subject not known YET
         // (`undefined`): leaving "nobody" for a user is a change of session.
         const wasKnownNobody = this.isKnownNobody();
+        const previousToken = this.authToken;
 
         this.authToken = token;
         this.applySubject(token, subject);
@@ -1887,6 +1888,7 @@ class LunoraClient {
                 // kept: this path is reached on a plain sign-in too, where the
                 // queue belongs to the very user who just signed in.
                 this.rejectQueuedForIdentityChange(previousIdentity);
+                this.warnRefreshWithoutSubject(previousToken, token);
 
                 // And evict what the PREVIOUS identity left live. A socket pins
                 // its credential in the upgrade URL and cannot be rotated in
@@ -2594,6 +2596,16 @@ class LunoraClient {
      * identity from the cookie/token in effect); use this to refresh a
      * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
      * with a freshly minted one. Returns an unsubscribe function.
+     *
+     * Also fired, once per credential, when a queued write's replay is refused
+     * `TOKEN_EXPIRED` / `UNAUTHENTICATED`. The write is held for the refresh, and
+     * survives it only if the identity is keyed on a `subject`: pass the same user
+     * id with the new token, `setAuthToken(freshToken, user.id)` (or have passed
+     * it before — the subject is sticky). With no subject the identity is the
+     * token hash, so a refresh cannot be told from an account switch and the held
+     * writes are rejected `OFFLINE_IDENTITY_CHANGED`. A cookie session has no
+     * token to replace: renew the cookie, and the held write is re-sent on a
+     * backoff with it.
      */
     public onTokenExpired(listener: () => void): Unsubscribe {
         return this.tokenExpiredListeners.add(listener);
@@ -6522,6 +6534,7 @@ class LunoraClient {
         }
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
+        const sentToken = flags.authToken === undefined ? this.authToken : flags.authToken;
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
             // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
@@ -6584,6 +6597,8 @@ class LunoraClient {
 
         flags.onMutationAck?.(body.lastMutationId);
         flags.onCommitCursor?.(body.commitCursor);
+
+        this.noteCredentialAccepted(sentToken);
 
         // Remember how far this shard had committed, so a later read can demand
         // at least this much from a replica — filed under the one key both an
@@ -8662,6 +8677,25 @@ class LunoraClient {
     }
 
     /**
+     * Warn when a token refused for a queued write is replaced with no subject
+     * keyed: the likely refresh reads as a user switch, so the writes it was
+     * meant to rescue were just rejected `OFFLINE_IDENTITY_CHANGED`. Dropping is
+     * the safe default — a refresh and an account switch look the same without
+     * a subject — so this only says how to keep them.
+     */
+    private warnRefreshWithoutSubject(previousToken: null | string, token: null | string): void {
+        if (previousToken === null || token === null || this.authSubject !== undefined || this.authRefusalNotifiedFor !== this.hashToken(previousToken)) {
+            return;
+        }
+
+        // eslint-disable-next-line no-console -- the only signal that a refresh just discarded the writes it was meant to rescue
+        console.warn(
+            "[lunora] setAuthToken replaced a token that was just refused for a queued write, with no subject: without one a refresh reads as a user switch, " +
+                "so the held writes were discarded (OFFLINE_IDENTITY_CHANGED). Pass the user id, e.g. setAuthToken(token, user.id), to keep them across a refresh.",
+        );
+    }
+
+    /**
      * Reject the in-memory offline writes that can no longer replay under the
      * identity now signed in, dropping their durable records so a later
      * `hydrate` can't resurrect another user's writes.
@@ -9160,12 +9194,18 @@ class LunoraClient {
      * wait, so the drain can honour it before trying again
      * ({@link LunoraClient.replayRetryState}). Counts the attempt either way:
      * that is what a hintless refusal backs off on.
+     *
+     * A credential refused under a cookie session (`authToken === null`) backs
+     * off on the hintless ramp too. A bearer refusal waits for `setAuthToken`,
+     * which re-flushes; a cookie is renewed in the browser, invisibly to this
+     * client, so the only way to learn it was is to send again.
      */
-    private noteReplayRetryDelay(shardKey: string | undefined, error: unknown): void {
+    private noteReplayRetryDelay(shardKey: string | undefined, error: unknown, authToken: null | string): void {
         const key = connectionKey(shardKey);
         const previous = this.replayRetryState.get(key);
         const attempts = (previous?.attempts ?? 0) + 1;
-        const delay = replayRetryDelayMs(error, attempts);
+        const delay =
+            replayRetryDelayMs(error, attempts) ?? (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts) : undefined);
 
         this.replayRetryState.set(key, {
             attempts,
@@ -9459,6 +9499,18 @@ class LunoraClient {
     }
 
     /**
+     * A request under `authToken` succeeded: if a refusal of that credential was
+     * reported, its next refusal is news again. A bearer re-arms by changing; a
+     * cookie session's `null` never does, so without this the app could be asked
+     * to refresh a cookie only once per page.
+     */
+    private noteCredentialAccepted(authToken: null | string): void {
+        if (this.authRefusalNotifiedFor !== undefined && this.authRefusalNotifiedFor === this.hashToken(authToken ?? "")) {
+            this.authRefusalNotifiedFor = undefined;
+        }
+    }
+
+    /**
      * Redeem a {@link ReplayCredential} (single use) into the request flags it
      * pins (the judged bearer, and the subject a cookie replay names) and the
      * identity stamp it was judged for. Throws for a credential this client did
@@ -9595,7 +9647,7 @@ class LunoraClient {
                     continue;
                 }
 
-                this.noteReplayRetryDelay(shardKey, error);
+                this.noteReplayRetryDelay(shardKey, error, authToken);
                 this.offlineQueue.requeue(items.slice(index));
 
                 return;
@@ -9757,7 +9809,7 @@ class LunoraClient {
         authToken: null | string,
     ): { requeue: QueuedMutation[]; stop: boolean } {
         if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error, authToken))) {
-            this.noteReplayRetryDelay(shardKey, error);
+            this.noteReplayRetryDelay(shardKey, error, authToken);
 
             return { requeue: items, stop: true };
         }
@@ -9820,6 +9872,8 @@ class LunoraClient {
         }
 
         const requeue: QueuedMutation[] = [];
+        let accepted = false;
+        let refused = false;
 
         for (const [index, item] of items.entries()) {
             const inner = bySlot.get(index);
@@ -9831,15 +9885,24 @@ class LunoraClient {
             } else if ("error" in inner) {
                 const error = slotError(inner);
 
+                refused ||= isAuthReplayFailure(error);
+
                 if (this.shouldRequeueReplayFailure(error, authToken)) {
-                    this.noteReplayRetryDelay(shardKey, error);
+                    this.noteReplayRetryDelay(shardKey, error, authToken);
                     requeue.push(item);
                 } else {
                     this.settleReplayTerminal(item, error);
                 }
             } else {
+                accepted = true;
                 this.settleReplayBatchResult(item, inner);
             }
+        }
+
+        // Re-armed once the whole batch is classified, and only if no slot was
+        // refused: re-arming between slots would notify twice for one credential.
+        if (accepted && !refused) {
+            this.noteCredentialAccepted(authToken);
         }
 
         return requeue;

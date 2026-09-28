@@ -99,6 +99,12 @@ window keeps them:
 
 ```ts
 client.setAuthToken(accessToken, user.id); // identity keyed on user.id, not the token bytes
+
+client.onTokenExpired(async () => {
+    const { token, userId } = await refreshSession();
+
+    client.setAuthToken(token, userId); // the same subject keeps writes held for the refresh
+});
 ```
 
 The subject is **sticky**: a later `setAuthToken(refreshedToken)` that omits it
@@ -298,10 +304,16 @@ you writing sync glue:
    one swapped in afterwards. A replay refused for its token (`TOKEN_EXPIRED` or
    `UNAUTHENTICATED`) stays queued, and so do the writes behind it: `onTokenExpired`
    fires once, nothing is re-sent under the refused token, and the write goes out
-   again after `setAuthToken` hands the client a fresh one. In `@lunora/db`, if no
+   again after `setAuthToken` hands the client a fresh one. It survives that
+   refresh only if you pass the same subject, `setAuthToken(freshToken, user.id)`:
+   with no subject the identity is the token hash, a refresh reads as a user
+   switch, and the held writes are rejected `OFFLINE_IDENTITY_CHANGED`. Under a
+   cookie session there is no token to replace, so the write is re-sent on a
+   backoff with whatever cookie the browser holds by then. In `@lunora/db`, if no
    fresh token arrives within a minute, or the fresh one is refused too, the write
-   is rejected: `onWriteRejected` receives the refusal's code and the optimistic
-   row rolls back. `UNAUTHORIZED` is the app's own verdict on the write ("Sign in
+   is rejected (a cookie write is rejected when the minute runs out):
+   `onWriteRejected` receives the refusal's code and the optimistic row rolls
+   back. `UNAUTHORIZED` is the app's own verdict on the write ("Sign in
    to post"), so it is rejected straight away, never held.
 
 ## Write ordering
