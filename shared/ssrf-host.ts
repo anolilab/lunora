@@ -23,6 +23,19 @@ const IPV4_OCTET = /^\d{1,3}$/u;
 /** IPv4-mapped IPv6 in the hex form the WHATWG `URL` parser emits (`::ffff:7f00:1`). */
 const IPV6_MAPPED_HEX = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/u;
 
+/**
+ * SIIT IPv4-translated IPv6, `::ffff:0:0:0/96` (RFC 6052 §2.1 / RFC 7915), in the
+ * form the WHATWG parser emits (`::ffff:0:a9fe:a9fe`). A translator forwards to
+ * the embedded IPv4, so it is classified like the mapped form.
+ */
+const IPV6_TRANSLATED_HEX = /^::ffff:0:([\da-f]{1,4}):([\da-f]{1,4})$/u;
+
+/**
+ * IPv4-compatible with a zero high word (`::0.0.169.254` → `::a9fe`). The embedded
+ * address is `0.0.x.x`, inside `0.0.0.0/8`, so every such host is private.
+ */
+const IPV6_COMPATIBLE_LOW_ONLY = /^::[\da-f]{1,4}$/u;
+
 /** IPv4-mapped IPv6 in dotted form (`::ffff:127.0.0.1`), for parsers that keep it. */
 const IPV6_MAPPED_DOTTED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u;
 
@@ -77,15 +90,25 @@ const parseIpv4 = (host: string): [number, number, number, number] | undefined =
     return [octets[0]!, octets[1]!, octets[2]!, octets[3]!];
 };
 
-/** True if an IPv4 octet tuple is loopback / private / link-local / CGNAT / reserved — the ranges an SSRF guard blocks. */
-const isPrivateIpv4 = ([a, b]: [number, number, number, number]): boolean =>
+/**
+ * True if an IPv4 octet tuple is in a special-purpose range (RFC 6890) — loopback,
+ * private, link-local, CGNAT, protocol-assignment, benchmarking, documentation,
+ * multicast or reserved. None of them is a public destination, and the
+ * benchmarking and protocol-assignment blocks are routinely routed internally.
+ */
+const isPrivateIpv4 = ([a, b, c]: [number, number, number, number]): boolean =>
     a === 0 || // 0.0.0.0/8 "this host"
     a === 10 || // 10.0.0.0/8 private
     a === 127 || // 127.0.0.0/8 loopback
     (a === 100 && b >= 64 && b <= 127) || // 100.64.0.0/10 CGNAT
     (a === 169 && b === 254) || // 169.254.0.0/16 link-local (incl. 169.254.169.254 metadata)
     (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 private
+    (a === 192 && b === 0 && (c === 0 || c === 2)) || // 192.0.0.0/24 protocol assignments, 192.0.2.0/24 TEST-NET-1
+    (a === 192 && b === 88 && c === 99) || // 192.88.99.0/24 6to4 relay anycast
     (a === 192 && b === 168) || // 192.168.0.0/16 private
+    (a === 198 && (b === 18 || b === 19)) || // 198.18.0.0/15 benchmarking
+    (a === 198 && b === 51 && c === 100) || // 198.51.100.0/24 TEST-NET-2
+    (a === 203 && b === 0 && c === 113) || // 203.0.113.0/24 TEST-NET-3
     a >= 224; // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved + 255.255.255.255 broadcast
 
 /**
@@ -119,6 +142,12 @@ const isPrivateIpv6 = (host: string): boolean => {
         return isPrivateEmbeddedIpv4(mappedHex[1], mappedHex[2]);
     }
 
+    const translated = IPV6_TRANSLATED_HEX.exec(ip);
+
+    if (translated) {
+        return isPrivateEmbeddedIpv4(translated[1], translated[2]);
+    }
+
     const mappedDotted = IPV6_MAPPED_DOTTED.exec(ip);
 
     if (mappedDotted) {
@@ -143,10 +172,24 @@ const isPrivateIpv6 = (host: string): boolean => {
         return isPrivateEmbeddedIpv4(compatHex[1], compatHex[2]);
     }
 
+    if (IPV6_COMPATIBLE_LOW_ONLY.test(ip)) {
+        return true;
+    }
+
     // NAT64 well-known prefix `64:ff9b::/96`. Block unconditionally: any address
     // in this range translates an embedded IPv4 at the egress NAT64 gateway, and
     // an embedded private IPv4 (e.g. 169.254.169.254) reaches an internal host.
     if (IPV6_NAT64_HEX.test(ip)) {
+        return true;
+    }
+
+    // NAT64 local-use prefix `64:ff9b:1::/48` (RFC 8215) — the operator's own
+    // translator, so the same reasoning applies. Blocked whole rather than by
+    // decoding the IPv4: under a /48 prefix RFC 6052 splits the embedded address
+    // around the reserved `u` octet (bits 48–63 and 72–87), and an operator may
+    // carve longer prefixes out of it with other layouts, so no single decode is
+    // right for every address in the block.
+    if (ip.startsWith("64:ff9b:1:")) {
         return true;
     }
 
@@ -174,7 +217,17 @@ const isPrivateIpv6 = (host: string): boolean => {
         ip.startsWith("fe8") || // fe80::/10 link-local
         ip.startsWith("fe9") ||
         ip.startsWith("fea") ||
-        ip.startsWith("feb")
+        ip.startsWith("feb") ||
+        ip.startsWith("fec") || // fec0::/10 site-local (deprecated, still routed on some internal networks)
+        ip.startsWith("fed") ||
+        ip.startsWith("fee") ||
+        ip.startsWith("fef") ||
+        ip.startsWith("ff") || // ff00::/8 multicast (the IPv4 side blocks 224.0.0.0/4 too)
+        ip.startsWith("2001:db8:") || // 2001:db8::/32 documentation
+        // 100::/64 discard-only. WHATWG compression always renders its three zero
+        // groups as `100::`; the prefix also takes in a few other `100::/8`
+        // addresses, all IETF-reserved and none a public destination.
+        ip.startsWith("100::")
     );
 };
 
