@@ -1,47 +1,8 @@
 import { createRequire } from "node:module";
 
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
-
+import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
-import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
-
-/**
- * `resolveTargetOrThrow`, plus the check that the resolved target is one with a
- * command-line toolchain.
- *
- * `isRunnableTarget` is the shared predicate the CLI's `deploy`/`dev` guard uses,
- * so the two cannot drift. `resolveTargetOrThrow` accepts a codegen-only target
- * like `node` — legitimately, since generating for it is meaningful — so without
- * this check the build would go on to emit the wrong surface silently.
- */
-const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): string => {
-    const target = resolveTargetOrThrow(projectRoot, explicit);
-
-    if (!isRunnableTarget(target)) {
-        throw new Error(
-            `target "${target}" has no command-line toolchain, so the Lunora Rspack plugin cannot build for it — it can only generate for it (\`lunora codegen --target ${target}\`). Buildable targets: ${runnableTargetIds().join(", ")}`,
-        );
-    }
-
-    return target;
-};
-
-const resolveOptions = (options: LunoraRspackOptions | undefined): ResolvedLunoraRspackOptions => {
-    const input = options ?? {};
-    const projectRoot = input.projectRoot ?? process.cwd();
-
-    return {
-        apiSpec: input.apiSpec ?? "openapi",
-        projectRoot,
-        schemaDir: input.schemaDir ?? "lunora",
-        // Same resolution AND validation as the CLI — explicit option, then
-        // `lunora.config.*`, then the default — so a project that sets `target`
-        // once gets it in `rspack build` and `lunora deploy` alike, and a typo
-        // fails here rather than emitting the default surface silently.
-        target: resolveRunnableTargetOrThrow(projectRoot, input.target),
-        validateWrangler: input.validateWrangler ?? true,
-    };
-};
+import type { LunoraRspackOptions } from "./types";
 
 /**
  * Lunora Rspack plugin. Add it to `plugins` in `rspack.config.*` (or
@@ -76,11 +37,12 @@ const lunoraRspack = (options?: LunoraRspackOptions): LunoraRspackPlugin => new 
 // from both `src/index.ts` (tsc/vitest) and the bundled `dist/index.mjs`.
 const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
-// `./codegen` stays internal plumbing: `createReusableProject` returns a
-// ts-morph `Project`, and exporting it would put `ts-morph` in this package's
-// public `.d.ts` — a type a consumer never installs. Tests import it directly.
-export type { CodegenLogger, CodegenPass } from "./codegen";
-export type { AsyncTapHook, CompilationLike, CompilerLike, DependencySet } from "./compiler";
-export { LunoraRspackPlugin, PLUGIN_NAME } from "./plugin";
-export type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
-export { lunoraRspack, resolveOptions, resolveRunnableTargetOrThrow, VERSION };
+// Deliberately narrow. `CompilerLike` has to be public — it is in `apply`'s
+// signature — but `./codegen` stays internal (its `Project` would drag `ts-morph`
+// into this package's `.d.ts`, a type a consumer never installs), and so do the
+// projection's inner types and the option resolver. `@lunora/vite`, which has
+// adopters, publishes three values; this package has none yet.
+export type { CompilerLike } from "./compiler";
+export { LunoraRspackPlugin } from "./plugin";
+export type { LunoraRspackOptions } from "./types";
+export { lunoraRspack, VERSION };

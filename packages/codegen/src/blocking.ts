@@ -27,9 +27,9 @@ const errorPlatformDiagnosticNames = (platformDiagnostics: ReadonlyArray<Pick<Pl
     sortedUniqueNames(platformDiagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.name));
 
 /**
- * Convenience read combining both categories from a full {@link CodegenResult}
- * — the shape {@link blockingFindingsMessage} needs, which (unlike the CLI's
- * `lunora codegen`/`lunora deploy`) folds ERROR-level advisories and platform
+ * Convenience read combining both categories from a full {@link CodegenResult} —
+ * the shape the bundler plugins need, which (unlike the CLI's `lunora
+ * codegen`/`lunora deploy`) folds ERROR-level advisories and platform
  * diagnostics into a single blocking message with no strict/CI opt-out.
  */
 const describeErrorLevelFindings = (
@@ -41,28 +41,4 @@ const describeErrorLevelFindings = (
     };
 };
 
-/**
- * The one aggregated line a bundler plugin fails a production build with, or
- * `undefined` when nothing is ERROR-level. `tag` is the caller's own log badge,
- * so the line reads like the rest of that plugin's output.
- *
- * Lives here, beside the filter it folds, because `@lunora/vite` and
- * `@lunora/rspack` both escalate identically and a second copy of the wording
- * plus the fold is how the two bundlers start disagreeing about what blocks a
- * build. Presentation for the CLI paths stays their own — they report the two
- * categories separately and honour a strict/CI opt-out.
- */
-const blockingFindingsMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, tag: string): string | undefined => {
-    const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
-    const blockingNames = sortedUniqueNames([...advisoryNames, ...platformDiagnosticNames]);
-
-    if (blockingNames.length === 0) {
-        return undefined;
-    }
-
-    const noun = blockingNames.length === 1 ? "advisory/platform diagnostic" : "advisories/platform diagnostics";
-
-    return `${tag} ${String(blockingNames.length)} ERROR-level ${noun} (${blockingNames.join(", ")}) — see the log above for detail.`;
-};
-
-export { blockingFindingsMessage, describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames };
+export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames, sortedUniqueNames };

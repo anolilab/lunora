@@ -68,12 +68,19 @@ Before every compilation, in this order:
 In watch mode the plugin registers your schema directory as a watch dependency,
 so editing _or adding_ anything under `lunora/` regenerates — a new
 `lunora/foo.ts` is discovered by codegen without being imported anywhere, which a
-file-list watch would never see appear. The first pass of a session also
-scaffolds `.dev.vars`, which is gitignored and so absent from a fresh clone.
+file-list watch would never see appear. Each pass is gated on a content hash of
+what codegen _reads_, which excludes `_generated/` — so codegen's own writes, and
+anything a `postcodegen` hook rewrites there, do not retrigger it. The first pass
+of a session also scaffolds `.dev.vars` (gitignored, so absent from a fresh
+clone) and tops it up with `WORKER_ENV=development`, which plain `wrangler dev`
+would not otherwise set.
 
 A production build **fails** on an ERROR-level schema advisory or platform
-diagnostic, exactly as `vite build` and `lunora deploy` do. A watch rebuild logs
-them and carries on — a half-typed schema should not take the watcher down.
+diagnostic, exactly as `vite build` and `lunora deploy` do: the finding lands in
+`compilation.errors`, so no bundle is emitted and the CLI exits non-zero. A watch
+rebuild logs it and carries on — a half-typed schema should not take the watcher
+down. Codegen _crashes_ are reported the same way in both modes rather than
+thrown out of the hook, which would end a watch session.
 
 ## Options
 
@@ -85,5 +92,7 @@ them and carries on — a half-typed schema should not take the watcher down.
 | `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*` |
 | `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                   |
 
-`LUNORA_CODEGEN=0` disables the plugin entirely — no generation, no wrangler
-checks, no watch registration.
+`LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode
+only**. A production build keeps generating: the ERROR-advisory gate is the only
+thing that fails it, so honouring the variable there would let an app ship
+against a surface its target cannot serve, green the whole way.

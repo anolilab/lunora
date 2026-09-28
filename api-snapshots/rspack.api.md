@@ -11,43 +11,6 @@ SemVer promise until the package graduates.
 
 ## `@lunora/rspack`
 
-### `AsyncTapHook` (interface)
-
-```ts
-interface AsyncTapHook<T> {
-    tapPromise: (name: string, callback: (value: T) => Promise<void>) => void;
-}
-```
-
-### `CodegenLogger` (interface)
-
-```ts
-interface CodegenLogger {
-    error: (message: string) => void;
-    info: (message: string) => void;
-    warn: (message: string) => void;
-}
-```
-
-### `CodegenPass` (interface)
-
-```ts
-interface CodegenPass {
-    blockingMessage?: string;
-    outputDirectory?: string;
-}
-```
-
-### `CompilationLike` (interface)
-
-```ts
-interface CompilationLike {
-    contextDependencies: DependencySet;
-    errors: Error[];
-    warnings: Error[];
-}
-```
-
 ### `CompilerLike` (interface)
 
 ```ts
@@ -57,14 +20,6 @@ interface CompilerLike {
         beforeCompile: AsyncTapHook<unknown>;
     };
     watchMode?: boolean;
-}
-```
-
-### `DependencySet` (interface)
-
-```ts
-interface DependencySet {
-    add: (dependency: string) => void;
 }
 ```
 
@@ -90,24 +45,6 @@ class LunoraRspackPlugin {
 }
 ```
 
-### `PLUGIN_NAME` (const)
-
-```ts
-const PLUGIN_NAME = "LunoraRspackPlugin";
-```
-
-### `ResolvedLunoraRspackOptions` (interface)
-
-```ts
-interface ResolvedLunoraRspackOptions {
-    apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
-    projectRoot: string;
-    schemaDir: string;
-    target: string;
-    validateWrangler: boolean;
-}
-```
-
 ### `VERSION` (const)
 
 ```ts
@@ -120,14 +57,46 @@ const VERSION: string;
 const lunoraRspack: (options?: LunoraRspackOptions) => LunoraRspackPlugin;
 ```
 
-### `resolveOptions` (const)
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `AsyncTapHook` (interface)
 
 ```ts
-const resolveOptions: (options: LunoraRspackOptions | undefined) => ResolvedLunoraRspackOptions;
+interface AsyncTapHook<T> {
+    tapPromise: (name: string, callback: (value: T) => Promise<void>) => void;
+}
 ```
 
-### `resolveRunnableTargetOrThrow` (const)
+### `CompilationLike` (interface)
 
 ```ts
-const resolveRunnableTargetOrThrow: (projectRoot: string, explicit?: string) => string;
+interface CompilationLike {
+    contextDependencies: DependencySet;
+    errors: Error[];
+    fileDependencies: DependencySet;
+}
+```
+
+### `DependencySet` (interface)
+
+```ts
+interface DependencySet {
+    add: (dependency: string) => void;
+}
+```
+
+### `ResolvedLunoraRspackOptions` (interface)
+
+```ts
+interface ResolvedLunoraRspackOptions {
+    apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
+    projectRoot: string;
+    schemaDir: string;
+    target: string;
+    validateWrangler: boolean;
+}
 ```

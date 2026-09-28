@@ -2,18 +2,23 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { listLunoraSourceFiles } from "@lunora/codegen";
+import { listLunoraSourceFiles } from "./discover/ast";
 
 /**
  * Content hash of the schema directory's TypeScript sources — everything codegen
  * reads, minus its own `_generated/` output.
  *
- * Taken before codegen runs and compared again after the project's `postcodegen`
- * has settled, this is what tells the hook's own writes apart from a developer's
- * save landing in the same window. Timing cannot: both look identical to the
- * watcher, which is why every save during a multi-second hook used to be dropped
- * outright. Content can — a formatter that rewrites a file to the same bytes
- * leaves the hash alone, and a real edit does not.
+ * Taken before codegen runs and compared against the previous run's, this is what
+ * tells a developer's save apart from a write the `postcodegen` hook made itself.
+ * Timing cannot: both look identical to a watcher, which is why every save during
+ * a multi-second hook used to be dropped outright. Content can — a formatter that
+ * rewrites a file to the same bytes leaves the hash alone, and a real edit does not.
+ *
+ * Crucially the set EXCLUDES `_generated/`, so a hook that rewrites generated
+ * output (a formatter, a codemod) does not read as a source change. That is what
+ * lets a bundler plugin watch the whole schema directory — the only way a newly
+ * created `lunora/foo.ts` is ever noticed — without the hook's own writes
+ * retriggering it forever.
  *
  * The file set comes from codegen's own `listLunoraSourceFiles` (plus
  * `schema.ts`, which discovery loads separately), so "what codegen reads" is one

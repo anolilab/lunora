@@ -1,51 +1,41 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
-import { blockingFindingsMessage, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
-import { advisoryLine, LUNORA_TAG } from "@lunora/config";
+import { createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import type { FindingLogger } from "@lunora/config";
+import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings } from "@lunora/config";
 import { collectWranglerSecretVariables, reconcileWranglerExtras } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 
 import type { ResolvedLunoraRspackOptions } from "./types";
 
-/** The three channels this module reports through — Rspack's `Logger` satisfies it, as does `console`. */
-interface CodegenLogger {
-    error: (message: string) => void;
+/** The three channels this module reports through — `console` satisfies it, as does Rspack's `Logger`. */
+interface CodegenLogger extends FindingLogger {
     info: (message: string) => void;
-    warn: (message: string) => void;
-}
-
-/** Outcome of one codegen pass. `blockingMessage` is set only when a build must fail. */
-interface CodegenPass {
-    /**
-     * Why the build should fail: an ERROR-level advisory or an `error` platform
-     * diagnostic. Every level is already logged by the time this is returned —
-     * this only decides whether the caller escalates.
-     */
-    blockingMessage?: string;
-
-    /** Absolute path codegen wrote `_generated/*` into, when the run produced output. */
-    outputDirectory?: string;
 }
 
 /**
  * Run `@lunora/codegen` once and report everything it found.
  *
  * Never throws for a *schema* problem — advisories and platform diagnostics are
- * logged and summarised into {@link CodegenPass.blockingMessage} so the caller
- * decides (a one-shot build fails, a watch rebuild keeps going). A codegen
- * crash* does throw: that is a broken `lunora/` the developer must see.
+ * logged and folded into the returned blocking message, so the caller decides
+ * whether they stop a build. A codegen *crash* (an unparseable `lunora/`, a
+ * non-static cron expression) does throw: that is broken input the developer must
+ * see, and the caller turns it into a compilation error rather than letting it
+ * reject a hook.
  *
  * A missing `schema.ts` is the normal state of an uninitialised project, so it
- * warns and returns rather than failing — matching `lunora codegen`.
+ * warns and returns `undefined` rather than failing — matching `lunora codegen`.
+ *
+ * Returns the blocking message, or `undefined` when nothing is ERROR-level.
  */
-const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLogger, project?: Project): CodegenPass => {
+const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLogger, project?: Project): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         logger.warn(`${LUNORA_TAG} no schema found at ${schemaPath} — run \`lunora init\` or create it, then rebuild.`);
 
-        return {};
+        return undefined;
     }
 
     const result = runCodegen({
@@ -58,31 +48,9 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
     });
 
     reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
+    reportCodegenFindings(result, logger);
 
-    for (const advisory of result.advisories) {
-        const line = advisoryLine(advisory.level, advisory.name, advisory.detail, advisory.remediation);
-
-        if (advisory.level === "ERROR") {
-            logger.error(line);
-        } else {
-            logger.warn(line);
-        }
-    }
-
-    for (const diagnostic of result.platformDiagnostics) {
-        const line = advisoryLine(diagnostic.level === "error" ? "ERROR" : "WARN", diagnostic.name, diagnostic.message, diagnostic.remediation);
-
-        if (diagnostic.level === "error") {
-            logger.error(line);
-        } else {
-            logger.warn(line);
-        }
-    }
-
-    // Identical escalation to `@lunora/vite`'s, from the same shared builder: an
-    // ERROR advisory says a call throws at runtime, and an `error` platform
-    // diagnostic says the emitted surface does not match the declared target.
-    return { blockingMessage: blockingFindingsMessage(result, LUNORA_TAG), outputDirectory: resolve(result.outputDirectory) };
+    return blockingFindingsMessage(result);
 };
 
 /**
@@ -90,12 +58,22 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
  * pass. Re-parsing the user's whole TS program on every save is the difference
  * between a sub-second and a multi-second rebuild, which is the entire reason
  * codegen exposes `createCodegenProject` / `refreshCodegenProject`.
+ *
+ * `drop()` discards the cached program. Two callers need it, both borrowed from
+ * `@lunora/vite`, which learned them the hard way: a run that THREW leaves the
+ * Project partially mutated, so reusing it risks emitting wrong code off a
+ * corrupted program; and a `tsconfig.json` change (a new path alias, a changed
+ * `include`) is invisible to `refreshCodegenProject`, which only re-reads files
+ * the program already knows about.
  */
-const createReusableProject = (lunoraDirectory: string): { refresh: () => Project } => {
+const createReusableProject = (lunoraDirectory: string): { drop: () => void; get: () => Project } => {
     let project: Project | undefined;
 
     return {
-        refresh: (): Project => {
+        drop: (): void => {
+            project = undefined;
+        },
+        get: (): Project => {
             if (project === undefined) {
                 project = createCodegenProject(lunoraDirectory);
             } else {
@@ -107,5 +85,5 @@ const createReusableProject = (lunoraDirectory: string): { refresh: () => Projec
     };
 };
 
-export type { CodegenLogger, CodegenPass };
+export type { CodegenLogger };
 export { createReusableProject, runCodegenPass };

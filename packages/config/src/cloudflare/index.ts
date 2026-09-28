@@ -14,6 +14,8 @@
  * subpath rather than relocating wholesale.
  */
 
+export type { AssertWranglerOptions } from "./assert-wrangler";
+export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";

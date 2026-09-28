@@ -110,7 +110,7 @@ Before every compilation, in this order:
 
 In watch mode the plugin registers your schema directory as a watch dependency, so editing _or adding_ anything under `lunora/` regenerates. The first pass of a session also scaffolds `.dev.vars` (it is gitignored, so a fresh clone has none and the Worker throws on its first required secret).
 
-A production build **fails** on an ERROR-level schema advisory or platform diagnostic, exactly as `vite build` and `lunora deploy` do. A watch rebuild logs them and carries on — a half-typed schema should not take the watcher down.
+A production build **fails** on an ERROR-level schema advisory or platform diagnostic, exactly as `vite build` and `lunora deploy` do: the finding lands in `compilation.errors`, so no bundle is emitted and the CLI exits non-zero. A watch rebuild logs it and carries on — a half-typed schema should not take the watcher down. Codegen _crashes_ are reported the same way in both modes, never thrown out of the hook.
 
 ## Options
 
@@ -124,7 +124,7 @@ lunoraRspack({
 });
 ```
 
-`LUNORA_CODEGEN=0` disables the plugin entirely — no generation, no wrangler checks, no watch registration.
+`LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode only**. A production build keeps generating: the ERROR-advisory gate below is the only thing that fails it, so honouring the variable there would let an app ship against a surface its target cannot serve, green the whole way.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/rspack)**.
 

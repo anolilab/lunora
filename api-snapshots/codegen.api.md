@@ -1021,12 +1021,6 @@ interface WranglerVariableIR {
 }
 ```
 
-### `blockingFindingsMessage` (const)
-
-```ts
-const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, tag: string) => string | undefined;
-```
-
 ### `buildOpenApiDocument` (const)
 
 ```ts
@@ -1379,6 +1373,12 @@ const findProjectConfigFile: (projectRoot: string) => string | undefined;
 const findTsconfig: (startPath: string) => string | undefined;
 ```
 
+### `fingerprintSchemaSources` (const)
+
+```ts
+const fingerprintSchemaSources: (schemaDirectory: string) => string;
+```
+
 ### `formatAdvisories` (const)
 
 ```ts
@@ -1497,6 +1497,12 @@ const secretKindOf: (value: string) => string | undefined;
 
 ```ts
 const serializeSchemaSnapshot: (snapshot: SchemaSnapshot) => string;
+```
+
+### `sortedUniqueNames` (const)
+
+```ts
+const sortedUniqueNames: (names: Iterable<string>) => ReadonlyArray<string>;
 ```
 
 ### `toAdvisorContext` (const)

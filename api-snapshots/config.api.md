@@ -301,6 +301,18 @@ const DEV_VARS_FILE: string;
 const DEV_VARS_KEY_PATTERN: RegExp;
 ```
 
+### `DEV_WORKER_ENV_VALUE` (const)
+
+```ts
+const DEV_WORKER_ENV_VALUE = "development";
+```
+
+### `DEV_WORKER_ENV_VAR` (const)
+
+```ts
+const DEV_WORKER_ENV_VAR = "WORKER_ENV";
+```
+
 ### `DeployDriver` (interface)
 
 ```ts
@@ -505,6 +517,15 @@ interface FillDevSecretsResult {
     addedKeys: string[];
     filledKeys: string[];
     status: "created" | "filled" | "unchanged";
+}
+```
+
+### `FindingLogger` (interface)
+
+```ts
+interface FindingLogger {
+    error: (message: string) => void;
+    warn: (message: string) => void;
 }
 ```
 
@@ -1050,6 +1071,12 @@ const badgeLead: (text: string) => string;
 const badgeWidth: (_spec: BadgeSpec) => number;
 ```
 
+### `blockingFindingsMessage` (const)
+
+```ts
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
+```
+
 ### `buildPackageSecretsBlock` (const)
 
 ```ts
@@ -1170,6 +1197,12 @@ const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVar
 
 ```ts
 const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
+```
+
+### `ensureDevWorkerEnv` (const)
+
+```ts
+const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
 ```
 
 ### `escapeRegExp` (const)
@@ -1432,6 +1465,12 @@ const readProjectTarget: (projectRoot: string) => string | undefined;
 const removeDevVariableLine: (content: string, key: string) => string;
 ```
 
+### `reportCodegenFindings` (const)
+
+```ts
+const reportCodegenFindings: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, logger: FindingLogger) => void;
+```
+
 ### `requiredSecrets` (const)
 
 ```ts
@@ -1558,6 +1597,15 @@ const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 interface AlchemyTranslation {
     source: string;
     unsupported: ReadonlyArray<string>;
+}
+```
+
+### `AssertWranglerOptions` (interface)
+
+```ts
+interface AssertWranglerOptions {
+    projectRoot: string;
+    schemaDir: string;
 }
 ```
 
@@ -2111,6 +2159,12 @@ interface WranglerWorkflowEntry {
     name?: string;
     script_name?: string;
 }
+```
+
+### `assertWranglerSatisfiesSchema` (const)
+
+```ts
+const assertWranglerSatisfiesSchema: (options: AssertWranglerOptions, warn: (message: string) => void, remedy: string) => void;
 ```
 
 ### `buildBindingManifest` (const)
