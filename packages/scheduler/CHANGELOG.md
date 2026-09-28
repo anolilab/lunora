@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.94...@lunora/scheduler@1.0.0-alpha.95) (2026-09-28)
+
+### Code Refactoring
+
+* **scheduler:** stop exporting schedulerStub from do-client ([#887](https://github.com/anolilab/lunora/issues/887)) ([da1be56](https://github.com/anolilab/lunora/commit/da1be562592346873343bb70387bb7361fef3f19))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
 ## @lunora/scheduler [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.93...@lunora/scheduler@1.0.0-alpha.94) (2026-09-27)
 
 
