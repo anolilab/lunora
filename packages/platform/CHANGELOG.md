@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.41...@lunora/platform@1.0.0-alpha.42) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
 ## @lunora/platform [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.40...@lunora/platform@1.0.0-alpha.41) (2026-09-26)
 
 ### ⚠ BREAKING CHANGES
