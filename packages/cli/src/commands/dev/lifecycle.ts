@@ -57,9 +57,10 @@ const LOG_TAIL_MAX_BYTES = 256 * 1024;
 /**
  * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
  * worker + embedded studio + codegen watch) for a standalone class-C project.
- * `vite` is a project on `@lunora/vite`: the plugin already runs the worker,
- * studio, and codegen inside the Vite dev server, so `lunora dev` runs the
- * project's own dev script and gets out of the way — this also covers class-B
+ * `vite` is a project whose BUNDLER PLUGIN already runs the worker — `@lunora/vite`
+ * inside the Vite dev server, or `@lunora/rspack/rsbuild` alongside an Rsbuild
+ * one — together with studio and codegen, so `lunora dev` runs the project's own
+ * dev script and gets out of the way — this also covers class-B
  * frameworks whose own dev server runs the worker in `workerd` (Astro 6 +
  * `@astrojs/cloudflare`, which embeds `@cloudflare/vite-plugin` in `astro dev`:
  * SSR + `/_lunora/*` + `ShardDO` in one process, HMR intact). `framework-worker`
@@ -83,21 +84,36 @@ type DevFlavor = "framework-worker" | "vite" | "wrangler";
 const SIDECAR_FRAMEWORKS = new Set(["nuxt", "sveltekit"]);
 
 /**
+ * Bundler plugins that run the worker themselves, so `lunora dev` delegates the
+ * whole stack to the project's own dev script.
+ *
+ * `@lunora/rspack` is here for its Rsbuild entry point, which spawns `wrangler
+ * dev` from `onBeforeStartDevServer` and proxies `/_lunora/*` to it. Without this
+ * an Rspack project fell through to the `wrangler` flavor and `lunora dev` ran
+ * ONLY the worker — the client dev server never started, which is a worse outcome
+ * than either half alone. A bare-Rspack project (no Rsbuild) runs its own worker
+ * anyway, per that package's README, so delegating is right there too.
+ */
+const WORKER_RUNNING_PLUGINS = ["@lunora/rspack", "@lunora/vite"];
+
+/**
  * Detect the dev flavor.
  *
  * A SvelteKit / Nuxt project needs the two-process `framework-worker` stack even
  * though it also declares `@lunora/vite` (which its framework dev server uses for
- * codegen/studio) — so the framework check comes FIRST. Everything else on
- * `@lunora/vite` (class-A frameworks + Astro + standalone Vite) delegates to the
- * project's own dev server (`vite`); a project without `@lunora/vite` is the
- * classic standalone `wrangler` stack.
+ * codegen/studio) — so the framework check comes FIRST. Everything else on a
+ * worker-running bundler plugin (class-A frameworks + Astro + standalone Vite +
+ * Rsbuild) delegates to the project's own dev server (`vite`); a project with no
+ * such plugin is the classic standalone `wrangler` stack.
  */
 const detectDevFlavor = (cwd: string): DevFlavor => {
     if (SIDECAR_FRAMEWORKS.has(detectFramework(cwd).framework)) {
         return "framework-worker";
     }
 
-    return readProjectDependencyNames(cwd).has("@lunora/vite") ? "vite" : "wrangler";
+    const dependencies = readProjectDependencyNames(cwd);
+
+    return WORKER_RUNNING_PLUGINS.some((name) => dependencies.has(name)) ? "vite" : "wrangler";
 };
 
 /**

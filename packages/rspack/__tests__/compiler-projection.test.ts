@@ -1,7 +1,9 @@
+import type { RsbuildPluginAPI } from "@rsbuild/core";
 import type { Compilation, Compiler } from "@rspack/core";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { CompilationLike, CompilerLike } from "../src/compiler";
+import type { RsbuildApiLike } from "../src/rsbuild";
 
 /**
  * The structural projection in `src/compiler.ts` exists so `@rspack/core` never
@@ -24,5 +26,40 @@ describe("compiler projection", () => {
         expect.assertions(0);
 
         expectTypeOf<Compilation>().toExtend<CompilationLike>();
+    });
+
+    /**
+     * The Rsbuild projection cannot be asserted with `toExtend` the way the Rspack
+     * one is. Making it a true structural subset would mean restating
+     * `ProxyConfig`, `Plugins` and friends — i.e. reproducing `@rsbuild/core`'s
+     * types in a package that declares it an OPTIONAL peer precisely so they never
+     * reach the published `.d.ts`.
+     *
+     * What CAN drift silently is a renamed hook: `RsbuildPlugins` is built on
+     * `LooseRsbuildPlugin`, whose `setup: (api: any) => …` swallows any mismatch,
+     * so a rename upstream would compile clean here and simply never fire. These
+     * pin the four names this plugin taps.
+     *
+     * The shapes themselves are covered behaviourally instead — `proxy.test.ts`
+     * drives a real `createRsbuild()` dev server and reads what comes back, which
+     * is what caught the array-form `server.proxy` bug a shape assertion missed.
+     */
+    it("taps hooks that @rsbuild/core actually has", () => {
+        expect.assertions(0);
+
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("modifyRsbuildConfig");
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("modifyRspackConfig");
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("onBeforeStartDevServer");
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("onCloseDevServer");
+    });
+
+    it("declares exactly the hooks it taps, and no more", () => {
+        expect.assertions(1);
+
+        // A member added here without a corresponding `toHaveProperty` above would
+        // be unpinned — this keeps the two lists in step.
+        expectTypeOf<keyof RsbuildApiLike>().toEqualTypeOf<"modifyRsbuildConfig" | "modifyRspackConfig" | "onBeforeStartDevServer" | "onCloseDevServer">();
+
+        expect(true).toBe(true);
     });
 });
