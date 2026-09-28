@@ -4384,12 +4384,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("createImages({ binding: imagesBinding as ImagesBindingLike })");
             // Attached only inside the `isAction` block, never spliced into the base ctx literal.
             expect(output).toContain("ctx.images = images;");
-            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
-            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+            expect(output).toContain('const isAction = contextKind === "action";');
         });
 
         it("wires ctx.sql (Hyperdrive) onto the ACTION ctx ONLY via a REQUIRED config thunk when hyperdrive is used", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -4402,6 +4401,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;");
             expect(output).not.toContain("createHyperdrive");
             expect(output).toContain("ctx.sql = sql;");
+            // A query composed from an action must not see it either.
+            expect(output).toContain("delete queryView.sql;");
         });
 
         it("wires ctx.browser onto the ACTION ctx ONLY via a config thunk (no puppeteer import) when browser is used", () => {
@@ -4526,8 +4527,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })");
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
             expect(output).toContain("ctx.x402 = x402;");
-            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
-            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+            expect(output).toContain('const isAction = contextKind === "action";');
         });
 
         it("never attaches ctx.x402 onto the base ctx literal, and omits the pay rail entirely when unused", () => {

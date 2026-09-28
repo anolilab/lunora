@@ -870,7 +870,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return backfillSearchIndexes(this.sql as SqlExec, schema as unknown as SchemaLike, options);
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: FunctionKind; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -896,8 +896,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the `ctx.run*` caller guard; a ctx built for an
-            // admin/lifecycle path has no registered function, and so no kind.
-            const contextKind = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
+            // admin/lifecycle path has no registered function, and so no kind. An
+            // untracked `ctx.runQuery` overrides it with `"query"`: the sub-query
+            // keeps the caller's `functionPath` for attribution but runs as a query.
+            const contextKind = options.kind ?? LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind;
             // `list`/`get` are the two methods `ctx.db.system.query("_scheduled_functions")`
             // reaches through, and pending jobs live in the SchedulerDO — nothing the
             // CDC changelog records — so reading them must forfeit a delta resume.
@@ -955,12 +957,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // cache does not key on the host, so a query that signs URLs needs a
             // declared `publicBaseUrl` either way.
             const requestOrigin = contextKind !== "query" && options.identity === undefined ? this.getCurrentOrigin() : undefined;
-            const storage = markUnvouchableReads(asBucketStorage(config.storage?.(env, requestOrigin) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
-                "bucket",
-                "download",
-                "getMetadata",
-                "list",
-            ]);
+            const makeStorage = (origin?: string): SystemReaderStorageLike =>
+                markUnvouchableReads(asBucketStorage(config.storage?.(env, origin) ?? storageStub) as SystemReaderStorageLike, options.onRead, [
+                    "bucket",
+                    "download",
+                    "getMetadata",
+                    "list",
+                ]);
+            const storage = makeStorage(requestOrigin);
             // `ctx.storage.deleteAfterCommit(key)`, on every dispatch that can host
             // a MUTATION handler — which is not only a mutation dispatch:
             // `ctx.runMutation` hands the CALLER's ctx to the callee, so a mutation
@@ -1121,36 +1125,65 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 secrets,
             };
 
-            ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind);
-            // The composed mutation runs under the SAME wrapper the top-level RPC
-            // uses, so "do the transactional work in a mutation and call it from the
-            // action" — the recipe the docs give for atomicity — actually is atomic.
-            ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) =>
-                dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind, async (work) => this.runMutationTransaction(ctx, work));
-            // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
-            // its OWN context, built without the subscription's read-footprint
-            // hooks — so its reads never enter this subscription's footprint and a
-            // write to the tables it touched does not re-run us. Everything else is
-            // inherited: `functionPath` (log/metric attribution), `headroom` (the
-            // sub-query must not escape this dispatch's resource ceiling),
-            // `scope` (the reactive-cache capture — an untracked sub-query's reads
-            // must still be deps of the entry the OUTER query is memoized as, or
-            // the memo goes stale), and — load-bearing — the resolved `caller` BY VALUE
-            // (identity, userId AND ip). Omitting it would let `buildCtx` fall back
-            // to the shared per-request fields, which a concurrent RPC may have
-            // re-set, and an RLS-scoped sub-query would then read as the wrong user
-            // from the wrong address. A tracked call keeps sharing `ctx` exactly as
-            // before.
-            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
-                dispatchRun(
-                    "query",
-                    reference.__lunoraRef,
-                    fnArgs,
-                    runOptions?.untracked === true
-                        ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, scope: options.scope })
-                        : ctx,
-                    contextKind,
-                );
+            const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
+                target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);
+                // The composed mutation runs under the SAME wrapper the top-level RPC
+                // uses, so "do the transactional work in a mutation and call it from the
+                // action" — the recipe the docs give for atomicity — actually is atomic.
+                target.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) =>
+                    dispatchRun("mutation", reference.__lunoraRef, fnArgs, target, kind, async (work) => this.runMutationTransaction(target, work));
+                // `ctx.runQuery(ref, args, { untracked: true })` runs the sub-query on
+                // its OWN query context, built without the subscription's read-footprint
+                // hooks — so its reads never enter this subscription's footprint and a
+                // write to the tables it touched does not re-run us. Everything else is
+                // inherited: `functionPath` (log/metric attribution), `headroom` (the
+                // sub-query must not escape this dispatch's resource ceiling),
+                // `scope` (the reactive-cache capture — an untracked sub-query's reads
+                // must still be deps of the entry the OUTER query is memoized as, or
+                // the memo goes stale), and — load-bearing — the resolved `caller` BY VALUE
+                // (identity, userId AND ip). Omitting it would let `buildCtx` fall back
+                // to the shared per-request fields, which a concurrent RPC may have
+                // re-set, and an RLS-scoped sub-query would then read as the wrong user
+                // from the wrong address. A tracked call runs on `queryContext()` below.
+                target.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
+                    dispatchRun(
+                        "query",
+                        reference.__lunoraRef,
+                        fnArgs,
+                        runOptions?.untracked === true
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope })
+                            : queryContext(),
+                        kind,
+                    );
+            };
+
+            // A query composed from a mutation or action runs on a QUERY view of
+            // this ctx, so it behaves exactly as it does when called directly or
+            // live: same `db`, read hooks, trace and `now`, but no request
+            // origin — neither `ctx.origin` nor the storage signed-URL fallback —
+            // and a `run*` guard that refuses a mutation or action. An action's
+            // ActionCtx-only helpers are stripped for the same reason. Copied by
+            // descriptor so the `ip` getter is carried over, not read. Built on the
+            // first composed call only; a query ctx is already its own view.
+            let queryView: Record<string, unknown> | undefined;
+            const queryContext = (): Record<string, unknown> => {
+                if (contextKind === "query") {
+                    return ctx;
+                }
+
+                if (queryView === undefined) {
+                    queryView = Object.defineProperties({}, {
+                        ...Object.getOwnPropertyDescriptors(ctx),
+                        origin: { enumerable: true, value: undefined },
+                        storage: { enumerable: true, value: requestOrigin === undefined ? storage : makeStorage() },
+                    }) as Record<string, unknown>;
+                    installRun(queryView, "query");
+                }
+
+                return queryView;
+            };
+
+            installRun(ctx, contextKind);
 
             return ctx;
         }
