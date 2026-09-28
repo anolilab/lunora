@@ -1,3 +1,10 @@
+## @lunora/flags [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.60...@lunora/flags@1.0.0-alpha.61) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
 ## @lunora/flags [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.59...@lunora/flags@1.0.0-alpha.60) (2026-09-27)
 
 
