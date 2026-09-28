@@ -160,6 +160,56 @@ describe("durable replay under an expired bearer", () => {
         client.close();
     });
 
+    // With no subject the identity is the token hash, so a refresh cannot be
+    // told from an account switch: dropping the held write is the safe answer.
+    // The warning is what tells the app how to keep it.
+    it("discards the held write on a refresh that names no subject, and warns how to keep it", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthenticatedResponse());
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("jwt-issued-before-going-offline");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(warn).not.toHaveBeenCalled();
+
+        client.setAuthToken("refreshed-jwt");
+        await settle();
+
+        // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a credential
+        await expect(outcome).resolves.toBe("rejected:OFFLINE_IDENTITY_CHANGED");
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("setAuthToken(token, user.id)");
+
+        // A later token change unrelated to a refusal stays quiet.
+        client.setAuthToken("another-jwt");
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+        client.close();
+    });
+
     // `UNAUTHORIZED` is the app's own "you may not do this" (`throw new
     // LunoraError("UNAUTHORIZED", "Sign in to post")`): a verdict on the write,
     // which no refresh changes. Holding it stranded the write, and asked an app

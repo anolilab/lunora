@@ -1824,6 +1824,7 @@ class LunoraClient {
         // `adoptCookieSubject`. Distinct from a subject not known YET
         // (`undefined`): leaving "nobody" for a user is a change of session.
         const wasKnownNobody = this.isKnownNobody();
+        const previousToken = this.authToken;
 
         this.authToken = token;
         this.applySubject(token, subject);
@@ -1887,6 +1888,7 @@ class LunoraClient {
                 // kept: this path is reached on a plain sign-in too, where the
                 // queue belongs to the very user who just signed in.
                 this.rejectQueuedForIdentityChange(previousIdentity);
+                this.warnRefreshWithoutSubject(previousToken, token);
 
                 // And evict what the PREVIOUS identity left live. A socket pins
                 // its credential in the upgrade URL and cannot be rotated in
@@ -2594,6 +2596,16 @@ class LunoraClient {
      * identity from the cookie/token in effect); use this to refresh a
      * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
      * with a freshly minted one. Returns an unsubscribe function.
+     *
+     * Also fired, once per credential, when a queued write's replay is refused
+     * `TOKEN_EXPIRED` / `UNAUTHENTICATED`. The write is held for the refresh, and
+     * survives it only if the identity is keyed on a `subject`: pass the same user
+     * id with the new token, `setAuthToken(freshToken, user.id)` (or have passed
+     * it before — the subject is sticky). With no subject the identity is the
+     * token hash, so a refresh cannot be told from an account switch and the held
+     * writes are rejected `OFFLINE_IDENTITY_CHANGED`. A cookie session has no
+     * token to replace: renew the cookie, and the held write is re-sent on a
+     * backoff with it.
      */
     public onTokenExpired(listener: () => void): Unsubscribe {
         return this.tokenExpiredListeners.add(listener);
@@ -8662,6 +8674,25 @@ class LunoraClient {
         const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
 
         return liveStamp === undefined ? item.identity : liveStamp;
+    }
+
+    /**
+     * Warn when a token refused for a queued write is replaced with no subject
+     * keyed: the likely refresh reads as a user switch, so the writes it was
+     * meant to rescue were just rejected `OFFLINE_IDENTITY_CHANGED`. Dropping is
+     * the safe default — a refresh and an account switch look the same without
+     * a subject — so this only says how to keep them.
+     */
+    private warnRefreshWithoutSubject(previousToken: null | string, token: null | string): void {
+        if (previousToken === null || token === null || this.authSubject !== undefined || this.authRefusalNotifiedFor !== this.hashToken(previousToken)) {
+            return;
+        }
+
+        // eslint-disable-next-line no-console -- the only signal that a refresh just discarded the writes it was meant to rescue
+        console.warn(
+            "[lunora] setAuthToken replaced a token that was just refused for a queued write, with no subject: without one a refresh reads as a user switch, " +
+                "so the held writes were discarded (OFFLINE_IDENTITY_CHANGED). Pass the user id, e.g. setAuthToken(token, user.id), to keep them across a refresh.",
+        );
     }
 
     /**
