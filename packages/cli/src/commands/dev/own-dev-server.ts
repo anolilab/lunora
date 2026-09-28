@@ -8,9 +8,9 @@ import { planToolchainInvocation, targetRunsOwnDevServer } from "@lunora/config"
 
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
-import type { DevCommandOptions, DevCommandPlan } from "./handler";
 import type { DevFlavor } from "./lifecycle";
 import { codegenRequested } from "./lifecycle";
+import type { DevCommandOptions, DevCommandPlan } from "./types";
 
 /**
  * The flavor `lunora dev` actually runs for `target`.

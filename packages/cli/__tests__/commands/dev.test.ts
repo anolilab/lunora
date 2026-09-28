@@ -5,16 +5,11 @@ import { join } from "node:path";
 import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import {
-    defaultWorkerSpawner,
-    detectDevFlavor,
-    negatableDevFlags,
-    planDevCommand,
-    resolveInspectorPort,
-    resolveWorkerPort,
-    runDevCommand,
-} from "../../src/commands/dev/handler";
+import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
+import { detectDevFlavor } from "../../src/commands/dev/lifecycle";
+import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
+import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
+import type { DevCommandOptions } from "../../src/commands/dev/types";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 

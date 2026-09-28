@@ -5,8 +5,9 @@ export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, I
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer";
 export { runDeployCommand } from "./commands/deploy/handler";
 export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from "./commands/deploy/types";
-export type { DevCommandOptions, DevCommandPlan } from "./commands/dev/handler";
-export { planDevCommand, runDevCommand } from "./commands/dev/handler";
+export { runDevCommand } from "./commands/dev/handler";
+export { planDevCommand } from "./commands/dev/plan";
+export type { DevCommandOptions, DevCommandPlan } from "./commands/dev/types";
 export type { InitCommandOptions, InitCommandResult, Template } from "./commands/init/handler";
 export { runInitCommand } from "./commands/init/handler";
 export type { MigrateGenerateCommandOptions, MigrateGenerateCommandResult } from "./commands/migrate/handler";
