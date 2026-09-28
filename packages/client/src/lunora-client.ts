@@ -6522,6 +6522,7 @@ class LunoraClient {
         }
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
+        const sentToken = flags.authToken === undefined ? this.authToken : flags.authToken;
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
             // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
@@ -6584,6 +6585,8 @@ class LunoraClient {
 
         flags.onMutationAck?.(body.lastMutationId);
         flags.onCommitCursor?.(body.commitCursor);
+
+        this.noteCredentialAccepted(sentToken);
 
         // Remember how far this shard had committed, so a later read can demand
         // at least this much from a replica — filed under the one key both an
@@ -9160,12 +9163,18 @@ class LunoraClient {
      * wait, so the drain can honour it before trying again
      * ({@link LunoraClient.replayRetryState}). Counts the attempt either way:
      * that is what a hintless refusal backs off on.
+     *
+     * A credential refused under a cookie session (`authToken === null`) backs
+     * off on the hintless ramp too. A bearer refusal waits for `setAuthToken`,
+     * which re-flushes; a cookie is renewed in the browser, invisibly to this
+     * client, so the only way to learn it was is to send again.
      */
-    private noteReplayRetryDelay(shardKey: string | undefined, error: unknown): void {
+    private noteReplayRetryDelay(shardKey: string | undefined, error: unknown, authToken: null | string): void {
         const key = connectionKey(shardKey);
         const previous = this.replayRetryState.get(key);
         const attempts = (previous?.attempts ?? 0) + 1;
-        const delay = replayRetryDelayMs(error, attempts);
+        const delay =
+            replayRetryDelayMs(error, attempts) ?? (authToken === null && isAuthReplayFailure(error) ? defaultReplayRetryDelayMs(attempts) : undefined);
 
         this.replayRetryState.set(key, {
             attempts,
@@ -9459,6 +9468,18 @@ class LunoraClient {
     }
 
     /**
+     * A request under `authToken` succeeded: if a refusal of that credential was
+     * reported, its next refusal is news again. A bearer re-arms by changing; a
+     * cookie session's `null` never does, so without this the app could be asked
+     * to refresh a cookie only once per page.
+     */
+    private noteCredentialAccepted(authToken: null | string): void {
+        if (this.authRefusalNotifiedFor !== undefined && this.authRefusalNotifiedFor === this.hashToken(authToken ?? "")) {
+            this.authRefusalNotifiedFor = undefined;
+        }
+    }
+
+    /**
      * Redeem a {@link ReplayCredential} (single use) into the request flags it
      * pins (the judged bearer, and the subject a cookie replay names) and the
      * identity stamp it was judged for. Throws for a credential this client did
@@ -9595,7 +9616,7 @@ class LunoraClient {
                     continue;
                 }
 
-                this.noteReplayRetryDelay(shardKey, error);
+                this.noteReplayRetryDelay(shardKey, error, authToken);
                 this.offlineQueue.requeue(items.slice(index));
 
                 return;
@@ -9757,7 +9778,7 @@ class LunoraClient {
         authToken: null | string,
     ): { requeue: QueuedMutation[]; stop: boolean } {
         if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error, authToken))) {
-            this.noteReplayRetryDelay(shardKey, error);
+            this.noteReplayRetryDelay(shardKey, error, authToken);
 
             return { requeue: items, stop: true };
         }
@@ -9832,12 +9853,13 @@ class LunoraClient {
                 const error = slotError(inner);
 
                 if (this.shouldRequeueReplayFailure(error, authToken)) {
-                    this.noteReplayRetryDelay(shardKey, error);
+                    this.noteReplayRetryDelay(shardKey, error, authToken);
                     requeue.push(item);
                 } else {
                     this.settleReplayTerminal(item, error);
                 }
             } else {
+                this.noteCredentialAccepted(authToken);
                 this.settleReplayBatchResult(item, inner);
             }
         }

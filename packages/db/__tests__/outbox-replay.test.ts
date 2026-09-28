@@ -1236,6 +1236,74 @@ describe("durable outbox replay credential", () => {
             expect(database.pendingCount()).toBe(0);
         });
 
+        // A cookie (or Access edge) session has no token to change: `getAuthToken()`
+        // is `null` before and after the refresh, so a hold keyed on the token
+        // value never lifted and every such write was rejected at the deadline.
+        describe("under a cookie session", () => {
+            const tokenExpired = (): Response => refusal("TOKEN_EXPIRED", "authentication token expired");
+
+            it("re-sends a refused write with the refreshed cookie and commits it inside the hold window", async () => {
+                let cookieFresh = false;
+                const { client, requests } = realClient(() => (cookieFresh ? ok() : tokenExpired()));
+                const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+                // The app renews its session cookie when told the credential lapsed.
+                const onExpired = vi.fn<() => void>(() => {
+                    cookieFresh = true;
+                });
+
+                client.setAuthToken(null, "user-a");
+                client.onTokenExpired(onExpired);
+
+                const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+                await sink.enqueue(write("k1"));
+                await twentySeconds();
+
+                expect(sendsOf(requests, "messages:send")).toBe(2);
+                expect(onExpired).toHaveBeenCalledTimes(1);
+                expect(rejected).not.toHaveBeenCalled();
+                expect(database.pendingCount()).toBe(0);
+
+                // The session lapses again later: the renewed cookie was accepted
+                // in between, so the app is asked to refresh it again.
+                cookieFresh = false;
+                await sink.enqueue(write("k2"));
+                await twentySeconds();
+
+                expect(onExpired).toHaveBeenCalledTimes(2);
+                expect(rejected).not.toHaveBeenCalled();
+                expect(database.pendingCount()).toBe(0);
+            });
+
+            it("rejects a write whose cookie is never refreshed at the deadline, re-sending it only on a backoff", async () => {
+                const { client, requests } = realClient(() => tokenExpired());
+                const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+                const onExpired = vi.fn<() => void>();
+
+                client.setAuthToken(null, "user-a");
+                client.onTokenExpired(onExpired);
+
+                const { database, sink } = await startFakeOutbox(client, { onWriteRejected: rejected });
+
+                await sink.enqueue(write("k1"));
+                await twentySeconds();
+
+                // Held, not rejected: the refresh may still land. Re-sent on a
+                // backoff, never on every one-second executor tick.
+                expect(rejected).not.toHaveBeenCalled();
+                expect(database.pendingCount()).toBe(1);
+                expect(sendsOf(requests, "messages:send")).toBeLessThanOrEqual(5);
+
+                await vi.advanceTimersByTimeAsync(60_000);
+
+                expect(rejected.mock.calls.map(([event]) => event.code)).toStrictEqual(["TOKEN_EXPIRED"]);
+                expect(database.pendingCount()).toBe(0);
+                expect(sendsOf(requests, "messages:send")).toBe(6);
+                // Every re-send is refused, but the app is asked to refresh once.
+                expect(onExpired).toHaveBeenCalledTimes(1);
+            });
+        });
+
         it("rejects and rolls back a write refused by a 401 with no readable body", async () => {
             const { client, requests } = realClient(
                 () => new Response("<html>401 Unauthorized</html>", { headers: { "content-type": "text/html" }, status: 401 }),

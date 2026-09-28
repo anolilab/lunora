@@ -285,3 +285,73 @@ describe("durable replay against a real worker under a lapsed bearer", () => {
         client.close();
     });
 });
+
+// A cookie (or Access edge) session keeps `authToken` at `null` across its
+// refresh, so neither `setAuthToken` nor a changed bearer ever re-flushes the
+// queue: a write refused for the lapsed cookie sat queued until the next
+// reconnect, which a healthy socket never makes.
+describe("durable replay under an expired cookie session", () => {
+    it("re-sends a refused write on a backoff with the refreshed cookie, asking the app to refresh once", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        sockets.length = 0;
+
+        let cookieFresh = false;
+        const rpcCalls: string[] = [];
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (url) => {
+            if (url.includes("get-session")) {
+                return Response.json({ session: { id: "s" }, user: { id: "user-1" } });
+            }
+
+            rpcCalls.push(url);
+
+            return cookieFresh ? okResponse() : Response.json({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, { status: 401 });
+        });
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken(null, "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(rpcCalls).toHaveLength(1);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        // Still expired for a while: re-sent on a backoff, not in a loop, and
+        // the app is not asked to refresh again for the same session.
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(rpcCalls.length).toBeGreaterThan(1);
+        expect(rpcCalls.length).toBeLessThanOrEqual(5);
+        expect(expired).toHaveBeenCalledTimes(1);
+        await expect(persistence.load()).resolves.toHaveLength(1);
+
+        // The browser's cookie is renewed; nothing on the client changes.
+        cookieFresh = true;
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        await expect(outcome).resolves.toBe("committed");
+        await expect(persistence.load()).resolves.toHaveLength(0);
+
+        client.close();
+        vi.useRealTimers();
+    });
+});

@@ -212,14 +212,47 @@ const replayCredentialFor = (client: LunoraClient, meta: undefined | WriteProven
  */
 const CREDENTIAL_HOLD_MS = 60_000;
 
+/**
+ * When, measured from the first refusal, a write refused under a cookie (or an
+ * edge such as Cloudflare Access) is sent again. That credential lives in the
+ * browser, not in `getAuthToken()`, so its refresh changes nothing this client
+ * can watch: the only way to learn the session was renewed is to try. A handful
+ * of attempts, never one per executor tick, so a session that stays expired
+ * costs six requests over the whole hold rather than sixty.
+ */
+const COOKIE_RESEND_AFTER_MS = [2000, 5000, 10_000, 20_000, 40_000] as const;
+
 /** A write the worker refused for its credential, parked until the token changes. */
 interface CredentialHold {
     /** The refusal, reported if the hold ends in a rejection. */
     error: unknown;
-    /** The token the refused replay was sent with. */
+    /** The token the refused replay was sent with; `null` for a cookie session. */
     refused: null | string;
+    /** How many times a cookie hold has re-sent the write (see {@link COOKIE_RESEND_AFTER_MS}). */
+    resends: number;
     since: number;
 }
+
+/**
+ * What a held write does on this executor attempt: `send` once the credential it
+ * was refused with changed, or a cookie hold's next {@link COOKIE_RESEND_AFTER_MS}
+ * mark has passed; `expired` once {@link CREDENTIAL_HOLD_MS} ran out; else `wait`.
+ */
+const holdGate = (hold: CredentialHold, token: null | string, now: number): "expired" | "send" | "wait" => {
+    if (token !== hold.refused) {
+        return "send";
+    }
+
+    const waited = now - hold.since;
+
+    if (waited >= CREDENTIAL_HOLD_MS) {
+        return "expired";
+    }
+
+    const resendAt = hold.refused === null ? COOKIE_RESEND_AFTER_MS[hold.resends] : undefined;
+
+    return resendAt !== undefined && waited >= resendAt ? "send" : "wait";
+};
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
@@ -339,18 +372,26 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
      * second refusal after the change, or no change within
      * {@link CREDENTIAL_HOLD_MS}, rejects it, so an app that never refreshes sees
      * `onWriteRejected` and the optimistic row rolls back.
+     *
+     * A write refused under a cookie session has no token to watch — it is
+     * `null` before the refresh and after it — so it is re-sent on the
+     * {@link COOKIE_RESEND_AFTER_MS} backoff instead, with whatever cookie the
+     * browser holds by then. A refusal of a re-send keeps it held; only the
+     * deadline rejects it, since nothing tells a renewed cookie from a stale one.
      */
     const replayHoldingCredential = async (key: string, meta: undefined | WriteProvenance, send: (replayCredential: ReplayCredential) => Promise<unknown>) => {
         const hold = credentialHolds.get(key);
 
-        if (client.getAuthToken() === hold?.refused) {
-            if (Date.now() - hold.since < CREDENTIAL_HOLD_MS) {
-                throw new Error("outbox write deferred: waiting for a fresh credential");
-            }
+        const gate = hold === undefined ? "send" : holdGate(hold, client.getAuthToken(), Date.now());
 
+        if (gate === "expired") {
             credentialHolds.delete(key);
 
-            throw toNonRetriable(hold.error);
+            throw toNonRetriable(hold?.error);
+        }
+
+        if (gate === "wait") {
+            throw new Error("outbox write deferred: waiting for a fresh credential");
         }
 
         // Read with the verdict, no await between: the token the credential pins.
@@ -364,13 +405,15 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                 throw error;
             }
 
-            if (hold !== undefined) {
+            const cookieResend = hold?.refused === null && judgedToken === null;
+
+            if (hold !== undefined && !cookieResend) {
                 credentialHolds.delete(key);
 
                 throw toNonRetriable(error);
             }
 
-            credentialHolds.set(key, { error, refused: judgedToken, since: Date.now() });
+            credentialHolds.set(key, { error, refused: judgedToken, resends: hold === undefined ? 0 : hold.resends + 1, since: hold?.since ?? Date.now() });
 
             // A message naming no status: the executor gives up on one that does.
             throw new Error("outbox write deferred: its credential was refused", { cause: error });
