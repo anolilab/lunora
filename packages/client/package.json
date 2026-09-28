@@ -1,6 +1,6 @@
 {
     "name": "@lunora/client",
-    "version": "1.0.0-alpha.157",
+    "version": "1.0.0-alpha.158",
     "description": "Lunora browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue",
     "keywords": [
         "cloudflare",
@@ -85,7 +85,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.46",
+        "@lunora/errors": "1.0.0-alpha.47",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
