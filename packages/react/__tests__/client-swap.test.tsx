@@ -122,4 +122,31 @@ describe("lunoraProvider — swapping the `client` prop", () => {
 
         expect(screen.getByTestId("view").textContent).toBe("loading");
     });
+
+    it("does not render a preloaded value in a component that mounts after the swap", async () => {
+        expect.hasAssertions();
+
+        const token: Preloaded<string> = { __lunoraPreloaded: true, args: {}, functionPath: "messages:mine", value: "preloaded-for-a" };
+        const Preload = (): ReactElement => <div data-testid="view">{usePreloadedQuery(token) ?? "loading"}</div>;
+        const a = createMockClient(() => "rows-of-a");
+        // The new client's read never answers, so only a leftover value could fill the view.
+        const b = createMockClient(async () => new Promise<never>(() => {}));
+        const tree = (client: typeof a.asClient, show: boolean): ReactNode => (
+            <LunoraProvider client={client}>{show ? <Preload /> : <div data-testid="view">none</div>}</LunoraProvider>
+        );
+        const view = render(tree(a.asClient, true));
+
+        expect(screen.getByTestId("view").textContent).toBe("preloaded-for-a");
+
+        view.rerender(tree(a.asClient, false));
+        view.rerender(tree(b.asClient, false));
+        // Mounted under the swapped-in client: its `useState` sees only `b`.
+        view.rerender(tree(b.asClient, true));
+
+        await waitFor(() => {
+            expect(b.query).toHaveBeenCalledTimes(1);
+        });
+
+        expect(screen.getByTestId("view").textContent).toBe("loading");
+    });
 });

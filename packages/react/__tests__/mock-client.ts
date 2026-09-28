@@ -166,6 +166,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
+        identityEpoch: () => 0,
         onIdentityChange: (): Unsubscribe => () => undefined,
         // The PUBLIC getter the hooks read (`client.isReady`), not the private
         // `readyResolved` field behind it — this object is a plain literal cast

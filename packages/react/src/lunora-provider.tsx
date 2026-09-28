@@ -10,6 +10,14 @@ import { getSubscriptionRegistry } from "./cache";
 
 const LunoraContext = createContext<LunoraClient | null>(null);
 
+/**
+ * Whether the provider's `client` differs from the one it first rendered with.
+ * A value preloaded on the server belongs to that first client, so a hook that
+ * mounts after a swap must not seed it: its own `useState` only ever saw the
+ * new client.
+ */
+const LunoraClientSwappedContext = createContext(false);
+
 interface LunoraProviderProps {
     children: ReactNode;
     client: LunoraClient;
@@ -90,7 +98,16 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
         effectiveClient.invalidateQueries({ queryKey: ["lunora"] });
     }, [client, effectiveClient]);
 
-    const content = <LunoraContext value={client}>{children}</LunoraContext>;
+    // The client the page loaded with, kept on purpose: a server-preloaded value
+    // belongs to it, and a hook mounting after a swap never saw it.
+    // react-doctor-disable-next-line react-doctor/no-derived-useState -- intentional: the FIRST `client` is the point, never re-synced to the prop
+    const [firstClient] = useState(client);
+
+    const content = (
+        <LunoraContext value={client}>
+            <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
+        </LunoraContext>
+    );
 
     // Don't double-wrap when a parent already provides the client.
     if (parentQueryClient === effectiveClient) {
@@ -99,6 +116,9 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
 
     return <QueryClientProvider client={effectiveClient}>{content}</QueryClientProvider>;
 };
+
+/** Whether the nearest `<LunoraProvider>` has swapped its `client` since it first rendered. */
+const useLunoraClientSwapped = (): boolean => use(LunoraClientSwappedContext);
 
 /**
  * Read the {@link LunoraClient} from the nearest `<LunoraProvider>`. Kept
@@ -116,4 +136,4 @@ const useLunora = (): LunoraClient => {
 
 export type { LunoraProviderProps };
 // eslint-disable-next-line react-refresh/only-export-components -- useLunora is a hook kept colocated with the provider component for back-compat; splitting it into its own module would break existing imports.
-export { LunoraProvider, useLunora };
+export { LunoraProvider, useLunora, useLunoraClientSwapped };

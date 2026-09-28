@@ -100,9 +100,6 @@ class LunoraSubscriptionRegistry {
     /** Open snapshot samples per key — the lifetime bound on the push counter. */
     private readonly samples = new Map<string, number>();
 
-    /** How many identities the client has retired since this registry started listening. */
-    private epoch = 0;
-
     /** Query clients cleared on each identity change (see `clearOnIdentityChange`). */
     private readonly identityWatched = new Set<QueryClient>();
 
@@ -213,16 +210,9 @@ class LunoraSubscriptionRegistry {
     }
 
     /**
-     * How many identities the client has retired since this registry started
-     * listening (see `listenForIdentityChange`). A preloaded value is
-     * only good while this is `0`: it was rendered for whoever was signed in
-     * when the page loaded.
-     */
-    public readonly identityEpoch = (): number => this.epoch;
-
-    /**
-     * `useSyncExternalStore` subscribe for `identityEpoch`: registers the
-     * counting listener first, so the epoch has moved by the time `onChange` runs.
+     * `useSyncExternalStore` subscribe for the client's `identityEpoch()`:
+     * registers the clearing listener first, so the previous identity's cached
+     * rows are gone by the time `onChange` re-renders.
      */
     public readonly subscribeIdentityEpoch = (onChange: () => void): Unsubscribe => {
         this.listenForIdentityChange();
@@ -231,10 +221,10 @@ class LunoraSubscriptionRegistry {
     };
 
     /**
-     * Register the one `onIdentityChange` listener that counts epochs and clears
-     * every watched `QueryClient`. Idempotent. Call it before registering any
-     * listener that reads {@link identityEpoch}: listeners fire in insertion
-     * order, so this one must run first.
+     * Register the one `onIdentityChange` listener that clears every watched
+     * `QueryClient`. Idempotent. Call it before registering any listener that
+     * re-renders from the cache: listeners fire in insertion order, so this one
+     * must run first.
      */
     public listenForIdentityChange(): void {
         if (this.listening) {
@@ -244,8 +234,6 @@ class LunoraSubscriptionRegistry {
         this.listening = true;
 
         this.client.onIdentityChange(() => {
-            this.epoch += 1;
-
             for (const queryClient of this.identityWatched) {
                 this.clearQueries(queryClient);
             }

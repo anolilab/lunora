@@ -288,6 +288,55 @@ describe("useQuery across an identity change", () => {
         client.close();
     });
 
+    // The provider's registry starts counting only when it first listens, so a
+    // switch that happened before any provider mounted was invisible to it.
+    it("does not seed user A's preloaded value on a client that retired an identity before the provider mounted", () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+
+        client.setAuthToken("jwt-A", "user-A");
+        client.setAuthToken("jwt-B", "user-B");
+
+        expect(client.identityEpoch()).toBe(1);
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <PreloadedView />
+            </LunoraProvider>,
+        );
+
+        expect(view.container.textContent).toBe("(none)");
+
+        client.close();
+    });
+
+    it("keeps user A's preloaded value across a refresh of user A's own token", async () => {
+        expect.assertions(2);
+
+        const sockets: MockSocket[] = [];
+        const client = new LunoraClient({ fetch: server, reconnect: FAST_RECONNECT, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+
+        client.setAuthToken("jwt-A", "user-A");
+
+        const view = render(
+            <LunoraProvider client={client}>
+                <PreloadedView />
+            </LunoraProvider>,
+        );
+
+        await act(async () => {
+            client.setAuthToken("jwt-A2", "user-A");
+            await settle();
+        });
+
+        expect(client.identityEpoch()).toBe(0);
+        expect(view.container.textContent).toBe("A-secret");
+
+        client.close();
+    });
+
     it("does not show user A's preloaded value to a component that remounts after user B signs in", async () => {
         expect.assertions(2);
 

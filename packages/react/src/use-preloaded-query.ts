@@ -5,7 +5,7 @@ import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-qu
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
-import { useLunora } from "./lunora-provider";
+import { useLunora, useLunoraClientSwapped } from "./lunora-provider";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
@@ -27,9 +27,11 @@ import { useLunora } from "./lunora-provider";
  * hook keeps rendering the SSR snapshot as if it were live.
  *
  * The preloaded value was read for whoever was signed in when the page loaded.
- * After a sign-out or user switch retires an identity, every `usePreloadedQuery`
- * on the client (mounted then or later) stops using it and returns `undefined`
- * until the live value arrives — hence the `T | undefined` return type. A token
+ * After a sign-out or user switch retires an identity (`client.identityEpoch()`
+ * above `0`), every `usePreloadedQuery` on the client (mounted then or later)
+ * stops using it and returns `undefined` until the live value arrives. So does
+ * every one under a `LunoraProvider` whose `client` was swapped, mounted before
+ * or after the swap — hence the `T | undefined` return type. A token
  * preloaded after the switch (a client-side navigation that preloads again) is
  * ignored too and costs a loading flash: the hook cannot tell which identity a
  * token was read under.
@@ -51,19 +53,26 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onErr
         onErrorRef.current?.(error);
     }, []);
 
-    // Read from the client, not kept per instance: a component that mounts (or
-    // remounts) after a user switch must see the switch too. The preloaded value
-    // was rendered for the identity the page loaded under, so it is used only
-    // while no identity has been retired since.
+    // Read from the client itself, not counted per instance or per registry: a
+    // component that mounts (or remounts) after a user switch must see the
+    // switch too, including one made before any provider listened. The preloaded
+    // value was rendered for the identity the page loaded under, so it is used
+    // only while the client has retired no identity since.
     const registry = getSubscriptionRegistry(client);
-    const identityEpoch = useSyncExternalStore(registry.subscribeIdentityEpoch, registry.identityEpoch, () => 0);
+    const identityEpoch = useSyncExternalStore(
+        registry.subscribeIdentityEpoch,
+        () => client.identityEpoch(),
+        () => 0,
+    );
 
-    // Likewise bound to the client this hook mounted under: after a provider
-    // `client` swap the value belongs to the previous client, not the new one.
+    // Likewise bound to the client the page loaded with: after a provider
+    // `client` swap the value belongs to the previous client, whether this hook
+    // mounted before the swap (`mountClient`) or after it (the provider's flag).
     const [mountClient] = useState(client);
+    const clientSwapped = useLunoraClientSwapped();
 
     const { args, functionPath, shardKey } = preloaded;
-    const value = identityEpoch === 0 && client === mountClient ? preloaded.value : undefined;
+    const value = identityEpoch === 0 && !clientSwapped && client === mountClient ? preloaded.value : undefined;
     // Both values are consumed structurally (TanStack hashes `queryKey`; the
     // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
     // reference each render is fine — React Compiler auto-memoizes these
