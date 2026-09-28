@@ -1,3 +1,17 @@
+## @lunora/cli [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.318...@lunora/cli@1.0.0-alpha.319) (2026-09-28)
+
+### Bug Fixes
+
+* close five template, registry and generator defects ([#897](https://github.com/anolilab/lunora/issues/897)) ([3df5a3e](https://github.com/anolilab/lunora/commit/3df5a3e8e23fb61a06bf996d8850a46aa041f6ce))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.278
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.193
+* **@lunora/seed:** upgraded to 1.0.0-alpha.166
+* **@lunora/testing:** upgraded to 1.0.0-alpha.207
+
 ## @lunora/cli [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.317...@lunora/cli@1.0.0-alpha.318) (2026-09-27)
 
 ### Code Refactoring
