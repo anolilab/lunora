@@ -11,7 +11,9 @@
  * SECURITY — a webhook payload is untrusted and a run dispatches privileged.
  * Trust is established ONLY by the per-channel signature check (Slack HMAC over
  * `v0:timestamp:body`, GitHub HMAC over the body, Discord Ed25519 over
- * `timestamp+body`). A request that fails verification is rejected `401` and
+ * `timestamp+body`). Slack and Discord also reject a signed timestamp more than
+ * 5 minutes from now in either direction; GitHub signs no timestamp, so its
+ * replays are bounded only by delivery-id dedupe. A request that fails verification is rejected `401` and
  * never reaches a mapper. Payload fields are spoofable relative to each other and
  * MUST NOT be used for trust; derive the run `owner` from the verified channel
  * identity (the workspace/installation the secret belongs to), never from an
@@ -95,6 +97,12 @@ const verifySlack = async (options: {
 
 /**
  * Verify a GitHub webhook signature (`x-hub-signature-256` = `sha256=` + HMAC over the body).
+ *
+ * There is no replay window: GitHub signs the body alone, with no timestamp, so
+ * a captured delivery verifies indefinitely. `dispatchAgentChannel` bounds that
+ * by keying the run on the SHA-256 of the signed body (see `deliveryId`), so a
+ * replay dedupes to the original run — for as long as the Workflow keeps that
+ * instance id.
  * @experimental
  */
 const verifyGithub = async (options: { body: string; secret: string; signature: string | undefined }): Promise<boolean> => {
@@ -110,12 +118,26 @@ const verifyGithub = async (options: { body: string; secret: string; signature: 
 /**
  * Verify a Discord interaction signature: Ed25519 over `timestamp + body`,
  * `x-signature-ed25519` (hex) against the application's `publicKey` (hex).
+ * The signed `x-signature-timestamp` must be within `tolerance` seconds of
+ * `now` in either direction, or a captured interaction would verify forever.
+ * `now` is injectable for deterministic tests (defaults to the wall clock).
  * @experimental
  */
-const verifyDiscord = async (options: { body: string; publicKey: string; signature: string | undefined; timestamp: string | undefined }): Promise<boolean> => {
-    const { body, publicKey, signature, timestamp } = options;
+const verifyDiscord = async (options: {
+    body: string;
+    now?: number;
+    publicKey: string;
+    signature: string | undefined;
+    timestamp: string | undefined;
+    tolerance?: number;
+}): Promise<boolean> => {
+    const { body, now = Date.now() / 1000, publicKey, signature, timestamp, tolerance = DEFAULT_TIMESTAMP_TOLERANCE } = options;
 
     if (!signature || !timestamp) {
+        return false;
+    }
+
+    if (!isFreshTimestamp(Number(timestamp), now, tolerance)) {
         return false;
     }
 
