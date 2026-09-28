@@ -188,17 +188,18 @@ describe("gatePlatformFeatures", () => {
     /** The capability key the remediation names (`… marks "workflowRollback" as …`). */
     const QUOTED_KEY = /"(\w+)"/u;
 
-    // Both fail at first use on celld rather than run without the feature, so
-    // they are gated from the app's declaration, not discovered in production.
+    // Rollback and egress fail at first use on celld rather than run without the
+    // feature, so they are gated from the app's declaration, not discovered in
+    // production. Worker Loaders (`jsCodeTool`) exist on both Workers hosts only.
     it.each([
         ["celld", ["containerEgressPolicy", "workflowRollback"]],
-        ["node", ["containerEgressPolicy"]],
+        ["node", ["containerEgressPolicy", "workerLoaders"]],
         ["cloudflare", []],
-    ])("gates step rollback and container egress policies per target (%s)", async (target, refused) => {
+    ])("gates step rollback, container egress policies and worker loaders per target (%s)", async (target, refused) => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        const result = gatePlatformFeatures(ALL_OFF, target, { containerEgressPolicy: true, workflowRollback: true });
+        const result = gatePlatformFeatures(ALL_OFF, target, { containerEgressPolicy: true, workerLoaders: true, workflowRollback: true });
 
         expect(
             result.diagnostics

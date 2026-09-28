@@ -757,6 +757,7 @@ interface SandboxUsage {
     usesSandboxBrowser: boolean;
     usesSandboxContainer: boolean;
     usesSandboxFs: boolean;
+    usesSandboxLoader: boolean;
 }
 ```
 

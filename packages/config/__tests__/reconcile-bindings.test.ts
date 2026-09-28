@@ -35,6 +35,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesR2sql: false,
         usesScheduler: false,
         usesStorage: false,
+        usesWorkerLoader: false,
         usesX402Charge: false,
         usesX402Pay: false,
         workflows: [],
@@ -588,6 +589,19 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().analytics_engine_datasets).toEqual([{ binding: "ANALYTICS", dataset: "ANALYTICS" }]);
 
         const second = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the LOADER worker_loaders binding when jsCodeTool is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesWorkerLoader: true }));
+
+        expect(first.added).toContain("LOADER (Worker Loader)");
+        expect(readConfig().worker_loaders).toEqual([{ binding: "LOADER" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesWorkerLoader: true }));
 
         expect(second.changed).toBe(false);
     });

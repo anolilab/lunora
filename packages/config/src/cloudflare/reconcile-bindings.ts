@@ -122,6 +122,8 @@ interface WranglerShape {
     // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.
     queues?: QueuesShape;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    // Self-describing: `[{ binding }]` with nothing remote to mint (see reconcileWorkerLoaders).
+    worker_loaders?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;
 }
 
@@ -623,6 +625,22 @@ const reconcileAnalytics = (text: string, parsed: WranglerShape): ReconcileStep 
     const nextDatasets = [{ binding: "ANALYTICS", dataset: "ANALYTICS" }];
 
     return { added: ["ANALYTICS (Analytics Engine)"], text: applyModify(text, ["analytics_engine_datasets"], nextDatasets) };
+};
+
+/**
+ * Add the `worker_loaders` binding `jsCodeTool` reads (`LOADER`), if absent.
+ * Self-describing — the binding name is the whole entry — so it auto-writes.
+ * Idempotent on any existing `LOADER` entry; another loader binding is left
+ * alone and `LOADER` added beside it. Pure.
+ */
+const reconcileWorkerLoaders = (text: string, parsed: WranglerShape): ReconcileStep => {
+    const loaders = parsed.worker_loaders ?? [];
+
+    if (loaders.some((loader) => loader.binding === "LOADER")) {
+        return { added: [], text };
+    }
+
+    return { added: ["LOADER (Worker Loader)"], text: applyModify(text, ["worker_loaders"], [...loaders, { binding: "LOADER" }]) };
 };
 
 /** Map a camelCase custom instance type onto wrangler's snake_case fields. Pure. */
@@ -1231,7 +1249,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
-    // browser vs images vs analytics_engine_datasets vs containers /
+    // browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
     // observability vs workflows). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (ai/browser/images/analytics) auto-write here;
@@ -1244,6 +1262,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
         { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
         { enabled: inferred.usesAnalytics, run: (text) => reconcileAnalytics(text, parsed) },
+        { enabled: inferred.usesWorkerLoader, run: (text) => reconcileWorkerLoaders(text, parsed) },
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {

@@ -275,6 +275,8 @@ interface PlatformSignals {
     secrets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
     vectorStore?: boolean;
+    /** A `jsCodeTool` import from `@lunora/agent` in `lunora/`. */
+    workerLoaders?: boolean;
     /** A `defineStep({ rollback })` compensation. */
     workflowRollback?: boolean;
 }
@@ -292,6 +294,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "relationGraph",
     "secrets",
     "vectorStore",
+    "workerLoaders",
     "workflowRollback",
 ] as const;
 
@@ -308,6 +311,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
     vectorStore: "vector indexes (`.vectorize()`)",
+    workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",
     workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
 };
 

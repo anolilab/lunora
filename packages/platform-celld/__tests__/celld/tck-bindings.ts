@@ -4,13 +4,16 @@
  * The contract suites cover what `ShardHost` / `SocketHost` / `ShardKvStore`
  * rest on. The other `native` ratings — D1, KV, R2, Queues, Workflows, Cron
  * Triggers — rest on celld bindings (and Discord channel verification on its
- * Web Crypto, and `sqliteVectorStore`'s vec0 index on its `sqlite_vec` flag), so each check here drives the binding
+ * Web Crypto, `sqliteVectorStore`'s vec0 index on its `sqlite_vec` flag, and
+ * `jsCodeTool` on its Dynamic Workers), so each check here drives the binding
  * through Lunora's own adapter where there is one (`D1Client`, `createKv`,
  * `createStorage`, `createQueues` + `dispatchQueueBatch`), in the call shapes
  * the runtime actually uses (see each check). Checks that complete
  * asynchronously (a queue delivery, a workflow run, a cron tick) record what
  * they observed in KV under `tck:*`, and the node side polls for it.
  */
+import type { AgentToolContext } from "@lunora/agent";
+import { jsCodeTool } from "@lunora/agent";
 import { verifyDiscord } from "@lunora/agent/channels";
 import { sqliteVectorStore } from "@lunora/ai/rag";
 import { createKv } from "@lunora/bindings/kv";
@@ -31,6 +34,7 @@ type BindingEnv = {
     DB: D1DatabaseLike;
     JOBS: QueueBindingLike;
     KV: KVNamespaceLike;
+    LOADER: unknown;
     R2: R2BucketLike;
     TCK_FLOW: Workflow;
     VECTORS: DurableObjectNamespace;
@@ -290,6 +294,26 @@ const checkVectorIndex = async (env: BindingEnv): Promise<void> => {
     check(response.ok, await response.text());
 };
 
+/**
+ * `jsCodeTool` through the worker's `LOADER` binding (celld's Dynamic Workers):
+ * a script's value and `console` output come back, `globalOutbound: null`
+ * leaves it no network, and the CPU budget stops a busy loop.
+ */
+const checkWorkerLoader = async (env: BindingEnv): Promise<void> => {
+    const tool = jsCodeTool({ cpuMs: 50 });
+    const run = async (code: string) => tool.execute({ code }, { env } as unknown as AgentToolContext);
+
+    same(await run('console.log("hi", 2);\nreturn [1, 2].map((n) => n * 21);'), { logs: ["hi 2"], value: [21, 42] }, "script result");
+
+    const offline = await run('await fetch("https://example.com/");\nreturn "reached the network";');
+
+    check(offline.value === undefined && typeof offline.error === "string", `fetch is refused: ${JSON.stringify(offline)}`);
+
+    const busy = await run("for (;;) {}");
+
+    check(typeof busy.error === "string", `a busy loop is stopped: ${JSON.stringify(busy)}`);
+};
+
 /** What `scheduled()` hands `runCronJobs` and the backup cron: `cron` and `scheduledTime`. */
 const recordCron = async (controller: ScheduledController, env: BindingEnv): Promise<void> => {
     await env.KV.put("tck:cron", JSON.stringify({ cron: controller.cron, scheduledTime: controller.scheduledTime }));
@@ -309,6 +333,7 @@ const handleBindingRoute = async (request: Request, env: BindingEnv): Promise<Bi
         d1: checkD1,
         ed25519: checkEd25519,
         kv: checkKv,
+        loader: checkWorkerLoader,
         r2: checkR2,
         vec: checkVectorIndex,
     };

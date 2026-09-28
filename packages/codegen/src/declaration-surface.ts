@@ -296,6 +296,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // while the `vectors` capability only flips on an import or a literal
         // `ctx.vectors` read, neither of which a `.vectorize()` declaration is.
         vectorStore: schema.vectorIndexes.length > 0,
+        workerLoaders: sandboxUsage.usesSandboxLoader,
         workflowRollback: codeSignals.workflowRollback,
     });
     const featureUsage = platformGate.usage;

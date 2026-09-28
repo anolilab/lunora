@@ -24,6 +24,8 @@
         "producers": [{ "binding": "JOBS", "queue": "tck-jobs" }],
         "consumers": [{ "queue": "tck-jobs", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 3, "retry_delay": 0 }],
     },
+    // `jsCodeTool` loads its scripts through this (tck-bindings.ts).
+    "worker_loaders": [{ "binding": "LOADER" }],
     "workflows": [{ "binding": "TCK_FLOW", "name": "tck-flow", "class_name": "TckWorkflow" }],
     "triggers": { "crons": ["* * * * *"] },
 }

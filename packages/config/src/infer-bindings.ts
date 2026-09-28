@@ -188,62 +188,66 @@ const extractImportSpecifierList = (statementText: string): string => {
 };
 
 /**
- * A specifier-level `{ type browserTool }` inside an otherwise-value import —
- * compiles away even though the import declaration itself is a value import
- * (e.g. alongside `containerTool`). Mirrors `discover/sandbox.ts`'s
- * `named.isTypeOnly()` guard. Tested against the extracted specifier list, not
- * the whole statement.
+ * Per sandbox tool: its name in the extracted specifier list, a
+ * specifier-level `{ type <tool> }` inside an otherwise-value import (compiles
+ * away, mirroring `discover/sandbox.ts`'s `named.isTypeOnly()` guard), and the
+ * whole-file fallback used ONLY when `es-module-lexer` can't parse the file
+ * (e.g. mid-edit) — same degrade-gracefully contract as
+ * `capabilitiesFromSource`'s `lexCapabilities`/`regexCapabilities` split, and
+ * the same comment-blindness every other capability's regex fallback has.
+ *
+ * `browserTool` provisions `BROWSER`; `jsCodeTool` provisions `LOADER`.
  */
-const TYPE_BROWSER_TOOL_SPECIFIER_PATTERN = /\btype\s+browserTool\b/;
+const SANDBOX_TOOL_PATTERNS = {
+    browserTool: {
+        fallback: /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/,
+        name: /\bbrowserTool\b/,
+        typeSpecifier: /\btype\s+browserTool\b/,
+    },
+    jsCodeTool: {
+        fallback: /import\s+\{[^}]*\bjsCodeTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/,
+        name: /\bjsCodeTool\b/,
+        typeSpecifier: /\btype\s+jsCodeTool\b/,
+    },
+} as const satisfies Record<string, { fallback: RegExp; name: RegExp; typeSpecifier: RegExp }>;
 
-/** A named `browserTool` specifier appears in the extracted specifier list. */
-const BROWSER_TOOL_NAME_PATTERN = /\bbrowserTool\b/;
-
-/**
- * Whole-file regex fallback for `hasSandboxBrowserToolImport`, used ONLY when
- * `es-module-lexer` can't parse the file (e.g. mid-edit) — same
- * degrade-gracefully contract as `capabilitiesFromSource`'s
- * `lexCapabilities`/`regexCapabilities` split. Being a blind text sweep, it
- * shares the same comment-blindness every other capability's regex fallback
- * already has; the primary (lexer-based) path below does not.
- */
-const SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/;
+type SandboxToolName = keyof typeof SANDBOX_TOOL_PATTERNS;
 
 /**
  * True when the sliced text of a SINGLE import declaration is a VALUE
- * (non-type-only) named import of `browserTool` — mirrors
- * `discover/sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
- * `named.isTypeOnly()` (single specifier) guards exactly.
+ * (non-type-only) named import of `tool` — mirrors `discover/sandbox.ts`'s
+ * `declaration.isTypeOnly()` (whole import) and `named.isTypeOnly()` (single
+ * specifier) guards exactly.
  */
-const isValueBrowserToolImport = (statementText: string): boolean => {
+const isValueToolImport = (statementText: string, tool: SandboxToolName): boolean => {
     if (TYPE_ONLY_IMPORT_PATTERN.test(statementText)) {
         return false; // `import type { browserTool } from …` — the whole import compiles away.
     }
 
     const specifierList = extractImportSpecifierList(statementText);
+    const patterns = SANDBOX_TOOL_PATTERNS[tool];
 
-    return BROWSER_TOOL_NAME_PATTERN.test(specifierList) && !TYPE_BROWSER_TOOL_SPECIFIER_PATTERN.test(specifierList);
+    return patterns.name.test(specifierList) && !patterns.typeSpecifier.test(specifierList);
 };
 
 /**
- * Whether `code` contains a VALUE `browserTool` import from `@lunora/agent`
- * (main entry or `/sandbox`). Unlike the old whole-file regex sweep, this
- * walks `es-module-lexer`'s PARSED import records and tests only the sliced
- * text of each matching declaration — a commented-out import (`// import {
- * browserTool } from "@lunora/agent";`) is never parsed as a declaration at
- * all, so it can never match, and a `type`-prefixed specifier is rejected by
- * {@link isValueBrowserToolImport}. This is what makes the detector agree with
+ * Whether `code` contains a VALUE import of the sandbox `tool` from
+ * `@lunora/agent` (main entry or `/sandbox`). Walks `es-module-lexer`'s PARSED
+ * import records and tests only the sliced text of each matching declaration —
+ * a commented-out import is never parsed as a declaration at all, so it can
+ * never match, and a `type`-prefixed specifier is rejected by
+ * {@link isValueToolImport}. This is what makes the detector agree with
  * `discover/sandbox.ts`'s AST-based one on the same fixture matrix.
  */
-const hasSandboxBrowserToolImport = (code: string): boolean => {
+const hasSandboxToolImport = (code: string, tool: SandboxToolName): boolean => {
     try {
         const [imports] = lexModule(code);
 
         return imports.some(
-            (entry) => entry.n !== undefined && SANDBOX_MODULE_SPECIFIERS.has(entry.n) && isValueBrowserToolImport(code.slice(entry.ss, entry.se)),
+            (entry) => entry.n !== undefined && SANDBOX_MODULE_SPECIFIERS.has(entry.n) && isValueToolImport(code.slice(entry.ss, entry.se), tool),
         );
     } catch {
-        return SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN.test(code);
+        return SANDBOX_TOOL_PATTERNS[tool].fallback.test(code);
     }
 };
 
@@ -407,6 +411,8 @@ interface InferredBindings {
     usesScheduler: boolean;
     /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
+    /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
+    usesWorkerLoader: boolean;
     /** `@lunora/x402/charge` is imported — the charge rail settles USDC to a recipient address (a public `[vars]` entry, user-named; hint-only). */
     usesX402Charge: boolean;
     /** `@lunora/x402/pay` is imported — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
@@ -505,7 +511,7 @@ const capabilitiesFromSource = (code: string): Capabilities => {
     }
 
     // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
-    // folded in here — see `scanSandboxBrowserToolUsage` below. Unlike every
+    // folded in here — see `scanSandboxToolUsage` below. Unlike every
     // other probe, it must be scoped to EXACTLY the `lunora/` file set
     // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
     // lunora-only pass in `inferLunoraBindings` instead.
@@ -905,26 +911,34 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 };
 
 /**
- * Scan ONLY the `lunora/` tree (never `src/`) for a value `browserTool`
- * import — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
+ * Scan ONLY the `lunora/` tree (never `src/`) for value imports of the sandbox
+ * tools — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
  * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
- * walks `src/`) so config never auto-writes a `BROWSER` binding codegen will
- * never wire — a `src/`-only `browserTool` import never registers the
- * `sandbox:invoke` dispatcher, since `discoverSandboxUsage` only reads
- * `lunora/`.
+ * walks `src/`) so config never auto-writes a binding codegen will never wire:
+ * a `src/`-only `browserTool` import never registers the `sandbox:invoke`
+ * dispatcher, and a `src/`-only `jsCodeTool` never reaches the
+ * `workerLoaders` gate, since `discoverSandboxUsage` only reads `lunora/`.
  */
-const scanSandboxBrowserToolUsage = (projectRoot: string, lunoraDirectory: string): boolean => {
+const scanSandboxToolUsage = (projectRoot: string, lunoraDirectory: string): Record<SandboxToolName, boolean> => {
     const absolute = join(projectRoot, lunoraDirectory);
+    const found: Record<SandboxToolName, boolean> = { browserTool: false, jsCodeTool: false };
 
     if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
-        return false;
+        return found;
     }
 
     const files: string[] = [];
 
     collectSourceFiles(absolute, files);
 
-    return files.some((file) => hasSandboxBrowserToolImport(readFileSync(file, "utf8")));
+    for (const file of files) {
+        const code = readFileSync(file, "utf8");
+
+        found.browserTool ||= hasSandboxToolImport(code, "browserTool");
+        found.jsCodeTool ||= hasSandboxToolImport(code, "jsCodeTool");
+    }
+
+    return found;
 };
 
 /** Provenance lines for declared DO containers / workflows / agents. */
@@ -1039,9 +1053,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // sandbox dispatcher, so it must not provision the binding either. Folded
     // into `capabilities` here (not `scanCapabilities`) so both the returned
     // `usesBrowser` flag AND the provenance signal line agree.
+    const sandboxTools = scanSandboxToolUsage(options.projectRoot, schemaDirectory);
     const capabilities: Capabilities = {
         ...scannedCapabilities,
-        usesBrowser: scannedCapabilities.usesBrowser || scanSandboxBrowserToolUsage(options.projectRoot, schemaDirectory),
+        usesBrowser: scannedCapabilities.usesBrowser || sandboxTools.browserTool,
     };
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
@@ -1091,6 +1106,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
 
     const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows, agents);
 
+    if (sandboxTools.jsCodeTool) {
+        signals.push("worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }");
+    }
+
     if (flagshipBinding !== undefined) {
         signals.push(
             `hint: lunora/flags.ts uses Flagship in binding mode; add a flagship binding ({ binding: "${flagshipBinding}", app_id }) — the app_id can't be auto-provisioned`,
@@ -1106,6 +1125,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         queues,
         signals,
         usesFlags: flags !== undefined,
+        usesWorkerLoader: sandboxTools.jsCodeTool,
         workflows,
         ...capabilityFlags,
     };

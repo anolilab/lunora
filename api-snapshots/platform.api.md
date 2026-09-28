@@ -315,6 +315,7 @@ interface PlatformCapabilities {
         shardReadReplicas?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
+        workerLoaders?: Capability;
         workflowRollback?: Capability;
         workflows?: Capability;
     };

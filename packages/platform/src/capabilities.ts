@@ -33,7 +33,8 @@
  * `containerEgressPolicy`, `containers`, `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
- * `scheduler`, `secrets`, `vectorStore`, `workflowRollback`, `workflows`.
+ * `scheduler`, `secrets`, `vectorStore`, `workerLoaders`, `workflowRollback`,
+ * `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
@@ -472,6 +473,15 @@ export interface PlatformCapabilities {
         websocketHibernation?: Capability;
 
         /**
+         * Worker Loaders (Dynamic Workers): load code supplied at runtime into
+         * its own isolate with an `env`, egress and CPU budget the loader
+         * chooses. `@lunora/agent`'s `jsCodeTool` runs model-written scripts
+         * through it. Gate-bearing: codegen sets the `workerLoaders`
+         * `PlatformSignals` flag on a `jsCodeTool` import in `lunora/`.
+         */
+        workerLoaders?: Capability;
+
+        /**
          * Compensation for a failed workflow — `defineStep({ rollback })`,
          * which `@lunora/workflow` forwards to the host's `step.do` rollback
          * option.
@@ -543,6 +553,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         relationGraph: {
             level: "emulated",
             note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
+        },
+        workerLoaders: {
+            level: "native",
+            note: "The `worker_loaders` binding (Dynamic Workers, in open beta): `load()` compiles a script into its own isolate, `globalOutbound: null` removes its network, and `limits.cpuMs` bounds it",
         },
         workflowRollback: { level: "native", note: "Workflows step rollback (the step.do rollback option)" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
@@ -786,6 +800,10 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`acceptWebSocket`/`getWebSockets`/`getTags`/attachments, and a hibernatable socket survives its cell hibernating on the same node. It closes when the cell moves to another owner (a node stop, drain, or rebalance), so the client reconnects — which Lunora's client already does. `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
         },
+        workerLoaders: {
+            level: "native",
+            note: "Dynamic Workers behind the `worker_loaders` key: a loaded script compiles into its own V8 isolate in the loader's process (an isolate boundary, not a process or VM one), gets only the `env` it is handed, loses every ambient connection under `globalOutbound: null`, and has `limits.cpuMs` / `subRequests` enforced. A process holds at most 256 live Dynamic Workers (255 per script generation), and a load past that throws",
+        },
         workflowRollback: {
             level: "unsupported",
             note: "celld does not implement step rollback: a step.do with a rollback option fails at first use (`step rollbackOptions are not implemented in celld`)",
@@ -889,6 +907,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         queues: {
             level: "emulated",
             note: "createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd's implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. Cloudflare's byte ceilings are enforced on send — 128 KiB per message and 256 KiB per sendBatch, measured over the encoded body — because @lunora/queue leaves both to the platform and this host is the only point where those bytes already exist. mode: \"pull\" queues are written but not consumed — nothing here serves the HTTP pull endpoint. Gap: message.run and ctx.run dispatch to LUNORA_ORIGIN_URL's /_lunora/scheduler/dispatch, which no Node HTTP server serves, so a handler that calls a Lunora function fails at runtime; its batch retries like any other failure until maxRetries sends it to the deadLetterQueue or parks it",
+        },
+        workerLoaders: {
+            level: "unsupported",
+            note: "No isolate loader: Node has no V8-isolate sandbox for untrusted code, and a `node:vm` context is not a security boundary",
         },
         workflowRollback: {
             level: "emulated",

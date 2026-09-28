@@ -637,6 +637,7 @@ interface InferredBindings {
     usesR2sql: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
+    usesWorkerLoader: boolean;
     usesX402Charge: boolean;
     usesX402Pay: boolean;
     workflows: InferredWorkflow[];

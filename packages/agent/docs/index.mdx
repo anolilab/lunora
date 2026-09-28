@@ -553,8 +553,38 @@ Expose that tool as a normal top-level tool, or gate the whole script with
 Scripts are capped at `maxSteps` (default 16); a
 longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
 prefix, so the model can split the work instead of silently losing its trailing
-steps. Running arbitrary model-authored _code_ in an isolate (the Cloudflare
-Worker Loader path) is a separate future mode.
+steps. To run model-authored _code_ rather than compose tools, use
+[`jsCodeTool`](#sandboxed-javascript-jscodetool).
+
+## Sandboxed JavaScript (`jsCodeTool`)
+
+`jsCodeTool` runs a script the model writes — the body of an `async` function —
+in a Worker Loader isolate (Dynamic Workers on Cloudflare and on celld), and
+returns what it `return`s plus its `console` output:
+
+```ts
+import { defineAgent, jsCodeTool } from "@lunora/agent";
+
+export const analyst = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: { js: jsCodeTool({ cpuMs: 1000 }) },
+});
+// The tool result is `{ value, logs }`, or `{ error, logs }` when the script
+// threw, did not parse, returned something that is not JSON, or ran out of time.
+```
+
+The isolate gets **no network** (`globalOutbound: null`), **no bindings** and
+**no tools**, and `cpuMs` (default 1000) plus a 30-second wall clock bound each
+run. So it is for computation over what the model already has — arithmetic,
+parsing, reshaping data — not a way to reach anything. A failure is a result,
+not a throw, so the durable step does not retry a script that will fail the same
+way again.
+
+Importing `jsCodeTool` in `lunora/` makes codegen provision the
+`worker_loaders` binding (`LOADER`, or pass `binding`) and gate the target on
+the `workerLoaders` capability: Cloudflare and celld rate it `native`, and the
+Node host has no isolate sandbox, so `target: "node"` refuses it with a
+`platform_unsupported_feature` diagnostic.
 
 ## Skills
 
