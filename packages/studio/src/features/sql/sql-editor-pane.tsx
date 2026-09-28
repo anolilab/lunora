@@ -91,7 +91,7 @@ const SqlEditorPane = ({
                     onAccept={onAcceptInlineEdit}
                     onCancel={onCancelInlineEdit}
                     rpc={assistant}
-                    source={draft.slice(inlineEdit.start, inlineEdit.end)}
+                    source={inlineEdit.text}
                     whole={inlineEdit.start === 0 && inlineEdit.end === draft.length}
                 />
             )}

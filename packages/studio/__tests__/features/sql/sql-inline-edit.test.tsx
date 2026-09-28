@@ -150,6 +150,31 @@ describe("sql inline edit", () => {
         expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
     });
 
+    it("refuses to splice when Format rewrote the draft after the proposal arrived", async () => {
+        expect.assertions(2);
+
+        render(
+            <LunoraProvider client={aiMock(REWRITE).asClient}>
+                <SqlEditorPanel />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(editor(), { target: { value: "select * from messages where id = 1" } });
+        await askFor("limit to 10");
+        await screen.findByTestId("sql-inline-diff");
+
+        // Format writes the draft without going through the textarea, so the
+        // armed offsets now cover different text than the proposal was made for.
+        fireEvent.click(screen.getByTestId("sql-format"));
+
+        const formatted = editor().value;
+
+        fireEvent.click(screen.getByTestId("sql-inline-edit-accept"));
+
+        expect(editor().value).toBe(formatted);
+        expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
+    });
+
     it("closes on Escape without touching the draft", async () => {
         expect.assertions(2);
 

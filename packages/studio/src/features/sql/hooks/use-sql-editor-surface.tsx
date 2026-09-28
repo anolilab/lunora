@@ -31,13 +31,15 @@ const isInlineEditChord = (event: React.KeyboardEvent): boolean =>
  * The span the inline AI rewrite is targeting: the operator's selection, or the
  * whole draft when the caret was collapsed.
  *
- * Offsets rather than the text itself, because the panel must splice the
- * accepted rewrite back into the draft it came out of — and because holding the
- * text would be a second copy of the draft to keep in step.
+ * Offsets so Accept can splice the rewrite back in place, plus the text they
+ * covered at arm time: the draft has writers besides the textarea (Format, the
+ * prompt bar, loading a saved query), and Accept must refuse a span that no
+ * longer holds what was rewritten.
  */
 interface InlineEditTarget {
     readonly end: number;
     readonly start: number;
+    readonly text: string;
 }
 
 /** Everything {@link useSqlEditorSurface} hands back — what the editor pane renders and wires. */
@@ -212,7 +214,9 @@ const useSqlEditorSurface = ({
 
             const { selectionEnd, selectionStart, value } = event.currentTarget;
 
-            setInlineEdit(selectionStart === selectionEnd ? { end: value.length, start: 0 } : { end: selectionEnd, start: selectionStart });
+            const [start, end] = selectionStart === selectionEnd ? [0, value.length] : [selectionStart, selectionEnd];
+
+            setInlineEdit({ end, start, text: value.slice(start, end) });
         }
     };
 
@@ -273,7 +277,15 @@ const useSqlEditorSurface = ({
             return;
         }
 
-        const { end, start } = inlineEdit;
+        const { end, start, text } = inlineEdit;
+
+        // The draft moved underneath the armed span (Format, prompt bar, load):
+        // splicing now would land the rewrite across unrelated characters.
+        if (node.value.slice(start, end) !== text) {
+            closeInlineEdit();
+
+            return;
+        }
 
         setDraft(node.value.slice(0, start) + sql + node.value.slice(end));
         setInlineEdit(null);
