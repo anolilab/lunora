@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.46...@lunora/errors@1.0.0-alpha.47) (2026-09-28)
+
+### Bug Fixes
+
+* **db:** re-send writes refused under an expired cookie session ([#895](https://github.com/anolilab/lunora/issues/895)) ([f63c57a](https://github.com/anolilab/lunora/commit/f63c57a7a7f1462cfbd9b04d33ba056055f83597))
+
 ## @lunora/errors [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.45...@lunora/errors@1.0.0-alpha.46) (2026-09-27)
 
 ### Bug Fixes
