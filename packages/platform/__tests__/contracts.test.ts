@@ -82,6 +82,15 @@ describe("@lunora/platform contracts", () => {
         expect(NODE_CAPABILITIES.features.identityProxy?.level).toBe("unsupported");
     });
 
+    // `ctx.origin` and the storage base fallback: every host fills it from
+    // `request.url`, but only an edge that routes by hostname vouches for it.
+    it("rates the request origin as vouched for on the edge and caller-shaped on node", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.requestOrigin?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.requestOrigin?.level).toBe("emulated");
+    });
+
     it("exports the noop execution context", () => {
         expect.assertions(2);
 
