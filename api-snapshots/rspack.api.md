@@ -57,6 +57,74 @@ const VERSION: string;
 const lunoraRspack: (options?: LunoraRspackOptions) => LunoraRspackPlugin;
 ```
 
+## `@lunora/rspack/rsbuild`
+
+### `LUNORA_PATH` (const)
+
+```ts
+const LUNORA_PATH = "/_lunora";
+```
+
+### `LunoraRsbuildOptions` (interface)
+
+```ts
+interface LunoraRsbuildOptions extends LunoraRspackOptions {
+    worker?: boolean;
+    workerPort?: number;
+    wranglerArgs?: ReadonlyArray<string>;
+}
+```
+
+### `RSBUILD_PLUGIN_NAME` (const)
+
+```ts
+const RSBUILD_PLUGIN_NAME = "lunora:rsbuild";
+```
+
+### `RsbuildApiLike` (interface)
+
+```ts
+interface RsbuildApiLike {
+    modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
+    modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
+    onBeforeStartDevServer: (callback: () => Promise<void> | void) => void;
+    onCloseDevServer: (callback: () => Promise<void> | void) => void;
+}
+```
+
+### `RsbuildConfigLike` (interface)
+
+```ts
+interface RsbuildConfigLike {
+    server?: {
+        proxy?: Record<string, unknown>;
+    };
+}
+```
+
+### `RsbuildPluginLike` (interface)
+
+```ts
+interface RsbuildPluginLike {
+    name: string;
+    setup: (api: RsbuildApiLike) => void;
+}
+```
+
+### `RspackConfigLike` (interface)
+
+```ts
+interface RspackConfigLike {
+    plugins?: unknown[];
+}
+```
+
+### `lunoraRsbuild` (const)
+
+```ts
+const lunoraRsbuild: (options?: LunoraRsbuildOptions) => RsbuildPluginLike;
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
