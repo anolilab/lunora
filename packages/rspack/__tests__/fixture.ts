@@ -60,6 +60,9 @@ interface FixtureOptions {
 
     /** Write a `wrangler.jsonc`; defaults to `true`. */
     wrangler?: boolean;
+
+    /** Pin `dev.port` in the wrangler config, as a project choosing its worker port would. */
+    wranglerDevPort?: number;
 }
 
 /**
@@ -85,7 +88,12 @@ const createFixture = (options: FixtureOptions = {}): string => {
     );
 
     if (options.wrangler !== false) {
-        writeFileSync(join(root, "wrangler.jsonc"), WRANGLER, "utf8");
+        const wrangler =
+            options.wranglerDevPort === undefined
+                ? WRANGLER
+                : WRANGLER.replace('"name": "lunora-app",', `"name": "lunora-app",\n    "dev": { "port": ${String(options.wranglerDevPort)} },`);
+
+        writeFileSync(join(root, "wrangler.jsonc"), wrangler, "utf8");
     }
 
     writeFileSync(

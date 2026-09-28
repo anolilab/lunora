@@ -7,6 +7,7 @@
         "codegen",
         "durable-objects",
         "lunora",
+        "rsbuild",
         "rspack",
         "rspack-plugin",
         "webpack-plugin",
@@ -40,6 +41,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./rsbuild": {
+            "types": "./dist/rsbuild.d.ts",
+            "import": "./dist/rsbuild.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -61,6 +66,7 @@
         "@lunora/config": "1.0.0-alpha.278"
     },
     "devDependencies": {
+        "@rsbuild/core": "catalog:build",
         "@rspack/core": "catalog:build",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -71,9 +77,13 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@rsbuild/core": "^2.0.0",
         "@rspack/core": "^1.5.0 || ^2.0.0"
     },
     "peerDependenciesMeta": {
+        "@rsbuild/core": {
+            "optional": true
+        },
         "@rspack/core": {
             "optional": true
         }
