@@ -36,30 +36,17 @@ export {
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
 } from "./remote-bindings";
+export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";
 export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
+export type { TailConsumer, WranglerConfig, WranglerContainerEntry, WranglerValidationReport, WranglerWorkflowEntry } from "./wrangler-config";
+export type { WranglerEnvironmentMerge } from "./wrangler-environment";
+export { mergeWranglerEnvironment } from "./wrangler-environment";
 export type { ReadWranglerResult } from "./wrangler-path";
 export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
+export type { WranglerProjectValidationOptions, WranglerProjectValidationResult } from "./wrangler-project";
+export { UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "./wrangler-project";
 export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
 export type { AlchemyTranslation, WranglerConfigShape } from "./wrangler-to-alchemy";
 export { wranglerToAlchemy } from "./wrangler-to-alchemy";
-export type {
-    TailConsumer,
-    WranglerConfig,
-    WranglerContainerEntry,
-    WranglerEnvironmentMerge,
-    WranglerProjectValidationOptions,
-    WranglerProjectValidationResult,
-    WranglerValidationReport,
-    WranglerWorkflowEntry,
-} from "./wrangler-validator";
-export {
-    mergeWranglerEnvironment,
-    REQUIRED_COMPATIBILITY_DATE,
-    REQUIRED_FLAG,
-    UNEXPORTED_CLASS_MARKER,
-    validateWrangler,
-    validateWranglerConfig,
-    validateWranglerProject,
-    withTailConsumer,
-} from "./wrangler-validator";
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig } from "./wrangler-validator";
