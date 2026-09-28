@@ -242,11 +242,13 @@ const checkEd25519 = async (): Promise<void> => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const publicKey = toHex(await crypto.subtle.exportKey("raw", pair.publicKey));
     const body = JSON.stringify({ type: 1 });
-    const timestamp = "1790000000";
+    // `verifyDiscord` rejects a timestamp outside its freshness window.
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = toHex(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(timestamp + body)));
 
     check(await verifyDiscord({ body, publicKey, signature, timestamp }), "a valid Discord signature verifies");
     check(!(await verifyDiscord({ body: `${body} `, publicKey, signature, timestamp })), "a tampered body is rejected");
+    check(!(await verifyDiscord({ body, now: Number(timestamp) + 3600, publicKey, signature, timestamp })), "a stale timestamp is rejected");
 };
 
 /**
