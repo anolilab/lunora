@@ -1622,11 +1622,15 @@ const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: Caller
     // The fallback covers a context that is not a shard dispatch (\`runMutation\` is
     // installed by \`buildCtx\` on every kind but a query's TYPE omits it); there is
     // no transaction to join in that case, so a direct call is all there is.
-    if (registered.kind === "mutation") {
-        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+    //
+    // A query is routed through \`ctx.runQuery\` for the same reason: that is what
+    // hands it a query view of a mutation's or action's ctx (no request origin,
+    // query-guarded \`run*\`) instead of the caller's own.
+    if (registered.kind === "mutation" || registered.kind === "query") {
+        const run = (context as { runMutation?: unknown; runQuery?: unknown })[registered.kind === "mutation" ? "runMutation" : "runQuery"];
 
-        if (typeof runMutation === "function") {
-            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        if (typeof run === "function") {
+            return (await run.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
         }
     }
 
@@ -5561,8 +5565,8 @@ ${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r
             }
 `
         : "";
-    // Only resolve the executing function's kind when an action-only helper is
-    // wired — otherwise `isAction` would be an unused local.
+    // Only emit `isAction` when an action-only helper is wired — otherwise it
+    // would be an unused local.
     const isActionLine = actionOnlyHasAny ? `            const isAction = contextKind === "action";\n` : "";
 
     /* eslint-disable no-secrets/no-secrets -- emitted ShardDO source: type names (RunShardWriteResult, AsyncIterable<unknown>, …) are generated framework API, not credentials */
@@ -6256,7 +6260,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: FunctionKind; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: "query"; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -6484,12 +6488,14 @@ ${isActionLine}${actionOnlyBlock}
 
             // A query composed from a mutation or action runs on a QUERY view of
             // this ctx, so it behaves exactly as it does when called directly or
-            // live: same \`db\`, read hooks, trace and \`now\`, but no request
-            // origin — neither \`ctx.origin\` nor the storage signed-URL fallback —
-            // and a \`run*\` guard that refuses a mutation or action. An action's
-            // ActionCtx-only helpers are stripped for the same reason. Copied by
-            // descriptor so the \`ip\` getter is carried over, not read. Built on the
-            // first composed call only; a query ctx is already its own view.
+            // live: same \`db\`, read hooks, trace and \`now\`, but every field that
+            // depends on the dispatch kind or the request origin is re-derived for a
+            // query — no \`ctx.origin\`, storage with no origin fallback (and no
+            // \`deleteAfterCommit\`), the unwrapped scheduler, no ActionCtx-only
+            // helpers, and a \`run*\` guard that refuses a mutation or action. A new
+            // kind- or origin-dependent ctx field must be overridden here too.
+            // Copied by descriptor so the \`ip\` getter is carried over, not read.
+            // Built on the first composed call only; a query ctx is its own view.
             let queryView: Record<string, unknown> | undefined;
             const queryContext = (): Record<string, unknown> => {
                 if (contextKind === "query") {
@@ -6497,11 +6503,16 @@ ${isActionLine}${actionOnlyBlock}
                 }
 
                 if (queryView === undefined) {
+                    const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);
+${actionOnlyFields.map((field) => `                    delete descriptors.${field};\n`).join("")}                    // Writable and configurable, like the plain fields they replace.
+                    const field = (value: unknown): PropertyDescriptor => ({ configurable: true, enumerable: true, value, writable: true });
+
                     queryView = Object.defineProperties({}, {
-                        ...Object.getOwnPropertyDescriptors(ctx),
-                        origin: { enumerable: true, value: undefined },
-                        storage: { enumerable: true, value: requestOrigin === undefined ? storage : makeStorage() },
-                    }) as Record<string, unknown>;${actionOnlyFields.map((field) => `\n                    delete queryView.${field};`).join("")}
+                        ...descriptors,
+                        origin: field(undefined),
+                        scheduler: field(schedulerBase),
+                        storage: field(makeStorage()),
+                    }) as Record<string, unknown>;
                     installRun(queryView, "query");
                 }
 

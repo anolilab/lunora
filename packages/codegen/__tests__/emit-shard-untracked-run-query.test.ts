@@ -73,8 +73,8 @@ describe("emitShard — untracked ctx.runQuery", () => {
         expect(emitted).toContain('if (contextKind === "query") {\n                    return ctx;');
         // No request origin, in `ctx.origin` or the storage signed-URL fallback,
         // so a composed query behaves as it does when called directly or live.
-        expect(emitted).toContain("origin: { enumerable: true, value: undefined },");
-        expect(emitted).toContain("storage: { enumerable: true, value: requestOrigin === undefined ? storage : makeStorage() },");
+        expect(emitted).toContain("origin: field(undefined),");
+        expect(emitted).toContain("storage: field(makeStorage()),");
         // Its own `run*` are guarded as a query's.
         expect(emitted).toContain('installRun(queryView, "query");');
     });
@@ -84,7 +84,7 @@ describe("emitShard — untracked ctx.runQuery", () => {
 
         // A spread would invoke the getter and mark the dispatch's reactive-cache
         // scope as address-dependent for every composed query.
-        expect(shard()).toContain("...Object.getOwnPropertyDescriptors(ctx),");
+        expect(shard()).toContain("const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);");
     });
 
     it("keeps runMutation/runAction on the caller's ctx and kind", () => {

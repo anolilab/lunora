@@ -978,7 +978,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: FunctionKind; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: "query"; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -1260,12 +1260,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // A query composed from a mutation or action runs on a QUERY view of
             // this ctx, so it behaves exactly as it does when called directly or
-            // live: same `db`, read hooks, trace and `now`, but no request
-            // origin — neither `ctx.origin` nor the storage signed-URL fallback —
-            // and a `run*` guard that refuses a mutation or action. An action's
-            // ActionCtx-only helpers are stripped for the same reason. Copied by
-            // descriptor so the `ip` getter is carried over, not read. Built on the
-            // first composed call only; a query ctx is already its own view.
+            // live: same `db`, read hooks, trace and `now`, but every field that
+            // depends on the dispatch kind or the request origin is re-derived for a
+            // query — no `ctx.origin`, storage with no origin fallback (and no
+            // `deleteAfterCommit`), the unwrapped scheduler, no ActionCtx-only
+            // helpers, and a `run*` guard that refuses a mutation or action. A new
+            // kind- or origin-dependent ctx field must be overridden here too.
+            // Copied by descriptor so the `ip` getter is carried over, not read.
+            // Built on the first composed call only; a query ctx is its own view.
             let queryView: Record<string, unknown> | undefined;
             const queryContext = (): Record<string, unknown> => {
                 if (contextKind === "query") {
@@ -1273,10 +1275,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 }
 
                 if (queryView === undefined) {
+                    const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);
+                    // Writable and configurable, like the plain fields they replace.
+                    const field = (value: unknown): PropertyDescriptor => ({ configurable: true, enumerable: true, value, writable: true });
+
                     queryView = Object.defineProperties({}, {
-                        ...Object.getOwnPropertyDescriptors(ctx),
-                        origin: { enumerable: true, value: undefined },
-                        storage: { enumerable: true, value: requestOrigin === undefined ? storage : makeStorage() },
+                        ...descriptors,
+                        origin: field(undefined),
+                        scheduler: field(schedulerBase),
+                        storage: field(makeStorage()),
                     }) as Record<string, unknown>;
                     installRun(queryView, "query");
                 }

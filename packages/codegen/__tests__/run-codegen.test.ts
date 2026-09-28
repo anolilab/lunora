@@ -1594,8 +1594,8 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
-        it("routes a mutation reached through createCaller into the caller's transaction", () => {
-            expect.assertions(2);
+        it("routes a mutation or query reached through createCaller through the caller's run*", () => {
+            expect.assertions(3);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -1605,9 +1605,11 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             // deferred schedules, no deferred-delete flush. Its writes autocommitted
             // one row at a time and its `ctx.scheduler` calls dispatched at once, so
             // a mid-handler throw left the earlier writes durable and the job
-            // already enqueued.
-            expect(result.generated.functions).toContain('if (registered.kind === "mutation") {');
-            expect(result.generated.functions).toContain("await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})");
+            // already enqueued. A query goes through \`ctx.runQuery\` so it gets the
+            // same origin-free query view it would get composed directly.
+            expect(result.generated.functions).toContain('if (registered.kind === "mutation" || registered.kind === "query") {');
+            expect(result.generated.functions).toContain('[registered.kind === "mutation" ? "runMutation" : "runQuery"]');
+            expect(result.generated.functions).toContain("await run.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
@@ -4402,7 +4404,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("createHyperdrive");
             expect(output).toContain("ctx.sql = sql;");
             // A query composed from an action must not see it either.
-            expect(output).toContain("delete queryView.sql;");
+            expect(output).toContain("delete descriptors.sql;");
         });
 
         it("wires ctx.browser onto the ACTION ctx ONLY via a config thunk (no puppeteer import) when browser is used", () => {
