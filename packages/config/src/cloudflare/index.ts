@@ -14,6 +14,8 @@
  * subpath rather than relocating wholesale.
  */
 
+export type { AssertWranglerOptions } from "./assert-wrangler";
+export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";
@@ -23,6 +25,8 @@ export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
 export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
+export type { ReconcileProject } from "./reconcile-project";
+export { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-project";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,

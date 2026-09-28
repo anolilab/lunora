@@ -1,8 +1,8 @@
+import { lunoraLine } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { FrameworkDetection } from "./detect-framework";
 import { detectFramework } from "./detect-framework";
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**

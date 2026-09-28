@@ -55,6 +55,7 @@ export {
     removeDevVariableLine,
     upsertDevVariableLine,
 } from "./dev-variables-format";
+export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
 export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
 export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
@@ -62,6 +63,8 @@ export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-ignores";
+export type { FindingLogger } from "./log-badge";
+export { advisoryLine, blockingFindingsMessage, LUNORA_TAG, lunoraLine, reportCodegenFindings } from "./log-badge";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";

@@ -301,6 +301,18 @@ const DEV_VARS_FILE: string;
 const DEV_VARS_KEY_PATTERN: RegExp;
 ```
 
+### `DEV_WORKER_ENV_VALUE` (const)
+
+```ts
+const DEV_WORKER_ENV_VALUE = "development";
+```
+
+### `DEV_WORKER_ENV_VAR` (const)
+
+```ts
+const DEV_WORKER_ENV_VAR = "WORKER_ENV";
+```
+
 ### `DeployDriver` (interface)
 
 ```ts
@@ -508,6 +520,15 @@ interface FillDevSecretsResult {
 }
 ```
 
+### `FindingLogger` (interface)
+
+```ts
+interface FindingLogger {
+    error: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
 ### `FrameworkClass` (type)
 
 ```ts
@@ -686,6 +707,12 @@ const LUNORA_IGNORED_PATHS: ReadonlyArray<string>;
 
 ```ts
 const LUNORA_SKILL_NAMES: ReadonlyArray<string>;
+```
+
+### `LUNORA_TAG` (const)
+
+```ts
+const LUNORA_TAG: string;
 ```
 
 ### `LevelBadgeName` (type)
@@ -1014,6 +1041,12 @@ const addArgsFor: (manager: PackageManager, packages: ReadonlyArray<string>, opt
 };
 ```
 
+### `advisoryLine` (const)
+
+```ts
+const advisoryLine: (level: "ERROR" | "INFO" | "WARN", name: string, detail: string, remediation: string) => string;
+```
+
 ### `applyAdditiveEdit` (const)
 
 ```ts
@@ -1036,6 +1069,12 @@ const badgeLead: (text: string) => string;
 
 ```ts
 const badgeWidth: (_spec: BadgeSpec) => number;
+```
+
+### `blockingFindingsMessage` (const)
+
+```ts
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
 ```
 
 ### `buildPackageSecretsBlock` (const)
@@ -1160,6 +1199,12 @@ const ensureDevVariables: (deps: EnsureDevVariablesDeps) => Promise<EnsureDevVar
 const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<string>) => string[];
 ```
 
+### `ensureDevWorkerEnv` (const)
+
+```ts
+const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
+```
+
 ### `escapeRegExp` (const)
 
 ```ts
@@ -1264,6 +1309,12 @@ const isRecordedProcessCurrent: (state: DevServerState) => boolean;
 
 ```ts
 const isRunnableTarget: (target: string) => boolean;
+```
+
+### `lunoraLine` (const)
+
+```ts
+const lunoraLine: (message: string) => string;
 ```
 
 ### `packageNamesFromBindings` (const)
@@ -1414,6 +1465,12 @@ const readProjectTarget: (projectRoot: string) => string | undefined;
 const removeDevVariableLine: (content: string, key: string) => string;
 ```
 
+### `reportCodegenFindings` (const)
+
+```ts
+const reportCodegenFindings: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, logger: FindingLogger) => void;
+```
+
 ### `requiredSecrets` (const)
 
 ```ts
@@ -1540,6 +1597,15 @@ const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 interface AlchemyTranslation {
     source: string;
     unsupported: ReadonlyArray<string>;
+}
+```
+
+### `AssertWranglerOptions` (interface)
+
+```ts
+interface AssertWranglerOptions {
+    projectRoot: string;
+    schemaDir: string;
 }
 ```
 
@@ -1760,6 +1826,15 @@ interface ReconcileResult {
     reason?: string;
     warnings: string[];
     wranglerPath?: string;
+}
+```
+
+### `ReconcileProject` (interface)
+
+```ts
+interface ReconcileProject {
+    projectRoot: string;
+    schemaDir: string;
 }
 ```
 
@@ -2086,6 +2161,12 @@ interface WranglerWorkflowEntry {
 }
 ```
 
+### `assertWranglerSatisfiesSchema` (const)
+
+```ts
+const assertWranglerSatisfiesSchema: (options: AssertWranglerOptions, warn: (message: string) => void, remedy: string) => void;
+```
+
 ### `buildBindingManifest` (const)
 
 ```ts
@@ -2158,6 +2239,12 @@ const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
 const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResult<T>;
 ```
 
+### `reconcileBindingsSafely` (const)
+
+```ts
+const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogger, onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void) => Promise<void>;
+```
+
 ### `reconcileWranglerBindings` (const)
 
 ```ts
@@ -2174,6 +2261,12 @@ const reconcileWranglerCompatibilityDate: (projectRoot: string) => ReconcileComp
 
 ```ts
 const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
+```
+
+### `reconcileWranglerExtras` (const)
+
+```ts
+const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
 ```
 
 ### `resolveRemoteEnabled` (const)
@@ -2554,6 +2647,15 @@ type GlobalBackend = "d1" | "hyperdrive";
 
 ```ts
 type InferredQueue = QueueIR;
+```
+
+### `ReconcileLogger` (interface)
+
+```ts
+interface ReconcileLogger {
+    info?: (message: string) => void;
+    warn: (message: string) => void;
+}
 ```
 
 ### `RemoteEligibleKey` (type)

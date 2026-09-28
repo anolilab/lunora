@@ -23,7 +23,7 @@ export const CATEGORY_TITLES = {
     platform: "Platform Hosts",
     observability: "Observability",
     client: "Client & UI",
-    "vite-plugin": "Build & Tooling",
+    "bundler-plugin": "Build & Tooling",
     codegen: "Codegen",
     cli: "CLI",
     "dev-tools": "Dev Tools",

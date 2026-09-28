@@ -1,7 +1,6 @@
-import { AGENT_RULES_HINT, claimAgentRulesHint, detectAgentRules } from "@lunora/config";
+import { AGENT_RULES_HINT, claimAgentRulesHint, detectAgentRules, lunoraLine } from "@lunora/config";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**

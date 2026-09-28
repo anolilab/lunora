@@ -1,6 +1,6 @@
+import { reconcileBindingsSafely } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
-import { reconcileBindingsSafely } from "./reconcile-wrangler";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**

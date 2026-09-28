@@ -323,6 +323,30 @@ describe("lunora dev", () => {
             expect(plan.runsCodegenWatch).toBe(false);
         });
 
+        it("delegates to the project's dev script for a project on @lunora/rspack", () => {
+            expect.assertions(4);
+
+            // `@lunora/rspack/rsbuild` spawns `wrangler dev` itself and proxies
+            // `/_lunora/*` to it, so the CLI must get out of the way exactly as it
+            // does for `@lunora/vite`. Falling through to the `wrangler` flavor ran
+            // ONLY the worker and never started the client dev server — worse than
+            // either half on its own, and silent about it.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ devDependencies: { "@lunora/rspack": "workspace:*" }, name: "app", scripts: { dev: "rsbuild dev" } }),
+                "utf8",
+            );
+
+            expect(detectDevFlavor(workdir)).toBe("vite");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.wrangler.args.join(" ")).toContain("run dev");
+            // The plugin owns studio + codegen inside the dev server.
+            expect(plan.runsCodegenWatch).toBe(false);
+        });
+
         it("runs the project's dev script for the vite flavor (meta-framework CLIs)", () => {
             expect.assertions(3);
 

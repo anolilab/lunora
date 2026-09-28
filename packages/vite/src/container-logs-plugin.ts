@@ -1,8 +1,7 @@
 import type { ContainerLogStreamHandle } from "@lunora/config";
-import { discoverContainerInfo, streamContainerLogs } from "@lunora/config";
+import { discoverContainerInfo, lunoraLine, streamContainerLogs } from "@lunora/config";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**

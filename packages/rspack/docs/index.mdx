@@ -1,0 +1,120 @@
+---
+title: "@lunora/rspack"
+description: Codegen, binding provisioning, and wrangler validation for Rspack builds.
+related:
+    - to: /docs/packages/vite
+    - to: /docs/packages/cli
+---
+
+`@lunora/rspack` is the [Rspack](https://rspack.rs) counterpart to
+[`@lunora/vite`](/docs/packages/vite): it runs codegen before every compilation,
+writes the Cloudflare bindings your code implies into `wrangler.jsonc`, validates
+that config — and, under [Rsbuild](https://rsbuild.rs), runs your Worker too.
+
+## Rsbuild — one command, Worker included
+
+```ts
+// rsbuild.config.ts
+import { lunoraRsbuild } from "@lunora/rspack/rsbuild";
+import { defineConfig } from "@rsbuild/core";
+
+export default defineConfig({
+    plugins: [lunoraRsbuild()],
+});
+```
+
+`rsbuild dev` starts the client dev server **and** the Lunora Worker, and routes
+`/_lunora/*` to it. One entry registers codegen, binding provisioning, wrangler
+validation, the Worker and the proxy — there is no hand-written proxy to get
+wrong, no second terminal, and no `wrangler.dev.jsonc`.
+
+The proxy is same-origin on purpose: the browser talks to the dev server's own
+origin, so `LunoraClient` needs no CORS and the auth cookie stays first-party. It
+carries the WebSocket (`ws: true`), which is what live queries ride — the single
+most expensive thing to get wrong by hand, because without it RPC answers
+normally and subscriptions simply never arrive.
+
+## Bare Rspack or webpack
+
+The Rspack plugin works on its own for codegen and config, without running a
+Worker:
+
+```js
+// rspack.config.mjs
+import { lunoraRspack } from "@lunora/rspack";
+
+export default {
+    plugins: [lunoraRspack()],
+};
+```
+
+The plugin API it taps is webpack 5's, so the same instance works in a plain
+webpack build unchanged. `@rspack/core` and `@rsbuild/core` are both optional
+peers — the plugin speaks their APIs structurally and never imports them.
+
+## How the Worker runs
+
+Not in-process. `@cloudflare/vite-plugin` runs the Worker _inside_ the dev server
+using Vite's Environment API: a module runner in workerd pulls each module over
+RPC from Vite. Rspack has no equivalent runner protocol, and the alternative —
+bundling the Worker ourselves and handing it to Miniflare — would mean
+reimplementing wrangler's `nodejs_compat`, Durable Object migrations, binding
+wiring and local persistence, all of which `wrangler dev` already does correctly.
+
+So the plugin spawns `wrangler dev` and proxies to it. From your seat that is the
+same DX. What differs is that the Worker **restarts** on change rather than
+hot-swapping modules, and a few Vite-plugin features have no counterpart: the
+browser error overlay, remote-binding dev (`LUNORA_REMOTE`), and class-A
+framework worker composition. Use `@lunora/vite` if you need those.
+
+Pass `worker: false` to run the Worker yourself — the proxy is still injected, so
+the same-origin route and its WebSocket stay correct.
+
+## What each pass does
+
+Before every compilation, in this order:
+
+1. **Provision bindings** — infers the Durable Objects, their migration classes,
+   and the `DB` D1 binding a `.global()` table implies, and writes them into
+   `wrangler.jsonc`. Idempotent, and deliberately ahead of validation: the
+   bindings the check requires are the ones Lunora writes itself.
+2. **Validate** — checks `wrangler.jsonc` against the schema's requirements and
+   throws when it is short one. `validateWrangler: false` opts out.
+3. **Generate** — runs `@lunora/codegen` into `<schemaDir>/_generated`, syncing
+   your cron triggers and the compatibility date on the way.
+4. **`postcodegen`** — runs the project's hook.
+
+In watch mode the plugin registers your schema directory as a watch dependency,
+so editing _or adding_ anything under `lunora/` regenerates — a new
+`lunora/foo.ts` is discovered by codegen without being imported anywhere, which a
+file-list watch would never see appear. Each pass is gated on a content hash of
+what codegen _reads_, which excludes `_generated/` — so codegen's own writes, and
+anything a `postcodegen` hook rewrites there, do not retrigger it. The first pass
+of a session also scaffolds `.dev.vars` (gitignored, so absent from a fresh
+clone) and tops it up with `WORKER_ENV=development`, which plain `wrangler dev`
+would not otherwise set.
+
+A production build **fails** on an ERROR-level schema advisory or platform
+diagnostic, exactly as `vite build` and `lunora deploy` do: the finding lands in
+`compilation.errors`, so no bundle is emitted and the CLI exits non-zero. A watch
+rebuild logs it and carries on — a half-typed schema should not take the watcher
+down. Codegen _crashes_ are reported the same way in both modes rather than
+thrown out of the hook, which would end a watch session.
+
+## Options
+
+| Option             | Default         | Purpose                                                                                             |
+| ------------------ | --------------- | --------------------------------------------------------------------------------------------------- |
+| `projectRoot`      | `process.cwd()` | Directory containing `lunora/`                                                                      |
+| `schemaDir`        | `"lunora"`      | Directory containing `schema.ts` + function files                                                   |
+| `apiSpec`          | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                      |
+| `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*` |
+| `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                   |
+| `worker`           | `true`          | **Rsbuild only.** Run `wrangler dev` alongside the dev server                                       |
+| `workerPort`       | `8787`          | **Rsbuild only.** Port the Worker serves on; defaults to the wrangler config's `dev.port`           |
+| `wranglerArgs`     | `[]`            | **Rsbuild only.** Extra arguments appended to `wrangler dev`                                        |
+
+`LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode
+only**. A production build keeps generating: the ERROR-advisory gate is the only
+thing that fails it, so honouring the variable there would let an app ship
+against a surface its target cannot serve, green the whole way.

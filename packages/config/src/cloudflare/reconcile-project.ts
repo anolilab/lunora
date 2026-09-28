@@ -1,10 +1,27 @@
-import { inferLunoraBindings } from "@lunora/config";
-import type { ExportGap } from "@lunora/config/cloudflare";
-import { describePreservedCrons, reconcileWranglerBindings, reconcileWranglerCompatibilityDate } from "@lunora/config/cloudflare";
+/**
+ * The best-effort wrangler reconcilers a bundler plugin runs at startup: binding
+ * inference, cron triggers, and the compatibility date.
+ *
+ * They live beside the primitives they call (rather than in a plugin package)
+ * because `@lunora/vite` and `@lunora/rspack` both need the identical pass, and a
+ * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
+ * fixed twice.
+ */
+import { inferLunoraBindings } from "../infer-bindings";
+import { LUNORA_TAG } from "../log-badge";
+import type { ExportGap } from "./reconcile-bindings";
+import { reconcileWranglerBindings } from "./reconcile-bindings";
+import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
+import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 
-import { reconcileWranglerCrons } from "./cron-sync";
-import { LUNORA_TAG } from "./log";
-import type { ResolvedLunoraPluginOptions } from "./types";
+/** The project coordinates every reconciler here needs. */
+interface ReconcileProject {
+    /** Absolute path to the project root holding `wrangler.jsonc`. */
+    projectRoot: string;
+
+    /** The schema directory, relative to `projectRoot` (usually `"lunora"`). */
+    schemaDir: string;
+}
 
 /** The two logger methods every reconciler here needs; `info` is optional on Vite's. */
 interface ReconcileLogger {
@@ -24,7 +41,7 @@ interface ReconcileLogger {
  * error overlay in addition to the console warning.
  */
 const reconcileBindingsSafely = async (
-    options: Pick<ResolvedLunoraPluginOptions, "projectRoot" | "schemaDir">,
+    options: ReconcileProject,
     logger: ReconcileLogger,
     onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
@@ -66,10 +83,7 @@ const reconcileBindingsSafely = async (
  */
 const lastPreserved = new Map<string, string>();
 
-/**
- * Reconcile cron triggers and compatibility date into wrangler.jsonc.
- * Extracted from the plugin so it stays a plugin rather than a reconciler.
- */
+/** Reconcile cron triggers and the compatibility date into `wrangler.jsonc`. */
 const reconcileWranglerExtras = (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger): void => {
     try {
         const reconciled = reconcileWranglerCrons(projectRoot, cronTriggers);
@@ -115,4 +129,5 @@ const reconcileWranglerExtras = (projectRoot: string, cronTriggers: ReadonlyArra
     }
 };
 
+export type { ReconcileProject };
 export { reconcileBindingsSafely, reconcileWranglerExtras };

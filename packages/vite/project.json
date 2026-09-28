@@ -1,4 +1,4 @@
 {
     "name": "vite",
-    "tags": ["type:package", "category:vite-plugin"]
+    "tags": ["type:package", "category:bundler-plugin"]
 }

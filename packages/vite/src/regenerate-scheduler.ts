@@ -1,4 +1,4 @@
-import { LUNORA_TAG } from "./log";
+import { LUNORA_TAG } from "@lunora/config";
 
 /** How long a burst of saves is coalesced into one regeneration. */
 const DEBOUNCE_MS = 100;

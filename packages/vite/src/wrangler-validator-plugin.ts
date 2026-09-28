@@ -1,11 +1,10 @@
 import { spawnSync } from "node:child_process";
 
+import { lunoraLine } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { readWranglerJsonc, validateWranglerProject } from "@lunora/config/cloudflare";
-import { LunoraError } from "@lunora/errors";
+import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */
@@ -44,19 +43,6 @@ const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => bool
     );
 };
 
-const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Error => {
-    const lines = [
-        "[lunora] wrangler configuration is missing bindings required by your schema.",
-        `  file: ${wranglerPath}`,
-        "",
-        ...problems.map((problem) => `  - ${problem}`),
-        "",
-        "  Update your wrangler.jsonc and restart the dev server.",
-    ];
-
-    return new Error(lines.join("\n"));
-};
-
 /**
  * Vite plugin that validates the project's `wrangler.jsonc` against the
  * bindings implied by `lunora/schema.ts`. Throws (Vite renders nicely) on
@@ -88,32 +74,22 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
                 return;
             }
 
-            const result = validateWranglerProject({
-                projectRoot: options.projectRoot,
-                schemaDir: options.schemaDir,
-            });
+            // Shared with `@lunora/rspack` — same rules, same messages, only the
+            // closing remedy differs.
+            assertWranglerSatisfiesSchema(
+                options,
+                (message) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(message);
+                },
+                "Update your wrangler.jsonc and restart the dev server.",
+            );
 
-            if (!result.wranglerPath) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    [
-                        "[lunora] wrangler.jsonc not found.",
-                        `  searched in: ${options.projectRoot}`,
-                        "  create a wrangler.jsonc declaring at least the SHARD durable object binding.",
-                    ].join("\n"),
-                );
+            const wranglerPath = findWranglerFile(options.projectRoot);
+
+            if (wranglerPath !== undefined) {
+                warnWhenDockerMissing(wranglerPath);
             }
-
-            for (const warning of result.report.warnings) {
-                // eslint-disable-next-line no-console
-                console.warn(lunoraLine(`wrangler validator: ${warning}`));
-            }
-
-            if (result.problems.length > 0) {
-                throw formatError(result.wranglerPath, result.problems);
-            }
-
-            warnWhenDockerMissing(result.wranglerPath);
         },
         enforce: "pre",
         name: "lunora:wrangler-validator",

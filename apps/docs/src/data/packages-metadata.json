@@ -179,6 +179,11 @@
         "description": "Local-first replica runtime: event sourcing, a pluggable SQLite LocalMirror, and EventsSync catch-up.",
         "features": ["Event-sourcing runtime", "Pluggable SQLite LocalMirror", "EventsSync client catch-up"]
     },
+    "rspack": {
+        "displayName": "Rspack Plugin",
+        "description": "Rspack/webpack plugin \u2014 codegen, binding provisioning, wrangler validator.",
+        "features": ["Codegen on save", "Binding provisioning", "Wrangler config validator"]
+    },
     "runtime": {
         "displayName": "Runtime",
         "description": "Worker entry: RPC router, shard resolver, query coordinator.",
