@@ -25,6 +25,20 @@ import { buildResourceServer } from "./resource-server";
 const PAYMENT_HEADER = "PAYMENT-SIGNATURE";
 
 /**
+ * Whether a response header is a cache directive aimed at a CDN rather than at
+ * every cache: `CDN-Cache-Control` and any `<name>-CDN-Cache-Control` (RFC 9213 —
+ * `Cloudflare-CDN-Cache-Control`, `Vercel-CDN-Cache-Control`, …), and
+ * `Surrogate-Control` (Fastly, Akamai and other surrogate caches). A CDN obeys
+ * these instead of `Cache-Control`, so narrowing `Cache-Control` alone would
+ * leave a paid body storable at the edge.
+ */
+const isCdnCacheHeader = (name: string): boolean => {
+    const lower = name.toLowerCase();
+
+    return lower === "cdn-cache-control" || lower.endsWith("-cdn-cache-control") || lower === "surrogate-control";
+};
+
+/**
  * A paid response's `Cache-Control`, with every shared-cache directive replaced
  * by `private`.
  *
@@ -280,9 +294,21 @@ export const createChargeMiddleware = async (
 
     const settleBeforeHandler = options?.settleBeforeHandler ?? true;
 
-    /** The paid resource: the settlement receipt attached, and never shared-cacheable (see {@link privateCacheControl}). */
-    const paidResponse = (response: Response, settlementHeaders: Record<string, string>): Response =>
-        withHeaders(response, { ...settlementHeaders, "cache-control": privateCacheControl(response.headers.get("cache-control")) });
+    /**
+     * The paid resource: the settlement receipt attached, and never shared-cacheable.
+     * `Cache-Control` is narrowed to `private` (see {@link privateCacheControl}), and
+     * every CDN-targeted cache header is dropped, because a CDN reads its own header
+     * AHEAD of `Cache-Control` (see {@link isCdnCacheHeader}).
+     */
+    const paidResponse = (response: Response, settlementHeaders: Record<string, string>): Response => {
+        const paid = withHeaders(response, { ...settlementHeaders, "cache-control": privateCacheControl(response.headers.get("cache-control")) });
+
+        for (const name of [...paid.headers.keys()].filter((key) => isCdnCacheHeader(key))) {
+            paid.headers.delete(name);
+        }
+
+        return paid;
+    };
 
     const handle = async (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps): Promise<Response> => {
         const url = new URL(request.url);

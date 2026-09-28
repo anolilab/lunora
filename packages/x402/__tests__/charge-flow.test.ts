@@ -393,4 +393,30 @@ describe("x402 v2 wire headers", () => {
         expect(paid.status).toBe(200);
         expect(paid.headers.get("cache-control")).toBe(expected);
     });
+
+    // A CDN reads its own targeted header ahead of `Cache-Control` (RFC 9213), so a
+    // paid response must not carry one the handler set for its unpaid life.
+    it("strips CDN-targeted cache headers from a paid response", async () => {
+        expect.assertions(5);
+
+        settlingFacilitator();
+
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const cdnHeaders = {
+            "cdn-cache-control": "public, max-age=600",
+            "cloudflare-cdn-cache-control": "public, max-age=600",
+            "surrogate-control": "max-age=600",
+            "vercel-cdn-cache-control": "max-age=600",
+        };
+        const handler = (): Response => new Response("report", { headers: cdnHeaders });
+
+        const challenge = await middleware.handle(new Request(url), handler);
+        const paid = await middleware.handle(new Request(url, { headers: { "PAYMENT-SIGNATURE": signedPayment(challenge) } }), handler);
+
+        expect(paid.status).toBe(200);
+
+        for (const name of Object.keys(cdnHeaders)) {
+            expect(paid.headers.get(name), name).toBeNull();
+        }
+    });
 });

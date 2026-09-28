@@ -60,10 +60,16 @@ finally `PAYMENT-RESPONSE` is attached to the returned resource.
 accepted: `@x402/core` v2 does not read `X-PAYMENT`, so a v1 client gets a fresh
 `402` and is not charged.
 
-**A paid response is never shared-cacheable.** Whatever `Cache-Control` the
-handler set, the paid response goes out `private` (a `public` or `s-maxage`
-directive is dropped), so no CDN or proxy can store one caller's paid body and
-replay it to the next.
+**A paid response is never shared-cacheable.** Whatever cache headers the
+handler set, the paid response goes out `Cache-Control: private` (a `public` or
+`s-maxage` directive is dropped), and every CDN-targeted cache header —
+`CDN-Cache-Control`, any `<vendor>-CDN-Cache-Control` such as
+`Cloudflare-CDN-Cache-Control`, and `Surrogate-Control` — is removed, since a CDN
+obeys those ahead of `Cache-Control`. So no CDN or proxy can store one caller's
+paid body and replay it to the next. The payer's own browser may still keep a
+private copy for the `max-age` the handler set; only the payer, who already has
+the body, can reuse it. Send `Cache-Control: no-store` from the handler if even
+that is unwanted.
 
 ### Gate an HTTP action
 
