@@ -80,6 +80,12 @@ const SQL_ASSISTANT_TIMEOUT_MS = 15_000;
 const MAX_ATTEMPTS = 2;
 
 /**
+ * Output ceiling per inference. Sized for a rewrite of a full `STATEMENT_CAP`
+ * statement; a reply that hits it was cut off, and `runPrompt` drops it.
+ */
+const MAX_OUTPUT_TOKENS = 1024;
+
+/**
  * Structural projection of the Workers `AI` binding's `run`, declared locally so
  * `@lunora/do` needs no dependency edge on `@lunora/ai` to reach `env.AI`.
  */
@@ -114,7 +120,7 @@ interface GenerateSqlArgs {
 }
 
 /** Why the assistant produced nothing. A closed union so a typo'd sentinel is a compile error. */
-type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
+type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "too-long" | "unsafe-response";
 
 /** One structured filter clause the `filter` task produces — the same shape the data browser already validates. */
 interface AssistantFilterClause {
@@ -350,7 +356,7 @@ const runPrompt = async (binding: AiRunBinding, model: string, system: string, u
 
     const result = await Promise.race([
         binding.run(model, {
-            max_tokens: 300,
+            max_tokens: MAX_OUTPUT_TOKENS,
             messages: [
                 { content: system, role: "system" },
                 { content: user, role: "user" },
@@ -366,7 +372,15 @@ const runPrompt = async (binding: AiRunBinding, model: string, system: string, u
     });
 
     if (typeof result === "object" && result !== null && typeof (result as { response?: unknown }).response === "string") {
-        return (result as { response: string }).response;
+        const { response, usage } = result as { response: string; usage?: { completion_tokens?: unknown } };
+
+        // A reply that used the whole budget was truncated, and a cut-off
+        // statement can still pass the read-only gate — so it is no reply at all.
+        if (typeof usage?.completion_tokens === "number" && usage.completion_tokens >= MAX_OUTPUT_TOKENS) {
+            return undefined;
+        }
+
+        return response;
     }
 
     return undefined;
@@ -459,6 +473,12 @@ const generateSql = async (binding: unknown, rawArgs: Record<string, unknown>, s
 
     if (args.prompt === "") {
         return degraded("empty-response");
+    }
+
+    // Studio splices the rewrite over the WHOLE selection, so rewriting a
+    // truncated copy would silently drop the selection's tail on Accept.
+    if (typeof rawArgs.editSql === "string" && rawArgs.editSql.trim().length > STATEMENT_CAP) {
+        return degraded("too-long");
     }
 
     if (!isAiBinding(binding)) {

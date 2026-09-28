@@ -14,6 +14,10 @@ const assistantReasonMessage = (reason: GenerateSqlDegradedReason, t: TFunction)
         return t("The model returned a statement that is not read-only, so it was discarded.");
     }
 
+    if (reason === "too-long") {
+        return t("The statement is too long to rewrite. Select a shorter part of it.");
+    }
+
     return reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
 };
 
