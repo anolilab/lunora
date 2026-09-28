@@ -44,6 +44,15 @@ const limiter = new RateLimiter({
     store: createMemoryStore(),
 });
 
+/**
+ * Caps on the awareness payload. `listPresent` re-sends every member's `data` to
+ * every room subscriber on each heartbeat, so one oversized blob is multiplied
+ * by the room size and the heartbeat rate. The validator bounds each key and
+ * value; these bound the record as a whole, which a per-value limit cannot.
+ */
+const PRESENCE_DATA_MAX_ENTRIES = 32;
+const PRESENCE_DATA_MAX_BYTES = 4096;
+
 /** A single present member as returned by `listPresent`. */
 interface PresenceMember {
     /** Opaque awareness blob (selection, cursor, name, color…). */
@@ -65,10 +74,12 @@ interface PresenceMember {
  */
 export const heartbeat = mutation
     .input({
-        // Awareness payload (cursor, status, color, …) — a bounded map of scalar
-        // values rather than `v.any()`, so a public client can't smuggle an
-        // unvalidated/oversized blob. Widen the value union if you need more.
-        data: v.optional(v.record(v.string(), v.union(v.string().max(1024), v.number(), v.boolean()))),
+        // Awareness payload (cursor, status, color, …) — a map of scalar values
+        // rather than `v.any()`. The validator bounds each key and value; the
+        // entry count and total size are checked in the handler below
+        // (PRESENCE_DATA_MAX_ENTRIES / PRESENCE_DATA_MAX_BYTES). Widen the value
+        // union or the caps if you need more.
+        data: v.optional(v.record(v.string().max(64), v.union(v.string().max(1024), v.number(), v.boolean()))),
         roomId: v.string().max(256),
         sessionId: v.string().max(256),
     })
@@ -79,6 +90,18 @@ export const heartbeat = mutation
     // them — see the `ratelimit_key_spoofable_or_global` advisor lint.
     .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
+        if (data !== undefined) {
+            const entries = Object.keys(data).length;
+            const bytes = new TextEncoder().encode(JSON.stringify(data)).byteLength;
+
+            if (entries > PRESENCE_DATA_MAX_ENTRIES || bytes > PRESENCE_DATA_MAX_BYTES) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `presence/heartbeat: data has ${String(entries)} entries / ${String(bytes)} bytes; the limit is ${String(PRESENCE_DATA_MAX_ENTRIES)} entries / ${String(PRESENCE_DATA_MAX_BYTES)} bytes.`,
+                );
+            }
+        }
+
         const lastSeen = ctx.now;
         const userId = ctx.auth.userId ?? undefined;
 

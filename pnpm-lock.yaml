@@ -4947,6 +4947,9 @@ importers:
       '@lunora/observability':
         specifier: workspace:*
         version: link:../observability
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../ratelimit
       '@types/node':
         specifier: catalog:types
         version: 26.4.1
