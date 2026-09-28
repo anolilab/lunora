@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { printWorkerLine, resolveWorkerPort, startWorker } from "../src/worker";
 import { createFixture } from "./fixture";
 
+/** The refusal a port already held by another process must produce. */
+const PORT_IN_USE_RE = /already in use/u;
+
 const roots: string[] = [];
 
 /**
@@ -160,6 +163,42 @@ describe(startWorker, () => {
         vi.unstubAllEnvs();
         vi.restoreAllMocks();
     });
+
+    it("refuses to start when the port is already held by someone else", async () => {
+        expect.assertions(1);
+
+        const root = createFixture();
+
+        roots.push(root);
+
+        const binDirectory = stubWranglerOnPath();
+
+        vi.stubEnv("PATH", `${binDirectory}:${process.env.PATH ?? ""}`);
+
+        // Something else — an orphaned wrangler, a second `rsbuild dev`, `lunora
+        // dev` in another terminal — is already serving. `accepts()` cannot tell
+        // that process from ours, so without a pre-flight check the readiness poll
+        // succeeds on its first iteration and the dev server proxies `/_lunora/*`
+        // to a FOREIGN worker while the one spawned here dies of "port in use".
+        const { createServer } = await import("node:net");
+        const squatter = createServer();
+
+        await new Promise<void>((resolve) => {
+            squatter.listen(0, "127.0.0.1", resolve);
+        });
+
+        const { port } = squatter.address() as { port: number };
+
+        try {
+            await expect(startWorker({ port, projectRoot: root })).rejects.toThrow(PORT_IN_USE_RE);
+        } finally {
+            await new Promise<void>((resolve) => {
+                squatter.close(() => {
+                    resolve();
+                });
+            });
+        }
+    }, 45_000);
 
     it("resolves once the worker accepts connections, and stop() ends it", async () => {
         expect.assertions(3);

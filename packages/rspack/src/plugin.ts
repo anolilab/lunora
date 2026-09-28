@@ -161,6 +161,32 @@ class LunoraRspackPlugin {
         this.#project = createReusableProject(this.#schemaDirectory);
     }
 
+    /**
+     * Run the once-per-session dev preparation (`.dev.vars` scaffolding, the
+     * agent-rules hint) and mark the session started.
+     *
+     * Public because ORDER matters and only the caller knows it: wrangler reads
+     * `.dev.vars` once, while resolving bindings at startup. A host that spawns
+     * the Worker — `@lunora/rspack/rsbuild` does, from `onBeforeStartDevServer`,
+     * which Rsbuild runs before the first compilation — must therefore await this
+     * first, or the very first `rsbuild dev` after a fresh clone boots a Worker
+     * with every secret `undefined`. That surfaces as auth failures rather than a
+     * clear error, and the SECOND run works, because `.dev.vars` is on disk by
+     * then. Neither creating the file nor rewriting `wrangler.jsonc` afterwards
+     * rescues the running process.
+     *
+     * Idempotent: the pass below sees `#started` and skips its own call.
+     */
+    public async prepareDevSession(): Promise<void> {
+        if (this.#started) {
+            return;
+        }
+
+        this.#started = true;
+
+        await prepareDevSession(this.#options);
+    }
+
     /** Rspack's plugin entry point. */
     public apply(compiler: CompilerLike): void {
         compiler.hooks.beforeCompile.tapPromise(PLUGIN_NAME, async () => {

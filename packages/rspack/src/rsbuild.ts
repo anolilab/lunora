@@ -44,15 +44,26 @@ interface RsbuildApiLike {
     onCloseDevServer: (callback: () => Promise<void> | void) => void;
 }
 
+/** A single entry of Rsbuild's array-form `server.proxy`. */
+type ProxyArrayEntry = Record<string, unknown> & { pathFilter?: unknown };
+
+/**
+ * Rsbuild's `server.proxy`, which is a record OR an array — the distinction that
+ * matters, because spreading an array into an object literal turns its entries
+ * into numeric keys and Rsbuild then reads each key as a `pathFilter`, silently
+ * unrouting every rule that relied on the default match-all.
+ */
+type ProxyConfigLike = ProxyArrayEntry[] | Record<string, unknown>;
+
 /** The slice of the Rspack config this plugin writes. */
 interface RspackConfigLike {
-    plugins?: unknown[];
+    plugins?: unknown;
 }
 
 /** The slice of Rsbuild's config this plugin writes. */
 interface RsbuildConfigLike {
     server?: {
-        proxy?: Record<string, unknown>;
+        proxy?: ProxyConfigLike;
     };
 }
 
@@ -61,6 +72,27 @@ interface RsbuildPluginLike {
     name: string;
     setup: (api: RsbuildApiLike) => void;
 }
+
+/**
+ * Add the Lunora route to whichever form of `server.proxy` the project uses,
+ * without converting one form into the other.
+ *
+ * In both forms the project's own entry for this path WINS: the plugin supplies
+ * a default, not a policy. `127.0.0.1` rather than `localhost` because Node
+ * resolves `localhost` to `::1` first on some hosts while wrangler binds IPv4.
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- returning the SAME form it was given is the whole contract; collapsing an array into a record is the bug this exists to prevent
+const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): ProxyConfigLike => {
+    const target = `http://127.0.0.1:${String(port)}`;
+
+    if (Array.isArray(existing)) {
+        // Appended, so an earlier rule the project declared for this path still
+        // matches first.
+        return [...existing, { changeOrigin: true, pathFilter: LUNORA_PATH, target, ws: true }];
+    }
+
+    return { [LUNORA_PATH]: { changeOrigin: true, target, ws: true }, ...existing };
+};
 
 /**
  * Lunora Rsbuild plugin — the one-command dev story.
@@ -94,6 +126,12 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     const resolved = resolveOptions(options);
     const runWorker = options?.worker !== false;
     const port = resolveWorkerPort(resolved.projectRoot, options?.workerPort);
+    // ONE instance, built here rather than inside `modifyRspackConfig` — Rsbuild
+    // invokes that callback once per environment, and a per-environment instance
+    // defeats the plugin's own in-flight guard: an SSR project would run
+    // concurrent codegen passes, two `postcodegen` subprocesses, racing writes to
+    // `_generated/` and `wrangler.jsonc`, and two interactive `.dev.vars` prompts.
+    const codegenPlugin = new LunoraRspackPlugin(resolved);
 
     return {
         name: RSBUILD_PLUGIN_NAME,
@@ -106,30 +144,14 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
             api.modifyRspackConfig((config) => {
                 return {
                     ...config,
-                    plugins: [...(config.plugins ?? []), new LunoraRspackPlugin(resolved)],
+                    plugins: [...(Array.isArray(config.plugins) ? (config.plugins as unknown[]) : []), codegenPlugin],
                 };
             });
 
             api.modifyRsbuildConfig((config) => {
                 return {
                     ...config,
-                    server: {
-                        ...config.server,
-                        proxy: {
-                            [LUNORA_PATH]: {
-                                changeOrigin: true,
-                                // `127.0.0.1`, not `localhost`: Node resolves
-                                // `localhost` to `::1` first on some hosts, and
-                                // wrangler binds IPv4.
-                                target: `http://127.0.0.1:${String(port)}`,
-                                ws: true,
-                            },
-                            // Spread last so an entry the project already declares for
-                            // this path wins — the plugin supplies a default, it does
-                            // not overrule a deliberate choice.
-                            ...config.server?.proxy,
-                        },
-                    },
+                    server: { ...config.server, proxy: withLunoraProxy(config.server?.proxy, port) },
                 };
             });
 
@@ -140,6 +162,15 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
             let worker: WorkerProcess | undefined;
 
             api.onBeforeStartDevServer(async () => {
+                // BEFORE the spawn. Rsbuild runs this hook ahead of the first
+                // compilation, so the codegen plugin's own `.dev.vars` scaffolding
+                // would otherwise land after wrangler has already read its bindings
+                // — and wrangler reads `.dev.vars` exactly once, at startup. On a
+                // fresh clone (where the file is absent, being gitignored) that
+                // means a Worker with every secret `undefined` for the whole
+                // session, surfacing as auth failures rather than a clear error.
+                await codegenPlugin.prepareDevSession();
+
                 // eslint-disable-next-line no-console -- startup notice, before any compilation has a logger
                 console.info(lunoraLine(`starting the worker on http://127.0.0.1:${String(port)} …`));
 
@@ -154,5 +185,5 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     };
 };
 
-export type { LunoraRsbuildOptions, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
-export { LUNORA_PATH, lunoraRsbuild, RSBUILD_PLUGIN_NAME };
+export type { LunoraRsbuildOptions, ProxyConfigLike, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
+export { LUNORA_PATH, lunoraRsbuild, RSBUILD_PLUGIN_NAME, withLunoraProxy };

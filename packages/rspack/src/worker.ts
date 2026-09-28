@@ -17,6 +17,9 @@ const READY_TIMEOUT_MS = 30_000;
 /** Gap between readiness probes. */
 const READY_POLL_MS = 150;
 
+/** How long a terminating worker gets before SIGKILL. */
+const STOP_ESCALATION_MS = 5000;
+
 /** A running `wrangler dev`, and the handle to stop it. */
 interface WorkerProcess {
     /** The port it serves on. */
@@ -103,7 +106,14 @@ const printWorkerLine = (line: string): void => {
     }
 };
 
-/** Wire a child stream to {@link printWorkerLine}, one line at a time. */
+/**
+ * Wire a child stream to {@link printWorkerLine}, one line at a time.
+ *
+ * The remainder after the last newline is flushed on `end`. Wrangler's final
+ * error before it dies frequently has no trailing newline, and dropping it left
+ * the developer with only `wrangler dev exited with code 1 before it was ready`
+ * — the opposite of what the actionable-error handling below is for.
+ */
 const pipeLines = (stream: NodeJS.ReadableStream | null): void => {
     let buffered = "";
 
@@ -117,6 +127,12 @@ const pipeLines = (stream: NodeJS.ReadableStream | null): void => {
 
         for (const line of lines) {
             printWorkerLine(line);
+        }
+    });
+    stream?.once("end", () => {
+        if (buffered !== "") {
+            printWorkerLine(buffered);
+            buffered = "";
         }
     });
 };
@@ -145,10 +161,30 @@ interface StartWorkerOptions {
  * unredacted — the same flag `lunora dev` passes.
  */
 const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> => {
-    const args = ["dev", "--port", String(options.port), "--var", "WORKER_ENV:development", ...(options.wranglerArgs ?? [])];
+    // Before spawning, not after. `accepts()` cannot tell OUR worker from anyone
+    // else's, so a port already held — an orphaned wrangler, a second
+    // `rsbuild dev`, `lunora dev` in another terminal — would satisfy the
+    // readiness poll on its first iteration. The dev server would then proxy
+    // `/_lunora/*` to a foreign process while the wrangler spawned here quietly
+    // died of "port in use", and the session would look perfectly healthy.
+    if (await accepts(options.port)) {
+        throw new Error(
+            `could not start the worker: port ${String(options.port)} is already in use. Stop whatever is serving there (another \`rsbuild dev\` or \`lunora dev\`?), or set \`workerPort\`.`,
+        );
+    }
 
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `wrangler` resolves from the project's node_modules/.bin via the package manager's PATH; args are fixed
-    const child: ChildProcess = spawn("wrangler", args, { cwd: options.projectRoot, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const args = ["dev", "--port", String(options.port), "--var", "WORKER_ENV:development", ...(options.wranglerArgs ?? [])];
+    // Package managers install `wrangler.cmd` on Windows, and Node will not launch
+    // a `.cmd` shim without a shell — the failure surfaces as ENOENT, telling the
+    // developer wrangler is not installed when it is. Argv stays fixed either way:
+    // the port is a number and `wranglerArgs` is the project's own config.
+    const isWindows = process.platform === "win32";
+
+    const child: ChildProcess = spawn(isWindows ? "wrangler.cmd" : "wrangler", args, {
+        cwd: options.projectRoot,
+        shell: isWindows,
+        stdio: ["ignore", "pipe", "pipe"],
+    });
 
     pipeLines(child.stdout);
     pipeLines(child.stderr);
@@ -168,19 +204,38 @@ const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> 
                 : error;
     });
 
-    const stop = async (): Promise<void> =>
-        new Promise((resolve) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-                resolve();
+    // Kills the child if this process goes away without `stop()` being reached —
+    // a throw anywhere between the spawn and the dev server listening leaves no
+    // cleanup path, and an orphaned wrangler holds the port so the NEXT run fails
+    // the pre-flight check above. `exit` handlers must be synchronous, so this
+    // signals rather than awaiting.
+    const reapOnExit = (): void => {
+        child.kill("SIGKILL");
+    };
 
-                return;
-            }
+    process.once("exit", reapOnExit);
+
+    const stop = async (): Promise<void> => {
+        process.removeListener("exit", reapOnExit);
+
+        if (child.exitCode !== null || child.signalCode !== null) {
+            return;
+        }
+
+        await new Promise<void>((resolve) => {
+            // Rsbuild awaits every cleanup before exiting, so a wrangler that
+            // ignores SIGTERM would hang `rsbuild dev` on shutdown forever.
+            const escalation = setTimeout(() => {
+                child.kill("SIGKILL");
+            }, STOP_ESCALATION_MS);
 
             child.once("exit", () => {
+                clearTimeout(escalation);
                 resolve();
             });
             child.kill("SIGTERM");
         });
+    };
 
     let exited: Error | undefined;
 
@@ -203,6 +258,18 @@ const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> 
 
         // eslint-disable-next-line no-await-in-loop -- a readiness poll is sequential by definition
         if (await accepts(options.port)) {
+            // Something is listening — confirm it is OUR child. The pre-flight
+            // check above makes a foreign holder unlikely, but one could bind in
+            // the window between them.
+            if (child.exitCode !== null || child.signalCode !== null) {
+                // eslint-disable-next-line no-await-in-loop -- terminal path; the loop exits on the next line
+                await stop();
+
+                throw new Error(
+                    `the worker on port ${String(options.port)} is not the one this plugin started — it exited while something else took the port.`,
+                );
+            }
+
             return { port: options.port, stop };
         }
 

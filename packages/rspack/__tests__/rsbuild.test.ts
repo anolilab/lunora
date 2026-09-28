@@ -1,14 +1,26 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
-import { lunoraRsbuild } from "../src/rsbuild";
+import { lunoraRsbuild, withLunoraProxy } from "../src/rsbuild";
 import { startWorker } from "../src/worker";
 import { createFixture } from "./fixture";
 
 /** The actionable message a missing wrangler must produce. */
 const WRANGLER_MISSING_RE = /wrangler` was not found on PATH/u;
+
+/** Read the record form of `server.proxy`, failing loudly if the plugin produced an array. */
+const recordProxy = (config: RsbuildConfigLike): Record<string, unknown> => {
+    const proxy = config.server?.proxy;
+
+    if (proxy === undefined || Array.isArray(proxy)) {
+        throw new TypeError("expected the record form of server.proxy");
+    }
+
+    return proxy;
+};
 
 const roots: string[] = [];
 
@@ -61,7 +73,7 @@ describe(lunoraRsbuild, () => {
         // never connect, which fails silently — the app just never leaves its
         // loading state. `changeOrigin` keeps the worker's self-origin aligned
         // with the browser's so the CSRF guard accepts the upgrade.
-        expect(rsbuild.server?.proxy?.["/_lunora"]).toStrictEqual({
+        expect(recordProxy(rsbuild)["/_lunora"]).toStrictEqual({
             changeOrigin: true,
             target: "http://127.0.0.1:8787",
             ws: true,
@@ -74,7 +86,7 @@ describe(lunoraRsbuild, () => {
         const root = fixture({ wranglerDevPort: 8799 });
         const { rsbuild } = captureSetup(lunoraRsbuild({ projectRoot: root, validateWrangler: false }));
 
-        expect(rsbuild.server?.proxy?.["/_lunora"]).toMatchObject({ target: "http://127.0.0.1:8799" });
+        expect(recordProxy(rsbuild)["/_lunora"]).toMatchObject({ target: "http://127.0.0.1:8799" });
     });
 
     it("never overrules a proxy entry the project already declares", () => {
@@ -94,7 +106,24 @@ describe(lunoraRsbuild, () => {
         });
 
         // The plugin supplies a default, not a policy.
-        expect(config.server?.proxy?.["/_lunora"]).toStrictEqual({ target: "http://127.0.0.1:9999" });
+        expect(recordProxy(config)["/_lunora"]).toStrictEqual({ target: "http://127.0.0.1:9999" });
+    });
+
+    it("preserves an array-form server.proxy instead of collapsing it to an object", () => {
+        expect.assertions(2);
+
+        // Rsbuild accepts `server.proxy` as an array. Spreading one into an object
+        // literal turns its entries into numeric keys, and Rsbuild then reads each
+        // key as a `pathFilter` — silently unrouting every rule that relied on the
+        // default match-all.
+        const existing = [{ target: "http://localhost:3000" }];
+        const result = withLunoraProxy(existing, 8787);
+
+        expect(Array.isArray(result)).toBe(true);
+        expect(result).toStrictEqual([
+            { target: "http://localhost:3000" },
+            { changeOrigin: true, pathFilter: "/_lunora", target: "http://127.0.0.1:8787", ws: true },
+        ]);
     });
 
     it("registers the codegen plugin itself, so one entry wires everything", () => {
@@ -108,6 +137,45 @@ describe(lunoraRsbuild, () => {
         expect(rspack.plugins).toHaveLength(1);
     });
 
+    it("scaffolds .dev.vars BEFORE spawning the worker", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const root = fixture();
+        let beforeStart: (() => Promise<void> | void) | undefined;
+
+        const plugin = lunoraRsbuild({ projectRoot: root, validateWrangler: false, workerPort: 1 });
+
+        plugin.setup({
+            modifyRsbuildConfig: (callback) => callback({}),
+            modifyRspackConfig: (callback) => callback({}),
+            onBeforeStartDevServer: (callback) => {
+                beforeStart = callback;
+            },
+            onCloseDevServer: () => {},
+        });
+
+        // Port 1 is privileged, so the spawn fails fast — all this asserts is the
+        // ORDER of what happened before it did.
+        const existsBefore = existsSync(join(root, ".dev.vars"));
+
+        try {
+            await beforeStart?.();
+        } catch {
+            // The spawn is expected to fail; only the ordering above is asserted.
+        }
+
+        // wrangler reads `.dev.vars` exactly once, while resolving bindings at
+        // startup. Scaffolding it afterwards leaves a fresh clone's first session
+        // running with every secret `undefined` — and the SECOND run works,
+        // because the file is on disk by then, which is what makes it so hard to
+        // diagnose.
+        expect(existsBefore).toBe(false);
+        expect(existsSync(join(root, ".dev.vars"))).toBe(true);
+    }, 45_000);
+
     it("still injects the proxy under worker: false, but starts nothing", () => {
         expect.assertions(2);
 
@@ -116,7 +184,7 @@ describe(lunoraRsbuild, () => {
 
         // A project running the Worker itself still wants the same-origin route —
         // getting `ws` right by hand is the mistake this prevents.
-        expect(rsbuild.server?.proxy?.["/_lunora"]).toMatchObject({ ws: true });
+        expect(recordProxy(rsbuild)["/_lunora"]).toMatchObject({ ws: true });
         expect(startedDevServer).toBe(false);
     });
 });

@@ -41,6 +41,7 @@ interface LunoraRspackOptions {
 class LunoraRspackPlugin {
     #private;
     constructor(options: ResolvedLunoraRspackOptions);
+    prepareDevSession(): Promise<void>;
     apply(compiler: CompilerLike): void;
 }
 ```
@@ -75,6 +76,12 @@ interface LunoraRsbuildOptions extends LunoraRspackOptions {
 }
 ```
 
+### `ProxyConfigLike` (type)
+
+```ts
+type ProxyConfigLike = ProxyArrayEntry[] | Record<string, unknown>;
+```
+
 ### `RSBUILD_PLUGIN_NAME` (const)
 
 ```ts
@@ -97,7 +104,7 @@ interface RsbuildApiLike {
 ```ts
 interface RsbuildConfigLike {
     server?: {
-        proxy?: Record<string, unknown>;
+        proxy?: ProxyConfigLike;
     };
 }
 ```
@@ -115,7 +122,7 @@ interface RsbuildPluginLike {
 
 ```ts
 interface RspackConfigLike {
-    plugins?: unknown[];
+    plugins?: unknown;
 }
 ```
 
@@ -123,6 +130,12 @@ interface RspackConfigLike {
 
 ```ts
 const lunoraRsbuild: (options?: LunoraRsbuildOptions) => RsbuildPluginLike;
+```
+
+### `withLunoraProxy` (const)
+
+```ts
+const withLunoraProxy: (existing: ProxyConfigLike | undefined, port: number) => ProxyConfigLike;
 ```
 
 ## Referenced internal declarations
@@ -155,6 +168,14 @@ interface CompilationLike {
 interface DependencySet {
     add: (dependency: string) => void;
 }
+```
+
+### `ProxyArrayEntry` (type)
+
+```ts
+type ProxyArrayEntry = Record<string, unknown> & {
+    pathFilter?: unknown;
+};
 ```
 
 ### `ResolvedLunoraRspackOptions` (interface)
