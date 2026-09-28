@@ -1,3 +1,14 @@
+## @lunora/storage [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.89...@lunora/storage@1.0.0-alpha.90) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+
 ## @lunora/storage [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.88...@lunora/storage@1.0.0-alpha.89) (2026-09-28)
 
 ### Bug Fixes
