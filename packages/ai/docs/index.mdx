@@ -337,6 +337,22 @@ a short page. Without the extension the first operation throws naming the
 missing `vec0` module. Workerd cannot load `sqlite-vec`, so this does not apply
 on Cloudflare.
 
+Limits of the index:
+
+- **It needs code that runs inside the Durable Object.** celld loads sqlite-vec
+  only into Durable Object SQLite, not into D1, and Lunora actions run in the
+  Worker rather than inside a shard, so a Lunora function has no `exec` over a
+  shard's SQLite to hand the store. Use it from a Durable Object class your app
+  writes (its `state.storage.sql`), or from `node:sqlite`.
+- **Cosine only**, over one fixed width: `ann.dimensions` is the `vec0` column
+  width, so an embedding of another width fails on upsert. Changing the model's
+  width means a new `table`.
+- **Filtered queries still scan** the namespace, with the same `maxScan` bound
+  as without the index.
+- **Writes are two statements, not one transaction.** An interrupted upsert or
+  delete can leave an index entry the table no longer holds; a query drops it,
+  so it costs a `topK` slot rather than returning a stale record.
+
 ### Bring your own embeddings — no `env.AI` binding
 
 `embeddingModel` takes a Workers AI model **id** (a string, resolved through

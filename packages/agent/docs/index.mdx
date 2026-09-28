@@ -586,6 +586,27 @@ the `workerLoaders` capability: Cloudflare and celld rate it `native`, and the
 Node host has no isolate sandbox, so `target: "node"` refuses it with a
 `platform_unsupported_feature` diagnostic.
 
+### Limits
+
+- **A script cannot call the agent's tools.** The only way out of a loaded
+  isolate is a service binding, and a call through one arrives as a fresh
+  invocation of the worker: it has neither the run's durable step (so nothing
+  it does is memoized or replay-safe) nor the caller's identity (so RLS would
+  not apply). To chain tool calls in one turn, use
+  [`codeTool`](#code-mode-codetool); to compute over their results, let the
+  model pass them into `jsCodeTool` as literals.
+- **Nothing persists between runs.** Each call loads a fresh isolate and
+  discards it, so module-level state does not survive to the next call.
+- **The result must be JSON.** A `bigint`, a cycle or a function comes back as
+  `error`, and a `Date` as its ISO string.
+- **`console` output is capped** at 100 entries per run.
+- **The isolate is a V8 boundary, not a process or VM one.** It scopes what the
+  script can address; it is not a claim about V8 escape safety. Run code that
+  needs a kernel boundary in a container (`containerTool`) instead.
+- **Dynamic Workers are in open beta on Cloudflare**, so the loader API can
+  still change. On celld a process holds at most 256 live loaded workers, and a
+  load past that fails the run with `error` set.
+
 ## Skills
 
 A **skill** is a reusable bundle many agents can share: an instruction fragment,
