@@ -336,6 +336,51 @@ describe("durable replay against a real worker under a lapsed bearer", () => {
     });
 });
 
+describe("durable batch replay with a refused slot", () => {
+    it("asks the app to refresh once when a batch interleaves refused and accepted slots", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const refusedSlot = { error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } };
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
+            Response.json({
+                results: [
+                    { body: refusedSlot, id: 0 },
+                    { body: { result: { ok: true } }, id: 1 },
+                    { body: refusedSlot, id: 2 },
+                ],
+            }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken("jwt", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        for (const text of ["one", "two", "three"]) {
+            client.mutation(fnRef("todos.add"), { text }).catch(() => undefined);
+        }
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(fetchImpl.mock.calls.some(([url]) => url.includes("rpc-batch"))).toBe(true);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        client.close();
+    });
+});
+
 // A cookie (or Access edge) session keeps `authToken` at `null` across its
 // refresh, so neither `setAuthToken` nor a changed bearer ever re-flushes the
 // queue: a write refused for the lapsed cookie sat queued until the next

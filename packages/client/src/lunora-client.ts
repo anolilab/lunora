@@ -9872,6 +9872,8 @@ class LunoraClient {
         }
 
         const requeue: QueuedMutation[] = [];
+        let accepted = false;
+        let refused = false;
 
         for (const [index, item] of items.entries()) {
             const inner = bySlot.get(index);
@@ -9883,6 +9885,8 @@ class LunoraClient {
             } else if ("error" in inner) {
                 const error = slotError(inner);
 
+                refused ||= isAuthReplayFailure(error);
+
                 if (this.shouldRequeueReplayFailure(error, authToken)) {
                     this.noteReplayRetryDelay(shardKey, error, authToken);
                     requeue.push(item);
@@ -9890,9 +9894,15 @@ class LunoraClient {
                     this.settleReplayTerminal(item, error);
                 }
             } else {
-                this.noteCredentialAccepted(authToken);
+                accepted = true;
                 this.settleReplayBatchResult(item, inner);
             }
+        }
+
+        // Re-armed once the whole batch is classified, and only if no slot was
+        // refused: re-arming between slots would notify twice for one credential.
+        if (accepted && !refused) {
+            this.noteCredentialAccepted(authToken);
         }
 
         return requeue;
