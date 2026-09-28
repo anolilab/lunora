@@ -2635,6 +2635,21 @@ interface MutationCtx {
     readonly now: number;
 
     /**
+     * The origin (`scheme://host[:port]`) the request behind this dispatch reached
+     * the worker on: the base for an absolute URL back to this app, such as a
+     * signed storage URL, with no per-environment value to configure.
+     *
+     * The runtime reads it off the request URL, never off a client header, and
+     * forwards it to the shard with the dispatch. `undefined` wherever no request
+     * is behind the call: a scheduled or workflow run, a queue consumer, a
+     * server-initiated dispatch. A query has no `origin` at all: a live query
+     * re-runs with no request behind it, and its cached result is shared across
+     * callers on every host, so a query that builds such a URL needs a configured
+     * base.
+     */
+    readonly origin?: string;
+
+    /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
      * Executes the referenced mutation's handler directly — no fresh DO RPC —
      * so its writes apply through the same shard invocation as the enclosing
@@ -2722,6 +2737,13 @@ interface ActionCtx {
      * may also use ambient `Date.now()` freely.
      */
     readonly now: number;
+
+    /**
+     * The origin the request behind this dispatch reached the worker on, or
+     * `undefined` when no request is behind it. Identical to
+     * {@link MutationCtx.origin}.
+     */
+    readonly origin?: string;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;

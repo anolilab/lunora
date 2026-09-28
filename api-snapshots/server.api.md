@@ -107,6 +107,7 @@ interface ActionCtx {
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
+    readonly origin?: string;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
@@ -1357,6 +1358,7 @@ interface MutationCtx {
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
+    readonly origin?: string;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;

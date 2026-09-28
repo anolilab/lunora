@@ -98,6 +98,15 @@ These are present regardless of kind:
   `nondeterministic_query_mutation` advisor flags `Date.now()`. Actions may use
   `Date.now()` freely but get `ctx.now` too for parity.
 
+`ctx.origin` is on mutations and actions only: the origin
+(`scheme://host[:port]`) the request behind the dispatch reached the worker on,
+read off the request URL and never off a client header. Build absolute URLs back
+to your app against it, such as a signed storage URL, instead of shipping a
+per-environment base URL. It is `undefined` for a scheduled or workflow run and
+any other dispatch no request is behind. Queries have no `ctx.origin`: a live
+query re-runs with no request behind it and its cached result is shared across
+hosts, so a query that builds such a URL needs a configured base.
+
 ## ctx field matrix
 
 | Field         | `QueryCtx`       | `MutationCtx`    | `ActionCtx`        |
@@ -107,6 +116,7 @@ These are present regardless of kind:
 | `log`         | ✓                | ✓                | ✓                  |
 | `ip`          | ✓                | ✓                | ✓                  |
 | `now`         | ✓                | ✓                | ✓                  |
+| `origin`      | —                | ✓                | ✓                  |
 | `storage`     | read-only        | read-only        | read/write         |
 | `vectors`     | read-only        | read/write       | read/write         |
 | `scheduler`   | —                | ✓                | ✓                  |

@@ -408,6 +408,24 @@ export interface PlatformCapabilities {
          * throws (or worse, silently returns nothing) on the first hop.
          */
         relationGraph?: Capability;
+
+        /**
+         * The origin a request reached the app on, forwarded to the shard with the
+         * dispatch: `ctx.origin` in mutations and actions, and the base
+         * `ctx.storage` signs URLs against when no `publicBaseUrl` is declared.
+         *
+         * The runtime reads it off `request.url`, never off a client header, so
+         * the rating answers whether the HOST vouches for that URL's host. An app
+         * signing URLs against it may hand them to other callers, and a host that
+         * builds the URL from a caller-typed `Host` header lets that caller choose
+         * where they point.
+         *
+         * Advisory by nature: every target populates it, so codegen has nothing
+         * to omit. Where the host does not vouch for it, configure a base
+         * (`publicBaseUrl`, or the storage registry item's
+         * `STORAGE_PUBLIC_BASE_URL`), which always wins over the origin.
+         */
+        requestOrigin?: Capability;
         /** Cron triggers / scheduled functions. */
         scheduler?: Capability;
         /** Secrets management. */
@@ -556,6 +574,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         httpCache: {
             level: "native",
             note: "The colo cache via caches.default. Worker-generated responses are NOT stored by it automatically — the runtime has to caches.default.put() them — and it honours Vary for Accept-Encoding only, so a varying response has to fold those header values into the cache key itself. A 206, a Vary: *, or a Set-Cookie-bearing response is refused by put()",
+        },
+        requestOrigin: {
+            level: "native",
+            note: "request.url carries the hostname the edge routed the request on (a route, custom domain or workers.dev name bound to this Worker), so a caller cannot point it at a host the Worker does not serve",
         },
         identityProxy: {
             level: "native",
@@ -735,6 +757,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         httpCache: {
             level: "unsupported",
             note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",
+        },
+        requestOrigin: {
+            level: "emulated",
+            note: "The same runtime code reads it off request.url, but nothing here serves HTTP: the embedding server builds that Request, usually from the Host header the caller sent. Pin the host in the proxy in front, or configure a base (publicBaseUrl / STORAGE_PUBLIC_BASE_URL), which always wins over the origin",
         },
         identityProxy: {
             level: "unsupported",
