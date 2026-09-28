@@ -1,3 +1,14 @@
+## @lunora/react [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.164...@lunora/react@1.0.0-alpha.165) (2026-09-28)
+
+### Bug Fixes
+
+* **react:** gate preloaded values on the client's identity epoch ([#896](https://github.com/anolilab/lunora/issues/896)) ([33b5bfb](https://github.com/anolilab/lunora/commit/33b5bfbf920abe8fe5d6de360a10d156538d38b6))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.158
+
 ## @lunora/react [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.163...@lunora/react@1.0.0-alpha.164) (2026-09-27)
 
 
