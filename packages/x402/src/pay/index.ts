@@ -2,7 +2,7 @@
  * `@lunora/x402/pay` — the pay rail (client / agent side, ActionCtx-only).
  *
  * A Lunora **action** (the only ctx with outbound network + secret access) pays
- * for a `402`-gated resource: it holds a wallet, signs an `X-PAYMENT`, and
+ * for a `402`-gated resource: it holds a wallet, signs a `PAYMENT-SIGNATURE`, and
  * retries — all bounded by a **mandatory** spend policy. Because the signer holds
  * spending authority, an unbounded policy is refused before a signer is resolved.
  *

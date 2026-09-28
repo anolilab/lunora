@@ -151,7 +151,7 @@ describe("createProcedureChargeGate", () => {
             type: "payment-verified",
         } as never);
         vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue({
-            headers: { "x-payment-response": "settled" },
+            headers: { "payment-response": "settled" },
             network: "eip155:8453",
             payer: "0xPayer",
             requirements: { amount: "50000", asset: "0xUSDC", payTo: "0x1111111111111111111111111111111111111111" },
@@ -168,7 +168,7 @@ describe("createProcedureChargeGate", () => {
         const response = await gate(rpcRequest(), { functionPath: "reports:charge", price: "$0.05" }, dispatch, { waitUntil });
 
         expect(dispatch).toHaveBeenCalledTimes(1);
-        expect(response.headers.get("x-payment-response")).toBe("settled");
+        expect(response.headers.get("payment-response")).toBe("settled");
         expect(onReceipt).toHaveBeenCalledTimes(1);
         expect(waitUntil).toHaveBeenCalledTimes(1);
         expect(waitUntil.mock.calls[0]?.[0]).toBeInstanceOf(Promise);

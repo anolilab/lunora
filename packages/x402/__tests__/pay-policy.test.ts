@@ -270,6 +270,74 @@ describe("buildPaymentGuard", () => {
         expect(state.spentAtomic).toBe(10_000n);
     });
 
+    // A payment that never happened must not pin the run's precision: nothing is
+    // held in the ledger, so there is nothing for a later asset to be mixed with.
+    const mixedAssets = [
+        { asset: USDC_BASE, decimals: 6, network: "base" },
+        { asset: OTHER_ASSET, decimals: 18, network: "base" },
+    ] as const;
+    const oneDollar18 = requirement({ amount: (10n ** 18n).toString(), asset: OTHER_ASSET });
+    const oneDollarUsdc = requirement({ amount: "1000000" });
+
+    it.each([
+        ["declined by onPaymentRequired", false, oneDollar18, "$10"],
+        ["over the per-run cap", true, requirement({ amount: (20n * 10n ** 18n).toString(), asset: OTHER_ASSET }), "$10"],
+    ])("does not lock the run's precision to a payment %s", async (_label, approveFirst, first, maxPerRun) => {
+        expect.assertions(3);
+
+        let approve = approveFirst;
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ allowedAssets: mixedAssets, maxPerRun, onPaymentRequired: () => approve }, state);
+
+        await expect(guard(guardContext(first))).resolves.toMatchObject({ abort: true });
+
+        approve = true;
+
+        await expect(guard(guardContext(oneDollarUsdc))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(1_000_000n);
+    });
+
+    it("does not lock the run's precision when the approval gate throws", async () => {
+        expect.assertions(3);
+
+        let fail = true;
+        const state = createSpendState();
+        const guard = buildPaymentGuard(
+            {
+                allowedAssets: mixedAssets,
+                maxPerRun: "$10",
+                onPaymentRequired: () => {
+                    if (fail) {
+                        throw new Error("approval timed out");
+                    }
+
+                    return true;
+                },
+            },
+            state,
+        );
+
+        await expect(guard(guardContext(oneDollar18))).rejects.toThrow(/approval timed out/);
+
+        fail = false;
+
+        await expect(guard(guardContext(oneDollarUsdc))).resolves.toBeUndefined();
+        expect(state.spentAtomic).toBe(1_000_000n);
+    });
+
+    it("does not lock the run's precision when the signature fails and the reservation is released", async () => {
+        expect.assertions(2);
+
+        const state = createSpendState();
+        const guard = buildPaymentGuard({ allowedAssets: mixedAssets, maxPerRun: "$10" }, state);
+
+        await expect(guard(guardContext(oneDollar18))).resolves.toBeUndefined();
+
+        await releaseSpendOnFailure(state)(failureContext(oneDollar18));
+
+        await expect(guard(guardContext(oneDollarUsdc))).resolves.toBeUndefined();
+    });
+
     it("scales the per-run cap by the run's asset decimals", async () => {
         const state = createSpendState();
         const guard = buildPaymentGuard({ allowedAssets: [{ asset: OTHER_ASSET, decimals: 18, network: "base" }], maxPerRun: "$2" }, state);

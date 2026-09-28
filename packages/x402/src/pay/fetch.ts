@@ -1,7 +1,7 @@
 /**
  * The pay-rail fetch builder: turns an {@link X402PayConfig} into a
  * payment-enabled `fetch` that transparently answers `402 Payment Required` by
- * signing an `X-PAYMENT` and retrying — all under the wallet's spend policy.
+ * signing a `PAYMENT-SIGNATURE` and retrying — all under the wallet's spend policy.
  *
  * Wiring order matters and is deliberately fail-closed. First
  * {@link assertBoundedPolicy} refuses an unbounded policy, and the enforcement hooks

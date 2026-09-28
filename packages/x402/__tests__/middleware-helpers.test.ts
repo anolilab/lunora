@@ -35,7 +35,7 @@ describe("buildRoute", () => {
 describe("createRequestAdapter", () => {
     it("exposes request metadata the way @x402/core expects", () => {
         const request = new Request("https://api.example/report?tier=pro&tag=a&tag=b", {
-            headers: { accept: "application/json", "user-agent": "agent/1", "x-payment": "sig" },
+            headers: { accept: "application/json", "user-agent": "agent/1", "payment-signature": "sig" },
             method: "POST",
         });
         const adapter = createRequestAdapter(request, new URL(request.url));
@@ -44,7 +44,7 @@ describe("createRequestAdapter", () => {
         expect(adapter.getPath()).toBe("/report");
         expect(adapter.getAcceptHeader()).toBe("application/json");
         expect(adapter.getUserAgent()).toBe("agent/1");
-        expect(adapter.getHeader("x-payment")).toBe("sig");
+        expect(adapter.getHeader("payment-signature")).toBe("sig");
         expect(adapter.getHeader("missing")).toBeUndefined();
         expect(adapter.getQueryParam?.("tier")).toBe("pro");
         expect(adapter.getQueryParam?.("tag")).toEqual(["a", "b"]);
@@ -78,11 +78,11 @@ describe("toResponse", () => {
 
 describe("withHeaders", () => {
     it("merges extra headers while preserving status and body", async () => {
-        const merged = withHeaders(new Response("ok", { headers: { "content-type": "text/plain" }, status: 200 }), { "x-payment-response": "receipt" });
+        const merged = withHeaders(new Response("ok", { headers: { "content-type": "text/plain" }, status: 200 }), { "payment-response": "receipt" });
 
         expect(merged.status).toBe(200);
         expect(merged.headers.get("content-type")).toBe("text/plain");
-        expect(merged.headers.get("x-payment-response")).toBe("receipt");
+        expect(merged.headers.get("payment-response")).toBe("receipt");
         await expect(merged.text()).resolves.toBe("ok");
     });
 });

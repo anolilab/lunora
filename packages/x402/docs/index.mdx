@@ -50,9 +50,26 @@ via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
 The server side needs only a **recipient address**, not a private key, because
 the facilitator performs settlement. Every gated surface runs the same
 four-step flow: unpaid request → `402` + `PAYMENT-REQUIRED` challenge; the
-client's `X-PAYMENT` payload is verified (via the facilitator); then the
+client's `PAYMENT-SIGNATURE` payload is verified (via the facilitator); then the
 handler and settlement run, in an order that depends on the rail (see below);
-finally `X-PAYMENT-RESPONSE` is attached to the returned resource.
+finally `PAYMENT-RESPONSE` is attached to the returned resource.
+
+**Header names: x402 v2 only.** A paying client sends the signed payload as
+`PAYMENT-SIGNATURE` and reads the receipt from `PAYMENT-RESPONSE`, which is what
+`@x402/fetch` does. The v1 names (`X-PAYMENT`, `X-PAYMENT-RESPONSE`) are not
+accepted: `@x402/core` v2 does not read `X-PAYMENT`, so a v1 client gets a fresh
+`402` and is not charged.
+
+**A paid response is never shared-cacheable.** Whatever cache headers the
+handler set, the paid response goes out `Cache-Control: private` (a `public` or
+`s-maxage` directive is dropped), and every CDN-targeted cache header —
+`CDN-Cache-Control`, any `<vendor>-CDN-Cache-Control` such as
+`Cloudflare-CDN-Cache-Control`, and `Surrogate-Control` — is removed, since a CDN
+obeys those ahead of `Cache-Control`. So no CDN or proxy can store one caller's
+paid body and replay it to the next. The payer's own browser may still keep a
+private copy for the `max-age` the handler set; only the payer, who already has
+the body, can reuse it. Send `Cache-Control: no-store` from the handler if even
+that is unwanted.
 
 ### Gate an HTTP action
 
@@ -118,6 +135,12 @@ refuses that dispatch with `MISCONFIGURED` rather than serving the paid result
 free. If a paid procedure starts answering `500`, the worker is missing
 `functions`.
 
+**A paid procedure exposed over REST cannot declare a public cache.** The REST
+edge cache answers before the paywall runs, so `.x402({ price })` together with
+`.expose({ rest: true, cache: { scope: "public" } })` would hand the paid result
+to every later caller for free. `createWorker` refuses that combination at
+construction; use `scope: "private"` or no cache policy.
+
 **Settlement order:** the procedure gate settles **before** dispatching the
 function (settle-first), because dispatch is what commits a paid mutation's
 writes. A settlement failure therefore means the function never runs at all;
@@ -128,7 +151,7 @@ to unwind.
 
 **A lost response is paid twice.** Settle-first (both rails) consumes the
 payment's nonce before the handler runs, so if the response never reaches the
-client — a dropped connection, a timeout — re-sending the same `X-PAYMENT` fails
+client — a dropped connection, a timeout — re-sending the same `PAYMENT-SIGNATURE` fails
 verification and earns a fresh `402`; `@x402/fetch` then signs a new payload and
 pays again. Where a double charge matters, make the handler idempotent (key it on
 something the client controls, e.g. an `Idempotency-Key` header or a client-minted
@@ -140,8 +163,8 @@ which never settles until the handler has produced a response.
 
 `@lunora/mcp`'s `createPaidMcpServer` lets free `tool()` and `paidTool()`
 registrations coexist on one MCP server, served over Streamable HTTP (an HTTP
-request can carry `X-PAYMENT`; stdio cannot). Each `tools/call` for a paid tool
-runs the same charge middleware:
+request can carry `PAYMENT-SIGNATURE`; stdio cannot). Each `tools/call` for a
+paid tool runs the same charge middleware:
 
 ```ts
 const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
@@ -155,6 +178,15 @@ export default { fetch: mcp.fetchHandler };
 `fetchHandler` takes the Worker's `(request, env, ctx)` triple, so mounting it as
 the default export is what wires `ctx.waitUntil` through to the charge
 middleware — see Receipts below.
+
+A paid call is only charged once the MCP transport would accept it. A request the
+transport rejects — an `Accept` header without `text/event-stream`, a non-JSON
+`Content-Type`, a malformed or id-less JSON-RPC message, an unsupported
+`mcp-protocol-version` — gets the transport's own error back before the paywall
+runs, and nothing is verified or settled. Past that point settlement precedes the
+tool: a tool that throws after payment returns an `isError` result, and the
+payment is not refunded automatically (settlement is final on-chain). A refund the
+app decides it owes is paid out of band, keyed on the transaction in the receipt.
 
 ### Receipts
 
