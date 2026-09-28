@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.235...@lunora/codegen@1.0.0-alpha.236) (2026-09-28)
+
+### Features
+
+* **rspack:** add an Rspack/webpack adapter ([#898](https://github.com/anolilab/lunora/issues/898)) ([79a869f](https://github.com/anolilab/lunora/commit/79a869fb488b7ddaadd284299f3c635d4fcd27d0)), closes [#906](https://github.com/anolilab/lunora/issues/906)
+
 ## @lunora/codegen [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.234...@lunora/codegen@1.0.0-alpha.235) (2026-09-28)
 
 ### Features
