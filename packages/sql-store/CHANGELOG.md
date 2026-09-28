@@ -1,3 +1,9 @@
+## @lunora/sql-store [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.148...@lunora/sql-store@1.0.0-alpha.149) (2026-09-28)
+
+### Bug Fixes
+
+* **sql-store:** hold the global cdc poll cursor below late commits ([#903](https://github.com/anolilab/lunora/issues/903)) ([d118920](https://github.com/anolilab/lunora/commit/d118920b33d5ddb9a760b9eda2a46d2880a8f40e))
+
 ## @lunora/sql-store [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.147...@lunora/sql-store@1.0.0-alpha.148) (2026-09-27)
 
 ### Code Refactoring
