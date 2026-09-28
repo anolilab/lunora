@@ -305,6 +305,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Build & Tooling"]!,
         category: "Build & Tooling",
+        description: "Rspack/webpack plugin — codegen, binding provisioning, wrangler validator.",
+        docsPath: "/docs/packages/rspack",
+        features: ["Codegen on save", "Binding provisioning", "Wrangler config validator"],
+        name: "Rspack Plugin",
+        npmName: "@lunora/rspack",
+        slug: "rspack",
+    },
+    {
+        accentColor: categoryColors["Build & Tooling"]!,
+        category: "Build & Tooling",
         description: "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay.",
         docsPath: "/docs/packages/vite",
         features: ["Codegen on save", "Wrangler config validator", "Error overlay"],
