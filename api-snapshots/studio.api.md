@@ -1927,6 +1927,7 @@ const MESSAGE_IDS: readonly [
     "The model could not be reached.",
     "The model returned a statement that is not read-only, so it was discarded.",
     "The model returned nothing usable.",
+    "The statement is too long to rewrite. Select a shorter part of it.",
     "Related",
     "p50",
     "p95",
