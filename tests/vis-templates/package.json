@@ -15,6 +15,7 @@
         "@lunora/db": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
+        "@lunora/server": "workspace:*",
         "@lunora/values": "workspace:*",
         "@lunora/workflow": "workspace:*",
         "@types/node": "catalog:types",

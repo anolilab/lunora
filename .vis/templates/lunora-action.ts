@@ -32,7 +32,7 @@ export default createTemplate({
         return {
             files: {
                 lunora: {
-                    [`${fileName}.ts`]: `import { action, v } from "lunorash/server";
+                    [`${fileName}.ts`]: `import { action, v } from "#lunora/_generated/server.js";
 
 /**
  * ${raw} action.

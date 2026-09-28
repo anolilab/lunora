@@ -5318,6 +5318,9 @@ importers:
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@lunora/values':
         specifier: workspace:*
         version: link:../../packages/values
