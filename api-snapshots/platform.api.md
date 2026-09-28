@@ -298,6 +298,7 @@ interface PlatformCapabilities {
         pointInTimeRecovery?: Capability;
         queues?: Capability;
         relationGraph?: Capability;
+        requestOrigin?: Capability;
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;

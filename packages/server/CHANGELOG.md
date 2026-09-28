@@ -1,3 +1,16 @@
+## @lunora/server [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.157...@lunora/server@1.0.0-alpha.158) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.96
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+* **@lunora/observability:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/server [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.156...@lunora/server@1.0.0-alpha.157) (2026-09-27)
 
 

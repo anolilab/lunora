@@ -11,7 +11,9 @@ and exposes idiomatic Lunora functions for browser uploads, gated downloads,
 delete, and list — with no bucket credential in the client.
 
 A worker-signed URL points at **your Worker**, not at R2:
-`${STORAGE_PUBLIC_BASE_URL}/<key>?exp&method&bucket&sig`. The `/storage/*` route
+`<base>/<key>?exp&method&bucket&sig`, where the base is the origin the request
+reached your Worker on (`ctx.origin`) unless `STORAGE_PUBLIC_BASE_URL` overrides
+it. The `/storage/*` route
 you add in step 4 is what verifies the signature and moves the bytes, for both
 the upload and the download. (The no-Worker-in-the-path variant is
 `@lunora/storage`'s S3 presigned URL, `getPresignedUrl` — it needs S3 credentials
@@ -51,21 +53,21 @@ This:
 2. Adds an R2 bucket binding to `wrangler.jsonc` (`r2_buckets`, binding
    **`UPLOADS`**, `bucket_name: "replace-me-uploads"` — rename it to a real
    bucket). It **merges** into any existing `r2_buckets`.
-3. Scaffolds `STORAGE_SIGNING_SECRET` (a secret) and `STORAGE_PUBLIC_BASE_URL`
-   into `.dev.vars`.
+3. Scaffolds `STORAGE_SIGNING_SECRET` (a secret) and an empty, optional
+   `STORAGE_PUBLIC_BASE_URL` into `.dev.vars`.
 4. Copies `lunora/storage/index.ts` (the `generateUploadUrl` /
    `getDownloadUrl` / `deleteObject` / `listObjects` functions) into your
    project — it is **yours** to edit.
 
 ## Step 2: Configure the binding + secrets
 
-| Name                      | Where                                | Notes                                                                                                                                                                                                                                                                |
-| ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets[]`    | The R2 bucket binding. Point `bucket_name` at a real bucket.                                                                                                                                                                                                         |
-| `STORAGE_SIGNING_SECRET`  | secret (`.dev.vars` / `secret put`)  | HMAC secret for signed URLs. Min 32 chars, enforced — a shorter one throws on the first call. Never share across tenants.                                                                                                                                            |
-| `STORAGE_PUBLIC_BASE_URL` | var (`.dev.vars` / `wrangler.jsonc`) | **Bare origin** running the `/storage/*` route — your app's own origin (locally the dev server URL, e.g. `http://localhost:5173` under Vite). Scaffolded empty, since the host and port are signed into every URL. A base carrying a path is rejected by the signer. |
+| Name                      | Where                                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets[]`            | The R2 bucket binding. Point `bucket_name` at a real bucket.                                                                                                                                                                                                                                                                                                                                                                              |
+| `STORAGE_SIGNING_SECRET`  | secret (`.dev.vars` / `secret put`)          | HMAC secret for signed URLs. Min 32 chars, enforced — a shorter one throws on the first call. Never share across tenants.                                                                                                                                                                                                                                                                                                                 |
+| `STORAGE_PUBLIC_BASE_URL` | optional var (`.dev.vars` / Worker variable) | Leave it **empty** and URLs are signed against the origin the request reached your Worker on (`ctx.origin`), right in dev, previews and production alike. Set a **bare origin** only when another host (a CDN) serves `/storage/*`, or to sign where no request is behind the call: a query, a scheduled job, a workflow step have no `ctx.origin`, so signing there without it throws. A base carrying a path is rejected by the signer. |
 
-`STORAGE_PUBLIC_BASE_URL` must be `https://` anywhere but local dev. A signed URL
+A configured `STORAGE_PUBLIC_BASE_URL` must be `https://` anywhere but local dev. A signed URL
 _is_ a bearer credential and the object bytes stream through it, so a plaintext
 origin hands both to anyone on the path. Only `http://localhost` /
 `http://127.0.0.1` belong in `.dev.vars`.
@@ -309,7 +311,8 @@ bare key back in — the component re-scopes it.
 
 - [ ] `lunora registry add storage` run, `pnpm install` done.
 - [ ] `UPLOADS` bucket bound to a real bucket; `STORAGE_SIGNING_SECRET` (≥32
-      chars) and `STORAGE_PUBLIC_BASE_URL` (a bare origin) set.
+      chars) set; `STORAGE_PUBLIC_BASE_URL` left empty unless another host
+      serves `/storage/*` or you sign URLs in a query or a scheduled job.
 - [ ] `lunora codegen` run so `api.storage.*` is generated.
 - [ ] `/storage/*` route added, verifying signed URLs on both `PUT` and `GET`.
 - [ ] Verified a client upload → signed download round-trip.

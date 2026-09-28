@@ -35,9 +35,12 @@
  * wrangler.jsonc / .dev.vars on add):
  *   - `env.UPLOADS`                 — the R2 bucket binding.
  *   - `env.STORAGE_SIGNING_SECRET`  — HMAC secret for signed URLs (secret).
- *   - `env.STORAGE_PUBLIC_BASE_URL` — bare origin serving the `/storage/*` route
- *                                     (no path: the key is verified from the
- *                                     whole URL pathname).
+ *   - `env.STORAGE_PUBLIC_BASE_URL` — optional: bare origin serving the
+ *                                     `/storage/*` route (no path: the key is
+ *                                     verified from the whole URL pathname).
+ *                                     Unset, URLs are signed against the origin
+ *                                     the request reached your Worker on
+ *                                     (`ctx.origin`).
  */
 import { env as workerEnv } from "cloudflare:workers";
 
@@ -118,7 +121,7 @@ const MIN_SIGNING_SECRET_LENGTH = 32;
 /**
  * Key prefix every object this item stores lives under.
  *
- * A worker-signed URL is `${STORAGE_PUBLIC_BASE_URL}/<key>?…` and
+ * A worker-signed URL is `${base}/<key>?…` and
  * `verifySignedUrl` reconstructs the key from the WHOLE pathname — so the base
  * must be a bare origin and the route that serves the bytes has to match on the
  * key's own first segment. Prefixing every key with `storage/` is what makes the
@@ -127,12 +130,44 @@ const MIN_SIGNING_SECRET_LENGTH = 32;
 const KEY_PREFIX = "storage";
 
 /**
+ * The base every URL is signed against: `STORAGE_PUBLIC_BASE_URL` when set,
+ * otherwise the origin the request reached the Worker on (`ctx.origin`).
+ *
+ * The host is bound into each URL's HMAC, so it has to be the one the browser
+ * will actually call. The request origin is that host in dev, in a preview and
+ * in production alike, which is why the env var is only an override (a CDN or
+ * a separate object host in front of the route).
+ *
+ * `ctx.origin` exists only in mutations and actions reached by a request. A
+ * query has none (a live query re-runs with no request behind it, and its
+ * cached result is shared across hosts), and neither does a scheduled or
+ * workflow run, so signing there needs the env var.
+ */
+const resolveBaseUrl = (origin: string | undefined): string => {
+    const configured = env.STORAGE_PUBLIC_BASE_URL;
+
+    if (typeof configured === "string" && configured !== "") {
+        return configured;
+    }
+
+    if (origin === undefined) {
+        throw new Error(
+            "@lunora/storage registry item: no base URL to sign against. `ctx.origin` is only set in a mutation or action reached by a request, so a query, a scheduled job or a workflow step needs a base URL: set `STORAGE_PUBLIC_BASE_URL` to the bare origin serving `/storage/*` (.dev.vars locally, a Worker variable when deployed).",
+        );
+    }
+
+    return origin;
+};
+
+/**
  * Build a {@link Storage} bound to the R2 bucket + signing config from the
  * Worker env. Cheap to construct, so we make one per call rather than holding a
- * module-global (keeps it correct under per-isolate env injection). Throws with
- * a clear message if the `UPLOADS` binding or the signing config is missing.
+ * module-global (keeps it correct under per-isolate env injection, and the base
+ * is per request). Pass `publicBaseUrl` (from {@link resolveBaseUrl}) wherever a
+ * URL is minted; a delete or a list needs none. Throws with a clear message if
+ * the `UPLOADS` binding or the signing secret is missing.
  */
-const makeStorage = (): Storage => {
+const makeStorage = (publicBaseUrl?: string): Storage => {
     const bucket = env.UPLOADS as StorageBucket | undefined;
 
     if (!bucket) {
@@ -145,7 +180,7 @@ const makeStorage = (): Storage => {
         // replayed against another bucket sharing the signing secret. Matches the
         // tag a single-bucket app's bare `ctx.storage` carries.
         bucketName: "default",
-        publicBaseUrl: requireEnv("STORAGE_PUBLIC_BASE_URL"),
+        publicBaseUrl,
         signingSecret: requireEnv("STORAGE_SIGNING_SECRET", MIN_SIGNING_SECRET_LENGTH),
     });
 };
@@ -214,7 +249,7 @@ export const generateUploadUrl = action
         }
 
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
-        const url = await makeStorage().generateUploadUrl(scoped, { contentType, expiresInSeconds });
+        const url = await makeStorage(resolveBaseUrl(ctx.origin)).generateUploadUrl(scoped, { contentType, expiresInSeconds });
 
         return { key: scoped, url };
     });
@@ -232,7 +267,7 @@ export const getDownloadUrl = action
     .use(rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
     .action(async ({ args: { expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
-        const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
+        const url = await makeStorage(resolveBaseUrl(ctx.origin)).getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
 
         return { key: scoped, url };
     });

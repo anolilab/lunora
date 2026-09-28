@@ -1026,6 +1026,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 log,
                 metrics,
                 now,
+                // The same request origin the storage fallback above uses, handed
+                // to the handler so code that signs its own URLs (a copy-in
+                // `createStorage`) can fall back to it too. `undefined` for a
+                // query and for a deferred dispatch, for the reasons given there.
+                origin: requestOrigin,
                 orm: bindOrm(facade),
                 scheduler,
                 span,

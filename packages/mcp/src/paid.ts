@@ -15,15 +15,18 @@
  * A call the transport would reject anyway (wrong Accept or Content-Type, a
  * malformed or id-less JSON-RPC message, an unsupported protocol version) is
  * answered with the transport's own error BEFORE the paywall, so it is never
- * charged. Settlement then precedes dispatch (x402's `settleBeforeHandler`
- * default, which this module does not override), so a tool that throws has
- * already been paid for — which is why a throwing handler returns an `isError`
- * result rather than a JSON-RPC protocol error the client may not surface.
- * Nothing refunds that payment automatically: settlement is final on-chain, so a
- * refund the app decides it owes is paid out of band, keyed on the settlement
- * transaction in the `onReceipt` receipt. The arguments are not validated
- * against `inputSchema` before settlement either — a tool rejecting its input
- * after payment has still been paid.
+ * charged. So is a call whose `arguments` fail the tool's own `inputSchema`: the
+ * same compiled validator that guards the handler at dispatch runs first, and its
+ * `isError` result is returned without a charge.
+ *
+ * Settlement then precedes dispatch (x402's `settleBeforeHandler` default, which
+ * this module does not override), so a VALID call whose handler throws or
+ * returns `isError` has already been paid for — which is why a throwing handler
+ * returns an `isError` result rather than a JSON-RPC protocol error the client
+ * may not surface. Nothing refunds that payment automatically: settlement is
+ * final on-chain, so a refund the app decides it owes is paid out of band, keyed
+ * on the settlement transaction in the `onReceipt` receipt. A check the handler
+ * makes that the schema could express belongs in the schema, for that reason.
  *
  * ```ts
  * const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
@@ -45,6 +48,8 @@ import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
+import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 
 import { memoizePromise } from "../../../shared/promise-memo";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
@@ -171,7 +176,26 @@ interface PaidMcpServer {
 interface RegisteredTool {
     definition: Tool;
     handler: ToolHandler;
+    /** `definition.inputSchema`, compiled once at registration. */
+    validate: JsonSchemaValidator<Record<string, unknown>>;
 }
+
+/**
+ * The SDK's eval-free JSON Schema provider. Its Ajv default compiles schemas
+ * with `new Function`, which workerd refuses — this one runs on Workers.
+ */
+const schemaValidator = new CfWorkerJsonSchemaValidator();
+
+/**
+ * The `isError` result for a call whose arguments fail the tool's
+ * `inputSchema`, or `undefined` when they pass. The ONE check both the
+ * pre-charge dry run and the real dispatch apply, so they cannot disagree.
+ */
+const argumentsRejection = (entry: RegisteredTool, name: string, arguments_: Record<string, unknown>): CallToolResult | undefined => {
+    const result = entry.validate(arguments_);
+
+    return result.valid ? undefined : { content: [{ text: `invalid arguments for tool "${name}": ${result.errorMessage}`, type: "text" }], isError: true };
+};
 
 /** Default server identity when the caller doesn't supply one. */
 
@@ -245,23 +269,34 @@ const refuseBatch = (): Response =>
  * the SDK `Server` refuse before a tool runs — a missing `text/event-stream` in
  * Accept (406), a non-JSON Content-Type (415), a malformed JSON-RPC envelope or
  * an unsupported `mcp-protocol-version` (400), a notification with no id (202),
- * invalid `tools/call` params — comes back as the transport's own response,
+ * invalid `tools/call` params, arguments that fail the tool's `inputSchema` —
+ * comes back as the transport's own response,
  * because it IS the transport's own response. A hand-copied list of those checks
  * would drift from the SDK on its next release; this cannot.
  *
  * Side-effect free: the stub handler replaces every tool, and the body is the
  * already-parsed one, so the real dispatch after payment re-reads nothing.
  */
-const transportRejection = async (request: Request, parsedBody: unknown, name: string, maxRequestBytes: number | undefined): Promise<Response | undefined> => {
+const transportRejection = async (
+    request: Request,
+    parsedBody: unknown,
+    name: string,
+    entry: RegisteredTool,
+    maxRequestBytes: number | undefined,
+): Promise<Response | undefined> => {
     // An object, not a `let`: the flag is flipped inside a callback, which flow
     // analysis cannot see, so a bare boolean reads as always-false here.
     const handler = { reached: false };
     const probe = new Server({ name: "lunora-paid-mcp-preflight", version: "0.0.0" }, { capabilities: { tools: {} } });
 
     probe.setRequestHandler(CallToolRequestSchema, (call): CallToolResult => {
-        handler.reached = call.params.name === name;
+        // The arguments the SDK parsed out of the envelope, checked by the same
+        // validator dispatch runs — a rejection here is answered unpaid.
+        const rejection = argumentsRejection(entry, name, call.params.arguments ?? {});
 
-        return { content: [] };
+        handler.reached = rejection === undefined && call.params.name === name;
+
+        return rejection ?? { content: [] };
     });
 
     const response = await serveStateless(probe, request, { maxRequestBytes, parsedBody });
@@ -300,7 +335,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
             definition.annotations = options.annotations;
         }
 
-        tools.set(options.name, { definition, handler });
+        tools.set(options.name, { definition, handler, validate: schemaValidator.getValidator(definition.inputSchema) });
 
         if (price !== undefined) {
             prices.set(options.name, price);
@@ -324,8 +359,15 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
                 return { content: [{ text: `unknown tool: ${request.params.name}`, type: "text" }], isError: true };
             }
 
+            const callArguments = request.params.arguments ?? {};
+            const rejection = argumentsRejection(entry, request.params.name, callArguments);
+
+            if (rejection !== undefined) {
+                return rejection;
+            }
+
             try {
-                return (await entry.handler(request.params.arguments ?? {})) as CallToolResult;
+                return (await entry.handler(callArguments)) as CallToolResult;
             } catch (error: unknown) {
                 // An `isError` result, not a rejection — the SDK turns a handler
                 // rejection into a JSON-RPC protocol `error`, which a client that
@@ -388,19 +430,21 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
 
         const name = callToolName(parsedBody);
         const price = name === undefined ? undefined : prices.get(name);
+        const entry = name === undefined ? undefined : tools.get(name);
 
         // Free tool, or any non-`tools/call` method (initialize, tools/list, …):
-        // dispatch without a paywall.
-        if (name === undefined || price === undefined) {
+        // dispatch without a paywall. A priced name is always registered.
+        if (name === undefined || price === undefined || entry === undefined) {
             return dispatch();
         }
 
         // Charge only for a call the transport will actually deliver. Payment is
         // settled BEFORE dispatch, and the transport's own checks (Accept,
-        // Content-Type, protocol version, a JSON-RPC request with an id) run INSIDE
-        // dispatch — so a call it rejects would be paid for and answered with an
-        // error. The dry run below is those checks, not a copy of them.
-        const rejected = await transportRejection(request, parsedBody, name, config.maxRequestBytes);
+        // Content-Type, protocol version, a JSON-RPC request with an id) and the
+        // tool's `inputSchema` check run INSIDE dispatch — so a call they reject
+        // would be paid for and answered with an error. The dry run below is
+        // those checks, not a copy of them.
+        const rejected = await transportRejection(request, parsedBody, name, entry, config.maxRequestBytes);
 
         if (rejected !== undefined) {
             return rejected;

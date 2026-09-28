@@ -1,3 +1,29 @@
+## @lunora/cli [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.320...@lunora/cli@1.0.0-alpha.321) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.169
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.82
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.235
+* **@lunora/config:** upgraded to 1.0.0-alpha.279
+* **@lunora/d1:** upgraded to 1.0.0-alpha.149
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.195
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.161
+* **@lunora/seed:** upgraded to 1.0.0-alpha.167
+* **@lunora/testing:** upgraded to 1.0.0-alpha.208
+
+## @lunora/cli [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.319...@lunora/cli@1.0.0-alpha.320) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/cli [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.318...@lunora/cli@1.0.0-alpha.319) (2026-09-28)
 
 ### Bug Fixes

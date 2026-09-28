@@ -1,3 +1,32 @@
+## @lunora/mcp [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.194...@lunora/mcp@1.0.0-alpha.195) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.159
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+
+## @lunora/mcp [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.193...@lunora/mcp@1.0.0-alpha.194) (2026-09-28)
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** tools registered on createPaidMcpServer (free and paid) now receive only
+arguments that satisfy their inputSchema; a non-conforming call returns an isError result
+without running the handler. Adds @cfworker/json-schema (the SDK's optional peer) as a
+dependency of @lunora/mcp.
+
+A valid call whose handler throws or returns isError is still charged; the module docs keep
+the out-of-band refund note for that case.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **mcp:** validate paid tool arguments before charging ([#900](https://github.com/anolilab/lunora/issues/900)) ([8f30062](https://github.com/anolilab/lunora/commit/8f300626f1b35303dc33e4fff777f6a3bc0dd284))
+
 ## @lunora/mcp [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.192...@lunora/mcp@1.0.0-alpha.193) (2026-09-28)
 
 

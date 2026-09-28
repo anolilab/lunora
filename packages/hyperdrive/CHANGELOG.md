@@ -1,3 +1,23 @@
+## @lunora/hyperdrive [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.146...@lunora/hyperdrive@1.0.0-alpha.147) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.150
+
+## @lunora/hyperdrive [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.145...@lunora/hyperdrive@1.0.0-alpha.146) (2026-09-28)
+
+### Bug Fixes
+
+* **sql-store:** hold the global cdc poll cursor below late commits ([#903](https://github.com/anolilab/lunora/issues/903)) ([d118920](https://github.com/anolilab/lunora/commit/d118920b33d5ddb9a760b9eda2a46d2880a8f40e))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.149
+
 ## @lunora/hyperdrive [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.144...@lunora/hyperdrive@1.0.0-alpha.145) (2026-09-27)
 
 ### Tests
