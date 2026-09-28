@@ -58,8 +58,7 @@
     },
     "dependencies": {
         "@lunora/codegen": "1.0.0-alpha.234",
-        "@lunora/config": "1.0.0-alpha.277",
-        "@lunora/errors": "1.0.0-alpha.46"
+        "@lunora/config": "1.0.0-alpha.278"
     },
     "devDependencies": {
         "@rspack/core": "catalog:build",

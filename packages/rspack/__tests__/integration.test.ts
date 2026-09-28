@@ -6,7 +6,7 @@ import { rspack } from "@rspack/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraRspack } from "../src/index";
-import { createFixture, SCHEMA, SCHEMA_WITH_ERROR_ADVISORY, SCHEMA_WITH_GLOBAL } from "./fixture";
+import { createFixture, SCHEMA, SCHEMA_WITH_ERROR_ADVISORY, SCHEMA_WITH_GLOBAL, WRANGLER } from "./fixture";
 
 /**
  * End-to-end coverage against a REAL `@rspack/core` compiler.
@@ -266,10 +266,12 @@ describe("rspack watch (real compiler)", () => {
         expect(readFileSync(join(root, "lunora", "_generated", "api.ts"), "utf8")).toContain("ping");
         expect(builds.flat()).toStrictEqual([]);
 
-        // Codegen's own writes land inside the watched directory. Exactly two
-        // builds means the source-fingerprint gate stopped the cascade; a third
-        // would mean it is regenerating itself.
-        expect(builds).toHaveLength(2);
+        // Codegen's own writes land inside the watched directory, and the first
+        // pass reconciles an inferred binding into the watched `wrangler.jsonc`.
+        // Three builds is the ceiling: the initial one, the new file, and that
+        // one-time reconcile write. Settling at all inside the window is the
+        // assertion — an ungated cascade keeps building through it.
+        expect(builds.length).toBeLessThanOrEqual(3);
     }, 60_000);
 
     it("does not let a postcodegen hook that rewrites generated output loop forever", async () => {
@@ -315,6 +317,58 @@ describe("rspack watch (real compiler)", () => {
         // unreachable whenever `watchMode` is read before `watch()` assigns it.
         expect(readFileSync(join(root, ".dev.vars"), "utf8")).toContain("WORKER_ENV");
         expect(builds.flat()).toStrictEqual([]);
+    }, 60_000);
+
+    it("clears a wrangler failure once the config is fixed, without touching the schema", async () => {
+        expect.assertions(2);
+
+        const root = fixture({ wrangler: false });
+
+        const { builds } = await watchRun(
+            root,
+            () => {
+                // Only `wrangler.jsonc` changes — the schema is untouched. The pass
+                // has to rerun anyway: its fingerprint covers the wrangler config,
+                // and a failed pass does not record one, so the stale finding is
+                // not replayed forever.
+                writeFileSync(join(root, "wrangler.jsonc"), WRANGLER, "utf8");
+            },
+            { expectedBuilds: 2, settleMs: 2500 },
+        );
+
+        expect(builds[0]?.join("\n")).toContain("wrangler.jsonc not found");
+        expect(builds.at(-1)).toStrictEqual([]);
+    }, 60_000);
+
+    it("retries a failed pass whose fix changes nothing the fingerprint covers", async () => {
+        expect.assertions(2);
+
+        // The hook fails until a sentinel appears. The sentinel sits OUTSIDE
+        // `lunora/` and is not the tsconfig or the wrangler config, so creating it
+        // changes no fingerprinted input — the pass can only rerun because a failed
+        // one records no fingerprint. Recording it up front pinned the failure: the
+        // stale finding replayed on every later compilation with no way to clear it.
+        const root = fixture({ scripts: { postcodegen: `node -e "process.exit(require('fs').existsSync('.hook-ok') ? 0 : 1)"` } });
+
+        // Settle the project first. The very first pass on a fresh fixture
+        // reconciles an inferred binding INTO the watched `wrangler.jsonc`, which
+        // moves the fingerprint on its own and would let the pass rerun for the
+        // wrong reason — masking exactly what this test is for.
+        await runOnce(productionCompiler(root));
+
+        const { builds } = await watchRun(
+            root,
+            () => {
+                writeFileSync(join(root, ".hook-ok"), "", "utf8");
+                // `index.js` is rspack's entry, watched by rspack and absent from the
+                // fingerprint — it is what makes a rebuild happen at all here.
+                writeFileSync(join(root, "index.js"), 'console.log("app");\n// touched\n', "utf8");
+            },
+            { expectedBuilds: 2, settleMs: 2500 },
+        );
+
+        expect(builds[0]).not.toStrictEqual([]);
+        expect(builds.at(-1)).toStrictEqual([]);
     }, 60_000);
 
     it("logs an ERROR-level advisory without failing the rebuild", async () => {

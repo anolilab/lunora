@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { findTsconfig, fingerprintSchemaSources } from "@lunora/codegen";
@@ -15,7 +16,7 @@ import {
     lunoraLine,
     runPostCodegenHook,
 } from "@lunora/config";
-import { assertWranglerSatisfiesSchema, reconcileBindingsSafely } from "@lunora/config/cloudflare";
+import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely } from "@lunora/config/cloudflare";
 
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
@@ -24,6 +25,15 @@ import type { ResolvedLunoraRspackOptions } from "./types";
 
 /** Tap name Rspack attributes this plugin's hooks to, in stats and in profiling output. */
 const PLUGIN_NAME = "LunoraRspackPlugin";
+
+/** A file's contents, or `""` when it is absent or unreadable — either way, "nothing to hash". */
+const readFileOrEmpty = (path: string): string => {
+    try {
+        return readFileSync(path, "utf8");
+    } catch {
+        return "";
+    }
+};
 
 /** Everything the plugin prints goes through the badge, so its lines read like `lunora dev`'s. */
 const consoleLogger: CodegenLogger = {
@@ -147,12 +157,15 @@ class LunoraRspackPlugin {
             // file-list watch would never see it appear.
             compilation.contextDependencies.add(this.#schemaDirectory);
 
-            // Not under the schema directory, so it needs its own registration — a
-            // new path alias or `include` changes what codegen resolves.
-            const tsconfigPath = findTsconfig(this.#schemaDirectory);
-
-            if (tsconfigPath !== undefined) {
-                compilation.fileDependencies.add(tsconfigPath);
+            // Neither lives under the schema directory, so both need their own
+            // registration: a new path alias or `include` changes what codegen
+            // resolves, and an edited wrangler config changes what validation
+            // accepts. Without these, fixing either one leaves the build showing
+            // the stale error until something under `lunora/` happens to change.
+            for (const path of [findTsconfig(this.#schemaDirectory), findWranglerFile(this.#options.projectRoot)]) {
+                if (path !== undefined) {
+                    compilation.fileDependencies.add(path);
+                }
             }
 
             for (const finding of this.#findings) {
@@ -206,35 +219,74 @@ class LunoraRspackPlugin {
         // ponytail: a NON-idempotent postcodegen that rewrites a SOURCE file
         // differently each run still oscillates. Vite caps that with
         // MAX_SETTLE_RERUNS; add the same counter here if anyone hits it.
-        const fingerprint = fingerprintSchemaSources(this.#schemaDirectory);
+        const fingerprint = this.#fingerprint(tsconfig);
 
         if (fingerprint === this.#lastFingerprint) {
             return;
         }
 
-        this.#lastFingerprint = fingerprint;
-
-        if (!this.#started) {
-            this.#started = true;
-
-            if (watching) {
-                await prepareDevSession(this.#options);
-            }
-        }
-
         this.#findings = [];
 
         try {
+            // Inside the try, and before `#started` is set: `.dev.vars` scaffolding
+            // reads and writes files, so an unreadable `.dev.vars.example` or a
+            // read-only directory would otherwise reject the hook and end the watch
+            // session — the one thing this plugin promises never to do. Leaving
+            // `#started` unset on failure lets the next rebuild retry it.
+            if (!this.#started && watching) {
+                await prepareDevSession(this.#options);
+            }
+
+            this.#started = true;
+
             await this.#generate(watching);
+
+            // Recorded only after a CLEAN pass, and deliberately keyed on the
+            // findings rather than on whether anything threw: `#generate` REPORTS a
+            // `postcodegen` failure instead of throwing, so a throw-only check
+            // still pinned the inputs of a failed pass. Either way the effect was
+            // the same — the stale finding replayed on every later compilation and
+            // nothing short of editing the schema could clear it.
+            //
+            // A watch-mode schema advisory is not a finding (it is logged, not
+            // reported), so a session with a standing advisory still records its
+            // fingerprint and does not re-run codegen on every rebuild.
+            if (this.#findings.length === 0) {
+                this.#lastFingerprint = fingerprint;
+            }
         } catch (error: unknown) {
-            // A codegen crash, or a wrangler config that cannot satisfy the schema.
-            // Reported, not rethrown, so a watch session survives a half-typed
-            // schema and regenerates on the next save. The Project is dropped
-            // because a run that threw may have left it partially mutated.
+            // A codegen crash, a wrangler config that cannot satisfy the schema, or
+            // a `.dev.vars` that could not be prepared. Reported, not rethrown, so a
+            // watch session survives a half-typed schema and regenerates on the next
+            // save. The Project is dropped because a run that threw may have left it
+            // partially mutated, and the fingerprint stays unset so the next
+            // compilation retries rather than replaying this finding forever.
             this.#project.drop();
+            this.#lastFingerprint = undefined;
             this.#findings.push(error instanceof Error ? error : new Error(String(error)));
             consoleLogger.error(error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /**
+     * Content hash of every input a pass depends on: the schema sources codegen
+     * reads, the tsconfig that decides how they resolve, and the wrangler config
+     * that validation checks them against.
+     *
+     * The wrangler config has to be in here. Without it, editing `wrangler.jsonc`
+     * in a live session left the fingerprint unchanged, so the next compilation
+     * skipped binding reconciliation, validation and codegen entirely — and a
+     * changed top-level `vars` never reached the `plaintext_secret_in_wrangler_vars`
+     * advisory.
+     *
+     * Each part is hashed to a fixed-width digest before being combined, so no
+     * concatenation of one part's content can impersonate another's.
+     */
+    #fingerprint(tsconfig: string): string {
+        const wranglerPath = findWranglerFile(this.#options.projectRoot);
+        const parts = [fingerprintSchemaSources(this.#schemaDirectory), tsconfig, wranglerPath === undefined ? "" : readFileOrEmpty(wranglerPath)];
+
+        return parts.map((part) => createHash("sha256").update(part).digest("hex")).join("");
     }
 
     /** The pass proper, in the order the steps depend on each other. */
@@ -269,15 +321,7 @@ class LunoraRspackPlugin {
     #readTsconfig(): string {
         const tsconfigPath = findTsconfig(this.#schemaDirectory);
 
-        if (tsconfigPath === undefined || !existsSync(tsconfigPath)) {
-            return "";
-        }
-
-        try {
-            return readFileSync(tsconfigPath, "utf8");
-        } catch {
-            return "";
-        }
+        return tsconfigPath === undefined ? "" : readFileOrEmpty(tsconfigPath);
     }
 }
 
