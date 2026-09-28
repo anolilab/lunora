@@ -1,3 +1,10 @@
+## @lunora/scheduler [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.95...@lunora/scheduler@1.0.0-alpha.96) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+
 ## @lunora/scheduler [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.94...@lunora/scheduler@1.0.0-alpha.95) (2026-09-28)
 
 ### Code Refactoring
