@@ -430,6 +430,9 @@ catalogs:
       specifier: 3.0.0
       version: 3.0.0
   mcp:
+    '@cfworker/json-schema':
+      specifier: ^4.1.1
+      version: 4.1.1
     '@modelcontextprotocol/sdk':
       specifier: ^1.30.0
       version: 1.30.0
@@ -1600,7 +1603,7 @@ importers:
         version: 19.2.8(react@19.2.8)
       shadcn:
         specifier: catalog:ui
-        version: 4.21.0(supports-color@10.2.2)(typescript@6.0.3)
+        version: 4.21.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(typescript@6.0.3)
     devDependencies:
       '@rolldown/plugin-babel':
         specifier: catalog:web
@@ -2383,7 +2386,7 @@ importers:
         version: link:../workflow
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
-        version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+        version: 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.4.3)
       ai:
         specifier: catalog:ai
         version: 7.0.93(zod@4.5.4)
@@ -3687,6 +3690,9 @@ importers:
 
   packages/mcp:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: catalog:mcp
+        version: 4.1.1
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
@@ -3698,7 +3704,7 @@ importers:
         version: link:../shard-engine
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
-        version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+        version: 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.4.3)
     devDependencies:
       '@lunora/x402':
         specifier: workspace:*
@@ -3874,7 +3880,7 @@ importers:
         version: 1.3.0(better-auth@1.7.3(509dd2df8dfdd5abdda7e32742b495cf))(better-call@1.4.0(zod@4.4.3))(express@5.2.1(supports-color@10.2.2))(hono@4.13.7)(react@19.2.8)
       creem:
         specifier: catalog:payment
-        version: 1.6.2(supports-color@10.2.2)
+        version: 1.6.2(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
       dodopayments:
         specifier: catalog:payment
         version: 2.49.0
@@ -4863,7 +4869,7 @@ importers:
         version: 19.2.8(react@19.2.8)
       shadcn:
         specifier: catalog:ui
-        version: 4.21.0(supports-color@10.2.2)(typescript@6.0.3)
+        version: 4.21.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(typescript@6.0.3)
       tailwindcss:
         specifier: catalog:vite
         version: 4.3.3
@@ -6545,6 +6551,9 @@ packages:
   '@capsizecss/unpack@4.0.0':
     resolution: {integrity: sha512-VERIM64vtTP1C4mxQ5thVT9fK0apjPFobqybMtA1UdUujWka24ERHbRHFGmpbbhp73MhV+KSsHQH9C6uOTdEQA==}
     engines: {node: '>=18'}
+
+  '@cfworker/json-schema@4.1.1':
+    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -26760,6 +26769,8 @@ snapshots:
     dependencies:
       fontkitten: 1.0.3
 
+  '@cfworker/json-schema@4.1.1': {}
+
   '@clack/core@1.4.3':
     dependencies:
       fast-wrap-ansi: 0.2.2
@@ -28773,7 +28784,7 @@ snapshots:
     dependencies:
       moo: 0.5.3
 
-  '@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@3.25.76)':
+  '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@3.25.76)':
     dependencies:
       '@hono/node-server': 2.1.0(hono@4.13.1)
       ajv: 8.20.0
@@ -28792,10 +28803,12 @@ snapshots:
       raw-body: 3.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 2.1.0(hono@4.13.1)
       ajv: 8.20.0
@@ -28814,6 +28827,8 @@ snapshots:
       raw-body: 3.0.2
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
 
@@ -38955,9 +38970,9 @@ snapshots:
       crc-32: 1.2.2
       readable-stream: 4.7.0
 
-  creem@1.6.2(supports-color@10.2.2):
+  creem@1.6.2(@cfworker/json-schema@4.1.1)(supports-color@10.2.2):
     dependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.4.3)
       jsonpath-rfc9535: 1.1.0
       zod: 4.4.3
     transitivePeerDependencies:
@@ -46512,14 +46527,14 @@ snapshots:
 
   setprototypeof@1.2.0: {}
 
-  shadcn@4.21.0(supports-color@10.2.2)(typescript@6.0.3):
+  shadcn@4.21.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(typescript@6.0.3):
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/parser': 7.29.8
       '@babel/plugin-transform-typescript': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@babel/preset-typescript': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@dotenvx/dotenvx': 1.71.0
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@10.2.2)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@3.25.76)
       '@types/validate-npm-package-name': 4.0.2
       browserslist: 4.28.6
       cn: 0.2.6
