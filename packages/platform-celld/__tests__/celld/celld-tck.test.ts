@@ -86,7 +86,7 @@ describe("celld conformance run", () => {
 
         const run = Date.now().toString();
 
-        it.for(["d1", "kv", "r2"])("%s runs the calls Lunora's adapter makes", async (name) => {
+        it.for(["d1", "ed25519", "kv", "r2"])("%s runs the calls Lunora's adapter makes", async (name) => {
             expect.assertions(1);
 
             await expect(binding(name)).resolves.toStrictEqual({ status: "passed" });

@@ -64,6 +64,7 @@
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/agent": "1.0.0-alpha.131",
         "@lunora/bindings": "1.0.0-alpha.68",
         "@lunora/container": "1.0.0-alpha.56",
         "@lunora/d1": "1.0.0-alpha.129",

@@ -3,13 +3,15 @@
  *
  * The contract suites cover what `ShardHost` / `SocketHost` / `ShardKvStore`
  * rest on. The other `native` ratings — D1, KV, R2, Queues, Workflows, Cron
- * Triggers — rest on celld bindings, so each check here drives the binding
+ * Triggers — rest on celld bindings (and Discord channel verification on its
+ * Web Crypto), so each check here drives the binding
  * through Lunora's own adapter where there is one (`D1Client`, `createKv`,
  * `createStorage`, `createQueues` + `dispatchQueueBatch`), in the call shapes
  * the runtime actually uses (see each check). Checks that complete
  * asynchronously (a queue delivery, a workflow run, a cron tick) record what
  * they observed in KV under `tck:*`, and the node side polls for it.
  */
+import { verifyDiscord } from "@lunora/agent/channels";
 import { createKv } from "@lunora/bindings/kv";
 import { D1Client } from "@lunora/d1";
 import type { D1DatabaseLike, KVNamespaceLike, QueueBindingLike, R2BucketLike } from "@lunora/platform";
@@ -224,6 +226,24 @@ class TckWorkflow extends WorkflowEntrypoint<BindingEnv, { seed: number }> {
     }
 }
 
+const toHex = (bytes: ArrayBuffer): string => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Discord channel verification (`verifyDiscord`): Ed25519 over `timestamp +
+ * body`, the public key imported in `raw` form. celld gained Ed25519 in v0.6.0;
+ * before that the import threw and every Discord interaction was rejected.
+ */
+const checkEd25519 = async (): Promise<void> => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const publicKey = toHex(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const body = JSON.stringify({ type: 1 });
+    const timestamp = "1790000000";
+    const signature = toHex(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(timestamp + body)));
+
+    check(await verifyDiscord({ body, publicKey, signature, timestamp }), "a valid Discord signature verifies");
+    check(!(await verifyDiscord({ body: `${body} `, publicKey, signature, timestamp })), "a tampered body is rejected");
+};
+
 /** What `scheduled()` hands `runCronJobs` and the backup cron: `cron` and `scheduledTime`. */
 const recordCron = async (controller: ScheduledController, env: BindingEnv): Promise<void> => {
     await env.KV.put("tck:cron", JSON.stringify({ cron: controller.cron, scheduledTime: controller.scheduledTime }));
@@ -239,7 +259,7 @@ const handleBindingRoute = async (request: Request, env: BindingEnv): Promise<Bi
     const url = new URL(request.url);
     const name = url.pathname.slice("/binding/".length);
     const id = url.searchParams.get("id") ?? "";
-    const synchronous: Record<string, (env: BindingEnv) => Promise<void>> = { d1: checkD1, kv: checkKv, r2: checkR2 };
+    const synchronous: Record<string, (env: BindingEnv) => Promise<void>> = { d1: checkD1, ed25519: checkEd25519, kv: checkKv, r2: checkR2 };
 
     try {
         const run = synchronous[name];
