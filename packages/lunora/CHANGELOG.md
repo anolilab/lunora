@@ -1,3 +1,14 @@
+## lunorash [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.323...lunorash@1.0.0-alpha.324) (2026-09-28)
+
+### Features
+
+* **rspack:** add an Rspack/webpack adapter ([#898](https://github.com/anolilab/lunora/issues/898)) ([79a869f](https://github.com/anolilab/lunora/commit/79a869fb488b7ddaadd284299f3c635d4fcd27d0)), closes [#906](https://github.com/anolilab/lunora/issues/906)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.322
+
 ## lunorash [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.322...lunorash@1.0.0-alpha.323) (2026-09-28)
 
 
