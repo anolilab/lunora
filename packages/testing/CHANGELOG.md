@@ -1,3 +1,9 @@
+## @lunora/testing [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.206...@lunora/testing@1.0.0-alpha.207) (2026-09-28)
+
+### Bug Fixes
+
+* close five template, registry and generator defects ([#897](https://github.com/anolilab/lunora/issues/897)) ([3df5a3e](https://github.com/anolilab/lunora/commit/3df5a3e8e23fb61a06bf996d8850a46aa041f6ce))
+
 ## @lunora/testing [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.205...@lunora/testing@1.0.0-alpha.206) (2026-09-27)
 
 
