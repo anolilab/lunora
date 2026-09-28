@@ -181,7 +181,7 @@ describe("gatePlatformFeatures", () => {
 
     // `celld` is the second spike target (see `@lunora/platform-celld`): a
     // Workers-compatible self-hosted Durable Objects runtime whose matrix
-    // (`CELLD_CAPABILITIES`, tracking celld v0.5.1) rates the bindings celld
+    // (`CELLD_CAPABILITIES`, tracking celld v0.6.0) rates the bindings celld
     // actually ships — KV, R2, D1, Queues, Workflows, Cron Triggers — as real
     // support, so those (and the queue-backed `mail`) must survive gating. What
     // it gates is the managed Cloudflare services celld has no binding for.

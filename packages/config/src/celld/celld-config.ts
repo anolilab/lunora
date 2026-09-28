@@ -21,7 +21,7 @@
  * source entry, the build's output root for a Vite build (whose assets sit in a
  * sibling of the server bundle).
  *
- * The accepted keys track celld v0.5.1's `docs/cloudflare-compat.md`
+ * The accepted keys track celld v0.6.0's `docs/cloudflare-compat.md`
  * ("Wrangler configuration") and `docs/services/containers.md`.
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";

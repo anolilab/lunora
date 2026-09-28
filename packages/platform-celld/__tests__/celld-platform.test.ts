@@ -5,7 +5,7 @@ import { createCelldShardPlatform, createCelldWorkerPlatform } from "../src/cell
 
 /**
  * A minimal `DurableObjectState` double carrying the surface celld documents
- * as of v0.5.1: key-value storage, `storage.sql`, alarms, and the hibernation
+ * as of v0.6.0: key-value storage, `storage.sql`, alarms, and the hibernation
  * socket API.
  */
 const createStateDouble = () => {

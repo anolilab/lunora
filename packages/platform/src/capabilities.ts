@@ -628,9 +628,9 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * differs is which primitives exist, and that difference is exactly this
  * matrix.
  *
- * Ratings track celld **v0.5.1** and derive from its documented compatibility
+ * Ratings track celld **v0.6.0** and derive from its documented compatibility
  * surface (`docs/cloudflare-compat.md`, `docs/services/*.md`,
- * `docs/limitations.md` in the celld repo, all alpha). The host contracts
+ * `docs/limitations.md` in the celld repo; v0.6.0 is celld's first beta). The host contracts
  * behind `shardedState`, `localSql`, `shardAlarms`, `commitOrderedTables` and
  * `websocketHibernation` are also exercised by the conformance TCK against a
  * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project),
@@ -653,7 +653,9 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * beside `queue()` (so `queues`, and `mail` with it, run on the one worker a
  * Lunora app compiles to), `getTags()` exists and a hibernatable socket
  * survives its cell hibernating (so `websocketHibernation` is real), and
- * Containers ship behind `ctx.container`.
+ * Containers ship behind `ctx.container`. v0.6.0 changes no rating: it drops
+ * the invalid-UTF-8 refusal from `TEXT` reads (they now decode as U+FFFD, as on
+ * workerd) and keeps empty R2 key segments, both reflected in the notes below.
  *
  * `shardPlacement` and `shardReadReplicas` stay `unsupported`: celld assigns a
  * cell to whichever node has capacity, and its v0.4.1 rebalancing evens out
@@ -700,7 +702,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         globalTables: {
             level: "native",
-            note: "D1 bindings, backed by the fleet's own SQLite rather than Cloudflare's. Two differences that matter: a result is capped at 100,000 rows or 32 MiB, and there are no read replicas — so the Sessions API's bookmark pinning is satisfied trivially rather than by catching a replica up. Bytes must go in a BLOB; celld refuses invalid UTF-8 from a TEXT value (which is where Lunora already puts them)",
+            note: "D1 bindings, backed by the fleet's own SQLite rather than Cloudflare's. Two differences that matter: a result is capped at 100,000 rows or 32 MiB, and there are no read replicas — so the Sessions API's bookmark pinning is satisfied trivially rather than by catching a replica up. Bytes still belong in a BLOB: a TEXT value that is not valid UTF-8 decodes with U+FFFD, as on workerd (Lunora already puts bytes in BLOBs)",
         },
         httpCache: {
             level: "unsupported",
@@ -721,7 +723,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         localSql: {
             level: "native",
-            note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. Two edges: celld refuses invalid UTF-8 from a TEXT value (store bytes in a BLOB, which the engine already does for sort keys and binary columns), and `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",
+            note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. One edge: `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",
         },
         mail: {
             level: "emulated",
@@ -733,7 +735,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         objectStorage: {
             level: "native",
-            note: "R2 bindings served from the fleet bucket under `r2/<bucket_name>/`. Gaps: no `ssecKey`, no `jurisdiction`, a conditional write cannot use a streamed body above 8 MiB, `createMultipartUpload()` takes no checksum, and a multipart upload cannot resume on another node or across a restart",
+            note: "R2 bindings served from the fleet bucket under `r2/<bucket_name>/`. Gaps: no `ssecKey`, no `jurisdiction`, a conditional write cannot use a streamed body above 8 MiB, `createMultipartUpload()` takes no checksum, and a multipart upload cannot resume on another node or across a restart. `list()` orders keys, and compares `startAfter`, by their percent-encoded form, so a key with a non-ASCII or reserved character (`%`, `~`, `#`, `*`, …) can list in a different position than on R2 — harmless for the CDC archive, whose keys vary only in zero-padded digits under a fixed prefix",
         },
         objectStorageBackups: {
             level: "emulated",

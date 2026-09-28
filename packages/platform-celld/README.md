@@ -13,7 +13,7 @@ const worker = createCelldWorkerPlatform(env); // in the worker entry
 
 ## What celld supports
 
-Ratings track **celld v0.5.1**. celld v0.3.0 shipped `state.storage.sql`, so the Lunora shard engine mounts on a cell unchanged, and v0.3.0/v0.4.0 added D1, KV, R2, Queues, Workflows and fleet-wide Cron Triggers as real bindings. v0.4.1–v0.5.1 closed the remaining Lunora blockers: a queue consumer may export `fetch()` on the same worker (so Queues and `ctx.mail` work), `getTags()` exists and hibernatable sockets survive their cell hibernating, and Containers ship (Experimental in celld).
+Ratings track **celld v0.6.0**, its first beta. celld v0.3.0 shipped `state.storage.sql`, so the Lunora shard engine mounts on a cell unchanged, and v0.3.0/v0.4.0 added D1, KV, R2, Queues, Workflows and fleet-wide Cron Triggers as real bindings. v0.4.1–v0.5.1 closed the remaining Lunora blockers: a queue consumer may export `fetch()` on the same worker (so Queues and `ctx.mail` work), `getTags()` exists and hibernatable sockets survive their cell hibernating, and Containers ship (Experimental in celld). v0.6.0 changes no rating; it drops the invalid-UTF-8 refusal on `TEXT` reads and keeps empty R2 key segments.
 
 `native`: sharded state, `localSql`, shard alarms, commit-ordered tables, global tables (D1), KV, object storage (R2), Queues, Workflows, Cron Triggers, WebSocket hibernation, Containers.
 
@@ -72,7 +72,7 @@ Non-secret configuration (feature switches, public URLs, region names), and valu
 
 ## Conformance
 
-`pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.5.1 the contract legs pass except 15 skips, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
+`pnpm run test:celld` boots `celld dev` on a TCK worker and runs every leg of the `@lunora/platform` and `@lunora/shard-engine` contract suites inside a real cell (the `celld` vitest project, gated by `LUNORA_CELLD_TESTS=1`; CI runs it against a pinned, checksum-verified release). Against v0.6.0 the contract legs pass except 15 skips, for the same missing test hooks as the Cloudflare workerd run (recycle simulation, a SchedulerHost, a terminal dispose, dispatch-level isolation).
 
 The same run drives the binding-backed ratings through Lunora's own adapters, in the call shapes the runtime uses: D1 via `D1Client` (sessions and bookmarks, `batch`, `UPDATE … RETURNING`, fts5), KV via `createKv` (JSON, metadata, TTL, prefix listing), R2 via `createStorage` plus the raw `sha256` / `startAfter` / `delimiter` calls the CDC archive and backups make, a queue consumed by `dispatchQueueBatch` on the same worker that exports `fetch` (a throwing first delivery comes back with `attempts: 2`), a workflow through `step.do` and `waitForEvent`, and one cron tick. With `LUNORA_CELLD_CONTAINERS=1` and a container engine, it also runs a `LunoraContainer` declared the way codegen emits one, and routes a request through it to the container's port (celld finds the engine via `DOCKER_HOST` or the default Docker / OrbStack / Podman socket; colima's needs `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`). Three gaps surfaced. A `defineQueue({ mode: "pull" })` queue is refused by celld at deploy. The other two would only fail once running — a `defineStep({ rollback })` step, and a container with an egress policy (`allowedHosts` / `deniedHosts` / `interceptHttps`) — so they are rated on their own keys (`workflowRollback`, `containerEgressPolicy`) and codegen refuses them for `target: "celld"` with a `platform_unsupported_feature` diagnostic, which blocks `lunora deploy`.
 
@@ -80,7 +80,7 @@ With `LUNORA_CELLD_S3_ENDPOINT` pointing at an S3-compatible endpoint (moto's se
 
 One difference from workerd surfaced: celld does not deliver a frame sent on an `acceptWebSocket` socket to a peer inside the same cell. Real clients get every frame, which a separate leg drives over the network (host sends, the wake-time socket id, tag fan-out); the engine harness records frames at the send boundary instead of reading them off an in-cell peer.
 
-Ratings derive from celld's documented compatibility surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld repo — all alpha), confirmed where the TCK reaches.
+Ratings derive from celld's documented compatibility surface (`docs/cloudflare-compat.md`, `docs/services/*.md`, `docs/limitations.md` in the celld repo, at the v0.6.0 tag), confirmed where the TCK reaches.
 
 ## Scope
 
