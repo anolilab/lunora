@@ -8,8 +8,8 @@ import { runCodegen } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeployCommandResult } from "../../src/commands/deploy/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
+import type { DeployCommandResult } from "../../src/commands/deploy/types";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";

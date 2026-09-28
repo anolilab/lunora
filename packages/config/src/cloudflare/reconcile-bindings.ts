@@ -21,16 +21,9 @@ import { containerBuildTag } from "@lunora/container";
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
-import type {
-    DurableObjectSpec,
-    GeneratedClassModule,
-    InferredAgent,
-    InferredBindings,
-    InferredContainer,
-    InferredQueue,
-    InferredWorkflow,
-} from "../infer-bindings";
+import type { InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
+import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
 import type { Manifest } from "./lunora-manifest";
 import { readManifest, recordManifestKey } from "./lunora-manifest";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";

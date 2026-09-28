@@ -76,8 +76,8 @@ export {
     runnableTargetIds,
     targetRunsOwnDevServer,
 } from "./driver-registry";
-export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
+export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
@@ -171,5 +171,7 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
+export type { GeneratedClassModule } from "./worker-entry";
+export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES } from "./worker-entry";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";

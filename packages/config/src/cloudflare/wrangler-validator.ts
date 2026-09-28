@@ -15,10 +15,10 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
-import { COMPOSED_ENTRY_DURABLE_OBJECTS, GENERATED_CLASS_MODULES, isFrameworkDurableObject } from "../infer-bindings";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
+import { COMPOSED_ENTRY_DURABLE_OBJECTS, GENERATED_CLASS_MODULES, isFrameworkDurableObject } from "../worker-entry";
 import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
 import { locateWorkerEntry, readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";

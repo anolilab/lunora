@@ -19,6 +19,7 @@ import { basename, dirname, extname } from "node:path";
 import type { Node, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
+import join from "../path";
 import {
     COMPOSED_ENTRY_DURABLE_OBJECTS,
     COMPOSED_WORKER_ENTRY,
@@ -29,8 +30,7 @@ import {
     NON_SOURCE_DIRECTORIES,
     SOURCE_DOT_DIRECTORIES,
     WORKER_ENTRY_FALLBACKS,
-} from "../infer-bindings";
-import join from "../path";
+} from "../worker-entry";
 
 /** Source extensions, in the order a relative specifier resolves them. */
 const SOURCE_EXTENSION_ORDER = [".ts", ".tsx", ".mts", ".cts"] as const;
