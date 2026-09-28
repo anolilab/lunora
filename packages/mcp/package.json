@@ -67,6 +67,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@cfworker/json-schema": "catalog:mcp",
         "@lunora/client": "1.0.0-alpha.158",
         "@lunora/errors": "1.0.0-alpha.47",
         "@lunora/shard-engine": "1.0.0-alpha.96",

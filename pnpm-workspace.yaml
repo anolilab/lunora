@@ -603,6 +603,10 @@ catalogs:
     "@visulima/notification": 1.1.1
   mcp:
     "@modelcontextprotocol/sdk": ^1.30.0
+    # The SDK's eval-free JSON Schema provider (`sdk/validation/cfworker`) needs
+    # this optional SDK peer; the Ajv default compiles with `new Function`, which
+    # workerd refuses. Keep in the SDK's peer range.
+    "@cfworker/json-schema": ^4.1.1
   # Client-side upload SDK (@lunora/storage /upload handler + framework upload
   # hooks). `@visulima/storage` is the server-side resumable upload handler
   # (TUS / chunked-REST / multipart over R2 via its aws-light provider);

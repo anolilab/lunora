@@ -17,6 +17,14 @@ export default defineConfig({
      */
     externals: [/^@lunora\/x402($|\/)/],
     runtime: "node",
+    // `@cfworker/json-schema` is never imported here: `src/paid.ts` loads the
+    // SDK's `validation/cfworker` provider, which imports it as the SDK's OPTIONAL
+    // peer. Declaring it is what makes that import resolve for a consumer.
+    validation: {
+        dependencies: {
+            unused: { exclude: ["@cfworker/json-schema"] },
+        },
+    },
     rollup: {
         dts: {
             oxc: true,

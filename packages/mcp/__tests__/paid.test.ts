@@ -291,8 +291,8 @@ describe("createPaidMcpServer", () => {
         };
 
         /** Answer the tool's 402 challenge the way `@x402/fetch` (v2) does. */
-        const paymentFor = async (mcp: ReturnType<typeof createPaidMcpServer>, name: string): Promise<string> => {
-            const challenge = await mcp.fetchHandler(mcpRequest(callBody(name)));
+        const paymentFor = async (mcp: ReturnType<typeof createPaidMcpServer>, name: string, body: unknown = callBody(name)): Promise<string> => {
+            const challenge = await mcp.fetchHandler(mcpRequest(body));
             const required = JSON.parse(atob(challenge.headers.get("payment-required") ?? "")) as { accepts: unknown[]; resource: unknown };
 
             return btoa(
@@ -345,6 +345,80 @@ describe("createPaidMcpServer", () => {
             expect(handler).not.toHaveBeenCalled();
             expect(calls.filter((call) => call === "verify" || call === "settle")).toStrictEqual([]);
         });
+
+        const REPORT_INPUT = {
+            additionalProperties: false,
+            properties: { quarter: { maximum: 4, minimum: 1, type: "integer" } },
+            required: ["quarter"],
+            type: "object",
+        } as const;
+
+        const argsCall = (arguments_: unknown): unknown => {
+            return { id: 2, jsonrpc: "2.0", method: "tools/call", params: { arguments: arguments_, name: "premium_report" } };
+        };
+
+        // A call whose arguments the tool's own inputSchema rejects delivers
+        // nothing, so it must be refused BEFORE the paywall — settlement is final.
+        it.each([
+            ["a missing required argument", {}],
+            ["an argument of the wrong type", { quarter: "Q1" }],
+            ["an argument out of range", { quarter: 5 }],
+            ["an undeclared argument", { extra: true, quarter: 1 }],
+        ])("refuses %s with the schema error, without verifying, settling or running the tool", async (_label, arguments_) => {
+            expect.assertions(6);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<() => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 1 }));
+            const response = await mcp.fetchHandler(mcpRequest(argsCall(arguments_), { "payment-signature": payment }));
+            const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get("payment-response")).toBeNull();
+            expect(payload.result?.isError).toBe(true);
+            expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "premium_report": /);
+            expect(handler).not.toHaveBeenCalled();
+            expect(calls.filter((call) => call === "verify" || call === "settle")).toStrictEqual([]);
+        });
+
+        it("charges and runs a call with valid arguments exactly once", async () => {
+            expect.assertions(4);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<(arguments_: Record<string, unknown>) => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 2 }));
+            const response = await mcp.fetchHandler(mcpRequest(argsCall({ quarter: 2 }), { "payment-signature": payment }));
+            const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+            expect(payload.result?.isError).toBeUndefined();
+            expect(handler).toHaveBeenCalledExactlyOnceWith({ quarter: 2 });
+            expect(calls.filter((call) => call === "verify")).toHaveLength(1);
+            expect(calls.filter((call) => call === "settle")).toHaveLength(1);
+        });
+    });
+
+    it("applies the same inputSchema validation to a free tool before its handler runs", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => ToolResult>(() => text("pong"));
+        const mcp = createPaidMcpServer({ charge });
+
+        mcp.tool({ description: "echo", inputSchema: { properties: { n: { type: "number" } }, required: ["n"], type: "object" }, name: "ping" }, handler);
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+        const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+        expect(payload.result?.isError).toBe(true);
+        expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "ping": /);
+        expect(handler).not.toHaveBeenCalled();
     });
 
     it("rejects registering the same tool name twice", () => {
