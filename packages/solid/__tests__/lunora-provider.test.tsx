@@ -140,6 +140,29 @@ describe(LunoraProvider, () => {
             expect(second.subscriptions).toHaveLength(2);
         });
 
+        it("does not re-seed the preloaded value after swapping back to the first client", () => {
+            const first = createFakeClient();
+            const second = createFakeClient();
+            const [client, setClient] = createSignal<LunoraClient>(first.asClient);
+
+            const Hydrated = () => {
+                const data = hydratePreloaded(preloaded);
+
+                return <pre>{JSON.stringify(data() ?? null)}</pre>;
+            };
+
+            const { container } = render(() => (
+                <LunoraProvider client={client()}>
+                    <Hydrated />
+                </LunoraProvider>
+            ));
+
+            setClient(second.asClient);
+            setClient(first.asClient);
+
+            expect(container.textContent).toBe("null");
+        });
+
         it("does not resubscribe when the provider re-reads the same client", () => {
             const fake = createFakeClient();
             const [client, setClient] = createSignal<LunoraClient>(fake.asClient, { equals: false });

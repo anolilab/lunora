@@ -16,9 +16,10 @@ import { createContext, useContext } from "solid-js";
 export const LunoraContext: Context<LunoraClient | undefined> = createContext<LunoraClient | undefined>();
 
 /**
- * `true` under a `<LunoraProvider>` whose `client` differs from the one it first
- * rendered with. A server-preloaded value belongs to that first client, so
- * `hydratePreloaded` must not seed it after a swap. Internal: not re-exported.
+ * `true` under a `<LunoraProvider>` whose `client` has changed since it first
+ * rendered, even if it later swapped back. A server-preloaded value belongs to
+ * that first client and is stale after any swap, so `hydratePreloaded` must not
+ * seed it. Internal: not re-exported.
  */
 export const LunoraClientSwappedContext: Context<boolean> = createContext<boolean>(false);
 

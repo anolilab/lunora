@@ -42,9 +42,9 @@ export interface LunoraProviderProps {
  * every primitive below is disposed (its subscriptions on the old client torn
  * down) and recreated against the new client, starting from `undefined` — no
  * rows from the old client survive, and `hydratePreloaded` does not seed a value
- * preloaded for the client the provider first rendered with. Local component
- * state under the provider resets with it. Re-reading the same instance is a
- * no-op.
+ * preloaded for the client the provider first rendered with (not even after
+ * swapping back to it). Local component state under the provider resets with
+ * it. Re-reading the same instance is a no-op.
  *
  * Written with `createComponent` rather than JSX on purpose. Solid 1.x and 2.0
  * compile JSX against different runtimes (`solid-js/web` vs `@solidjs/web`), so
@@ -53,17 +53,15 @@ export interface LunoraProviderProps {
  * itself is resolved per-major by {@link providerOf}.
  */
 export const LunoraProvider = (props: LunoraProviderProps): SolidElement => {
-    const firstClient = untrack(() => props.client);
     const client = createMemo(() => props.client);
-
-    const provide = (current: LunoraClient): unknown =>
+    const provide = (current: LunoraClient, swapped: boolean): unknown =>
         createComponent(providerOf(LunoraContext), {
             get children() {
                 return createComponent(providerOf(LunoraClientSwappedContext), {
                     get children() {
                         return props.children;
                     },
-                    value: current !== firstClient,
+                    value: swapped,
                 });
             },
             value: current,
@@ -72,9 +70,16 @@ export const LunoraProvider = (props: LunoraProviderProps): SolidElement => {
     // Keyed on the client's identity, like `<Show keyed>`: a new client disposes
     // the previous generation's owner (and every subscription under it) and
     // renders the children afresh inside a provider carrying the new value.
+    // Every generation after the first is "swapped" — sticky, because a value
+    // preloaded for the first client is stale even after swapping back to it.
+    let generation = 0;
+
     return createMemo<unknown>(() => {
         const current = client();
+        const swapped = generation > 0;
 
-        return untrack(() => provide(current));
+        generation += 1;
+
+        return untrack(() => provide(current, swapped));
     });
 };
