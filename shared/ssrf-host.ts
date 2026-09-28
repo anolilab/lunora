@@ -60,6 +60,78 @@ const IPV6_COMPATIBLE_HEX = /^::([\da-f]{1,4}):([\da-f]{1,4})$/u;
  */
 const IPV6_NAT64_HEX = /^64:ff9b::[\da-f]{1,4}:[\da-f]{1,4}$/u;
 
+/** One IPv6 hex group (1–4 digits). */
+const IPV6_GROUP = /^[\da-f]{1,4}$/u;
+
+/** An IPv6 prefix as `[leading groups, prefix length in bits]`; groups past the ones listed are zero. */
+type Ipv6Prefix = readonly [readonly number[], number];
+
+/**
+ * IANA IPv6 special-purpose registry blocks marked NOT globally reachable that
+ * need more than a string-prefix test (a sub-group boundary or a `::`-compressed
+ * form). `2001::/23` (IETF protocol assignments) takes in Teredo `2001::/32`,
+ * benchmarking `2001:2::/48` and the deprecated ORCHID `2001:10::/28`; its
+ * globally reachable carve-outs are listed in {@link GLOBAL_IPV6_CARVE_OUTS}.
+ * Teredo is blocked for its embedded IPv4, like 6to4 and NAT64 below.
+ */
+const NON_GLOBAL_IPV6: ReadonlyArray<Ipv6Prefix> = [
+    [[0x20_01], 23], // 2001::/23 IETF protocol assignments
+    [[0x3f_ff], 20], // 3fff::/20 documentation (RFC 9637)
+    [[0x5f_00], 16], // 5f00::/16 SRv6 SIDs (RFC 9602)
+    [[0x1_00, 0, 0, 1], 64], // 100:0:0:1::/64 dummy prefix (RFC 9780)
+];
+
+/** The globally reachable assignments inside `2001::/23`, per the same registry. */
+const GLOBAL_IPV6_CARVE_OUTS: ReadonlyArray<Ipv6Prefix> = [
+    [[0x20_01, 1, 0, 0, 0, 0, 0, 1], 128], // PCP anycast
+    [[0x20_01, 1, 0, 0, 0, 0, 0, 2], 128], // TURN anycast
+    [[0x20_01, 1, 0, 0, 0, 0, 0, 3], 128], // DNS-SD SRP anycast
+    [[0x20_01, 3], 32], // AMT
+    [[0x20_01, 4, 0x1_12], 48], // AS112-v6
+    [[0x20_01, 5], 32], // LISP EID space
+    [[0x20_01, 0x20], 28], // ORCHIDv2
+    [[0x20_01, 0x30], 28], // drone remote ID (DETs)
+];
+
+/** Expand an IPv6 literal (hex groups, at most one `::`) to its eight 16-bit groups, or `undefined`. */
+const expandIpv6 = (ip: string): number[] | undefined => {
+    const halves = ip.split("::");
+
+    if (halves.length > 2) {
+        return undefined;
+    }
+
+    const parse = (part: string | undefined): number[] =>
+        part === undefined || part === "" ? [] : part.split(":").map((group) => (IPV6_GROUP.test(group) ? Number.parseInt(group, 16) : Number.NaN));
+    const head = parse(halves[0]);
+    const tail = parse(halves[1]);
+    const zeros = 8 - head.length - tail.length;
+
+    if (zeros < 0 || (halves.length === 1 && zeros !== 0)) {
+        return undefined;
+    }
+
+    const groups = [...head, ...Array.from({ length: zeros }, () => 0), ...tail];
+
+    return groups.some(Number.isNaN) ? undefined : groups;
+};
+
+/** Whether eight expanded `groups` fall inside `prefix`. */
+const inIpv6Prefix = (groups: readonly number[], [prefix, length]: Ipv6Prefix): boolean => {
+    for (let index = 0; index * 16 < length; index += 1) {
+        const bits = Math.min(16, length - index * 16);
+        // eslint-disable-next-line no-bitwise -- masking a 16-bit group to the prefix's bits
+        const mask = (0xff_ff << (16 - bits)) & 0xff_ff;
+
+        // eslint-disable-next-line no-bitwise -- see above
+        if (((groups[index] ?? 0) & mask) !== ((prefix[index] ?? 0) & mask)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
 /** Leading / trailing `URL.hostname` IPv6 brackets (`[::1]`). */
 const IPV6_BRACKETS = /^\[|\]$/gu;
 
@@ -95,6 +167,8 @@ const parseIpv4 = (host: string): [number, number, number, number] | undefined =
  * private, link-local, CGNAT, protocol-assignment, benchmarking, documentation,
  * multicast or reserved. None of them is a public destination, and the
  * benchmarking and protocol-assignment blocks are routinely routed internally.
+ * `192.0.0.0/24` is blocked whole, including its two globally reachable anycast
+ * service addresses (`192.0.0.9`, `192.0.0.10`), which no app has reason to fetch.
  */
 const isPrivateIpv4 = ([a, b, c]: [number, number, number, number]): boolean =>
     a === 0 || // 0.0.0.0/8 "this host"
@@ -201,11 +275,16 @@ const isPrivateIpv6 = (host: string): boolean => {
         return true;
     }
 
-    // Teredo (`2001:0000::/32`) tunnels IPv4 and embeds a client + server IPv4. The
-    // WHATWG parser leaves the single all-zero second group uncompressed (a lone
-    // zero group is not collapsed to `::`), so the prefix normalises to `2001:0:`.
-    // Block it for the same embedded-IPv4 reason.
-    if (ip.startsWith("2001:0:")) {
+    // Matched on expanded groups, not as-written text: a block boundary can fall
+    // inside a group, and `::` compression hides zero groups (Teredo
+    // `2001:0:0:0:0:0:a9fe:a9fe` is written `2001::a9fe:a9fe`).
+    const groups = expandIpv6(ip);
+
+    if (
+        groups !== undefined &&
+        NON_GLOBAL_IPV6.some((prefix) => inIpv6Prefix(groups, prefix)) &&
+        !GLOBAL_IPV6_CARVE_OUTS.some((prefix) => inIpv6Prefix(groups, prefix))
+    ) {
         return true;
     }
 
