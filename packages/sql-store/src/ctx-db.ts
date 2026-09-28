@@ -1283,6 +1283,44 @@ const readSqlCdcChanges = async (
 };
 
 /**
+ * How long a hole in the `.global()` changelog's `seq` holds the poll cursor
+ * back — see "Late commits" on {@link readSqlCdcChangedTables}. Far above an
+ * append's commit latency, well below `GLOBAL_SHAPE_RESYNC_MS`.
+ */
+const CDC_LATE_COMMIT_WINDOW_MS = 10_000;
+
+/** How far below the head a cold or resync poll looks for a hole. */
+// ponytail: fixed tail; an append overtaken by more than this many commits falls back to the resync.
+const CDC_LATE_COMMIT_SCAN_ROWS = 1000;
+
+/**
+ * Two scalar columns locating the first live hole above `lower`: `gap` is the
+ * first row newer than `cutoff` whose predecessor `seq` is missing, `below` the
+ * last row before that hole. Both are uncorrelated, so each is evaluated once
+ * per statement. The plain `v.seq > lower` sits beside the arithmetic form so
+ * the scan stays a primary-key range.
+ */
+const lateCommitCap = (lower: SQL, cutoff: number): SQL => {
+    const log = sql.identifier(CDC_LOG_TABLE);
+    const gap = sql`(SELECT MIN(v.seq) FROM ${log} v WHERE v.seq > ${lower} AND v.seq - 1 > ${lower} AND v.ts > ${cutoff} AND NOT EXISTS (SELECT 1 FROM ${log} p WHERE p.seq = v.seq - 1))`;
+
+    return sql`${gap} AS ${sql.identifier("gap")}, (SELECT MAX(q.seq) FROM ${log} q WHERE q.seq > ${lower} AND q.seq < ${gap}) AS ${sql.identifier("below")}`;
+};
+
+/** Lower `cursor` to just under the hole {@link lateCommitCap} found, if any — to `fallback` when no row precedes the hole. */
+const capAtLateCommit = (cursor: number, row: Record<string, unknown> | undefined, fallback: number): number => {
+    const gap = Number(row?.["gap"] ?? Number.NaN);
+
+    if (!Number.isFinite(gap)) {
+        return cursor;
+    }
+
+    const below = Number(row?.["below"] ?? Number.NaN);
+
+    return Math.min(cursor, Number.isFinite(below) ? below : fallback);
+};
+
+/**
  * Which tables the changelog recorded a write to after `sinceSeq`, plus the
  * cursor to resume from. Metadata only — it reads no `doc`, so its cost is a
  * grouped scan over an index range rather than the size of the documents in it.
@@ -1298,36 +1336,57 @@ const readSqlCdcChanges = async (
  * the cursor as the max `seq` actually returned closes that window by
  * construction: the caller can never advance past a row this scan did not see.
  *
- * **What it does NOT close**, and the poll's resync interval is what covers it:
- * Postgres and MySQL allocate `seq` from a sequence BEFORE commit, so a
- * transaction holding a lower `seq` can commit after one holding a higher one.
- * No single read can see the uncommitted row, so a change can land below a
- * cursor already adopted. That change is invisible to the changelog probe until
- * the next unconditional pass — bounded by `GLOBAL_SHAPE_RESYNC_MS`, which is
- * the same bound already accepted for an out-of-band writer. D1 has no such
- * window (single writer, and `withSession` gives both reads one snapshot).
+ * **Late commits.** Postgres and MySQL allocate `seq` at INSERT, not at commit,
+ * so an append holding `N` can commit after one holding `N + 1`. A poll that
+ * adopts `N + 1` while `N` is still in flight skips `N` until the next resync
+ * pass. So on those engines the cursor stops below the first HOLE in `seq`
+ * rather than at the highest row seen: a hole is an allocated `seq` that is not
+ * (yet) visible, which is exactly what an in-flight append looks like. Tables
+ * above the hole are still reported, so nothing is delayed — rows past the
+ * cursor are just reported again next tick.
+ *
+ * A hole can also be permanent (a failed append burns its `seq`), and a cursor
+ * pinned under one forever would re-report everything above it on every tick.
+ * So a hole only holds the cursor while the first row after it is younger than
+ * {@link CDC_LATE_COMMIT_WINDOW_MS}: that row's append started before its own
+ * `seq` was allocated, which is after the hole's, so once it is that old the
+ * hole's owner has either committed (and is visible) or never will. An append
+ * slower than the window falls back to the resync interval, as before. A MySQL
+ * `auto_increment_increment` above 1 makes every step a hole, which holds the
+ * cursor one window behind the head: correct, just less narrowing.
+ *
+ * D1 skips all of this: single writer, `AUTOINCREMENT`, and `withSession` gives
+ * both reads one snapshot, so there is no hole to wait for — and D1 bills rows
+ * read.
  */
 const readSqlCdcChangedTables = async (
     exec: SqlCtxExec,
     sinceSeq: number,
     dialect: SqlDialect,
-    options: { cursorOnly?: boolean; retained?: boolean } = {},
+    options: { cursorOnly?: boolean; now?: number; retained?: boolean } = {},
 ): Promise<{ cursor: number; floor?: number; tables: string[] }> => {
+    const log = sql.identifier(CDC_LOG_TABLE);
+    const guarded = dialect.name !== "sqlite";
+    const cutoff = (options.now ?? Date.now()) - CDC_LATE_COMMIT_WINDOW_MS;
+
     if (options.cursorOnly) {
         // The caller is reading everything this pass regardless, so the table
         // list would be discarded — and on the cold-instance case that produces
         // it, computing it means grouping the entire changelog. `MAX(seq)` over
-        // the primary key answers what is actually wanted.
-        const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+        // the primary key answers what is actually wanted, and the hole search is
+        // bounded to the log's tail for the same reason. Never below `sinceSeq`:
+        // the `seq` before the log's first row is missing too, and is no hole.
+        const tail = sql`GREATEST((SELECT MAX(seq) FROM ${log}) - ${sql.raw(String(CDC_LATE_COMMIT_SCAN_ROWS))}, ${sinceSeq})`;
+        const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq${guarded ? sql`, ${lateCommitCap(tail, cutoff)}` : sql``} FROM ${log}`);
         const rawCursor = Number(head[0]?.["seq"] ?? sinceSeq);
 
-        return { cursor: Number.isFinite(rawCursor) ? rawCursor : sinceSeq, tables: [] };
+        return { cursor: capAtLateCommit(Number.isFinite(rawCursor) ? rawCursor : sinceSeq, head[0], sinceSeq), tables: [] };
     }
 
     const rows = await queryAll(
         exec,
         dialect,
-        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
+        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq${guarded ? sql`, ${lateCommitCap(sql`${sinceSeq}`, cutoff)}` : sql``} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
     );
 
     let cursor = sinceSeq;
@@ -1342,6 +1401,9 @@ const readSqlCdcChangedTables = async (
 
         tables.push(String(row["table"]));
     }
+
+    // Every row carries the same uncorrelated cap, so the first is as good as any.
+    cursor = capAtLateCommit(cursor, rows[0], sinceSeq);
 
     // The retained floor, so a caller can tell "nothing changed" from "what
     // changed was swept away". Read AFTER the scan, not before: the floor only
@@ -2763,7 +2825,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             try {
                 await ensureMigrated();
 
-                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, { ...readOptions, retained: cdcRetentionMs !== undefined });
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, { ...readOptions, now: clock(), retained: cdcRetentionMs !== undefined });
             } catch {
                 return undefined;
             }

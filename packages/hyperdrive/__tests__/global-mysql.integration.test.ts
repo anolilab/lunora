@@ -11,6 +11,7 @@ import {
     runSqlRankMigrations,
     sweepSqlCdcRetention,
 } from "@lunora/sql-store";
+import mysql from "mysql2/promise";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
@@ -281,6 +282,42 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, mysqlDialect);
 
                 expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
+    describe("`.global()` changelog poll — late commits", () => {
+        it(
+            "does not skip an append that commits after a higher `seq` the poll already saw",
+            async () => {
+                expect.assertions(3);
+
+                await runSqlCdcMigration(harness.exec, mysqlDialect);
+
+                const append = `INSERT INTO \`__cdc_log\` (\`ts\`, \`table\`, \`id\`, \`op\`) VALUES (?, ?, ?, 'insert')`;
+                const late = await mysql.createConnection(harness.connection);
+
+                try {
+                    // InnoDB hands out AUTO_INCREMENT at INSERT, so the open transaction
+                    // holds seq 1 while the autocommit append below takes seq 2.
+                    await late.query("BEGIN");
+                    await late.query(append, [FIXED_CLOCK, "late", "l1"]);
+                    await harness.query(append, [FIXED_CLOCK, "early", "e1"]);
+
+                    const first = await readSqlCdcChangedTables(harness.exec, 0, mysqlDialect, { now: FIXED_CLOCK });
+
+                    expect(first).toStrictEqual({ cursor: 0, tables: ["early"] });
+
+                    await late.query("COMMIT");
+
+                    const second = await readSqlCdcChangedTables(harness.exec, first.cursor, mysqlDialect, { now: FIXED_CLOCK });
+
+                    expect(second.tables).toContain("late");
+                    expect(second.cursor).toBe(2);
+                } finally {
+                    await late.end();
+                }
             },
             TEST_TIMEOUT,
         );

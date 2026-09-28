@@ -259,6 +259,66 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
         });
     });
 
+    describe("`.global()` changelog poll — late commits", () => {
+        // An append that took its `seq` and has not committed is invisible, so to
+        // the poll it is exactly a missing `seq`. Writing explicit `seq`s models
+        // it deterministically on a single session; the gated real-MySQL suite
+        // covers the two-session interleaving.
+        const append = async (seq: number, table: string): Promise<void> => {
+            await harness.query(`INSERT INTO "__cdc_log" ("seq", "ts", "table", "id", "op") VALUES ($1, $2, $3, $4, 'insert')`, [
+                seq,
+                FIXED_CLOCK,
+                table,
+                String(seq),
+            ]);
+        };
+
+        beforeEach(async () => {
+            await runSqlCdcMigration(harness.exec, postgresDialect);
+        });
+
+        it("holds the cursor below an in-flight append and delivers it once it commits", async () => {
+            expect.assertions(5);
+
+            await append(1, "a");
+            // seq 2 is allocated to an append still in flight; seq 3 committed first.
+            await append(3, "b");
+
+            const first = await readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK });
+
+            // Tables past the hole are still reported; only the cursor waits.
+            expect(new Set(first.tables)).toStrictEqual(new Set(["a", "b"]));
+            expect(first.cursor).toBe(1);
+
+            await append(2, "late");
+
+            const second = await readSqlCdcChangedTables(harness.exec, first.cursor, postgresDialect, { now: FIXED_CLOCK });
+
+            expect(second.cursor).toBe(3);
+            expect(second.tables).toContain("late");
+
+            // The cold/resync read adopts the head directly, so it needs the same cap.
+            await append(5, "c");
+
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { cursorOnly: true, now: FIXED_CLOCK })).resolves.toStrictEqual({
+                cursor: 3,
+                tables: [],
+            });
+        });
+
+        it("stops waiting for a hole once the row after it is older than the window", async () => {
+            expect.assertions(2);
+
+            await append(1, "a");
+            await append(3, "b");
+
+            // A failed append burns its `seq` for good; a cursor pinned under it
+            // would re-report everything above it on every tick.
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK + 9000 })).resolves.toMatchObject({ cursor: 1 });
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK + 11_000 })).resolves.toMatchObject({ cursor: 3 });
+        });
+    });
+
     describe("value codec round-trips (per kind)", () => {
         const typesSchema: SchemaLike = {
             tables: {

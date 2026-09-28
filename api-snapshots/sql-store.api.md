@@ -157,6 +157,7 @@ const migrateSearchState: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<voi
 ```ts
 const readSqlCdcChangedTables: (exec: SqlCtxExec, sinceSeq: number, dialect: SqlDialect, options?: {
     cursorOnly?: boolean;
+    now?: number;
     retained?: boolean;
 }) => Promise<{
     cursor: number;
