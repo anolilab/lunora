@@ -18,10 +18,9 @@
  * claims `.lunora/dev.json` before spawning Vite (closing the duplicate-start
  * race) and this plugin replaces that record with the authoritative URL + PID.
  */
-import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV, lunoraLine } from "@lunora/config";
 import type { Plugin, ViteDevServer } from "vite";
 
-import { lunoraLine } from "./log";
 import type { PendingCloseMap } from "./server-close";
 import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";

@@ -84,18 +84,18 @@ const escapeMarkdown = (text) => text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 const CATEGORY_NAMES = {
     "add-on": "Add-ons",
     advisor: "Advisor",
+    "bundler-plugin": "Bundler Plugins",
     cli: "CLI",
     client: "Client & Framework Adapters",
     codegen: "Codegen",
     "dev-tools": "Dev Tools",
     runtime: "Runtime",
-    "vite-plugin": "Vite Plugin",
 };
 
 /**
  * Preferred ordering for category sections. Categories not listed are appended alphabetically.
  */
-const CATEGORY_ORDER = ["runtime", "client", "cli", "codegen", "vite-plugin", "dev-tools", "advisor", "add-on"];
+const CATEGORY_ORDER = ["runtime", "client", "cli", "codegen", "bundler-plugin", "dev-tools", "advisor", "add-on"];
 
 /**
  * Formats a category slug for display.

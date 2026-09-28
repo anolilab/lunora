@@ -2,7 +2,7 @@
  * Shared "which findings are ERROR-level" read for a {@link CodegenResult}.
  *
  * Every caller that gates a run on codegen's output — `lunora codegen`,
- * `lunora deploy`, and the Vite plugin's `vite build` — needs the same
+ * `lunora deploy`, and the bundler plugins' production builds — needs the same
  * deduplicated, sorted name list for its ERROR-level advisories and platform
  * diagnostics. Before this file existed each of the three computed it inline
  * with `[...new Set(...)].toSorted(...)`, and they had already drifted:
@@ -28,10 +28,9 @@ const errorPlatformDiagnosticNames = (platformDiagnostics: ReadonlyArray<Pick<Pl
 
 /**
  * Convenience read combining both categories from a full {@link CodegenResult}
- * — the shape the Vite plugin's `buildBlockingMessage` needs, which (unlike
- * the CLI's `lunora codegen`/`lunora deploy`) folds ERROR-level advisories and
- * platform diagnostics into a single blocking message with no strict/CI
- * opt-out.
+ * — the shape {@link blockingFindingsMessage} needs, which (unlike the CLI's
+ * `lunora codegen`/`lunora deploy`) folds ERROR-level advisories and platform
+ * diagnostics into a single blocking message with no strict/CI opt-out.
  */
 const describeErrorLevelFindings = (
     result: Pick<CodegenResult, "advisories" | "platformDiagnostics">,
@@ -42,4 +41,28 @@ const describeErrorLevelFindings = (
     };
 };
 
-export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames };
+/**
+ * The one aggregated line a bundler plugin fails a production build with, or
+ * `undefined` when nothing is ERROR-level. `tag` is the caller's own log badge,
+ * so the line reads like the rest of that plugin's output.
+ *
+ * Lives here, beside the filter it folds, because `@lunora/vite` and
+ * `@lunora/rspack` both escalate identically and a second copy of the wording
+ * plus the fold is how the two bundlers start disagreeing about what blocks a
+ * build. Presentation for the CLI paths stays their own — they report the two
+ * categories separately and honour a strict/CI opt-out.
+ */
+const blockingFindingsMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, tag: string): string | undefined => {
+    const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
+    const blockingNames = sortedUniqueNames([...advisoryNames, ...platformDiagnosticNames]);
+
+    if (blockingNames.length === 0) {
+        return undefined;
+    }
+
+    const noun = blockingNames.length === 1 ? "advisory/platform diagnostic" : "advisories/platform diagnostics";
+
+    return `${tag} ${String(blockingNames.length)} ERROR-level ${noun} (${blockingNames.join(", ")}) — see the log above for detail.`;
+};
+
+export { blockingFindingsMessage, describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames };

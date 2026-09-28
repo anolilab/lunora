@@ -227,6 +227,9 @@ catalogs:
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
+    # Types-and-tests only for `@lunora/rspack`, which declares it as an optional
+    # peer and speaks the plugin API structurally — nothing here is bundled.
+    "@rspack/core": ^2.2.7
     "@visulima/packem": 2.1.0
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.15

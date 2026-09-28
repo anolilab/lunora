@@ -62,6 +62,7 @@ export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-ignores";
+export { advisoryLine, LUNORA_TAG, lunoraLine } from "./log-badge";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";

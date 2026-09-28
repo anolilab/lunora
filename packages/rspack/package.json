@@ -1,0 +1,85 @@
+{
+    "name": "@lunora/rspack",
+    "version": "0.0.0",
+    "description": "The Lunora Rspack plugin: codegen, binding provisioning, and wrangler validation for Rspack projects",
+    "keywords": [
+        "cloudflare",
+        "codegen",
+        "durable-objects",
+        "lunora",
+        "rspack",
+        "rspack-plugin",
+        "webpack-plugin",
+        "workers",
+        "wrangler"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/rspack"
+    },
+    "files": [
+        "./dist",
+        "__assets__",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/codegen": "1.0.0-alpha.234",
+        "@lunora/config": "1.0.0-alpha.277",
+        "@lunora/errors": "1.0.0-alpha.46"
+    },
+    "devDependencies": {
+        "@rspack/core": "catalog:build",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "ts-morph": "catalog:tooling",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@rspack/core": "^1.5.0 || ^2.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@rspack/core": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

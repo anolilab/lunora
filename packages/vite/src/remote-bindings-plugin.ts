@@ -15,11 +15,10 @@
  * the project's code implies — and disposed when Vite's dev server closes (the
  * `buildEnd`/`closeBundle` hooks), so it never leaks past the dev session.
  */
-import { readProjectRemotePreference } from "@lunora/config";
+import { lunoraLine, readProjectRemotePreference } from "@lunora/config";
 import { materializeRemoteWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { CloudflarePluginOptions } from "./types";
 
 /** The cloudflare-plugin option Lunora sets to point the worker at our temp config. */

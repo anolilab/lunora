@@ -688,6 +688,12 @@ const LUNORA_IGNORED_PATHS: ReadonlyArray<string>;
 const LUNORA_SKILL_NAMES: ReadonlyArray<string>;
 ```
 
+### `LUNORA_TAG` (const)
+
+```ts
+const LUNORA_TAG: string;
+```
+
 ### `LevelBadgeName` (type)
 
 ```ts
@@ -1014,6 +1020,12 @@ const addArgsFor: (manager: PackageManager, packages: ReadonlyArray<string>, opt
 };
 ```
 
+### `advisoryLine` (const)
+
+```ts
+const advisoryLine: (level: "ERROR" | "INFO" | "WARN", name: string, detail: string, remediation: string) => string;
+```
+
 ### `applyAdditiveEdit` (const)
 
 ```ts
@@ -1264,6 +1276,12 @@ const isRecordedProcessCurrent: (state: DevServerState) => boolean;
 
 ```ts
 const isRunnableTarget: (target: string) => boolean;
+```
+
+### `lunoraLine` (const)
+
+```ts
+const lunoraLine: (message: string) => string;
 ```
 
 ### `packageNamesFromBindings` (const)
@@ -1763,6 +1781,15 @@ interface ReconcileResult {
 }
 ```
 
+### `ReconcileProject` (interface)
+
+```ts
+interface ReconcileProject {
+    projectRoot: string;
+    schemaDir: string;
+}
+```
+
 ### `RemoteBindingPlan` (interface)
 
 ```ts
@@ -2158,6 +2185,12 @@ const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
 const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResult<T>;
 ```
 
+### `reconcileBindingsSafely` (const)
+
+```ts
+const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogger, onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void) => Promise<void>;
+```
+
 ### `reconcileWranglerBindings` (const)
 
 ```ts
@@ -2174,6 +2207,12 @@ const reconcileWranglerCompatibilityDate: (projectRoot: string) => ReconcileComp
 
 ```ts
 const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<string>) => ReconcileResult;
+```
+
+### `reconcileWranglerExtras` (const)
+
+```ts
+const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
 ```
 
 ### `resolveRemoteEnabled` (const)
@@ -2554,6 +2593,15 @@ type GlobalBackend = "d1" | "hyperdrive";
 
 ```ts
 type InferredQueue = QueueIR;
+```
+
+### `ReconcileLogger` (interface)
+
+```ts
+interface ReconcileLogger {
+    info?: (message: string) => void;
+    warn: (message: string) => void;
+}
 ```
 
 ### `RemoteEligibleKey` (type)

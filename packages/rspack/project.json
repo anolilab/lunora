@@ -1,4 +1,4 @@
 {
-    "name": "vite",
+    "name": "rspack",
     "tags": ["type:package", "category:bundler-plugin"]
 }

@@ -112,6 +112,9 @@
 "package: replica":
     - changed-files:
           - any-glob-to-any-file: "packages/replica/**/*"
+"package: rspack":
+    - changed-files:
+          - any-glob-to-any-file: "packages/rspack/**/*"
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"

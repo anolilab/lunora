@@ -1,27 +1,24 @@
 import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
-import type { CodegenResult } from "@lunora/codegen";
 import {
+    blockingFindingsMessage,
     CodegenDiagnosticError,
     createCodegenProject,
-    describeErrorLevelFindings,
     findTsconfig,
     PROJECT_CONFIG_FILENAMES,
     refreshCodegenProject,
     runCodegen,
 } from "@lunora/codegen";
-import { CODEGEN_ENV, isCodegenDisabled, runPostCodegenHook } from "@lunora/config";
+import { advisoryLine, CODEGEN_ENV, isCodegenDisabled, LUNORA_TAG, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectWranglerSecretVariables, WRANGLER_FILES } from "@lunora/config/cloudflare";
+import { collectWranglerSecretVariables, reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
 import { computeConfigFingerprint } from "./config-fingerprint";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
-import { advisoryLine, LUNORA_TAG } from "./log";
-import { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-wrangler";
 import { createRegenerateScheduler, HOOK_SETTLE_MS } from "./regenerate-scheduler";
 import fingerprintSchemaSources from "./schema-fingerprint";
 import type { PendingCloseMap } from "./server-close";
@@ -81,30 +78,6 @@ interface CodegenSafelyResult {
     /** Absolute directory codegen actually wrote to; `undefined` when codegen was skipped or failed. */
     outputDirectory?: string;
 }
-
-/**
- * The `blockingMessage` for {@link runCodegenSafely}'s result: one aggregated
- * line naming every ERROR-level advisory/platform diagnostic, or `undefined`
- * when none. The name list itself comes from `@lunora/codegen`'s
- * `describeErrorLevelFindings` — the same filter+dedup+sort the CLI's
- * `lunora codegen`/`lunora deploy` gate uses — so this only owns folding the
- * two categories into one combined, sorted message; it used to compute an
- * unsorted list inline, which is what let it drift from the CLI's. Extracted
- * purely to keep `runCodegenSafely`'s cognitive complexity within the repo's
- * lint budget — no other behavior change from inlining it.
- */
-const buildBlockingMessage = (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">): string | undefined => {
-    const { advisoryNames, platformDiagnosticNames } = describeErrorLevelFindings(result);
-    const blockingNames = [...new Set([...advisoryNames, ...platformDiagnosticNames])].toSorted((a, b) => a.localeCompare(b));
-
-    if (blockingNames.length === 0) {
-        return undefined;
-    }
-
-    const noun = blockingNames.length === 1 ? "advisory/platform diagnostic" : "advisories/platform diagnostics";
-
-    return `${LUNORA_TAG} ${String(blockingNames.length)} ERROR-level ${noun} (${blockingNames.join(", ")}) — see the log above for detail.`;
-};
 
 /**
  * Report a missing `schema.ts`, and — only on a watch-triggered run — escalate
@@ -209,7 +182,7 @@ const runCodegenSafely = (
         // target) — `vite dev` never does, matching `lunora codegen`'s own
         // advisory-outside-CI default.
         return {
-            blockingMessage: buildBlockingMessage(result),
+            blockingMessage: blockingFindingsMessage(result, LUNORA_TAG),
             outputDirectory: resolve(result.outputDirectory),
         };
     } catch (error: unknown) {

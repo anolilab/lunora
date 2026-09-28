@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
 
+import { lunoraLine } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { readWranglerJsonc, validateWranglerProject } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */

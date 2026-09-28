@@ -1,0 +1,89 @@
+---
+title: "@lunora/rspack"
+description: Codegen, binding provisioning, and wrangler validation for Rspack builds.
+related:
+    - to: /docs/packages/vite
+    - to: /docs/packages/cli
+---
+
+`@lunora/rspack` is the [Rspack](https://rspack.rs) counterpart to
+[`@lunora/vite`](/docs/packages/vite): it runs codegen before every compilation,
+writes the Cloudflare bindings your code implies into `wrangler.jsonc`, and
+validates that config against your schema.
+
+```js
+// rspack.config.mjs
+import { lunoraRspack } from "@lunora/rspack";
+
+export default {
+    plugins: [lunoraRspack()],
+};
+```
+
+Under [Rsbuild](https://rsbuild.rs), add it to `tools.rspack`:
+
+```ts
+// rsbuild.config.ts
+import { lunoraRspack } from "@lunora/rspack";
+import { defineConfig } from "@rsbuild/core";
+
+export default defineConfig({
+    tools: {
+        rspack: { plugins: [lunoraRspack()] },
+    },
+});
+```
+
+The plugin API it taps is webpack 5's, so the same instance works in a plain
+webpack build unchanged. `@rspack/core` is an optional peer — the plugin speaks
+the compiler interface structurally and never imports it.
+
+## It does not run your Worker
+
+Rspack has no `@cloudflare/vite-plugin` equivalent — nothing that boots
+workerd/miniflare inside the compiler. This plugin builds the client half, and
+**`wrangler dev` (or `lunora dev`) runs the Worker** — the same split as
+`@lunora/vite`'s `cloudflare: false` path.
+
+So everything in the Vite plugin that lives on the dev server has no counterpart
+here: no browser error overlay, no embedded Studio at `/__lunora`, no Worker log
+streaming, no container log tailing, no remote-binding dev, and no class-A
+framework worker composition. Run `lunora dev` alongside your Rspack build for
+the Worker-side features, or use `@lunora/vite` if you want them in-process.
+
+## What each pass does
+
+Before every compilation, in this order:
+
+1. **Provision bindings** — infers the Durable Objects, their migration classes,
+   and the `DB` D1 binding a `.global()` table implies, and writes them into
+   `wrangler.jsonc`. Idempotent, and deliberately ahead of validation: the
+   bindings the check requires are the ones Lunora writes itself.
+2. **Validate** — checks `wrangler.jsonc` against the schema's requirements and
+   throws when it is short one. `validateWrangler: false` opts out.
+3. **Generate** — runs `@lunora/codegen` into `<schemaDir>/_generated`, syncing
+   your cron triggers and the compatibility date on the way.
+4. **`postcodegen`** — runs the project's hook.
+
+In watch mode the plugin registers your schema directory as a watch dependency,
+so editing _or adding_ anything under `lunora/` regenerates — a new
+`lunora/foo.ts` is discovered by codegen without being imported anywhere, which a
+file-list watch would never see appear. The first pass of a session also
+scaffolds `.dev.vars`, which is gitignored and so absent from a fresh clone.
+
+A production build **fails** on an ERROR-level schema advisory or platform
+diagnostic, exactly as `vite build` and `lunora deploy` do. A watch rebuild logs
+them and carries on — a half-typed schema should not take the watcher down.
+
+## Options
+
+| Option             | Default         | Purpose                                                                                             |
+| ------------------ | --------------- | --------------------------------------------------------------------------------------------------- |
+| `projectRoot`      | `process.cwd()` | Directory containing `lunora/`                                                                      |
+| `schemaDir`        | `"lunora"`      | Directory containing `schema.ts` + function files                                                   |
+| `apiSpec`          | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                      |
+| `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*` |
+| `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                   |
+
+`LUNORA_CODEGEN=0` disables the plugin entirely — no generation, no wrangler
+checks, no watch registration.

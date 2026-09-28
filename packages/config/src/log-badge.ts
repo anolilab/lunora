@@ -1,11 +1,16 @@
 /**
- * Branding for the Vite plugin's console output. The plugin pipes through Vite's
- * own logger (which owns timestamps/clearing), so rather than swap the reporter
- * the way the CLI does, we prefix Lunora's lines with the same painted ` lunora `
- * badge from `@lunora/config` — replacing the old plain `[lunora]` text tag — so
- * the dev server and the CLI read as one tool.
+ * Branding for a bundler plugin's console output.
+ *
+ * A plugin pipes through its host's own logger (which owns timestamps and
+ * clearing), so rather than swap the reporter the way the CLI does, it prefixes
+ * Lunora's lines with the same painted ` lunora ` badge the CLI reporter paints —
+ * so the dev server and the CLI read as one tool.
+ *
+ * Lives here rather than in one plugin package because every bundler adapter
+ * (`@lunora/vite`, `@lunora/rspack`) needs the identical badge; a per-plugin copy
+ * is how two tools that are meant to look like one drift apart.
  */
-import { BADGES, paintBadge } from "@lunora/config";
+import { BADGES, paintBadge } from "./tui-theme";
 
 /** The painted ` lunora ` badge, prepended to the plugin's branded log lines. */
 const LUNORA_TAG: string = paintBadge(BADGES.lunora);

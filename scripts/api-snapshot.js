@@ -202,6 +202,11 @@ const TIER_2 = [
  * surface that moves there moves under someone's billing. Recollection is the
  * wrong instrument for "has this settled?" on a surface with that blast radius.
  *
+ * `rspack` is the newest adapter and starts here for the plainest reason: it
+ * has no adopters yet, so its option surface is still free to move. What the
+ * snapshot buys today is the record that `@lunora/vite` did not have when it
+ * was this young.
+ *
  * `angular`, `browser`, `react-native`, `replica` and `x402` were added last,
  * for the plainest reason: they were the only published packages whose surface
  * no record described, so the graduation question had no instrument at all for
@@ -209,7 +214,7 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "x402"];
+const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "rspack", "x402"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.

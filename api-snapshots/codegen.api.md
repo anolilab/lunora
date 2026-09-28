@@ -1021,6 +1021,12 @@ interface WranglerVariableIR {
 }
 ```
 
+### `blockingFindingsMessage` (const)
+
+```ts
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, tag: string) => string | undefined;
+```
+
 ### `buildOpenApiDocument` (const)
 
 ```ts

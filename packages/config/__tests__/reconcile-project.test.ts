@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerExtras } from "../src/reconcile-wrangler";
+import { reconcileWranglerExtras } from "../src/cloudflare/reconcile-project";
 
 let workdir: string;
 
-/** Collects the plugin's log lines so a test can assert on what a dev server would print. */
+/** Collects the reconciler's log lines so a test can assert on what a dev server would print. */
 const collectingLogger = (): { info: string[]; log: { info: (message: string) => void; warn: (message: string) => void }; warn: string[] } => {
     const info: string[] = [];
     const warn: string[] = [];
@@ -23,7 +23,7 @@ const seedProject = (root: string, crons: string): void => {
 
 describe("reconcileWranglerExtras", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-reconcile-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-reconcile-project-"));
     });
 
     afterEach(() => {

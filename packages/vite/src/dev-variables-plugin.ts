@@ -6,6 +6,7 @@ import {
     DEV_VARS_FILE,
     ensureDevVariables,
     fillDevSecrets,
+    lunoraLine,
     parseDevVariableEntries,
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
@@ -14,7 +15,6 @@ import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
-import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**
