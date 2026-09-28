@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import type { ArgsValidator, RegisteredMutation, RegisteredQuery } from "@lunora/server";
 import { defineSchema, defineTable, v } from "@lunora/server";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -32,8 +33,8 @@ const GENERATED_SERVER = "#lunora/_generated/server.js";
 const outDirectory = join(here, "..", "node_modules", ".registry-presence-test");
 
 interface PresenceItem {
-    heartbeat: Parameters<TestHarness["mutation"]>[0];
-    listPresent: Parameters<TestHarness["query"]>[0];
+    heartbeat: RegisteredMutation<ArgsValidator, unknown>;
+    listPresent: RegisteredQuery<ArgsValidator, unknown>;
     presence: { extension: Parameters<ReturnType<typeof defineSchema>["extend"]>[0] };
 }
 
