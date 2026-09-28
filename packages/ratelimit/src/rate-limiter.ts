@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
 import { availableAt, evaluate } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
@@ -13,9 +14,14 @@ interface RateLimiterOptions<Names extends string> {
     /**
      * Optional key normalizer applied to every incoming `args.key` (the
      * deny-list check and the storage key both see the normalized form). Use for case-folding, trimming, or canonicalizing
-     * IPs/emails so equivalent inputs share a single bucket. The deny-list
+     * emails so equivalent inputs share a single bucket. The deny-list
      * itself is consulted as-is; normalize the deny-list entries up front to
      * match.
+     *
+     * After it, a key that is an IPv6 address is always collapsed to its /64
+     * (`2001:db8:1:2::/64`) and an IPv4-mapped one to its IPv4 address, so a
+     * `ctx.ip`-keyed limit cannot be dodged by rotating addresses within one
+     * delegated prefix. A deny-list IPv6 entry therefore bans its whole /64.
      */
     normalize?: (key: string) => string;
     /** Clock injection for tests. Defaults to `Date.now`. */
@@ -28,6 +34,10 @@ interface RateLimiterOptions<Names extends string> {
 // named `a:b` (global) can't collide with limit `a` keyed by `b`.
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
+
+// The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
+const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
+    normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
 
 // Fires once per `new RateLimiter(...)` call that receives no explicit
 // `store` — never per check/limit call, which would be noise on the hot
@@ -64,7 +74,7 @@ class RateLimiter<Names extends string = string> {
 
     public constructor(options: RateLimiterOptions<Names>) {
         this.config = options.config;
-        this.normalize = options.normalize ?? ((key: string): string => key);
+        this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
         // that, catches nothing but a byte-exact repeat of the stored string:

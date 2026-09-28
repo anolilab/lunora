@@ -19,6 +19,7 @@
 import type { HttpCacheLike } from "@lunora/platform";
 
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
@@ -302,7 +303,8 @@ const unresolvedCallerKeyRefusal = (): Response =>
  * Adapt a `@lunora/ratelimit` limiter into a {@link RestRateLimit} gate for the
  * public REST surface (plan 167). Pass the limiter and the rate name to charge;
  * `key` isolates the limit per caller (IP / user / API key — defaults to
- * {@link trustedClientIp}).
+ * {@link trustedClientIp}, with an IPv6 address collapsed to its /64 so a
+ * caller cannot rotate through its own prefix for a fresh bucket per request).
  *
  * That default resolves an IP only ON Cloudflare, where the edge stamps
  * `cf-connecting-ip` over anything the client sent. On any other host it is a
@@ -334,7 +336,16 @@ const createRestRateLimit =
         options: { key?: (request: Request, functionPath: string) => string | undefined; name: string; trustedClientIpHeader?: string },
     ): RestRateLimit =>
     async (request, functionPath) => {
-        const key = options.key ? options.key(request, functionPath) : trustedClientIp(request.headers, options.trustedClientIpHeader);
+        let key: string | undefined;
+
+        if (options.key) {
+            key = options.key(request, functionPath);
+        } else {
+            const ip = trustedClientIp(request.headers, options.trustedClientIpHeader);
+
+            // An IPv6 caller is keyed on its /64 — see `ipRateLimitKey`.
+            key = ip === undefined ? undefined : ipRateLimitKey(ip);
+        }
 
         // `""` is refused alongside `undefined`: an empty key is a bucket name every
         // caller shares, which is the state this refusal exists to prevent.

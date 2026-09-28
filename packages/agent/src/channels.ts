@@ -224,42 +224,49 @@ type EligibleTarget = { config: NonNullable<AgentDefinition["onInbound"]>; targe
 /** A bare `200 OK` — the provider's "delivered, do not redeliver" acknowledgement. */
 const ack = (): Response => new Response(undefined, { status: 200 });
 
+/** SHA-256 of `value` as lowercase hex. */
+const sha256Hex = async (value: string): Promise<string> =>
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
 /**
- * A stable per-delivery id for idempotent dispatch: GitHub's `X-GitHub-Delivery`
- * header, else Slack's `event_id` / Discord's interaction `id` from the (already
- * verified) body. `undefined` when none is present.
+ * A stable per-delivery id for idempotent dispatch, taken ONLY from signed
+ * material: Slack's `event_id` / Discord's interaction `id` from the (already
+ * verified) body, else the SHA-256 of the verified body itself.
+ *
+ * GitHub is always keyed on the body hash. Its `X-GitHub-Delivery` header is not
+ * covered by the HMAC (which signs the body alone), so keying on it would let a
+ * captured signed body be replayed under a fresh — or absent — header into a new
+ * run each time. An honest redelivery resends the identical body, so it still
+ * dedupes. The same body-hash fallback covers Slack payloads that carry no
+ * `event_id` (interactive payloads, slash commands), which would otherwise start
+ * a run per replay within the timestamp window.
  */
-const deliveryId = (channel: AgentInboundChannelKind, headers: Headers, body: string): string | undefined => {
-    if (channel === "github") {
-        return headers.get("x-github-delivery") ?? undefined;
+const deliveryId = async (channel: AgentInboundChannelKind, body: string): Promise<string> => {
+    if (channel !== "github") {
+        try {
+            const parsed = JSON.parse(body) as { event_id?: unknown; id?: unknown };
+            const raw = channel === "slack" ? parsed.event_id : parsed.id;
+
+            if (typeof raw === "string" && raw !== "") {
+                return raw;
+            }
+        } catch {
+            // Not JSON (e.g. a form-encoded Slack payload) — key on the body.
+        }
     }
 
-    try {
-        const parsed = JSON.parse(body) as { event_id?: unknown; id?: unknown };
-        const raw = channel === "slack" ? parsed.event_id : parsed.id;
-
-        return typeof raw === "string" ? raw : undefined;
-    } catch {
-        return undefined;
-    }
+    return sha256Hex(body);
 };
 
 /**
- * Start the run for a claimed event, idempotently. A provider redelivery carries
+ * Start the run for a claimed event, idempotently. A provider redelivery maps to
  * the SAME delivery id, and Cloudflare Workflows rejects a duplicate instance id
  * — so a redelivery acks `200` (already handled) instead of starting a second
  * run. Only a *duplicate-instance* rejection is acked; any other `create()`
  * failure (service error, quota, bad binding) is rethrown so the handler returns
- * non-2xx and the provider redelivers rather than the event being lost. When no
- * usable delivery id is available (absent, or sanitized to empty), falls back to
- * a non-idempotent create.
+ * non-2xx and the provider redelivers rather than the event being lost.
  */
-const startChannelRun = async (
-    workflow: AgentWorkflowBindingLike,
-    run: AgentChannelRun,
-    channel: AgentInboundChannelKind,
-    id: string | undefined,
-): Promise<Response> => {
+const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentChannelRun, channel: AgentInboundChannelKind, id: string): Promise<Response> => {
     // `run` derives from an inbound channel webhook mapper — reject the reserved
     // workflow branch-marker key at this trust boundary before it ever reaches
     // `create()`. Thrown (not acked): a forged marker must not be reported as
@@ -268,21 +275,12 @@ const startChannelRun = async (
         throw new LunoraError("BAD_REQUEST", `@lunora/agent: inbound channel run params ${BRANCH_MARKER_REJECTION}`);
     }
 
-    // An absent or empty id gives no dedup key. Otherwise hash the RAW id: the
-    // hex digest is always instance-id-safe and fixed-length (`<channel>-` + 16
-    // chars, well under Cloudflare's 100-character cap) while keeping the whole id
-    // significant, where sanitize-then-truncate discarded everything past the
-    // cutoff. FNV-1a is a checksum, not a cryptographic hash — an attacker who
-    // can choose a delivery id can find a collision — so the integrity of this
-    // key rests on the upstream signature verification of the id, not on the
-    // digest; against ACCIDENTAL collision between honest ids, 64 bits is
-    // ample.
-    if (id === undefined || id === "") {
-        await workflow.create({ params: run });
-
-        return ack();
-    }
-
+    // Hash the RAW id: the hex digest is always instance-id-safe and fixed-length
+    // (`<channel>-` + 16 chars, well under Cloudflare's 100-character cap) while
+    // keeping the whole id significant. FNV-1a is a checksum, not a cryptographic
+    // hash — the integrity of this key rests on `deliveryId` drawing only from
+    // signed material, not on the digest; against ACCIDENTAL collision between
+    // honest ids, 64 bits is ample.
     try {
         await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: run });
     } catch (error) {
@@ -364,7 +362,7 @@ const dispatchAgentChannel =
             }
 
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
-            return await startChannelRun(workflow, run satisfies AgentChannelRun, channel, deliveryId(channel, request.headers, body));
+            return await startChannelRun(workflow, run satisfies AgentChannelRun, channel, await deliveryId(channel, body));
         }
 
         // No target's secret verified ⇒ unauthenticated; a verified-but-declined event is a 204.

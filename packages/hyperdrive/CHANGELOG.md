@@ -1,3 +1,15 @@
+## @lunora/hyperdrive [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.144...@lunora/hyperdrive@1.0.0-alpha.145) (2026-09-27)
+
+### Tests
+
+* **hyperdrive:** drop unused exports from the test helpers ([#886](https://github.com/anolilab/lunora/issues/886)) ([cbf3857](https://github.com/anolilab/lunora/commit/cbf3857c98fc9325727a458946c9cf649545bfd2))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.148
+
 ## @lunora/hyperdrive [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.143...@lunora/hyperdrive@1.0.0-alpha.144) (2026-09-27)
 
 ### Bug Fixes
