@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.103...@lunora/platform-node@1.0.0-alpha.104) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.149
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/queue:** upgraded to 1.0.0-alpha.77
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.150
+* **@lunora/do:** upgraded to 1.0.0-alpha.178
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.61
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.161
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+* **@lunora/storage:** upgraded to 1.0.0-alpha.90
+
 ## @lunora/platform-node [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.102...@lunora/platform-node@1.0.0-alpha.103) (2026-09-28)
 
 
