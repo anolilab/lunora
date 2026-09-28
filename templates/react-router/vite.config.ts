@@ -14,8 +14,16 @@ import { defineConfig } from "vite";
  * breaks the moment it runs on another one (`vite --port 3000`, a second app on
  * the same machine, a preview deploy); reading Vite's *resolved* port covers all
  * of those, and an explicit `VITE_LUNORA_URL` still wins.
+ *
+ * It runs on `serve` ONLY. `define` is a global text replacement, so without
+ * `apply` a production build bakes `http://localhost:<port>` into the CLIENT
+ * bundle too — and the client prefers it over `location.origin`, so every
+ * deployed browser connects to its own machine. Set `VITE_LUNORA_URL` to point
+ * a build at a standalone Worker; otherwise the browser uses its page origin,
+ * which is correct for this single-worker topology.
  */
 const ssrOrigin = (): Plugin => ({
+    apply: "serve",
     config(userConfig) {
         if (process.env.VITE_LUNORA_URL) {
             return undefined;
