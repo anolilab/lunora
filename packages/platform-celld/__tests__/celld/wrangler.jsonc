@@ -5,14 +5,16 @@
     "name": "lunora-celld-tck",
     "main": "tck-worker.ts",
     "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["nodejs_compat"],
+    // `sqlite_vec` loads sqlite-vec into each cell's SQLite (tck-bindings.ts).
+    "compatibility_flags": ["nodejs_compat", "sqlite_vec"],
     "durable_objects": {
         "bindings": [
             { "name": "TCK", "class_name": "TckCell" },
             { "name": "ECHO", "class_name": "EchoCell" },
+            { "name": "VECTORS", "class_name": "VectorCell" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell", "VectorCell"] }],
     // The binding-backed checks (tck-bindings.ts). The queue's consumer is this
     // same worker, which also exports `fetch` — the topology a Lunora app has.
     "d1_databases": [{ "binding": "DB", "database_name": "tck", "database_id": "tck" }],

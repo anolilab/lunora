@@ -253,7 +253,7 @@ class EchoCell {
 }
 
 export { EchoCell, TckCell };
-export { TckWorkflow } from "./tck-bindings";
+export { TckWorkflow, VectorCell } from "./tck-bindings";
 
 // A Workers entry module: the runtime reads the handlers off the default export
 // and each Durable Object class by name, so this file has to mix both.

@@ -846,6 +846,9 @@ catalogs:
     mysql2: ^3.24.3
     pg: ^8.23.0
     postgres: ^3.4.9
+    # Pinned to the sqlite-vec celld embeds (its `sqlite_vec` flag), so the
+    # @lunora/ai vec0 tests run the same extension a celld cell loads.
+    sqlite-vec: 0.1.9
   # HTTP server toolkits the framework adapters mount on: hono backs the
   # `@lunora/runtime` router, h3 is Nitro's request layer that `@lunora/nuxt`
   # types against.

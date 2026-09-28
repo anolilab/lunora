@@ -80,6 +80,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "sqlite-vec": "catalog:sql",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

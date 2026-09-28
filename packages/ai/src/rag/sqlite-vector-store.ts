@@ -8,12 +8,17 @@
  * tenant boundary, so one tenant's vectors are not merely filtered away from
  * another's — they are in a different database.
  *
- * **Nearest-neighbour search is brute force.** Every vector in the namespace is
- * read and scored in JS. There is no ANN index, because SQLite has no vector
- * type and `sqlite-vec` is not loadable inside workerd. That is a real bound,
- * not a detail: it is linear in namespace size, so this suits **many small
+ * **Nearest-neighbour search is brute force by default.** Every vector in the
+ * namespace is read and scored in JS, because SQLite has no vector type and
+ * `sqlite-vec` is not loadable inside workerd. That is a real bound, not a
+ * detail: it is linear in namespace size, so this suits **many small
  * per-tenant indexes** — the shape most sharded apps actually have — and not
  * one large shared corpus. For that, use Vectorize or a pgvector backend.
+ *
+ * Where the SQLite does have `sqlite-vec` — a celld Durable Object with the
+ * `sqlite_vec` compatibility flag, or `node:sqlite` with the extension loaded
+ * — {@link SqliteVectorStoreOptions.ann} adds a `vec0` index beside the table
+ * and an unfiltered query becomes a KNN lookup instead of a scan.
  * @experimental
  */
 import matchesMetadataFilter from "./metadata-filter";
@@ -24,6 +29,20 @@ import type { RagVectorStore, RagVectorStoreCapabilities } from "./vector-store"
 
 /** Options for {@link sqliteVectorStore}. */
 interface SqliteVectorStoreOptions {
+    /**
+     * Keep a `sqlite-vec` `vec0` index (cosine distance) in `<table>_ann`, one
+     * partition per namespace. Requires the extension in the executor's SQLite;
+     * without it the first operation throws naming the missing module.
+     *
+     * The JSON table stays the source of truth: an index created over an
+     * existing table is backfilled from it, and a match the table no longer
+     * holds is dropped. Only an **unfiltered** query uses the index — `vec0`
+     * applies a metadata filter after picking the `k` nearest, which would
+     * return a short page, so a filtered query keeps the exact scan (and its
+     * `maxScan` bound).
+     */
+    ann?: { dimensions: number };
+
     /** Execute one statement. See {@link RagSqlExec}. */
     exec: RagSqlExec;
 
@@ -75,6 +94,12 @@ const SQL_NULL = null;
 /** `undefined` and `""` are the same namespace — the un-namespaced one. */
 const namespaceKey = (namespace: string | undefined): string => namespace ?? "";
 
+/** The `vec0` row key: one text primary key for the table's `(namespace, id)`. */
+const annKey = (namespace: string, id: string): string => JSON.stringify([namespace, id]);
+
+/** Rows copied per statement when an index is backfilled from an existing table. */
+const BACKFILL_BATCH = 500;
+
 const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore => {
     if (typeof options.exec !== "function") {
         throw new TypeError("@lunora/ai/rag: sqliteVectorStore requires an `exec` function");
@@ -82,10 +107,17 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
 
     const table = assertSafeIdentifier(options.table ?? DEFAULT_TABLE, "sqliteVectorStore `table`");
     const maxScan = options.maxScan ?? DEFAULT_MAX_SCAN;
-    const { exec } = options;
+    const { ann, exec } = options;
+
+    if (ann !== undefined && (!Number.isInteger(ann.dimensions) || ann.dimensions <= 0)) {
+        throw new TypeError("@lunora/ai/rag: sqliteVectorStore `ann.dimensions` must be a positive integer");
+    }
+
+    const annTable = `${table}_ann`;
 
     const capabilities: RagVectorStoreCapabilities = {
-        maxDimensions: options.maxDimensions ?? false,
+        // A vec0 column has one fixed width; a wider embedding cannot be indexed.
+        maxDimensions: options.maxDimensions ?? ann?.dimensions ?? false,
         // Rows are TEXT columns in an ordinary table: neither the id nor the
         // metadata has a budget to enforce.
         maxIdBytes: false,
@@ -107,6 +139,55 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
      */
     let ready: Promise<void> | undefined;
 
+    /** Create the `vec0` index, backfilling it from the table the first time. */
+    const ensureAnnIndex = async (dimensions: number): Promise<void> => {
+        const existing = await exec("SELECT name FROM sqlite_master WHERE name = ?", [annTable]);
+
+        if (existing.length > 0) {
+            return;
+        }
+
+        try {
+            await exec(
+                `CREATE VIRTUAL TABLE ${annTable} USING vec0(ref TEXT PRIMARY KEY, namespace TEXT PARTITION KEY, embedding FLOAT[${String(dimensions)}] distance_metric=cosine)`,
+                [],
+            );
+        } catch (error) {
+            if (error instanceof Error && error.message.includes("vec0")) {
+                throw new Error(
+                    "@lunora/ai/rag: sqliteVectorStore `ann` needs the sqlite-vec extension in this SQLite (`no such module: vec0`) — on celld set the `sqlite_vec` compatibility flag, on node:sqlite load the extension",
+                    { cause: error },
+                );
+            }
+
+            throw error;
+        }
+
+        // Keyset pagination over rowid, so a large table is copied in bounded
+        // statements rather than one read that materialises every vector.
+        let after = 0;
+
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- one bounded page at a time; the next page starts after this one's last rowid
+            const rows = await exec(`SELECT rowid, id, namespace, vector FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`, [after, BACKFILL_BATCH]);
+
+            for (const row of rows) {
+                // eslint-disable-next-line no-await-in-loop -- vec0 takes one row per INSERT; the page is already bounded
+                await exec(`INSERT INTO ${annTable} (ref, namespace, embedding) VALUES (?, ?, ?)`, [
+                    annKey(String(row["namespace"]), String(row["id"])),
+                    String(row["namespace"]),
+                    String(row["vector"]),
+                ]);
+            }
+
+            if (rows.length < BACKFILL_BATCH) {
+                return;
+            }
+
+            after = Number(rows.at(-1)?.["rowid"]);
+        }
+    };
+
     const ensureTable = async (): Promise<void> => {
         ready ??= (async (): Promise<void> => {
             await exec(
@@ -114,6 +195,10 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
                 [],
             );
             await exec(`CREATE INDEX IF NOT EXISTS ${table}_namespace ON ${table} (namespace)`, []);
+
+            if (ann !== undefined) {
+                await ensureAnnIndex(ann.dimensions);
+            }
         })().catch((error: unknown) => {
             ready = undefined;
 
@@ -131,6 +216,18 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         }
 
         const vector = await input.embed(input.input);
+        const namespace = namespaceKey(input.namespace);
+
+        // The index is written BEFORE the table: an interrupted pair then leaves
+        // an index entry the table does not hold, which a query drops, rather
+        // than a stored chunk no KNN lookup can find. vec0 has no upsert, so a
+        // re-index is DELETE then INSERT.
+        if (ann !== undefined) {
+            const reference = annKey(namespace, input.id);
+
+            await exec(`DELETE FROM ${annTable} WHERE ref = ?`, [reference]);
+            await exec(`INSERT INTO ${annTable} (ref, namespace, embedding) VALUES (?, ?, ?)`, [reference, namespace, JSON.stringify([...vector])]);
+        }
 
         // ON CONFLICT rather than DELETE+INSERT: re-indexing a source rewrites
         // the same ids, and the two-statement form would leave a window where a
@@ -142,10 +239,74 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         await exec(
             `INSERT INTO ${table} (id, namespace, vector, metadata) VALUES (${placeholderList(4)}) ` +
                 `ON CONFLICT(namespace, id) DO UPDATE SET vector = excluded.vector, metadata = excluded.metadata`,
-            [input.id, namespaceKey(input.namespace), JSON.stringify([...vector]), input.metadata === undefined ? SQL_NULL : JSON.stringify(input.metadata)],
+            [input.id, namespace, JSON.stringify([...vector]), input.metadata === undefined ? SQL_NULL : JSON.stringify(input.metadata)],
         );
 
         return undefined;
+    };
+
+    const getByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<ReadonlyArray<RagVectorRecord>> => {
+        await ensureTable();
+
+        if (ids.length === 0) {
+            return [];
+        }
+
+        const records: RagVectorRecord[] = [];
+
+        // One statement per batch: a caller-sized `IN (…)` list is a caller-
+        // sized placeholder count, and workerd's per-statement cap is 100.
+        for (const batch of inListBatches(ids)) {
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; concurrent fan-out would multiply the subrequest budget
+            const rows = await exec(`SELECT id, metadata FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [
+                namespaceKey(namespace),
+                ...batch,
+            ]);
+
+            for (const row of rows) {
+                const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
+
+                records.push({ id: String(row["id"]), ...(metadata === undefined ? {} : { metadata }) });
+            }
+        }
+
+        return records;
+    };
+
+    /**
+     * KNN through the `vec0` index, then the table for metadata. Ranked by the
+     * index; a match whose row is gone (an interrupted upsert or delete) is
+     * dropped rather than returned without its record.
+     */
+    const queryAnn = async (values: ReadonlyArray<number>, input: RagVectorQueryInput): Promise<RagVectorMatches> => {
+        const namespace = namespaceKey(input.namespace);
+        const nearest = await exec(`SELECT ref, distance FROM ${annTable} WHERE embedding MATCH ? AND k = ? AND namespace = ?`, [
+            JSON.stringify([...values]),
+            input.topK ?? 10,
+            namespace,
+        ]);
+        const ids = nearest.map((row) => (JSON.parse(String(row["ref"])) as [string, string])[1]);
+        const stored = await getByIds(ids, namespace);
+        const records = new Map(stored.map((record) => [record.id, record]));
+        const matches: RagVectorMatch[] = [];
+
+        for (const [index, row] of nearest.entries()) {
+            const record = records.get(ids[index] as string);
+
+            if (record === undefined) {
+                continue;
+            }
+
+            matches.push({
+                id: record.id,
+                // vec0's cosine distance is `1 - similarity`, so this is the
+                // same score the scan path computes.
+                score: 1 - Number(row["distance"]),
+                ...(input.returnMetadata === "none" || record.metadata === undefined ? {} : { metadata: record.metadata }),
+            });
+        }
+
+        return { count: matches.length, matches };
     };
 
     const query = async (input: RagVectorQueryInput): Promise<RagVectorMatches> => {
@@ -157,6 +318,10 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             values = await input.embed(input.input);
         } else {
             throw new TypeError("@lunora/ai/rag: sqliteVectorStore query requires both `input` and `embed`");
+        }
+
+        if (ann !== undefined && input.filter === undefined) {
+            return queryAnn(values, input);
         }
 
         // `LIMIT maxScan + 1` rather than an unbounded SELECT: the overflow row
@@ -201,34 +366,6 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         return { count: ranked.length, matches: ranked };
     };
 
-    const getByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<ReadonlyArray<RagVectorRecord>> => {
-        await ensureTable();
-
-        if (ids.length === 0) {
-            return [];
-        }
-
-        const records: RagVectorRecord[] = [];
-
-        // One statement per batch: a caller-sized `IN (…)` list is a caller-
-        // sized placeholder count, and workerd's per-statement cap is 100.
-        for (const batch of inListBatches(ids)) {
-            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; concurrent fan-out would multiply the subrequest budget
-            const rows = await exec(`SELECT id, metadata FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [
-                namespaceKey(namespace),
-                ...batch,
-            ]);
-
-            for (const row of rows) {
-                const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
-
-                records.push({ id: String(row["id"]), ...(metadata === undefined ? {} : { metadata }) });
-            }
-        }
-
-        return records;
-    };
-
     const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<unknown> => {
         await ensureTable();
 
@@ -242,6 +379,15 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         for (const batch of inListBatches(ids)) {
             // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
             await exec(`DELETE FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [namespaceKey(namespace), ...batch]);
+
+            // After the table, for the reason `upsert` writes the index first.
+            if (ann !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
+                await exec(
+                    `DELETE FROM ${annTable} WHERE ref IN (${placeholderList(batch.length)})`,
+                    batch.map((id) => annKey(namespaceKey(namespace), id)),
+                );
+            }
         }
 
         return undefined;

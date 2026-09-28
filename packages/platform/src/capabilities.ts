@@ -780,7 +780,7 @@ export const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         vectorStore: {
             level: "unsupported",
-            note: "Vectorize is not a celld binding type. celld does honour the `sqlite_vec` compatibility flag, which is per-cell vector search inside `storage.sql` — not the fleet-wide index `ctx.vectors` is built on",
+            note: "Vectorize is not a celld binding type. celld does honour the `sqlite_vec` compatibility flag, which is per-cell vector search inside `storage.sql` — `sqliteVectorStore({ ann })` in `@lunora/ai/rag` indexes with it from a Durable Object — but not the fleet-wide index `ctx.vectors` is built on",
         },
         websocketHibernation: {
             level: "native",

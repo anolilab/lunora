@@ -4,7 +4,7 @@
  * The contract suites cover what `ShardHost` / `SocketHost` / `ShardKvStore`
  * rest on. The other `native` ratings — D1, KV, R2, Queues, Workflows, Cron
  * Triggers — rest on celld bindings (and Discord channel verification on its
- * Web Crypto), so each check here drives the binding
+ * Web Crypto, and `sqliteVectorStore`'s vec0 index on its `sqlite_vec` flag), so each check here drives the binding
  * through Lunora's own adapter where there is one (`D1Client`, `createKv`,
  * `createStorage`, `createQueues` + `dispatchQueueBatch`), in the call shapes
  * the runtime actually uses (see each check). Checks that complete
@@ -12,6 +12,7 @@
  * they observed in KV under `tck:*`, and the node side polls for it.
  */
 import { verifyDiscord } from "@lunora/agent/channels";
+import { sqliteVectorStore } from "@lunora/ai/rag";
 import { createKv } from "@lunora/bindings/kv";
 import { D1Client } from "@lunora/d1";
 import type { D1DatabaseLike, KVNamespaceLike, QueueBindingLike, R2BucketLike } from "@lunora/platform";
@@ -32,6 +33,7 @@ type BindingEnv = {
     KV: KVNamespaceLike;
     R2: R2BucketLike;
     TCK_FLOW: Workflow;
+    VECTORS: DurableObjectNamespace;
 };
 
 const QUEUE_NAME = "tck-jobs";
@@ -244,6 +246,50 @@ const checkEd25519 = async (): Promise<void> => {
     check(!(await verifyDiscord({ body: `${body} `, publicKey, signature, timestamp })), "a tampered body is rejected");
 };
 
+/**
+ * `sqliteVectorStore({ ann })` over a cell's own `storage.sql`: celld loads
+ * sqlite-vec into a Durable Object's SQLite when the worker sets the
+ * `sqlite_vec` flag (see wrangler.jsonc), and nowhere else — hence a cell.
+ */
+class VectorCell {
+    public constructor(private readonly state: DurableObjectState) {}
+
+    public async fetch(): Promise<Response> {
+        const { sql } = this.state.storage;
+        const store = sqliteVectorStore({
+            ann: { dimensions: 3 },
+            exec: (statement, parameters) => sql.exec(statement, ...parameters).toArray(),
+        });
+        const vector = (values: number[]) => async (): Promise<number[]> => values;
+
+        try {
+            await store.upsert({ embed: vector([1, 0, 0]), id: "x", input: "x", metadata: { kind: "a" } });
+            await store.upsert({ embed: vector([0, 1, 0]), id: "y", input: "y" });
+            await store.upsert({ embed: vector([0.7, 0.7, 0]), id: "z", input: "z" });
+            await store.deleteByIds(["y"]);
+
+            const nearest = await store.query({ embed: vector([0.9, 0.1, 0]), input: "q", topK: 3 });
+
+            same(
+                nearest.matches.map((match) => match.id),
+                ["x", "z"],
+                "KNN through the vec0 index",
+            );
+            same(nearest.matches[0]?.metadata, { kind: "a" }, "metadata read back from the table");
+
+            return new Response("ok");
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : String(error), { status: 500 });
+        }
+    }
+}
+
+const checkVectorIndex = async (env: BindingEnv): Promise<void> => {
+    const response = await env.VECTORS.get(env.VECTORS.newUniqueId()).fetch("https://cell/");
+
+    check(response.ok, await response.text());
+};
+
 /** What `scheduled()` hands `runCronJobs` and the backup cron: `cron` and `scheduledTime`. */
 const recordCron = async (controller: ScheduledController, env: BindingEnv): Promise<void> => {
     await env.KV.put("tck:cron", JSON.stringify({ cron: controller.cron, scheduledTime: controller.scheduledTime }));
@@ -259,7 +305,13 @@ const handleBindingRoute = async (request: Request, env: BindingEnv): Promise<Bi
     const url = new URL(request.url);
     const name = url.pathname.slice("/binding/".length);
     const id = url.searchParams.get("id") ?? "";
-    const synchronous: Record<string, (env: BindingEnv) => Promise<void>> = { d1: checkD1, ed25519: checkEd25519, kv: checkKv, r2: checkR2 };
+    const synchronous: Record<string, (env: BindingEnv) => Promise<void>> = {
+        d1: checkD1,
+        ed25519: checkEd25519,
+        kv: checkKv,
+        r2: checkR2,
+        vec: checkVectorIndex,
+    };
 
     try {
         const run = synchronous[name];
@@ -313,4 +365,4 @@ const handleBindingRoute = async (request: Request, env: BindingEnv): Promise<Bi
 };
 
 export type { BindingEnv, BindingResult };
-export { consumeQueue, handleBindingRoute, recordCron, TckWorkflow };
+export { consumeQueue, handleBindingRoute, recordCron, TckWorkflow, VectorCell };

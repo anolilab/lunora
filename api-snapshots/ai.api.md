@@ -486,6 +486,9 @@ interface SqlLexicalStoreOptions {
 
 ```ts
 interface SqliteVectorStoreOptions {
+    ann?: {
+        dimensions: number;
+    };
     exec: RagSqlExec;
     maxDimensions?: number | false;
     maxScan?: number;
