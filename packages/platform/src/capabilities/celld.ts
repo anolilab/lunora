@@ -42,6 +42,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
+        authJurisdictionMove: {
+            level: "unsupported",
+            note: "celld implements no jurisdictions — a fleet has only the machines you run, and `newUniqueId({ jurisdiction })` / `namespace.jurisdiction()` throw — so there is no jurisdiction-pinned auth object to copy into, and a schema that pins auth with `.jurisdiction(…)` fails closed",
+        },
         browser: { level: "unsupported", note: "Browser Rendering is not a celld binding type" },
         commitOrderedTables: {
             level: "native",
@@ -67,9 +71,17 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Same shape as Cloudflare: each chunk lands in the cell's SQLite under a monotonic seq and the producer outlives the socket via `waitUntil`. celld has no streaming primitive of its own, and a cell released under memory pressure mid-flight ends the run as STREAM_INTERRUPTED",
         },
+        edgeRequestMetadata: {
+            level: "unsupported",
+            note: 'celld hands the isolate a request.cf object with none of Cloudflare\'s edge fields — it states it cannot prove geolocation, colo or TLS metadata, and it does not terminate TLS, so no verified client certificate ever reaches it. trustInboundTraceContext: "mtls" therefore collapses to never-trust (the runtime warns once), and spans ship without placement attributes',
+        },
         globalTables: {
             level: "native",
             note: "D1 bindings, backed by the fleet's own SQLite rather than Cloudflare's. Two differences that matter: a result is capped at 100,000 rows or 32 MiB, and there are no read replicas — so the Sessions API's bookmark pinning is satisfied trivially rather than by catching a replica up. Bytes still belong in a BLOB: a TEXT value that is not valid UTF-8 decodes with U+FFFD, as on workerd (Lunora already puts bytes in BLOBs)",
+        },
+        hostTraceFusion: {
+            level: "unsupported",
+            note: "celld exports its own OpenTelemetry (CELLD_OTEL) at the daemon level, but exposes no cloudflare:workers tracing.enterSpan to the isolate, so there is no host trace tree to enter. Already capability-probed at runtime, so fuseCloudflareTraces is a no-op; onSpan remains the source of truth",
         },
         httpCache: {
             level: "unsupported",
@@ -92,6 +104,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`state.storage.sql` over the cell's own SQLite database, replicated to the fleet bucket. One edge: `Cursor.toArray()` raises a celld-specific error when the isolate is near its 128 MB V8 heap limit rather than materialising the set",
         },
+        logArchive: {
+            level: "unsupported",
+            note: "The read side needs R2 Data Catalog (Iceberg) plus R2 SQL; celld's R2 is a key space in the fleet bucket with neither, and it has no Pipelines binding to write the records in the first place. The admin route fails closed with LOG_ARCHIVE_NOT_CONFIGURED, which the studio renders as an empty state",
+        },
         mail: {
             level: "emulated",
             note: "Resend (third-party) via celld Queues — the same queue-backed send as on Cloudflare, now that a celld queue consumer may live on the worker that exports `fetch()`. Inbound Email Workers are absent",
@@ -113,9 +129,21 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "The segment format, the archive-before-trim ordering behind `waitUntil` and the de-overlapping read-back are Lunora's; celld supplies the bucket and the `startAfter` listing the segment keys are indexed on. celld has no notion of a changelog to tier, so nothing here is a product being consumed",
         },
         pipelines: { level: "unsupported", note: "Pipelines is not a celld binding type" },
+        pointInTimeRecovery: {
+            level: "unsupported",
+            note: "celld's Durable Object storage has no bookmark API (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. The fleet bucket's epoch-fenced replication is for durability and takeover, not an addressable history; `lunora backup` (objectStorageBackups) is the recovery tier here",
+        },
         queues: {
             level: "native",
             note: 'Queues bindings with batching, per-message ack/retry, delays and dead-letter queues, consumed by the `queue()` handler on the same worker that exports `fetch()` (the v0.4.0 rule forbidding that is gone as of v0.4.1). Differences: a queue is one cell with one writer, so write capacity scales by adding queues; a queue owner refuses more than 256 concurrent producer calls (retryable); retention is a fixed four days; no pull consumers or Queues HTTP API, so a `defineQueue({ mode: "pull" })` queue is refused at deploy',
+        },
+        relationGraph: {
+            level: "emulated",
+            note: "Identical to Cloudflare: the engine-level traversal over the same ctx.db reads, each hop a batched WHERE ... IN (...) against the cell's own SQLite inside its single-threaded event. Reads are local to the owning node, so a multi-hop expansion finishes within one request; there is no graph engine being consumed",
+        },
+        requestOrigin: {
+            level: "emulated",
+            note: "celld does not terminate TLS or front a CDN: request.url's hostname comes from the Host header unless a trusted proxy is declared (`--trust-forwarded-headers`, which then reads X-Forwarded-Host / -Proto). Pin the host at the ingress proxy, or configure a base (publicBaseUrl) rather than trusting the request",
         },
         scheduler: {
             level: "emulated",
