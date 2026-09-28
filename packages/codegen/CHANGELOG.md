@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.234...@lunora/codegen@1.0.0-alpha.235) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.169
+* **@lunora/agent:** upgraded to 1.0.0-alpha.151
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/queue:** upgraded to 1.0.0-alpha.77
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.96
+* **@lunora/do:** upgraded to 1.0.0-alpha.178
+* **@lunora/server:** upgraded to 1.0.0-alpha.158
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+
 ## @lunora/codegen [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.233...@lunora/codegen@1.0.0-alpha.234) (2026-09-27)
 
 
