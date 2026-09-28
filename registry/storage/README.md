@@ -8,6 +8,8 @@ Every key is scoped per-tenant as `storage/<userId>/<key>`, so a client-supplied
 
 The base is the origin the request reached your Worker on (`ctx.origin`), so the URLs point back at whichever host asked for them — in dev, in a preview and in production — with nothing to configure. Set `STORAGE_PUBLIC_BASE_URL` only to override it, for example when a CDN or a separate object host fronts the `/storage/*` route.
 
+> **`ctx.origin` is only for URLs returned to the caller who asked.** It is the origin the _current_ caller reached, which is what makes it right for these signed URLs. Do not reuse it for links delivered to other people (password-reset or invite emails, webhooks, notifications): on a host that derives it from the `Host` header (Node, rated `emulated`) the caller picks it, and that is host-header poisoning. Build those from a configured canonical base URL.
+
 ## Install
 
 ```bash

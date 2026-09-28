@@ -107,6 +107,15 @@ any other dispatch no request is behind. Queries have no `ctx.origin`: a live
 query re-runs with no request behind it and its cached result is shared across
 hosts, so a query that builds such a URL needs a configured base.
 
+:::caution
+`ctx.origin` is the origin the **current caller** reached, so use it only for
+URLs handed back to that same caller, such as a signed storage URL. Never build
+links that go to other people from it: password-reset or invite emails,
+webhooks, notifications. On a host that derives it from the `Host` header
+(Node, rated `emulated`), the caller chooses that value, and a link built from
+it is host-header poisoning. Use a configured canonical base URL for those.
+:::
+
 ## ctx field matrix
 
 | Field         | `QueryCtx`       | `MutationCtx`    | `ActionCtx`        |

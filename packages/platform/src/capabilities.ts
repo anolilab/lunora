@@ -760,7 +760,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         requestOrigin: {
             level: "emulated",
-            note: "The same runtime code reads it off request.url, but nothing here serves HTTP: the embedding server builds that Request, usually from the Host header the caller sent. Pin the host in the proxy in front, or configure a base (publicBaseUrl / STORAGE_PUBLIC_BASE_URL), which always wins over the origin",
+            note: "The same runtime code reads it off request.url, but nothing here serves HTTP: the embedding server builds that Request, usually from the Host header the caller sent. Pin the host in the proxy in front, or configure a base (publicBaseUrl / STORAGE_PUBLIC_BASE_URL), which always wins over the origin. Because the caller can choose it here, never build links delivered to OTHER people from ctx.origin (password-reset or invite emails, webhooks, notifications): that is host-header poisoning. Use a configured canonical base URL for those; a signed URL returned to the same caller is fine",
         },
         identityProxy: {
             level: "unsupported",
