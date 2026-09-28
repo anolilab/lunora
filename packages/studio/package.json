@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.236",
+    "version": "1.0.0-alpha.237",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -78,10 +78,10 @@
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
         "@lunora/advisor": "1.0.0-alpha.168",
-        "@lunora/bindings": "1.0.0-alpha.80",
-        "@lunora/client": "1.0.0-alpha.157",
-        "@lunora/errors": "1.0.0-alpha.46",
-        "@lunora/react": "1.0.0-alpha.164",
+        "@lunora/bindings": "1.0.0-alpha.81",
+        "@lunora/client": "1.0.0-alpha.158",
+        "@lunora/errors": "1.0.0-alpha.47",
+        "@lunora/react": "1.0.0-alpha.165",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
@@ -97,8 +97,8 @@
     "devDependencies": {
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
-        "@lunora/mail": "1.0.0-alpha.92",
-        "@lunora/notify": "1.0.0-alpha.68",
+        "@lunora/mail": "1.0.0-alpha.93",
+        "@lunora/notify": "1.0.0-alpha.69",
         "@lunora/platform": "1.0.0-alpha.41",
         "@lunora/runtime": "1.0.0-alpha.160",
         "@lunora/shard-engine": "1.0.0-alpha.96",
