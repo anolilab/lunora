@@ -31,16 +31,24 @@ const PLUGIN_NAME = "LunoraRspackPlugin";
  *
  * A failed pass records no fingerprint, so the next compilation retries it — that
  * is what lets a `postcodegen` recover once whatever broke it is repaired, since
- * the repair may be external and move nothing this plugin hashes. But a hook that
- * FAILS and writes under `_generated/` triggers its own next compilation on
- * unchanged inputs, and unbounded retries turn that into a spin that re-runs
- * codegen and respawns the hook forever.
+ * the repair may be external and move nothing this plugin hashes. Uncapped, that
+ * makes every UNRELATED rebuild pay for the whole pass for as long as the failure
+ * stands: editing app code with a broken hook re-ran codegen and respawned the
+ * hook on every save (measured across four saves: five hook spawns, versus two
+ * with this cap).
  *
- * Two, matching `@lunora/vite`'s `MAX_SETTLE_RERUNS`, for the same reason: enough
- * to ride out a transient cause, few enough that a permanently broken hook
- * settles. The finding keeps being reported after the cap — only the re-running
- * stops — and any real edit to the schema, tsconfig or wrangler config moves the
- * fingerprint and rearms it.
+ * Two, matching `@lunora/vite`'s `MAX_SETTLE_RERUNS`: enough to ride out a
+ * transient cause, few enough that a permanently broken hook settles. The finding
+ * keeps being reported after the cap — only the re-running stops — and any real
+ * edit to the schema, tsconfig or wrangler config moves the fingerprint and
+ * rearms it.
+ *
+ * Note what this is NOT guarding: a failing hook's own write under `_generated/`
+ * does not start another compilation. `runPostCodegenHook` is awaited inside
+ * `beforeCompile`, so the write lands before that compilation arms its watcher and
+ * is absorbed — verified by measuring the build count with this cap present and
+ * removed. Guarding a self-triggered spin was the first, wrong reading of this
+ * problem, and a test written against it passed either way.
  */
 const MAX_FAILED_RETRIES = 2;
 
