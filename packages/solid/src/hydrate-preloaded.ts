@@ -2,7 +2,7 @@ import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@l
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
-import { useLunora } from "./context";
+import { useLunora, useLunoraClientSwapped } from "./context";
 import { onMounted } from "./solid-compat";
 
 /**
@@ -36,7 +36,8 @@ import { onMounted } from "./solid-compat";
  * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (mounted
  * then or later) stops using it and returns `undefined` until the live value
  * arrives — matching `@lunora/react`'s `usePreloadedQuery`, hence the
- * `Accessor<T | undefined>` type.
+ * `Accessor<T | undefined>` type. The same holds under a `LunoraProvider` whose
+ * `client` was swapped: the value was preloaded for the first client.
  */
 const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): Accessor<T | undefined> => {
     const client = useLunora();
@@ -45,8 +46,9 @@ const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: { onError?: Subsc
 
     // Seed synchronously: the signal already holds the SSR value before the
     // first render reads it, so there is no loading window until an identity
-    // is retired.
-    const [data, setData] = createSignal<T | undefined>(client.identityEpoch() === 0 ? value : undefined);
+    // is retired — or the provider's `client` is swapped, since the value was
+    // preloaded for the client it first rendered with.
+    const [data, setData] = createSignal<T | undefined>(client.identityEpoch() === 0 && !useLunoraClientSwapped() ? value : undefined);
 
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 

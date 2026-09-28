@@ -1,4 +1,4 @@
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Preloaded } from "@lunora/client";
 import {
     createConnectionStatus,
     createMutation,
@@ -11,7 +11,7 @@ import {
 } from "@lunora/solid";
 import { render } from "@solidjs/testing-library";
 import * as solid from "solid-js";
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { describe, expect, it } from "vitest";
 
 import { createFakeClient } from "./fake-client";
@@ -212,6 +212,135 @@ describe("@lunora/solid on Solid 2", () => {
         unmount();
 
         expect(fake.listenerCount()).toBe(0);
+    });
+
+    describe("swapping the provider's client", () => {
+        const preloaded = {
+            args: { channelId: "channel:demo" },
+            functionPath: "messages:list",
+            value: { messages: ["from-ssr"] },
+        } as unknown as Preloaded<{ messages: string[] }>;
+
+        it("moves a mounted query to the new client with no stale data and no leak on the old one", () => {
+            const first = createFakeClient();
+            const second = createFakeClient();
+            const [client, setClient] = createSignal<LunoraClient>(first.asClient);
+
+            const Messages = () => {
+                const data = createQuery(listRef, { channelId: "channel:demo" });
+
+                return <pre>{data() === undefined ? "loading" : JSON.stringify(data())}</pre>;
+            };
+
+            const { container } = render(() => (
+                <LunoraProvider client={client()}>
+                    <Messages />
+                </LunoraProvider>
+            ));
+
+            first.subscriptions[0]?.push({ messages: ["old"] });
+            flush();
+
+            expect(container.textContent).toBe(JSON.stringify({ messages: ["old"] }));
+
+            setClient(second.asClient);
+            flush();
+
+            expect(first.subscriptions.every((sub) => sub.unsubscribed)).toBe(true);
+            expect(second.subscriptions).toHaveLength(1);
+            expect(container.textContent).toBe("loading");
+
+            second.subscriptions[0]?.push({ messages: ["new"] });
+            flush();
+
+            expect(container.textContent).toBe(JSON.stringify({ messages: ["new"] }));
+        });
+
+        it("hands a component created after the swap the new client", () => {
+            const first = createFakeClient();
+            const second = createFakeClient();
+            const [client, setClient] = createSignal<LunoraClient>(first.asClient);
+            const [shown, setShown] = createSignal(false);
+            let resolved: LunoraClient | undefined;
+
+            const Late = () => {
+                resolved = useLunora();
+                createQuery(listRef, { channelId: "channel:demo" });
+
+                return <div />;
+            };
+
+            render(() => (
+                <LunoraProvider client={client()}>
+                    <Show when={shown()}>
+                        <Late />
+                    </Show>
+                </LunoraProvider>
+            ));
+
+            setClient(second.asClient);
+            setShown(true);
+            flush();
+
+            expect(resolved).toBe(second.asClient);
+            expect(first.subscriptions).toHaveLength(0);
+            expect(second.subscriptions).toHaveLength(1);
+        });
+
+        it("never seeds a preloaded value from before the swap", () => {
+            const first = createFakeClient();
+            const second = createFakeClient();
+            const [client, setClient] = createSignal<LunoraClient>(first.asClient);
+            const [shown, setShown] = createSignal(false);
+
+            const Hydrated = (props: { label: string }) => {
+                const data = hydratePreloaded(preloaded);
+
+                return <pre>{`${props.label}:${JSON.stringify(data() ?? null)}`}</pre>;
+            };
+
+            const { container } = render(() => (
+                <LunoraProvider client={client()}>
+                    <Hydrated label="early" />
+                    <Show when={shown()}>
+                        <Hydrated label="late" />
+                    </Show>
+                </LunoraProvider>
+            ));
+
+            expect(container.textContent).toBe(`early:${JSON.stringify({ messages: ["from-ssr"] })}`);
+
+            setClient(second.asClient);
+            setShown(true);
+            flush();
+
+            expect(container.textContent).toBe("early:nulllate:null");
+            expect(first.subscriptions.every((sub) => sub.unsubscribed)).toBe(true);
+            expect(second.subscriptions).toHaveLength(2);
+        });
+
+        it("does not resubscribe when the provider re-reads the same client", () => {
+            const fake = createFakeClient();
+            const [client, setClient] = createSignal<LunoraClient>(fake.asClient, { equals: false });
+
+            const Messages = () => {
+                createQuery(listRef, { channelId: "channel:demo" });
+
+                return <div />;
+            };
+
+            render(() => (
+                <LunoraProvider client={client()}>
+                    <Messages />
+                </LunoraProvider>
+            ));
+
+            setClient(fake.asClient);
+            flush();
+
+            expect(fake.subscriptions).toHaveLength(1);
+            expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
+        });
     });
 
     it("names the missing provider instead of leaking Solid 2's context error", () => {
