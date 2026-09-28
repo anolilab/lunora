@@ -25,8 +25,7 @@
         },
         {
             "name": "STORAGE_PUBLIC_BASE_URL",
-            "description": "Bare origin that fronts the R2 bucket (the Worker or CDN host that serves the signed URLs). MUST NOT carry a path: the key is verified from the whole URL pathname, so a subpath base makes every minted URL fail verification. Every key this item mints is prefixed `storage/`, so the minted URLs land on `/storage/:key` at this origin.",
-            "value": "http://localhost:8787",
+            "description": "Bare origin that fronts the R2 bucket (the Worker or CDN host that serves the signed URLs). MUST NOT carry a path: the key is verified from the whole URL pathname, so a subpath base makes every minted URL fail verification. Every key this item mints is prefixed `storage/`, so the minted URLs land on `/storage/:key` at this origin. Scaffolded EMPTY: set it to the origin your app is served on — locally that is your dev server's URL (e.g. http://localhost:5173 under Vite); the port is signed into every URL, so a wrong one cannot be fixed by rewriting it.",
             "secret": false
         }
     ],

@@ -10,9 +10,8 @@ import { useState } from "react";
 // because `virtual:lunora/worker` serves Lunora from this same worker. In a
 // build with neither set, the browser uses its own page origin — also this
 // worker.
-const isServer = typeof globalThis.window === "undefined";
 const resolveLunoraUrl = (): string =>
-    (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (isServer ? "http://localhost:3000" : globalThis.location.origin);
+    (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (import.meta.env.SSR ? "http://localhost:3000" : globalThis.location.origin);
 
 /**
  * Client boundary that owns the browser `LunoraClient` and provides it to the

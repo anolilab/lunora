@@ -59,11 +59,11 @@ This:
 
 ## Step 2: Configure the binding + secrets
 
-| Name                      | Where                                | Notes                                                                                                                                  |
-| ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets[]`    | The R2 bucket binding. Point `bucket_name` at a real bucket.                                                                           |
-| `STORAGE_SIGNING_SECRET`  | secret (`.dev.vars` / `secret put`)  | HMAC secret for signed URLs. Min 32 chars, enforced — a shorter one throws on the first call. Never share across tenants.              |
-| `STORAGE_PUBLIC_BASE_URL` | var (`.dev.vars` / `wrangler.jsonc`) | **Bare origin** running the `/storage/*` route (scaffolded `http://localhost:8787`). A base carrying a path is rejected by the signer. |
+| Name                      | Where                                | Notes                                                                                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets[]`    | The R2 bucket binding. Point `bucket_name` at a real bucket.                                                                                                                                                                                                         |
+| `STORAGE_SIGNING_SECRET`  | secret (`.dev.vars` / `secret put`)  | HMAC secret for signed URLs. Min 32 chars, enforced — a shorter one throws on the first call. Never share across tenants.                                                                                                                                            |
+| `STORAGE_PUBLIC_BASE_URL` | var (`.dev.vars` / `wrangler.jsonc`) | **Bare origin** running the `/storage/*` route — your app's own origin (locally the dev server URL, e.g. `http://localhost:5173` under Vite). Scaffolded empty, since the host and port are signed into every URL. A base carrying a path is rejected by the signer. |
 
 `STORAGE_PUBLIC_BASE_URL` must be `https://` anywhere but local dev. A signed URL
 _is_ a bearer credential and the object bytes stream through it, so a plaintext

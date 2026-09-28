@@ -69,9 +69,11 @@ export ASTRO_TELEMETRY_DISABLED=1
 # The Next template's `app/providers.tsx` throws when NEXT_PUBLIC_LUNORA_URL is
 # unset in a production build — deliberately, so a deployed bundle can never
 # point at whatever localhost the developer happened to have. `next build`
-# prerenders every route, so that throw aborts the build. Supply the value the
-# two-worker split expects; harmless for every other template, which ignores it.
-export NEXT_PUBLIC_LUNORA_URL="http://localhost:8787"
+# prerenders every route, so that throw aborts the build. Supply a deployed-looking
+# origin, as a real production build would: the value is baked into the client
+# bundle, and the loopback scan in run_deploy_dryrun would rightly reject a
+# localhost one. Harmless for every other template, which ignores it.
+export NEXT_PUBLIC_LUNORA_URL="https://lunora.example.com"
 
 # In-place `sed` is not portable: GNU (Linux/CI) takes `-i` with an OPTIONAL
 # suffix attached to the flag, BSD (macOS) requires the suffix as a separate
@@ -480,6 +482,51 @@ run_deploy_dryrun() {
         echo "        The entry was passed through untranspiled — the deploy would succeed and the worker"
         echo "        would fail to parse in workerd. Check what \`main\`/the positional entry resolved to."
         return 1
+    fi
+
+    # 4. The client bundle must not carry a loopback origin. A dev-only value that
+    #    leaks into a PRODUCTION build (a Vite `define` without `apply: "serve"`)
+    #    makes every deployed browser connect to its own machine — and nothing
+    #    fails: the build, the typecheck and every step above pass, because the
+    #    bundle is valid JavaScript pointing at the wrong host.
+    #
+    #    Scans exactly what the deploy uploads: the directories wrangler printed
+    #    in step 2. Code only — `.map` files embed the SOURCE, whose dev
+    #    fallbacks are not in the shipped code. The pattern needs a scheme, a
+    #    loopback host AND an explicit port: every dev origin carries one (5173,
+    #    3000, 8787…), while a bare `http://localhost` is what routers legitimately
+    #    ship as a dummy base for `new URL(path, base)` parsing — React Router's
+    #    runtime does, twice. A plain word "localhost" never matches. There is
+    #    deliberately no allowance for a `typeof window` guarded fallback: a
+    #    server-only literal belongs behind `import.meta.env.SSR`, which the client
+    #    build drops, so any occurrence here is code the browser can reach.
+    if [[ "$expect_assets" == "yes" ]]; then
+        local assets_dir leaks
+        local -a asset_dirs=()
+
+        while IFS= read -r assets_dir; do
+            [[ "$assets_dir" == /* ]] || assets_dir="$scaffold_dir/$assets_dir"
+            asset_dirs+=("$assets_dir")
+        done < <(sed -nE 's/.*Read [0-9]+ files? from the assets directory (.+)$/\1/p' "$log")
+
+        for assets_dir in "${asset_dirs[@]+"${asset_dirs[@]}"}"; do
+            if [[ ! -d "$assets_dir" ]]; then
+                echo "  FAIL: $tname's assets directory \`$assets_dir\` (from the deploy log) does not exist, so the loopback scan has nothing to read"
+                return 1
+            fi
+
+            leaks="$(grep -rEo --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.html' \
+                ".{0,60}(https?|wss?)://(localhost|127\.0\.0\.1|\[::1\]):[0-9]+.{0,20}" "$assets_dir" 2> /dev/null | head -5 || true)"
+
+            if [[ -n "$leaks" ]]; then
+                echo "  FAIL: $tname's production client bundle contains a loopback origin:"
+                echo "$leaks" | sed "s|$assets_dir/|    |"
+                echo "        A deployed browser would connect to its own machine. A dev-only origin injected through"
+                echo "        Vite's \`define\` needs \`apply: \"serve\"\`; a server-only fallback belongs behind"
+                echo "        \`import.meta.env.SSR\`, which the client build eliminates."
+                return 1
+            fi
+        done
     fi
 
     echo "  ==> deploy dry run OK ($(grep -c 'env\.' "$log" || true) binding line(s) across ${#DEPLOY_DRYRUN_CMDS[@]} command(s))"

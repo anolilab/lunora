@@ -32,7 +32,7 @@ export default createTemplate({
         return {
             files: {
                 lunora: {
-                    [`${fileName}.ts`]: `import { mutation, v } from "lunorash/server";
+                    [`${fileName}.ts`]: `import { mutation, v } from "#lunora/_generated/server.js";
 
 /**
  * ${raw} mutation.

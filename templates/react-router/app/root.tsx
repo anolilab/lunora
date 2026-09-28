@@ -31,12 +31,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 // Lunora endpoint. `VITE_LUNORA_URL` wins so you can point at a deployed
-// Worker; `vite.config.ts` otherwise defines it as the dev server's resolved
-// origin, because the composed `virtual:lunora/worker` entry serves Lunora from
-// this same worker. The literal below is only a last resort if that plugin is
-// removed.
-const isServer = typeof globalThis.window === "undefined";
-const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (isServer ? "http://localhost:5173" : globalThis.location.origin);
+// Worker; under `vite dev`, `vite.config.ts` defines it as the dev server's
+// resolved origin, because the composed `virtual:lunora/worker` entry serves
+// Lunora from this same worker. A production build leaves it unset, so the
+// browser uses its page origin. The server-side literal is a last resort;
+// `import.meta.env.SSR` is what keeps it out of the client bundle.
+const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (import.meta.env.SSR ? "http://localhost:5173" : globalThis.location.origin);
 
 /**
  * Root route component. Mounts the LunoraProvider so every child route can call
