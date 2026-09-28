@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.321...@lunora/cli@1.0.0-alpha.322) (2026-09-28)
+
+### Features
+
+* **rspack:** add an Rspack/webpack adapter ([#898](https://github.com/anolilab/lunora/issues/898)) ([79a869f](https://github.com/anolilab/lunora/commit/79a869fb488b7ddaadd284299f3c635d4fcd27d0)), closes [#906](https://github.com/anolilab/lunora/issues/906)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.236
+* **@lunora/config:** upgraded to 1.0.0-alpha.280
+
 ## @lunora/cli [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.320...@lunora/cli@1.0.0-alpha.321) (2026-09-28)
 
 ### Features
