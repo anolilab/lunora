@@ -26,6 +26,24 @@ import type { ResolvedLunoraRspackOptions } from "./types";
 /** Tap name Rspack attributes this plugin's hooks to, in stats and in profiling output. */
 const PLUGIN_NAME = "LunoraRspackPlugin";
 
+/**
+ * Consecutive retries allowed for a pass that keeps failing on identical inputs.
+ *
+ * A failed pass records no fingerprint, so the next compilation retries it — that
+ * is what lets a `postcodegen` recover once whatever broke it is repaired, since
+ * the repair may be external and move nothing this plugin hashes. But a hook that
+ * FAILS and writes under `_generated/` triggers its own next compilation on
+ * unchanged inputs, and unbounded retries turn that into a spin that re-runs
+ * codegen and respawns the hook forever.
+ *
+ * Two, matching `@lunora/vite`'s `MAX_SETTLE_RERUNS`, for the same reason: enough
+ * to ride out a transient cause, few enough that a permanently broken hook
+ * settles. The finding keeps being reported after the cap — only the re-running
+ * stops — and any real edit to the schema, tsconfig or wrangler config moves the
+ * fingerprint and rearms it.
+ */
+const MAX_FAILED_RETRIES = 2;
+
 /** A file's contents, or `""` when it is absent or unreadable — either way, "nothing to hash". */
 const readFileOrEmpty = (path: string): string => {
     try {
@@ -121,6 +139,9 @@ class LunoraRspackPlugin {
 
     /** Findings from the last pass that ran, re-reported on every compilation until it runs again. */
     #findings: Error[] = [];
+
+    /** The fingerprint a failing pass keeps being retried on, and how many times. See {@link MAX_FAILED_RETRIES}. */
+    #failure: { attempts: number; fingerprint: string } | undefined;
 
     /** The in-flight pass, so concurrent compilers share one instead of racing. */
     #inFlight: Promise<void> | undefined;
@@ -221,7 +242,7 @@ class LunoraRspackPlugin {
         // MAX_SETTLE_RERUNS; add the same counter here if anyone hits it.
         const fingerprint = this.#fingerprint(tsconfig);
 
-        if (fingerprint === this.#lastFingerprint) {
+        if (this.#shouldSkip(fingerprint)) {
             return;
         }
 
@@ -253,6 +274,9 @@ class LunoraRspackPlugin {
             // fingerprint and does not re-run codegen on every rebuild.
             if (this.#findings.length === 0) {
                 this.#lastFingerprint = fingerprint;
+                this.#failure = undefined;
+            } else {
+                this.#recordFailure(fingerprint);
             }
         } catch (error: unknown) {
             // A codegen crash, a wrangler config that cannot satisfy the schema, or
@@ -264,8 +288,30 @@ class LunoraRspackPlugin {
             this.#project.drop();
             this.#lastFingerprint = undefined;
             this.#findings.push(error instanceof Error ? error : new Error(String(error)));
+            this.#recordFailure(fingerprint);
             consoleLogger.error(error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /**
+     * Whether this compilation can reuse the last pass's outcome.
+     *
+     * Two ways it can: the last pass succeeded on these exact inputs, or it failed
+     * on them and has already been retried to {@link MAX_FAILED_RETRIES}. Skipping
+     * never hides anything — `#findings` is re-reported on every compilation
+     * either way.
+     */
+    #shouldSkip(fingerprint: string): boolean {
+        if (fingerprint === this.#lastFingerprint) {
+            return true;
+        }
+
+        return this.#failure !== undefined && this.#failure.fingerprint === fingerprint && this.#failure.attempts >= MAX_FAILED_RETRIES;
+    }
+
+    /** Count this pass against {@link MAX_FAILED_RETRIES}, restarting the count when the inputs moved. */
+    #recordFailure(fingerprint: string): void {
+        this.#failure = this.#failure?.fingerprint === fingerprint ? { attempts: this.#failure.attempts + 1, fingerprint } : { attempts: 1, fingerprint };
     }
 
     /**

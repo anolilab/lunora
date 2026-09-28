@@ -84,8 +84,8 @@ const closeCompiler = async (compiler: Compiler): Promise<void> =>
     });
 
 /**
- * Watch `root`, run `act()` once the first build has settled, and resolve with
- * every build's error list plus the total build count.
+ * Watch `root`, run `act(n)` after build `n`, and resolve with every build's
+ * error list plus the total build count.
  *
  * `settleMs` is spent idle AFTER the last build the test expects, which is how
  * a regeneration cascade is detected: an unterminated one keeps producing
@@ -93,7 +93,7 @@ const closeCompiler = async (compiler: Compiler): Promise<void> =>
  */
 const watchRun = async (
     root: string,
-    act: () => void,
+    act: (buildNumber: number) => void,
     options: { expectedBuilds: number; settleMs: number },
 ): Promise<{ builds: string[][]; devVarsExists: boolean }> =>
     new Promise((resolve, reject) => {
@@ -133,8 +133,8 @@ const watchRun = async (
 
             builds.push(errorsOf(stats as Stats));
 
-            if (builds.length === 1) {
-                act();
+            if (builds.length < options.expectedBuilds) {
+                act(builds.length);
 
                 return;
             }
@@ -338,6 +338,38 @@ describe("rspack watch (real compiler)", () => {
 
         expect(builds[0]?.join("\n")).toContain("wrangler.jsonc not found");
         expect(builds.at(-1)).toStrictEqual([]);
+    }, 60_000);
+
+    it("stops re-running a pass that keeps failing on identical inputs", async () => {
+        expect.assertions(2);
+
+        // Every `postcodegen` run appends a line, so the file counts invocations.
+        // It lives outside `lunora/` and is not the tsconfig or wrangler config, so
+        // it never moves the fingerprint.
+        const root = fixture({
+            scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x'); process.exit(1)"` },
+        });
+
+        await runOnce(productionCompiler(root));
+        rmSync(join(root, ".hook-runs"), { force: true });
+
+        const { builds } = await watchRun(
+            root,
+            (buildNumber) => {
+                // Each touch is a rebuild on UNCHANGED codegen inputs — editing app
+                // code while a hook is broken. A failed pass records no fingerprint
+                // so it retries, and without a cap every such save re-runs codegen
+                // and respawns the failing hook.
+                writeFileSync(join(root, "index.js"), `console.log("app");\n// ${String(buildNumber)}\n`, "utf8");
+            },
+            { expectedBuilds: 5, settleMs: 2000 },
+        );
+
+        // Bounded by MAX_FAILED_RETRIES, not by the number of rebuilds.
+        expect(readFileSync(join(root, ".hook-runs"), "utf8").length).toBeLessThanOrEqual(2);
+
+        // Capping the re-runs must not silently drop the error.
+        expect(builds.at(-1)?.join("\n")).toContain("postcodegen");
     }, 60_000);
 
     it("retries a failed pass whose fix changes nothing the fingerprint covers", async () => {
