@@ -87,7 +87,7 @@ const createReadFootprint = (): ReadFootprint => {
  * carry, so it can only ever fall to "cannot vouch".
  *
  * `ctx.flags` is the deliberate exception and is NOT stamped — see
- * `emitFlagsFragments` in `@lunora/codegen`'s `emit.ts` for why, and for the
+ * `emitFlagsFragments` in `@lunora/codegen`'s `emit/shard-bindings.ts` for why, and for the
  * advisor lint that tells an app author instead.
  *
  * Deliberately NOT `"*"` (the admin wildcard in `shard-do.ts`). That one has a

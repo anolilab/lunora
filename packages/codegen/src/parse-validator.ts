@@ -89,7 +89,7 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
 /**
  * Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing.
  * `geoPoint` is arg-less like the scalars (it renders to a fixed `{ lat, lng }`
- * object type in `emit.ts`), so it rides this fast path too.
+ * object type in `emit/shared.ts`), so it rides this fast path too.
  */
 const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoPoint", "null", "number", "string", "timestamp"]);
 
@@ -501,7 +501,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
 
         case "id": {
             // The table name feeds straight into the generated `Id<"...">` type
-            // (see `emit.ts`), so codegen must resolve it statically — a
+            // (see `emit/shared.ts`), so codegen must resolve it statically — a
             // non-literal (or missing) argument must fail loudly rather than
             // degrade to a placeholder that still compiles.
             if (!first || !Node.isStringLiteral(first)) {
@@ -553,7 +553,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
 
         default: {
             // Loud failure — silently emitting `unknown` masks codegen bugs.
-            // `emit.ts` keeps a fallback case for safety, but this parser
+            // `emit/shared.ts` keeps a fallback case for safety, but this parser
             // must call out validator kinds it does not recognise.
             throw new LunoraError("INTERNAL", `Unsupported validator kind: ${member}`);
         }

@@ -201,7 +201,7 @@ const EMITTED_EXTENSIONS = new Map([
  * `paths` does not apply to a relative specifier, and no ambient declaration
  * satisfies a qualified `import("…").T`.
  *
- * `emit.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
+ * `emit/qualifiers.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
  * when it carries no extension, because the generated files are consumed under
  * NodeNext where the extension is mandatory. That single suffix is right for
  * exactly one case — a `.ts` file named without an extension — and wrong for the
@@ -258,7 +258,7 @@ const emittedSpecifierFor = (handlerFile: SourceFile, importDeclaration: ImportD
  * This answers both questions the printing rule needs: whether the checker will
  * print the name BARE at `node` (it will, exactly when the module imports it),
  * and — since a bare name does not resolve from `_generated/` — which specifier
- * to qualify it with instead. `emit.ts` takes it from there: a relative
+ * to qualify it with instead. `emit/qualifiers.ts` takes it from there: a relative
  * qualifier is rebased out of the source directory, an `@lunora/*` one is mapped
  * onto the umbrella, and a bare package specifier is already correct from any
  * directory.
@@ -303,7 +303,7 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
  * that imports `_generated/api.ts`, and not under a dedicated strict config for
  * generated output, which is the pattern this repo itself ships
  * (`apps/playground/tsconfig.generated.json` declares no `paths`). None of
- * `emit.ts`'s three rebasers touch it, so the alias would be written out
+ * `emit/qualifiers.ts`'s three rebasers touch it, so the alias would be written out
  * verbatim and fail to resolve exactly where `relocateUserRelativeImports`
  * exists to stop that happening.
  *

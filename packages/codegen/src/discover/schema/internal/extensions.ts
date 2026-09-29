@@ -89,7 +89,7 @@ const prefixTableName = (key: string, bareName: string): string => `${key}_${bar
  * The key is concatenated into every table the extension contributes, so its
  * characters land in generated type names (`Doc_<name>`) and unquoted property
  * keys exactly as a table name's do. Nothing checked it: `defineSchemaExtension("rate-limit", …)`
- * discovered cleanly and then died in `emit.ts` with an unlocated `INTERNAL`
+ * discovered cleanly and then died in `emit/` with an unlocated `INTERNAL`
  * naming `rate-limit_buckets` — a table the user never typed, with no file, no
  * line and no mention of the call that composed it. Validating the KEY reports
  * what the user actually wrote, where they wrote it.

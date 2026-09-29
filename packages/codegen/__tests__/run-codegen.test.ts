@@ -1594,8 +1594,8 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
-        it("routes a mutation reached through createCaller into the caller's transaction", () => {
-            expect.assertions(2);
+        it("routes a mutation or query reached through createCaller through the caller's run*", () => {
+            expect.assertions(3);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -1605,9 +1605,11 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             // deferred schedules, no deferred-delete flush. Its writes autocommitted
             // one row at a time and its `ctx.scheduler` calls dispatched at once, so
             // a mid-handler throw left the earlier writes durable and the job
-            // already enqueued.
-            expect(result.generated.functions).toContain('if (registered.kind === "mutation") {');
-            expect(result.generated.functions).toContain("await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})");
+            // already enqueued. A query goes through \`ctx.runQuery\` so it gets the
+            // same origin-free query view it would get composed directly.
+            expect(result.generated.functions).toContain('if (registered.kind === "mutation" || registered.kind === "query") {');
+            expect(result.generated.functions).toContain('[registered.kind === "mutation" ? "runMutation" : "runQuery"]');
+            expect(result.generated.functions).toContain("await run.call(context, { __lunoraRef: functionPath }, args ?? {})");
         });
 
         it("keeps dataModel.ts importable by a package with no server dependency (#18)", () => {
@@ -2586,7 +2588,7 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
         it("names the index module when the handler imports the type through a DIRECTORY", () => {
             expect.assertions(5);
 
-            // `emit.ts` appends `.js` to a rebased relative qualifier, because
+            // `emit/qualifiers.ts` appends `.js` to a rebased relative qualifier, because
             // the generated files are consumed under NodeNext. Extension
             // substitution covers a file — `./lib/shapes.js` finds
             // `lib/shapes.ts` — but a directory has nothing to substitute, so
@@ -2765,7 +2767,7 @@ export const get = query.input({}).query(async (): Promise<Envelope> => null as 
             expect.assertions(4);
 
             // The emitted qualifier is the specifier the USER wrote, and none of
-            // emit.ts's three rebasers touch an alias. Written out verbatim it
+            // emit/qualifiers.ts's three rebasers touch an alias. Written out verbatim it
             // resolves under the authoring project's own tsconfig and fails from a
             // sibling package or under a dedicated strict config for generated
             // output — which is the pattern this repo itself ships. Falling back
@@ -4384,12 +4386,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("createImages({ binding: imagesBinding as ImagesBindingLike })");
             // Attached only inside the `isAction` block, never spliced into the base ctx literal.
             expect(output).toContain("ctx.images = images;");
-            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
-            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+            expect(output).toContain('const isAction = contextKind === "action";');
         });
 
         it("wires ctx.sql (Hyperdrive) onto the ACTION ctx ONLY via a REQUIRED config thunk when hyperdrive is used", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -4402,6 +4403,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;");
             expect(output).not.toContain("createHyperdrive");
             expect(output).toContain("ctx.sql = sql;");
+            // A query composed from an action must not see it either.
+            expect(output).toContain("delete descriptors.sql;");
         });
 
         it("wires ctx.browser onto the ACTION ctx ONLY via a config thunk (no puppeteer import) when browser is used", () => {
@@ -4526,8 +4529,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })");
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
             expect(output).toContain("ctx.x402 = x402;");
-            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
-            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+            expect(output).toContain('const isAction = contextKind === "action";');
         });
 
         it("never attaches ctx.x402 onto the base ctx literal, and omits the pay rail entirely when unused", () => {

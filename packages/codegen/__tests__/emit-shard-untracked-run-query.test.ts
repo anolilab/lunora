@@ -29,12 +29,24 @@ describe("emitShard — untracked ctx.runQuery", () => {
         expect.assertions(2);
 
         const emitted = shard();
-        const branch = emitted.slice(emitted.indexOf("ctx.runQuery ="));
+        const branch = emitted.slice(emitted.indexOf("target.runQuery ="));
 
         // The whole point: no `onRead`/`onReadRange` on the sub-context, so the
         // sub-query's reads never reach the subscription's footprint.
         expect(branch).not.toContain("onRead");
         expect(branch).toContain("this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom");
+    });
+
+    it("runs the untracked sub-context as a query", () => {
+        expect.assertions(2);
+
+        const emitted = shard();
+
+        // It keeps the caller's `functionPath` for attribution, so the kind is
+        // overridden rather than looked up — otherwise a sub-query spawned from a
+        // mutation could compose a mutation of its own.
+        expect(emitted).toContain('identity: caller, kind: "query", scope: options.scope })');
+        expect(emitted).toContain("const contextKind = options.kind ?? ");
     });
 
     it("pins the identity by value on the untracked sub-context", () => {
@@ -50,17 +62,37 @@ describe("emitShard — untracked ctx.runQuery", () => {
         expect(shard()).toContain("identity: caller");
     });
 
-    it("leaves a tracked runQuery, and runMutation/runAction, sharing the caller's ctx", () => {
-        expect.assertions(3);
+    it("runs a tracked runQuery on a query view of the caller's ctx", () => {
+        expect.assertions(5);
 
         const emitted = shard();
 
-        // The default path is unchanged — no second ctx, no behaviour change for
-        // every call site that does not opt in. (The trailing arguments carry the
-        // caller's kind, and for a mutation its transaction wrapper; the ctx the
-        // callee runs on is still the caller's.)
-        expect(emitted).toContain(": ctx,\n                    contextKind,\n                );");
-        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind,');
-        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind)');
+        expect(emitted).toContain(": queryContext(),\n                        kind,\n                    );");
+        // A query ctx is already its own view, so the hot subscription path
+        // allocates nothing.
+        expect(emitted).toContain('if (contextKind === "query") {\n                    return ctx;');
+        // No request origin, in `ctx.origin` or the storage signed-URL fallback,
+        // so a composed query behaves as it does when called directly or live.
+        expect(emitted).toContain("origin: field(undefined),");
+        expect(emitted).toContain("storage: field(makeStorage()),");
+        // Its own `run*` are guarded as a query's.
+        expect(emitted).toContain('installRun(queryView, "query");');
+    });
+
+    it("copies the caller's ctx by descriptor so the `ip` getter is not read", () => {
+        expect.assertions(1);
+
+        // A spread would invoke the getter and mark the dispatch's reactive-cache
+        // scope as address-dependent for every composed query.
+        expect(shard()).toContain("const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);");
+    });
+
+    it("keeps runMutation/runAction on the caller's ctx and kind", () => {
+        expect.assertions(2);
+
+        const emitted = shard();
+
+        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, target, kind,');
+        expect(emitted).toContain("installRun(ctx, contextKind);");
     });
 });

@@ -26,7 +26,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * cached `{ runs: 1 }` on a replay without ever reaching this body again.
  *
  * Calls `commitMutationBookkeeping` inside its own `runInTransaction`, exactly
- * as generated `handleRpc` mutation branches do (`packages/codegen/src/emit.ts`,
+ * as generated `handleRpc` mutation branches do (`packages/codegen/src/emit/shard-dispatch.ts`,
  * the `registered.kind === "mutation"` branch) — the idempotency row commits
  * atomically with the writes, before `handleRpc` returns. The non-concurrent
  * tests below don't depend on this timing (they `await` one dispatch at a

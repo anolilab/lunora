@@ -18,7 +18,7 @@ import type {
  * see `plans/238-vector-reader-design.md` for the design this prototypes and
  * the open questions it stops short of (async-index consistency is documented
  * there, not exercised here since the fake index is synchronous; the write-side
- * namespace-wiring gap in `packages/codegen/src/emit.ts` is reported there and
+ * namespace-wiring gap in `packages/codegen/src/emit/shard-vectors.ts` is reported there and
  * is out of scope for this file to fix).
  *
  * Runs over the REAL `createVectors` binding (`../../src/vectors/create-vectors`)
@@ -330,7 +330,7 @@ describe("plan 238 spike: .withVectorIndex() prototype over the real createVecto
         // `query()` returns tenant B's id even though the caller only asked
         // for tenant A's namespace (e.g. a misconfigured/omitted namespace on
         // the write side — see the design doc's "critical finding" about
-        // `packages/codegen/src/emit.ts` not threading a namespace today).
+        // `packages/codegen/src/emit/shard-vectors.ts` not threading a namespace today).
         // Routed through the real `withVectorIndexPrototype`, this exercises
         // the prototype's stage-3 zip/drop loop directly: an id present in
         // `result.matches` but absent from `store.findMany`'s result must be

@@ -1,3 +1,45 @@
+## @lunora/agent [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.151...@lunora/agent@1.0.0-alpha.152) (2026-09-29)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a query reached from a mutation or action (runQuery,
+tracked or untracked, or createCaller) now has run* guarded as a query's,
+so runMutation/runAction from it throws RUN_KIND_FORBIDDEN, and an untracked
+sub-query from an action no longer carries action-only helpers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* chore(examples): regenerate generated files for the composed-query view
+
+Re-run codegen in every example so the committed _generated/functions.ts and
+shard.ts match the emitter (lint:generated).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(codegen): split emit.ts into per-emitter modules
+
+The 7k-line emit.ts becomes src/emit/, one module per emitter plus shared
+helpers; src/emit/index.ts keeps every existing ./emit import working.
+emitShard's static and feature-gated sections move out of its 2.2k-line
+template into shard-context (buildCtx), shard-dispatch (dispatchRun, RPC and
+subscription methods), shard-admin, shard-shapes, shard-sources and
+shard-vectors. Every module is now under 1k lines.
+
+Emitted output is byte-identical: the golden fixtures are unchanged and the
+public API snapshot still matches. Comments elsewhere that pointed at
+emit.ts now name the module that owns the code.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** give a composed ctx.runQuery its own query context ([#907](https://github.com/anolilab/lunora/issues/907)) ([3291182](https://github.com/anolilab/lunora/commit/3291182a45b111b25e8aa0c10897341863978296)), closes [#905](https://github.com/anolilab/lunora/issues/905)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.159
+
 ## @lunora/agent [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.150...@lunora/agent@1.0.0-alpha.151) (2026-09-28)
 
 
