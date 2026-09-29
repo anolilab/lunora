@@ -1,3 +1,21 @@
+## lunorash [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.326...lunorash@1.0.0-alpha.327) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.325
+* **@lunora/client:** upgraded to 1.0.0-alpha.161
+* **@lunora/do:** upgraded to 1.0.0-alpha.181
+* **@lunora/observability:** upgraded to 1.0.0-alpha.108
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.163
+* **@lunora/server:** upgraded to 1.0.0-alpha.160
+
 ## lunorash [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.325...lunorash@1.0.0-alpha.326) (2026-09-29)
 
 
