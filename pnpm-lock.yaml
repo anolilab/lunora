@@ -558,6 +558,9 @@ catalogs:
     postgres:
       specifier: ^3.4.9
       version: 3.4.9
+    sqlite-vec:
+      specifier: 0.1.9
+      version: 0.1.9
   storage:
     '@visulima/storage':
       specifier: 2.0.8
@@ -573,6 +576,9 @@ catalogs:
       specifier: 5.7.1
       version: 5.7.1
     '@vitest/coverage-v8':
+      specifier: 4.1.10
+      version: 4.1.10
+    '@vitest/expect':
       specifier: 4.1.10
       version: 4.1.10
     fake-indexeddb:
@@ -2464,6 +2470,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.22.0
+      sqlite-vec:
+        specifier: catalog:sql
+        version: 0.1.9
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -3923,6 +3932,70 @@ importers:
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
+      fallow:
+        specifier: catalog:lint
+        version: 3.22.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.4.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.14.0)(jsdom@30.0.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))
+
+  packages/platform-celld:
+    dependencies:
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@lunora/platform-cloudflare':
+        specifier: workspace:*
+        version: link:../platform-cloudflare
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30)
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../container
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../queue
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
+      '@lunora/storage':
+        specifier: workspace:*
+        version: link:../storage
+      '@types/node':
+        specifier: catalog:types
+        version: 26.4.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.1.0(3bc567c36cc82f7d20fa04472ffbbfb9)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.10)
+      '@vitest/expect':
+        specifier: catalog:test
+        version: 4.1.10
       esbuild:
         specifier: catalog:build
         version: 0.28.2
@@ -23392,6 +23465,34 @@ packages:
 
   sql.js@1.14.1:
     resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
+
+  sqlite-vec-darwin-arm64@0.1.9:
+    resolution: {integrity: sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  sqlite-vec-darwin-x64@0.1.9:
+    resolution: {integrity: sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA==}
+    cpu: [x64]
+    os: [darwin]
+
+  sqlite-vec-linux-arm64@0.1.9:
+    resolution: {integrity: sha512-5wXVJ9c9kR4CHm/wVqXb/R+XUHTdpZ4nWbPHlS+gc9qQFVHs92Km4bPnCKX4rtcPMzvNis+SIzMJR1SCEwpuUw==}
+    cpu: [arm64]
+    os: [linux]
+
+  sqlite-vec-linux-x64@0.1.9:
+    resolution: {integrity: sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA==}
+    cpu: [x64]
+    os: [linux]
+
+  sqlite-vec-windows-x64@0.1.9:
+    resolution: {integrity: sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q==}
+    cpu: [x64]
+    os: [win32]
+
+  sqlite-vec@0.1.9:
+    resolution: {integrity: sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA==}
 
   srvx@0.11.22:
     resolution: {integrity: sha512-LqZxxBDMKuMAZzFzJnDCkFOrs9MZQZr0LvHiO/SuSZVdQaXD7xQ5UWTUxheJrQPve1qk9MG2B/yttUvJxw8egQ==}
@@ -47173,6 +47274,29 @@ snapshots:
   sql-escaper@1.5.1: {}
 
   sql.js@1.14.1: {}
+
+  sqlite-vec-darwin-arm64@0.1.9:
+    optional: true
+
+  sqlite-vec-darwin-x64@0.1.9:
+    optional: true
+
+  sqlite-vec-linux-arm64@0.1.9:
+    optional: true
+
+  sqlite-vec-linux-x64@0.1.9:
+    optional: true
+
+  sqlite-vec-windows-x64@0.1.9:
+    optional: true
+
+  sqlite-vec@0.1.9:
+    optionalDependencies:
+      sqlite-vec-darwin-arm64: 0.1.9
+      sqlite-vec-darwin-x64: 0.1.9
+      sqlite-vec-linux-arm64: 0.1.9
+      sqlite-vec-linux-x64: 0.1.9
+      sqlite-vec-windows-x64: 0.1.9
 
   srvx@0.11.22: {}
 

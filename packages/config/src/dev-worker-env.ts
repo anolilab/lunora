@@ -19,11 +19,11 @@
  */
 import { readFileSync } from "node:fs";
 
+import type { WranglerConfig } from "./cloudflare/wrangler-config";
 // The concrete modules, not the `./cloudflare` barrel: that barrel pulls in
 // `assert-wrangler`, which imports `./log-badge` from this same package — a cycle
 // the bundler resolves to an undefined binding at runtime rather than an error.
 import { findWranglerFile, readWranglerJsonc } from "./cloudflare/wrangler-path";
-import type { WranglerConfig } from "./cloudflare/wrangler-validator";
 import { DEV_VARS_FILE, parseDevVariableEntries, upsertDevVariableLine } from "./dev-variables-format";
 import join from "./path";
 import { writeDevVariablesFileAtomically } from "./scaffold-dev-variables";

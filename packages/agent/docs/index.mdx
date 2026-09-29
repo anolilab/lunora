@@ -553,8 +553,61 @@ Expose that tool as a normal top-level tool, or gate the whole script with
 Scripts are capped at `maxSteps` (default 16); a
 longer script is **rejected** (`code_tool_too_many_steps`) rather than run as a
 prefix, so the model can split the work instead of silently losing its trailing
-steps. Running arbitrary model-authored _code_ in an isolate (the Cloudflare
-Worker Loader path) is a separate future mode.
+steps. To run model-authored _code_ rather than compose tools, use
+[`jsCodeTool`](#sandboxed-javascript-jscodetool).
+
+## Sandboxed JavaScript (`jsCodeTool`)
+
+`jsCodeTool` runs a script the model writes — the body of an `async` function —
+in a Worker Loader isolate (Dynamic Workers on Cloudflare and on celld), and
+returns what it `return`s plus its `console` output:
+
+```ts
+import { defineAgent, jsCodeTool } from "@lunora/agent";
+
+export const analyst = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: { js: jsCodeTool({ cpuMs: 1000 }) },
+});
+// The tool result is `{ value, logs }`, or `{ error, logs }` when the script
+// threw, did not parse, returned something that is not JSON, or ran out of time.
+```
+
+The isolate gets **no network** (`globalOutbound: null`), **no bindings** and
+**no tools**, and `cpuMs` (default 1000) plus a 30-second wall clock bound each
+run. So it is for computation over what the model already has — arithmetic,
+parsing, reshaping data — not a way to reach anything. A failure is a result,
+not a throw, so the durable step does not retry a script that will fail the same
+way again.
+
+Importing `jsCodeTool` in `lunora/` makes codegen provision the
+`worker_loaders` binding (`LOADER`) and gate the target on
+the `workerLoaders` capability: Cloudflare and celld rate it `native`, and the
+Node host has no isolate sandbox, so `target: "node"` refuses it with a
+`platform_unsupported_feature` diagnostic.
+
+### Limits
+
+- **A script cannot call the agent's tools.** The only way out of a loaded
+  isolate is a service binding, and a call through one arrives as a fresh
+  invocation of the worker: it has neither the run's durable step (so nothing
+  it does is memoized or replay-safe) nor the caller's identity (so RLS would
+  not apply). To chain tool calls in one turn, use
+  [`codeTool`](#code-mode-codetool); to compute over their results, let the
+  model pass them into `jsCodeTool` as literals.
+- **Nothing persists between runs.** Each call loads a fresh isolate and
+  discards it, so module-level state does not survive to the next call.
+- **The result must be JSON.** A `bigint`, a cycle or a function comes back as
+  `error`, and a `Date` as its ISO string.
+- **Output is capped.** A result over 256 KiB comes back as `error` (the whole
+  result is memoized as a durable step result, which the host caps at 1 MiB),
+  and `console` output at 100 entries of 2,000 characters each.
+- **The isolate is a V8 boundary, not a process or VM one.** It scopes what the
+  script can address; it is not a claim about V8 escape safety. Run code that
+  needs a kernel boundary in a container (`containerTool`) instead.
+- **Dynamic Workers are in open beta on Cloudflare**, so the loader API can
+  still change. On celld a process holds at most 256 live loaded workers, and a
+  load past that fails the run with `error` set.
 
 ## Skills
 

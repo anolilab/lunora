@@ -31,6 +31,17 @@ describe("lunora() — runnable target guard", () => {
         expect(() => lunora({ target: "node" })).toThrow(new RegExp(runnable.join(", ")));
     });
 
+    // celld deploys the Vite build output, so the Cloudflare integration that
+    // produces it stays composed; `vite dev` only warns that it serves workerd.
+    it("builds for celld through the Cloudflare integration and flags the dev runtime", () => {
+        expect.assertions(2);
+
+        const plugins = lunora({ target: "celld" });
+
+        expect(plugins.some((plugin) => plugin.name === "lunora:target-runtime-notice")).toBe(true);
+        expect(lunora({ target: "cloudflare" }).some((plugin) => plugin.name === "lunora:target-runtime-notice")).toBe(false);
+    });
+
     it("accepts a target that can actually be built", () => {
         expect.assertions(1);
 

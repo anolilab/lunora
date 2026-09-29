@@ -291,6 +291,23 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `JsCodeToolInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `JsCodeToolOptions` (interface)
+
+```ts
+interface JsCodeToolOptions {
+    cpuMs?: number;
+    description?: string;
+}
+```
+
+### `JsCodeToolResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `McpCallResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -476,6 +493,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `isSkillDefinition` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `jsCodeTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -680,6 +701,18 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `JsCodeToolInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `JsCodeToolOptions` (interface)
+
+Re-exported from `@lunora/agent` — signature tracked in that section.
+
+### `JsCodeToolResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `browserTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -689,6 +722,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `fsTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `jsCodeTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

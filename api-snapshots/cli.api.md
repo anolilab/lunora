@@ -153,6 +153,7 @@ interface DeployCommandResult {
         ok: boolean;
         url: string;
     };
+    logsAvailable?: boolean;
     mintedSecretsFile?: string;
     schemaDrift?: {
         blocked: boolean;

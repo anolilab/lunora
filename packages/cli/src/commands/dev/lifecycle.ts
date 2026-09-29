@@ -33,6 +33,8 @@ import {
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
+    resolveProjectTarget,
+    targetRunsOwnDevServer,
     updateDevServerState,
 } from "@lunora/config";
 
@@ -568,7 +570,12 @@ const startBackground = async (context: {
 }): Promise<{ code: number }> => {
     const { cwd, jsonLogs, logger, options, remote } = context;
     const run = context.run ?? runDevBackground;
-    const flavor = detectDevFlavor(cwd);
+    const detected = detectDevFlavor(cwd);
+    // A target with its own dev server (celld) has no Vite integration — the
+    // foreground path turns that into the standalone flavor (`resolveTargetFlavor`),
+    // so the background start must too, or it spawns `vite dev` and serves the
+    // worker on workerd after all.
+    const flavor = detected === "vite" && targetRunsOwnDevServer(options.target ?? resolveProjectTarget(cwd)) ? "wrangler" : detected;
     // Pre-listen default URL — cosmetic (shown only if a concurrent starter
     // loses to this claim); the child's superseding record carries the real one.
     // For `vite`/`framework-worker` the front door is the framework's own dev

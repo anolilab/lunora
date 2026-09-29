@@ -13,7 +13,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { lunoraLine } from "../log-badge";
-import { validateWranglerProject } from "./wrangler-validator";
+import { validateWranglerProject } from "./wrangler-project";
 
 /** The project coordinates the validator needs. */
 interface AssertWranglerOptions {

@@ -677,6 +677,25 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesBrowser).toBe(true);
     });
 
+    it("provisions LOADER from a jsCodeTool import in lunora/, and not from src/ or a type-only import", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/agents.ts", `import { jsCodeTool } from "@lunora/agent";\nexport const t = jsCodeTool();`);
+        write("lunora/agents.ts", `import type { jsCodeTool } from "@lunora/agent";\nexport const t = 1;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toMatchObject({ usesBrowser: false, usesWorkerLoader: false });
+
+        write("lunora/agents.ts", `import { defineAgent, jsCodeTool } from "@lunora/agent";\nexport const t = jsCodeTool();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesWorkerLoader).toBe(true);
+        expect(result.usesBrowser).toBe(false);
+        expect(result.signals.join(" ")).toMatch(/worker_loaders \(jsCodeTool/u);
+    });
+
     it("does not provision BROWSER for a sandbox containerTool-only import", async () => {
         expect.assertions(1);
 

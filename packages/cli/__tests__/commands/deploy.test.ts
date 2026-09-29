@@ -8,8 +8,8 @@ import { runCodegen } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeployCommandResult } from "../../src/commands/deploy/handler";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
+import type { DeployCommandResult } from "../../src/commands/deploy/types";
 import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
@@ -218,6 +218,65 @@ describe("lunora deploy", () => {
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "cloudflare" });
 
                 expect(result.code).toBe(0);
+            });
+
+            // celld refuses the Cloudflare-only keys the reconciler writes (it
+            // always adds `observability`), so the deploy must hand celld the
+            // projection — and run the `celld` binary itself, never through
+            // `pnpm exec` / `npx --`, which would resolve an npm package instead.
+            it("ships a celld-target app with `celld deploy` on the projected config", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result.code).toBe(0);
+                expect(calls.map((call) => [call.descriptor.command, ...call.descriptor.args])).toStrictEqual([
+                    ["celld", "deploy", join(workdir, ".celld.wrangler.json")],
+                ]);
+
+                const projected = JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8")) as Record<string, unknown>;
+
+                expect(projected["observability"]).toBeUndefined();
+                expect(projected["durable_objects"]).toBeDefined();
+                expect(warns.some((message) => message.includes("observability"))).toBe(true);
+            });
+
+            it("dry-runs celld with `celld deploy --dry-run`", async () => {
+                expect.assertions(1);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(calls.at(-1)?.descriptor.args.at(-1)).toBe("--dry-run");
+            });
+
+            // The refusal lives in the driver's argv builder, which runs before
+            // the projection is written: a refused deploy changes nothing.
+            it("refuses --preview for celld before the pipeline writes anything", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/no preview versions/u) });
+                // Refused before provisioning, so the committed config is untouched —
+                // not merely the projection left unwritten.
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+                expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+                expect(calls).toHaveLength(0);
             });
         });
 

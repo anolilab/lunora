@@ -313,13 +313,49 @@ When the executor is a shard's own SQLite, the shard **is** the tenant
 boundary — so the account-global-namespace hazard that Vectorize forces you to
 guard against does not exist here, rather than being filtered away.
 
-**Search is brute force.** Every vector in the namespace is read and scored in
-JS; there is no ANN index, because SQLite has no vector type and `sqlite-vec` is
+**Search is brute force by default.** Every vector in the namespace is read and scored in
+JS; there is no ANN index by default, because SQLite has no vector type and `sqlite-vec` is
 not loadable inside workerd. That is linear in namespace size, so this suits
 **many small per-tenant indexes** — the shape most sharded apps already have —
 and not one large shared corpus. A namespace past `maxScan` (default 50,000)
 throws a named error rather than letting a Worker get killed on CPU with nothing
 explaining why.
+
+**Where `sqlite-vec` is loaded, add an index.** A celld Durable Object whose
+worker sets the `sqlite_vec` compatibility flag, or a `node:sqlite` database
+with the extension loaded, can pass `ann`:
+
+```ts
+sqliteVectorStore({ ann: { dimensions: 768 }, exec });
+```
+
+The store then keeps a `vec0` index (cosine distance, one partition per
+namespace) in `<table>_ann`, backfilled from the table the first time, and an
+unfiltered query is a KNN lookup instead of a scan. A query with a `filter`
+still scans: `vec0` filters after choosing the `k` nearest, which would return
+a short page. Without the extension the first operation throws naming the
+missing `vec0` module. Workerd cannot load `sqlite-vec`, so this does not apply
+on Cloudflare.
+
+Limits of the index:
+
+- **It needs code that runs inside the Durable Object.** celld loads sqlite-vec
+  only into Durable Object SQLite, not into D1, and Lunora actions run in the
+  Worker rather than inside a shard, so a Lunora function has no `exec` over a
+  shard's SQLite to hand the store. Use it from a Durable Object class your app
+  writes (its `state.storage.sql`), or from `node:sqlite`.
+- **Cosine only**, over one fixed width: `ann.dimensions` is the `vec0` column
+  width, so an embedding of another width — or reopening the table with a
+  different `ann.dimensions` — fails with `RAG_DIMENSION_MISMATCH`. Changing the
+  model's width means a new `table`.
+- **An interrupted build is rebuilt, not trusted.** The index counts as built
+  only once its backfill finishes, so a build cut off part-way is dropped and
+  redone on the next call.
+- **Filtered queries still scan** the namespace, with the same `maxScan` bound
+  as without the index.
+- **Writes are two statements, not one transaction.** An interrupted upsert or
+  delete can leave an index entry the table no longer holds; a query drops it,
+  so it costs a `topK` slot rather than returning a stale record.
 
 ### Bring your own embeddings — no `env.AI` binding
 
