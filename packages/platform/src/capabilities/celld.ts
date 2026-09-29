@@ -24,10 +24,12 @@ import type { PlatformCapabilities } from "./types";
  * so "Partial" there means a listed set of gaps rather than silent
  * degradation; the gaps that bite Lunora are named per key below.
  *
- * `shardPlacement` and `shardReadReplicas` stay `unsupported`: celld assigns a
- * cell to whichever node has capacity, and its v0.4.1 rebalancing evens out
- * cell COUNTS across nodes, not distance to a reader — so there is still no
- * location to hint at and no region to place a read replica in.
+ * `shardPlacement` and `shardReadReplicas` stay `unsupported`, and by celld's
+ * own design rather than a gap: its Durable Object docs state it "makes no
+ * placement, migration, or jurisdiction promise". Nodes carry no region, and
+ * rebalancing moves hibernated cells toward each node's `CELLD_PLACEMENT_WEIGHT`
+ * share, not toward a reader — so there is no location to hint at and no region
+ * to place a read replica in. Revisit only if celld grows node regions.
  */
 const CELLD_CAPABILITIES: PlatformCapabilities = {
     id: "celld",

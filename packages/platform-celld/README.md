@@ -19,7 +19,7 @@ Ratings track **celld v0.6.0**, its first beta. celld v0.3.0 shipped `state.stor
 
 `emulated`: `ctx.mail` (Resend over Queues, as on Cloudflare), cross-shard fan-out, durable streams, memory tables, server reactors, the scheduler, and the R2-backed backup/CDC-archive paths.
 
-`unsupported`: shard placement and read replicas — celld places a cell on whichever node has capacity and rebalances by per-node cell count, not by distance to a reader, so a `locationHint` has nothing to act on and a read replica has no region to be nearer the reader in.
+`unsupported`: shard placement and read replicas. celld [makes no placement, migration, or jurisdiction promise](https://github.com/denoland/celld/blob/main/docs/services/durable-objects.md) — a deliberate non-goal, not a missing binding, so there is no upstream gap to file. A node carries no region, `locationHint` is not read, and rebalancing moves hibernated cells toward each node's share of `CELLD_PLACEMENT_WEIGHT` (CPU count by default), never toward a reader. A hint therefore has nothing to act on, and a read replica has no region to be nearer the reader in.
 
 The rest are managed Cloudflare products celld has no binding for: Workers AI (and with it `defineAgent`, whose loop compiles onto celld's Workflows but has no model to call), Vectorize, Browser Rendering, Images, Analytics Engine, Pipelines, Hyperdrive, Secrets Store, plus the Cache API (an always-miss stub on celld) and Cloudflare Access. Codegen gates every one of them off for `target: "celld"` in `lunora.config.ts`, with a `platform_unsupported_feature` diagnostic naming the feature.
 
