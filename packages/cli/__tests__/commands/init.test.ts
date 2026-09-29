@@ -496,6 +496,32 @@ describe("lunora init", () => {
             expect(pkg).toContain('"name": "starter"');
         });
 
+        it("tanstack-start-react-rspack template scaffolds an Rsbuild app with a composed deploy entry", async () => {
+            expect.assertions(6);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "starter",
+                templateType: "tanstack-start-react-rspack",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "starter");
+
+            expect(existsSync(join(target, "rsbuild.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
+            // `lunora deploy` bundles this in place of `main`; without it the deployed worker has no SSR.
+            expect(existsSync(join(target, "src", "worker.ts"))).toBe(true);
+
+            const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+            expect(pkg).toContain("@lunora/rspack");
+            expect(pkg).toContain('"name": "starter"');
+        });
+
         it("solid-v2 template scaffolds a Solid 2 SPA on the 2.x toolchain", async () => {
             expect.assertions(11);
 
@@ -770,16 +796,18 @@ describe("lunora init", () => {
         });
 
         it("isTemplate accepts the real template dir names incl. next and vinext (not the removed vite-react)", () => {
-            expect.assertions(13);
+            expect.assertions(15);
 
             expect(isTemplate("astro")).toBe(true);
             expect(isTemplate("expo")).toBe(true);
             expect(isTemplate("next")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
+            expect(isTemplate("rspack-react")).toBe(true);
             expect(isTemplate("solid-v2")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start-react")).toBe(true);
+            expect(isTemplate("tanstack-start-react-rspack")).toBe(true);
             expect(isTemplate("tanstack-start-solid")).toBe(true);
             expect(isTemplate("vinext")).toBe(true);
             expect(isTemplate("vinext-pages")).toBe(true);

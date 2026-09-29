@@ -34,6 +34,15 @@ carries the WebSocket (`ws: true`), which is what live queries ride — the sing
 most expensive thing to get wrong by hand, because without it RPC answers
 normally and subscriptions simply never arrive.
 
+Two starters ship this setup: `lunora init -t rspack-react` (a React SPA the
+Worker serves as static assets) and `lunora init -t tanstack-start-react-rspack`
+(TanStack Start, whose SSR handler `src/worker.ts` composes with Lunora into one
+Worker for `lunora deploy`).
+
+Lunora Studio is served at `/__lunora` on the dev server — the same URL, and
+the same app, as under `@lunora/vite`. Install `@lunora/studio` to enable it;
+pass `studio: false` to opt out.
+
 ## Bare Rspack or webpack
 
 The Rspack plugin works on its own for codegen and config, without running a
@@ -64,7 +73,7 @@ wiring and local persistence, all of which `wrangler dev` already does correctly
 So the plugin spawns `wrangler dev` and proxies to it. From your seat that is the
 same DX. What differs is that the Worker **restarts** on change rather than
 hot-swapping modules, and a few Vite-plugin features have no counterpart: the
-browser error overlay, remote-binding dev (`LUNORA_REMOTE`), and class-A
+the browser error overlay, remote-binding dev (`LUNORA_REMOTE`), and class-A
 framework worker composition. Use `@lunora/vite` if you need those.
 
 Pass `worker: false` to run the Worker yourself — the proxy is still injected, so
@@ -110,6 +119,7 @@ thrown out of the hook, which would end a watch session.
 | `apiSpec`          | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                      |
 | `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*` |
 | `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                   |
+| `studio`           | `true`          | **Rsbuild only.** Serve Lunora Studio at `/__lunora` (needs `@lunora/studio`)                       |
 | `worker`           | `true`          | **Rsbuild only.** Run `wrangler dev` alongside the dev server                                       |
 | `workerPort`       | `8787`          | **Rsbuild only.** Port the Worker serves on; defaults to the wrangler config's `dev.port`           |
 | `wranglerArgs`     | `[]`            | **Rsbuild only.** Extra arguments appended to `wrangler dev`                                        |

@@ -4,9 +4,10 @@ import type { CodegenOptions } from "@lunora/codegen";
  * Options for the `lunoraRspack()` plugin factory.
  *
  * Deliberately a subset of `@lunora/vite`'s. Everything absent here is
- * Vite-dev-server machinery with no Rspack counterpart (`overlay`, `studio`,
+ * Vite-dev-server machinery with no Rspack counterpart (`overlay`,
  * `cloudflare`, `shard`) — see the package README for which of those the
- * wrangler side of the stack covers instead.
+ * wrangler side of the stack covers instead. `studio` lives on the Rsbuild
+ * options, since it needs a dev server to mount on.
  */
 interface LunoraRspackOptions {
     /**

@@ -187,23 +187,27 @@ class LunoraRspackPlugin {
         await prepareDevSession(this.#options);
     }
 
+    /**
+     * Run a watch-mode codegen pass now, ahead of the first compilation.
+     *
+     * Public for the same ordering reason as {@link prepareDevSession}: the
+     * Worker `@lunora/rspack/rsbuild` spawns is bundled by `wrangler dev` at
+     * startup, and it imports `_generated/app` — which, on a fresh clone, only
+     * this pass writes. Spawned first, wrangler dies on an unresolvable import
+     * before the first compilation ever generates it. The first compilation then
+     * finds the fingerprint unchanged and skips its own pass.
+     */
+    public async generateForDev(): Promise<void> {
+        await this.#run(true);
+    }
+
     /** Rspack's plugin entry point. */
     public apply(compiler: CompilerLike): void {
         compiler.hooks.beforeCompile.tapPromise(PLUGIN_NAME, async () => {
             // `watchMode` is read HERE, not at tap time: `apply()` runs inside
             // `createCompiler()`, before `compiler.watch()` assigns it, so at tap
             // time it is always `false`.
-            //
-            // One instance can be applied to several compilers (an array config, or
-            // an Rsbuild with more than one environment), whose `beforeCompile`
-            // hooks then interleave. Sharing the in-flight promise keeps that to a
-            // single pass rather than duplicated codegen and two concurrent
-            // `postcodegen` subprocesses.
-            this.#inFlight ??= this.#pass(compiler.watchMode === true).finally(() => {
-                this.#inFlight = undefined;
-            });
-
-            await this.#inFlight;
+            await this.#run(compiler.watchMode === true);
         });
 
         compiler.hooks.afterCompile.tapPromise(PLUGIN_NAME, (compilation: CompilationLike) => {
@@ -229,6 +233,20 @@ class LunoraRspackPlugin {
 
             return Promise.resolve();
         });
+    }
+
+    /**
+     * One instance can be applied to several compilers (an array config, or an
+     * Rsbuild with more than one environment), whose `beforeCompile` hooks then
+     * interleave. Sharing the in-flight promise keeps that to a single pass
+     * rather than duplicated codegen and two concurrent `postcodegen` subprocesses.
+     */
+    async #run(watching: boolean): Promise<void> {
+        this.#inFlight ??= this.#pass(watching).finally(() => {
+            this.#inFlight = undefined;
+        });
+
+        await this.#inFlight;
     }
 
     /**

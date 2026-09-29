@@ -89,4 +89,94 @@ describe("the injected /_lunora proxy", () => {
         // Path preserved, not rewritten — the worker routes on it.
         expect(received).toStrictEqual(["/_lunora/probe"]);
     }, 120_000);
+
+    it("answers /__lunora with the studio, ahead of Rsbuild's history fallback", async () => {
+        expect.assertions(2);
+
+        const root = createFixture();
+
+        roots.push(root);
+
+        const rsbuild = await createRsbuild({
+            cwd: root,
+            rsbuildConfig: {
+                plugins: [lunoraRsbuild({ projectRoot: root, validateWrangler: false, worker: false })],
+                server: { host: "127.0.0.1", port: 0 },
+                source: { entry: { index: "./index.js" } },
+            },
+        });
+
+        const server = await rsbuild.startDevServer();
+
+        cleanups.push(async () => {
+            await server.server.close();
+        });
+
+        const response = await fetch(`http://127.0.0.1:${String(server.port)}/__lunora/data`);
+
+        // Registered after the built-ins, a deep link would get the APP's
+        // `index.html` from the history fallback — a 200 that looks right and
+        // boots the wrong single-page app.
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain("/__lunora/studio.js");
+    }, 120_000);
+
+    it("moves the studio with server.base, reading it after every plugin's config hooks", async () => {
+        expect.assertions(2);
+
+        const root = createFixture();
+
+        roots.push(root);
+
+        const rsbuild = await createRsbuild({
+            cwd: root,
+            rsbuildConfig: {
+                plugins: [lunoraRsbuild({ projectRoot: root, validateWrangler: false, worker: false })],
+                server: { base: "/app", host: "127.0.0.1", port: 0 },
+                source: { entry: { index: "./index.js" } },
+            },
+        });
+
+        const server = await rsbuild.startDevServer();
+
+        cleanups.push(async () => {
+            await server.server.close();
+        });
+
+        const response = await fetch(`http://127.0.0.1:${String(server.port)}/app/__lunora`);
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain("/__lunora/studio.js");
+    }, 120_000);
+
+    it("refuses the studio when the project explicitly binds beyond loopback", async () => {
+        expect.assertions(1);
+
+        const root = createFixture();
+
+        roots.push(root);
+
+        const rsbuild = await createRsbuild({
+            cwd: root,
+            rsbuildConfig: {
+                plugins: [lunoraRsbuild({ projectRoot: root, validateWrangler: false, worker: false })],
+                // An explicit `0.0.0.0` is `--host`: the same refusal `@lunora/vite`
+                // gives, even to this loopback request. Leaving `host` unset — the
+                // same bind, as Rsbuild's default — does not refuse.
+
+                server: { host: "0.0.0.0", port: 0 },
+                source: { entry: { index: "./index.js" } },
+            },
+        });
+
+        const server = await rsbuild.startDevServer();
+
+        cleanups.push(async () => {
+            await server.server.close();
+        });
+
+        const response = await fetch(`http://127.0.0.1:${String(server.port)}/__lunora`);
+
+        expect(response.status).toBe(403);
+    }, 120_000);
 });

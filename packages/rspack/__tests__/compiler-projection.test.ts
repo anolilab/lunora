@@ -38,7 +38,7 @@ describe("compiler projection", () => {
      * What CAN drift silently is a renamed hook: `RsbuildPlugins` is built on
      * `LooseRsbuildPlugin`, whose `setup: (api: any) => …` swallows any mismatch,
      * so a rename upstream would compile clean here and simply never fire. These
-     * pin the four names this plugin taps.
+     * pin the six names this plugin taps.
      *
      * The shapes themselves are covered behaviourally instead — `proxy.test.ts`
      * drives a real `createRsbuild()` dev server and reads what comes back, which
@@ -47,8 +47,10 @@ describe("compiler projection", () => {
     it("taps hooks that @rsbuild/core actually has", () => {
         expect.assertions(0);
 
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("getRsbuildConfig");
         expectTypeOf<RsbuildPluginAPI>().toHaveProperty("modifyRsbuildConfig");
         expectTypeOf<RsbuildPluginAPI>().toHaveProperty("modifyRspackConfig");
+        expectTypeOf<RsbuildPluginAPI>().toHaveProperty("onAfterStartDevServer");
         expectTypeOf<RsbuildPluginAPI>().toHaveProperty("onBeforeStartDevServer");
         expectTypeOf<RsbuildPluginAPI>().toHaveProperty("onCloseDevServer");
     });
@@ -58,7 +60,9 @@ describe("compiler projection", () => {
 
         // A member added here without a corresponding `toHaveProperty` above would
         // be unpinned — this keeps the two lists in step.
-        expectTypeOf<keyof RsbuildApiLike>().toEqualTypeOf<"modifyRsbuildConfig" | "modifyRspackConfig" | "onBeforeStartDevServer" | "onCloseDevServer">();
+        expectTypeOf<keyof RsbuildApiLike>().toEqualTypeOf<
+            "getRsbuildConfig" | "modifyRsbuildConfig" | "modifyRspackConfig" | "onAfterStartDevServer" | "onBeforeStartDevServer" | "onCloseDevServer"
+        >();
 
         expect(true).toBe(true);
     });
