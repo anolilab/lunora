@@ -7,43 +7,31 @@
  * passes every better-auth option (`socialProviders`, `plugins`, `session`, …)
  * straight through. See https://www.better-auth.com/docs for the full surface.
  *
- * What this scaffolds:
- *   - `buildAuth(env)` — constructs the better-auth instance, with
- *     email/password sign-up/sign-in enabled, backed by your D1 binding (`DB`).
- *   - `getAuth(env)` — memoizes the instance per isolate so better-auth and its
- *     adapter aren't rebuilt on every request.
- *   - `mountAuth(env, request)` — routes `/api/auth/*` requests to better-auth.
- *     Call it FIRST in your Worker's `fetch` and return its response when set;
- *     it returns `undefined` for non-auth routes without doing any auth work.
- *
- * Wiring (in your Worker entry, e.g. `src/server/index.ts`):
- *
- * ```ts
- * import { mountAuth } from "../../lunora/auth/index.js";
- *
- * export default {
- *     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
- *         const authResponse = await mountAuth(env, request);
- *         if (authResponse) return authResponse;
- *         // …dispatch the rest of your app (createWorker(...).fetch(...))…
- *     },
- * };
- * ```
- *
- * Resolve the caller's identity for Lunora procedures by passing
- * `resolveIdentity` to `createWorker`, calling `getAuth(env).api.getSession({
- * headers: request.headers })` inside it.
+ * What this exports:
+ *   - `authOptions(env)` — the better-auth options: email/password with
+ *     verification, and the `organization()` + `admin()` plugins the kit's
+ *     tenancy runs on. `lunora/server.ts` hands it to `.auth({ d1, options })`,
+ *     which builds the request instance over `lunoraD1Adapter`, builds the
+ *     migration instance over raw D1 from THE SAME options (so the plugin tables
+ *     and columns are migrated too), and serves `/api/auth/*`.
+ *   - `getAuth(env)` — a memoized instance over the same options, for the two
+ *     reads `.auth()` does not expose: the session + member lookup in
+ *     `resolveIdentity`, and the member count the organization hooks project.
  */
-import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
+import type { ShardNamespaceLike } from "lunorash/runtime";
+import { createShardClient } from "lunorash/runtime";
+
+import { internal } from "../_generated/api.js";
 
 /**
  * Env-name values that mark a development deployment, and the vars they live in.
  * `lunora dev` sets `WORKER_ENV=development`; a real deploy that sets none of
  * these stays production (fail closed). Used to gate dev-only behaviour below —
- * console-logging auth links and running schema migrations on cold start.
+ * console-logging auth links.
  */
 const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
@@ -51,7 +39,7 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
 /**
  * Whether the Worker is running in development. Defaults to FALSE so a real
  * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
- * dev-only conveniences (logging links, auto-migrating) never leak there.
+ * dev-only conveniences (logging links) never leak there.
  */
 const isDevEnvironment = (env: Record<string, unknown>): boolean =>
     ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
@@ -69,6 +57,8 @@ export interface AuthEnv {
     BETTER_AUTH_URL?: string;
     /** Cloudflare D1 binding better-auth persists users/sessions into. */
     DB: unknown;
+    /** The shard namespace — the organization hooks write the admin projection through it. */
+    SHARD: ShardNamespaceLike;
 }
 
 /**
@@ -128,26 +118,85 @@ const sendAuthEmail = async (env: AuthEnv, message: { html?: string; subject: st
 };
 
 /**
- * Construct the better-auth instance. Edit freely — add `socialProviders`,
- * `plugins` (from `@lunora/auth/plugins`), or a `session` policy
- * (`sessionPresets` from `@lunora/auth`). The `auth-clerk` / `auth-auth0`
- * registry items scaffold provider snippets you merge into the options here.
+ * Per-isolate memoized instance for {@link getAuth}. Cloudflare reuses the same
+ * `env` bindings across invocations within an isolate, so building once avoids
+ * reconstructing better-auth (and its adapter) on every request.
+ */
+let cached: LunoraAuth | undefined;
+
+/**
+ * Get (or lazily build) this isolate's instance over {@link authOptions}.
+ *
+ * ponytail: this is a second instance beside the one `.auth()` builds for
+ * `/api/auth/*` — same options, same D1, so the only cost is one construction
+ * per isolate. Drop it if `.auth()` ever hands its instance to `.extend()`.
+ */
+export const getAuth = (env: AuthEnv): LunoraAuth => {
+    cached ??= createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
+
+    return cached;
+};
+
+/** The organisation fields every hook carries. */
+interface OrganizationRecord {
+    id: string;
+    name: string;
+    slug: string;
+}
+
+/**
+ * Project one organisation into `saas_organizations` — the `.global()` table the
+ * admin screen reads and the billing page takes its seat count from.
+ *
+ * Through `createShardClient`, the supported way for Worker code (this runs
+ * inside better-auth's `/api/auth/*` handler, not a Lunora function) to call an
+ * `internal` function. It is a system caller, which is what an internal
+ * mutation needs; `saas_organizations` is `.global()`, so the root shard it
+ * lands on reaches the same D1 table every other shard does.
+ *
+ * The member count is re-read rather than kept as a delta, so a missed or
+ * repeated hook cannot leave the number permanently off by one. A failure is
+ * logged and swallowed: better-auth has already committed the change, so
+ * failing the request would tell the user their organisation was not created
+ * when it was. The next event for that organisation re-projects the whole row.
+ */
+const projectOrganization = async (env: AuthEnv, organization: OrganizationRecord, fields: { status?: string } = {}): Promise<void> => {
+    try {
+        const { adapter } = await getAuth(env).$context;
+        const seats = await adapter.count({ model: "member", where: [{ field: "organizationId", value: organization.id }] });
+
+        await createShardClient(env.SHARD, { shardKey: "__root__" }).call(internal.saas.syncOrganization, {
+            name: organization.name,
+            organizationId: organization.id,
+            seats,
+            slug: organization.slug,
+            ...fields,
+        });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- the admin projection is best-effort; surface the drift in Worker logs
+        console.error("[saas] could not project organization", { error, organizationId: organization.id });
+    }
+};
+
+/**
+ * The better-auth options. Edit freely — add `socialProviders`, `plugins` (from
+ * `@lunora/auth/plugins`), or a `session` policy (`sessionPresets` from
+ * `@lunora/auth`). The `auth-clerk` / `auth-auth0` registry items scaffold
+ * provider snippets you merge into the options here.
+ *
+ * No `database`: `.auth({ d1, options })` in `lunora/server.ts` supplies it —
+ * `lunoraD1Adapter` for requests, raw D1 for the migration sweep — and both are
+ * built from THESE options, so whatever plugin you add here gets its tables
+ * migrated too.
  *
  * Email/password sign-up enables verification + a forgot-password reset; both
  * deliver through {@link sendAuthEmail} (captured into the studio Mail tab in
  * dev). Edit the subjects/bodies — or swap to a React template via
  * `@lunora/mail`'s `renderEmail` — to taste.
  */
-export const buildAuth = (env: AuthEnv): LunoraAuth =>
-    createAuth({
+export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
+    return {
         baseURL: env.BETTER_AUTH_URL,
-        // Use `lunoraD1Adapter` rather than passing raw `env.DB`: better-auth
-        // accepts a D1Database directly, but then resolves its Kysely adapter via
-        // a runtime `await import(...)` that never settles under the Cloudflare
-        // Vite worker runner — hanging every auth request in `lunora dev`. The
-        // explicit adapter skips that, so dev and prod behave the same. Cast
-        // since AuthEnv keeps `DB` opaque (your generated `Env` types it precisely).
-        database: lunoraD1Adapter(env.DB as never),
         emailAndPassword: {
             enabled: true,
             requireEmailVerification: true,
@@ -177,81 +226,26 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
              * own authorization applied.
              *
              * Both add fields to the session and user that `createAuth`'s erased
-             * `LunoraAuth` return type does not carry — see the cast in
-             * `lunora/server.ts` and the note it points at.
+             * `LunoraAuth` return type does not carry — see the narrowing in
+             * `resolveIdentity` in `lunora/server.ts`.
              */
-            organization(),
+            organization({
+                // Keep the admin projection in step with the records it mirrors.
+                organizationHooks: {
+                    afterAcceptInvitation: async ({ organization: record }) => projectOrganization(env, record),
+                    afterAddMember: async ({ organization: record }) => projectOrganization(env, record),
+                    afterCreateOrganization: async ({ organization: record }) => projectOrganization(env, record),
+                    afterDeleteOrganization: async ({ organization: record }) => projectOrganization(env, record, { status: "deleted" }),
+                    afterRemoveMember: async ({ organization: record }) => projectOrganization(env, record),
+                    afterUpdateOrganization: async ({ organization: record }) => {
+                        if (record) {
+                            await projectOrganization(env, record);
+                        }
+                    },
+                },
+            }),
             admin(),
         ],
         secret: env.BETTER_AUTH_SECRET,
-    });
-
-/**
- * A migration-only auth instance backed by *raw* `env.DB`. `ensureMigrated`
- * runs better-auth's own Kysely-based migration runner, which needs the raw D1
- * database (not {@link lunoraD1Adapter}, whose custom store the migrator can't
- * drive). This instance is used solely to apply the schema in dev — request
- * handling always goes through {@link buildAuth}'s adapter-backed instance.
- */
-const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
-    createAuth({
-        baseURL: env.BETTER_AUTH_URL,
-        // Raw D1 on purpose — the migration runner resolves Kysely itself.
-        database: env.DB as never,
-        emailAndPassword: { enabled: true, requireEmailVerification: true },
-        secret: env.BETTER_AUTH_SECRET,
-    });
-
-/**
- * Per-isolate memoized auth instance. Cloudflare reuses the same `env` bindings
- * across invocations within an isolate, so building once avoids reconstructing
- * better-auth (and its adapter) on every request.
- */
-let cached: LunoraAuth | undefined;
-
-/** Get (or lazily build) the memoized auth instance for this isolate. */
-export const getAuth = (env: AuthEnv): LunoraAuth => {
-    cached ??= buildAuth(env);
-
-    return cached;
-};
-
-/**
- * Per-isolate single-flight guard so the dev migration runs at most once per
- * isolate even though `mountAuth` is called on every auth request.
- */
-let migrated: Promise<void> | undefined;
-
-/**
- * Route `/api/auth/*` to better-auth. Returns the auth `Response` when the
- * request is an auth route, or `undefined` so your Worker keeps dispatching.
- *
- * The auth-route check happens BEFORE any migration work, so non-auth traffic
- * (your app's own routes) never pays the schema diff and stays independent of
- * auth/D1 health — an auth migration problem can't take the whole site down.
- *
- * Migrations run only in development (idempotent, single-flight). For
- * production, pre-apply the schema at deploy time instead — see the README
- * (`compileMigrationsSql` + `wrangler d1 execute`) — so request paths never
- * trigger DDL. Migrations use a separate raw-D1 instance ({@link
- * buildMigrationAuth}) because better-auth's migration runner needs the raw
- * Kysely database, while request handling uses the adapter-backed instance.
- */
-export const mountAuth = async (env: AuthEnv, request: Request): Promise<Response | undefined> => {
-    const url = new URL(request.url);
-
-    // Match the auth path first — never touch auth/migrations for other routes.
-    if (url.pathname !== DEFAULT_AUTH_BASE_PATH && !url.pathname.startsWith(`${DEFAULT_AUTH_BASE_PATH}/`)) {
-        return undefined;
-    }
-
-    const auth = getAuth(env);
-
-    // Dev-only auto-migrate. In production, pre-apply the schema at deploy time.
-    if (isDevEnvironment(env as unknown as Record<string, unknown>)) {
-        migrated ??= ensureMigrated(buildMigrationAuth(env));
-        await migrated;
-    }
-
-    return handleAuthRequest(auth, request);
+    };
 };

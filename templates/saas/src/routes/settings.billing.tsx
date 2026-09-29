@@ -2,7 +2,7 @@ import { useAction, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { api } from "../../lunora/_generated/api";
-import type { Plan } from "../../lunora/saas-ui/core";
+import { PLANS } from "../../lunora/plans";
 import { BillingPanel, PricingTable } from "../../lunora/saas-ui/react";
 
 import "../../lunora/saas-ui/styles.css";
@@ -12,49 +12,26 @@ export const Route = createFileRoute("/settings/billing")({
 });
 
 /**
- * The plan catalog the pricing page renders.
+ * The billing page. The plan catalog is `lunora/plans.ts` — the same list the
+ * server derives its entitlements from, so the page cannot offer a feature the
+ * gate does not know.
  *
- * It has to agree with `ENTITLEMENTS` in `lunora/server.ts` — same plan ids,
- * same feature names, same price ids. They are separate on purpose: that one
- * gates a mutation and is the one that matters; this one renders a price and is
- * the one a designer edits. Keeping the gate out of the marketing copy is how
- * an edit here stays unable to hand anybody a feature.
+ * No `shardKey` on these calls, on purpose: a provider webhook arrives with no
+ * tenant to route by, so the billing tables live on the root shard and carry
+ * the organisation in `referenceId` instead. The functions derive that from the
+ * verified claim, so they are tenant-scoped all the same.
  */
-const PLANS: ReadonlyArray<Plan> = [
-    { blurb: "One organization, three projects", currency: "USD", features: ["projects"], id: "free", name: "Free", priceMinor: 0, seats: 1 },
-    {
-        blurb: "Your whole team, unlimited projects",
-        currency: "USD",
-        features: ["projects", "export", "admin"],
-        id: "pro",
-        name: "Pro",
-        priceId: "price_pro",
-        priceMinor: 2900,
-        seats: 10,
-    },
-    {
-        blurb: "SSO and unmetered seats",
-        currency: "USD",
-        features: ["projects", "export", "admin", "sso"],
-        id: "scale",
-        name: "Scale",
-        priceId: "price_scale",
-        priceMinor: 9900,
-    },
-];
-
 function BillingPage() {
-    // Billing lives on the organization, so both of these are already
-    // tenant-scoped: the functions derive the reference from the verified claim.
-    const subscriptions = useQuery(api.payment.mySubscriptions, {});
+    const me = useQuery(api.saas.me, {});
+    const subscriptions = useQuery(api.payment.mySubscriptions, me?.organizationId === undefined ? "skip" : {});
     // `useAction` returns `{ call, pending, … }` rather than a callable, the same
     // shape as `useMutation` — destructure at the call site.
     const { call: checkout } = useAction(api.payment.checkout);
     const { call: portal } = useAction(api.payment.portal);
 
-    // Members come from better-auth, which is not a Lunora table — wire your
-    // organization's member list in here. Until then the seat meter reads 1.
-    const memberCount = 1;
+    // The member count off the admin projection, which better-auth's
+    // organization hooks keep current (`lunora/auth/index.ts`).
+    const memberCount = me?.seats ?? 1;
 
     const subscription = subscriptions?.[0];
 

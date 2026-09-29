@@ -52,25 +52,52 @@
  *      `.dev.vars` (locally) and push the secrets to production with
  *      `wrangler secret put`.
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
+import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
 import { SUBSCRIPTIONS_TABLE } from "./schema.js";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it is a `tsc` error in a fresh scaffold. The
+ * generated `CloudflareBindings` is the open index signature this needs; the
+ * value stays `unknown`, so `appOrigin` still has to narrow it.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * Public origin of this deployment, used to build the checkout return URLs and
  * the billing-portal return URL. Read from env rather than the request: a Lunora
  * context carries no `Request` (a mutation can be replayed, a query re-run from
  * a live subscription), so there is nothing to derive an origin from at handler
- * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. That is a RUNTIME split, not a typing one:
+ * `.dev.vars` is read locally and never deployed, so a var declared only there
+ * is absent from the deployed Worker; the `vars` entry is what carries it to
+ * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
+ * the type — `env` above is the `cloudflare:workers` export narrowed to the
+ * generated `CloudflareBindings`. Unnarrowed it is `Cloudflare.Env`, which only
+ * `wrangler types` populates, so that narrowing is what makes this read compile
+ * at all, and what it yields is `unknown` — hence the check below.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
  */
 const appOrigin = (): string => {
-    // Read through a narrow shape: `vars` from wrangler.jsonc reach the running
-    // Worker, but the ambient `CloudflareBindings` this template type-checks
-    // against is generated from bindings only, so the key is not on `env`'s type.
-    const value = (env as { APP_BASE_URL?: unknown }).APP_BASE_URL;
+    const value = env["APP_BASE_URL"];
 
     if (typeof value !== "string" || value === "") {
         throw new Error(
@@ -90,7 +117,9 @@ const appOrigin = (): string => {
  * organisation and leave everyone else unable to see the plan they are on.
  *
  * Derived server-side from the verified claim and never taken as an argument,
- * for the same reason nothing else in this app takes an `organizationId`.
+ * for the same reason nothing else in this app takes an `organizationId`. That
+ * is also why `lunora/server.ts` relaxes `.payment()`'s default authorizer,
+ * which would only admit a reference equal to the caller's user id.
  */
 const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string } | null> } }): Promise<string> => {
     const identity = await ctx.auth.getIdentity();
@@ -109,6 +138,12 @@ const billingReference = async (ctx: { auth: { getIdentity: () => Promise<{ acti
 };
 
 /**
+ * Where the provider sends the customer back to: the billing page, told how the
+ * checkout ended so it can say so.
+ */
+const billingPage = (outcome?: "cancel" | "success"): string => `${appOrigin()}/settings/billing${outcome === undefined ? "" : `?checkout=${outcome}`}`;
+
+/**
  * Start a checkout session and hand the client the redirect URL. The reference
  * is the caller's active organisation — see {@link billingReference}.
  */
@@ -116,19 +151,19 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     const referenceId = await billingReference(ctx);
 
     const result = await ctx.payments.createCheckout({
-        cancelUrl: `${appOrigin()}/payment/cancel`,
+        cancelUrl: billingPage("cancel"),
         mode: "subscription",
         priceId,
         referenceId,
-        successUrl: `${appOrigin()}/payment/success`,
+        successUrl: billingPage("success"),
     });
 
     return { url: result.url };
 });
 
 /**
- * Record one metered usage event for the authenticated user. `track` writes the
- * durable ledger (exactly-once by idempotency key) and, when the provider
+ * Record one metered usage event for the caller's organisation. `track` writes
+ * the durable ledger (exactly-once by idempotency key) and, when the provider
  * supports it, forwards a meter event — best-effort.
  */
 export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
@@ -140,7 +175,7 @@ export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean 
 });
 
 /**
- * Check whether the authenticated user is still under their metered allowance
+ * Check whether the caller's organisation is still under its metered allowance
  * for the current billing period. Returns the allowance balance when available.
  */
 export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
@@ -152,31 +187,70 @@ export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; 
 });
 
 /**
- * Open the billing portal for the authenticated user (customer derived from the
- * payment store). The return URL is where the portal sends the user after
- * managing their subscription/billing details.
+ * Open the billing portal for the caller's organisation (customer derived from
+ * the payment store). The portal sends the customer back to the billing page.
  */
 export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
     const referenceId = await billingReference(ctx);
 
-    return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
+    return ctx.payments.createPortalSession(referenceId, billingPage());
 });
 
+/*
+ * Column readers for the raw `subscriptions` row. `ctx.db` hands back
+ * `Record<string, unknown>`, and a bare `row["x"] as string` types a MISSING
+ * column as `string` while handing the client `undefined` — so a row written
+ * before a column existed reaches a screen as a non-string claiming to be one.
+ * These narrow instead of asserting, and an absent optional column reads back as
+ * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
+ */
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? (row[column] as string) : "");
+
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined =>
+    typeof row[column] === "number" ? (row[column] as number) : undefined;
+
+const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
+    const value = row[column];
+
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+};
+
+/**
+ * What a billing screen reads. A hand-rolled projection rather than
+ * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
+ * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
+ * here has to be kept in step with `packages/payment/src/schema.ts` by hand.
+ */
 interface SubscriptionRow {
-    /** Drives the "cancels at period end" notice, which outranks the state. */
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd?: number;
-    /** What the UI matches against the plan catalog. Without it there is no plan to show. */
+    /** Start of the billing period metered usage is summed over. Without it a client falls back to `createdAt` and shows LIFETIME usage against a per-period limit. */
+    currentPeriodStart?: number;
+    /** The PRIMARY price id — `priceIds[0]`. For display; match plans against `priceIds`. */
     priceId: string;
+
+    /**
+     * EVERY price id the subscription bills. This — not `priceId` — is what a plan
+     * lookup tests membership in, mirroring `hasActivePrice`: a Stripe subscription
+     * is a list of items, so a base plan alongside an add-on or a metered price has
+     * a `priceId` naming only one of them.
+     *
+     * Absent on rows written by the webhook path (which carries one price id);
+     * read it as `priceIds ?? [priceId]`.
+     */
+    priceIds?: string[];
+    /** Which provider's row this is. Load-bearing while two providers coexist during a migration. */
+    provider: string;
     providerSubscriptionId: string;
-    /** Seats BILLED. The screens count members instead, because this lags an invite. */
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
     quantity: number;
     referenceId: string;
-    state: string;
+    state: SubscriptionState;
 }
 
 /**
- * Reactive read of the webhook-synced subscriptions for the authenticated user.
+ * Reactive read of the webhook-synced subscriptions for the caller's organisation.
  *
  * A `query` rather than an action because this is the one payment read that
  * should stay live — `ctx.payments` is ActionCtx-only, so it reads the
@@ -196,15 +270,25 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
         .collect();
 
-    return rows.map((row) => ({
-        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
-        currentPeriodEnd: typeof row["currentPeriodEnd"] === "number" ? row["currentPeriodEnd"] : undefined,
-        priceId: row["priceId"] as string,
-        providerSubscriptionId: row["providerSubscriptionId"] as string,
-        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
-        referenceId: row["referenceId"] as string,
-        state: row["state"] as string,
-    }));
+    return rows.map((document) => {
+        // A spread, not the document itself: in a codegen'd app the row is the
+        // typed `Doc<"subscriptions">` interface, which has no index signature,
+        // while its object-literal copy satisfies the readers' record type.
+        const row: Record<string, unknown> = { ...document };
+
+        return {
+            cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+            currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+            currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+            priceId: readString(row, "priceId"),
+            priceIds: readOptionalStringArray(row, "priceIds"),
+            provider: readString(row, "provider"),
+            providerSubscriptionId: readString(row, "providerSubscriptionId"),
+            quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+            referenceId: readString(row, "referenceId"),
+            state: readString(row, "state") as SubscriptionState,
+        };
+    });
 });
 
 /**

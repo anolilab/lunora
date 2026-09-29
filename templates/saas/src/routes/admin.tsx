@@ -17,9 +17,8 @@ export const Route = createFileRoute("/admin")({
  * itself refuses anyone without the platform admin role, so this route needs no
  * gate of its own beyond not linking to it from the app nav.
  *
- * Seed it with `pnpm run seed` so it has something to show before you have
- * customers; an admin screen that looks broken until launch is how every other
- * starter kit ships one.
+ * Rows arrive as organisations are created: better-auth's organization hooks
+ * project each one (`lunora/auth/index.ts`).
  */
 function AdminPage() {
     const rows = useQuery(api.saas.listOrganizations, {});
