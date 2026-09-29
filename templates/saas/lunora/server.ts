@@ -1,6 +1,7 @@
 import type { D1DatabaseLike } from "@lunora/d1";
 import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ShardNamespaceLike } from "lunorash/runtime";
+import ssr from "@tanstack/react-start/server-entry";
 import Stripe from "stripe";
 
 import { getAuth } from "./auth/index.js";
@@ -136,6 +137,11 @@ const app = defineApp<Env>()
             };
         },
     }))
+    // Everything outside `/_lunora/*` falls through to the TanStack Start SSR
+    // handler, so this one worker serves both planes. `wrangler.jsonc` points
+    // `main` HERE rather than at `virtual:lunora/worker`: the composed virtual
+    // entry never imports this file, so the tenancy gate above would be dead.
+    .httpRouter(ssr)
     .build();
 
 export const ShardDO = app.ShardDO;
