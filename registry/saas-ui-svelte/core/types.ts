@@ -65,6 +65,8 @@ interface SubscriptionLike {
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd?: number;
     priceId: string;
+    /** Every price a multi-item subscription bills (base plan + add-ons). Absent means `[priceId]`. */
+    priceIds?: ReadonlyArray<string>;
     quantity: number;
     state: string;
 }

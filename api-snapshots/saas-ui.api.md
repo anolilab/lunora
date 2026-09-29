@@ -71,12 +71,6 @@ const DEFAULT_ADMIN_VIEW: AdminView;
 const DEFAULT_VIEW: ProjectsView;
 ```
 
-### `ENTITLING_STATES` (const)
-
-```ts
-const ENTITLING_STATES: Set<string>;
-```
-
 ### `FieldSpec` (interface)
 
 ```ts
@@ -125,12 +119,6 @@ interface FormState<TFields extends string> {
     status: FlowStatus;
     values: Record<TFields, string>;
 }
-```
-
-### `MESSAGES` (const)
-
-```ts
-const MESSAGES: Record<string, string>;
 ```
 
 ### `NAME_MAX_LENGTH` (const)
@@ -196,6 +184,21 @@ interface PresenceMemberLike {
 }
 ```
 
+### `PricingRow` (type)
+
+```ts
+type PricingRow = {
+    current: boolean;
+    plan: Plan;
+    price: string;
+} & ({
+    priceId: string;
+    purchasable: true;
+} | {
+    purchasable: false;
+});
+```
+
 ### `ProjectRow` (interface)
 
 ```ts
@@ -240,7 +243,6 @@ interface Roster {
 
 ```ts
 interface RosterEntry {
-    connections: number;
     isSelf: boolean;
     key: string;
     lastSeen: number;
@@ -289,6 +291,7 @@ interface SubscriptionLike {
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd?: number;
     priceId: string;
+    priceIds?: ReadonlyArray<string>;
     quantity: number;
     state: string;
 }
@@ -336,24 +339,6 @@ const dayKey: (timestamp: number) => string;
 const deriveOverviewStats: (payload: OverviewPayload, now: number) => ReadonlyArray<StatTile>;
 ```
 
-### `describeAction` (const)
-
-```ts
-const describeAction: (action: string) => string;
-```
-
-### `describeActivity` (const)
-
-```ts
-const describeActivity: (row: ActivityRow) => string;
-```
-
-### `errorCode` (const)
-
-```ts
-const errorCode: (error: unknown) => string | undefined;
-```
-
 ### `formatMoney` (const)
 
 ```ts
@@ -378,12 +363,6 @@ const initials: (name: string) => string;
 const isEntitled: (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined, feature: string) => boolean;
 ```
 
-### `isEntitling` (const)
-
-```ts
-const isEntitling: (subscription: SubscriptionLike | undefined) => boolean;
-```
-
 ### `isFirstRun` (const)
 
 ```ts
@@ -394,6 +373,12 @@ const isFirstRun: (payload: OverviewPayload) => boolean;
 
 ```ts
 const mapError: (error: unknown) => string;
+```
+
+### `notEntitledLabel` (const)
+
+```ts
+const notEntitledLabel: (feature: string) => string;
 ```
 
 ### `planLabel` (const)
@@ -423,7 +408,7 @@ const presenceSummary: (roster: Roster) => string;
 ### `pricingRows` (const)
 
 ```ts
-const pricingRows: (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined) => ReadonlyArray<{ current: boolean; plan: Plan; price: string; priceId?: string; purchasable: boolean; }>;
+const pricingRows: (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined) => ReadonlyArray<PricingRow>;
 ```
 
 ### `projectCounts` (const)
@@ -436,6 +421,18 @@ const projectCounts: (rows: ReadonlyArray<ProjectRow>) => { active: number; arch
 
 ```ts
 const relativeTime: (timestamp: number, now: number) => string;
+```
+
+### `seatAlert` (const)
+
+```ts
+const seatAlert: (usage: SeatUsage) => string | undefined;
+```
+
+### `seatSummary` (const)
+
+```ts
+const seatSummary: (usage: SeatUsage) => string;
 ```
 
 ### `seatUsage` (const)
@@ -460,12 +457,6 @@ const selectProjects: (rows: ReadonlyArray<ProjectRow>, view?: ProjectsView) => 
 
 ```ts
 const subscriptionNotice: (subscription: SubscriptionLike | undefined) => string | undefined;
-```
-
-### `validateName` (const)
-
-```ts
-const validateName: (value: string) => string | undefined;
 ```
 
 ## `@lunora/saas-ui/react`
@@ -650,7 +641,7 @@ interface ProjectsCardProps {
 ### `useForm` (const)
 
 ```ts
-const useForm: <TFields extends string>(factory: () => FormController<TFields>, deps?: ReadonlyArray<unknown>) => [FormState<TFields>, FormController<TFields>];
+const useForm: <TFields extends string>(factory: () => FormController<TFields>) => [FormState<TFields>, FormController<TFields>];
 ```
 
 ## `@lunora/saas-ui/svelte`

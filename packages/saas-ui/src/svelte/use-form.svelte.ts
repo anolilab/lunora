@@ -8,9 +8,8 @@ import type { FormController, FormState } from "../core";
  * one is fifteen lines of `$state`, and everything a form *does* — validation,
  * double-submit suppression, error mapping — is shared between them, untouched.
  *
- * `$effect` is deliberately not used for the subscription: the controller
- * outlives any single effect scope, and the component owns teardown by calling
- * `destroy()` in its own `$effect` cleanup.
+ * Call it during component initialisation: it registers its own teardown, so
+ * the subscription and the controller die with the component that made them.
  */
 const createFormState = <TFields extends string>(
     controller: FormController<TFields>,
@@ -19,6 +18,10 @@ const createFormState = <TFields extends string>(
 
     controller.subscribe(() => {
         snapshot = controller.getState();
+    });
+
+    $effect(() => () => {
+        controller.destroy();
     });
 
     return {

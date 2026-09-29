@@ -3,13 +3,12 @@
 import type { ReactNode } from "react";
 
 import type { Plan } from "../core/billing";
-import { currentPlan, isEntitled, pricingRows, seatUsage, subscriptionNotice } from "../core/billing";
+import { currentPlan, isEntitled, notEntitledLabel, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice } from "../core/billing";
 import type { SubscriptionLike } from "../core/types";
 import { Card, Empty } from "./primitives";
 
 interface PricingTableProps {
-    /** Start checkout for a plan's provider price id. */
-    /** Start checkout. The return is ignored, so an async handler is fine. */
+    /** Start checkout for a plan's provider price id. The return is ignored, so an async handler is fine. */
     onSelect: (priceId: string) => unknown;
     plans: ReadonlyArray<Plan>;
     subscription: SubscriptionLike | undefined;
@@ -22,31 +21,30 @@ interface PricingTableProps {
  */
 const PricingTable = ({ onSelect, plans, subscription }: PricingTableProps): ReactNode => (
     <div className="lu-saas-stats">
-        {pricingRows(plans, subscription).map(({ current, plan, price, priceId, purchasable }) => (
-            <div className={current ? "lu-saas-stat lu-saas-stat--current" : "lu-saas-stat"} key={plan.id}>
-                <span className="lu-saas-stat__label">{plan.name}</span>
-                <span className="lu-saas-stat__value">{price}</span>
-                <span className="lu-saas-stat__note">{plan.blurb}</span>
+        {pricingRows(plans, subscription).map((row) => (
+            <div className={row.current ? "lu-saas-stat lu-saas-stat--current" : "lu-saas-stat"} key={row.plan.id}>
+                <span className="lu-saas-stat__label">{row.plan.name}</span>
+                <span className="lu-saas-stat__value">{row.price}</span>
+                <span className="lu-saas-stat__note">{row.plan.blurb}</span>
                 <ul className="lu-saas-list">
-                    {plan.features.map((feature) => (
+                    {row.plan.features.map((feature) => (
                         <li className="lu-saas-row" key={feature}>
                             {feature}
                         </li>
                     ))}
                 </ul>
-                {current ? (
+                {row.current ? (
                     <span className="lu-saas-stat__note">Current plan</span>
                 ) : (
-                    purchasable &&
-                    priceId !== undefined && (
+                    row.purchasable && (
                         <button
                             className="lu-saas-button"
                             onClick={() => {
-                                onSelect(priceId);
+                                onSelect(row.priceId);
                             }}
                             type="button"
                         >
-                            Choose {plan.name}
+                            Choose {row.plan.name}
                         </button>
                     )
                 )}
@@ -58,7 +56,6 @@ const PricingTable = ({ onSelect, plans, subscription }: PricingTableProps): Rea
 interface BillingPanelProps {
     /** Members in the organisation — the real seat count, not the billed quantity. */
     memberCount: number;
-    /** Open the provider's customer portal. */
     /** Open the provider's customer portal. The return is ignored. */
     onManage: () => unknown;
     plans: ReadonlyArray<Plan>;
@@ -71,6 +68,7 @@ const BillingPanel = ({ memberCount, onManage, plans, subscription }: BillingPan
     const plan = currentPlan(plans, subscription);
     const seats = seatUsage(plan, memberCount);
     const notice = subscriptionNotice(subscription);
+    const overAllowance = seatAlert(seats);
 
     return (
         <Card
@@ -93,17 +91,15 @@ const BillingPanel = ({ memberCount, onManage, plans, subscription }: BillingPan
                     {notice}
                 </p>
             ) : undefined}
-            <p>
-                {seats.limit === undefined ? `${seats.used.toString()} members, unmetered` : `${seats.used.toString()} of ${seats.limit.toString()} seats used`}
-            </p>
+            <p>{seatSummary(seats)}</p>
             {seats.limit === undefined ? undefined : (
                 <progress className="lu-saas-meter" max={1} value={seats.ratio}>
                     {Math.round(seats.ratio * 100)}%
                 </progress>
             )}
-            {seats.over ? (
+            {overAllowance ? (
                 <p className="lu-saas-error" role="alert">
-                    This organization is over its seat allowance. Upgrade, or remove members.
+                    {overAllowance}
                 </p>
             ) : undefined}
         </Card>
@@ -129,7 +125,7 @@ interface GatedProps {
  * for.
  */
 const Gated = ({ children, fallback, feature, plans, subscription }: GatedProps): ReactNode =>
-    isEntitled(plans, subscription, feature) ? children : (fallback ?? <Empty title={`Your plan does not include ${feature}.`} />);
+    isEntitled(plans, subscription, feature) ? children : (fallback ?? <Empty title={notEntitledLabel(feature)} />);
 
 export type { BillingPanelProps, GatedProps, PricingTableProps };
 export { BillingPanel, Gated, PricingTable };

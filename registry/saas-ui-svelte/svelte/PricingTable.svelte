@@ -31,7 +31,7 @@
                 <button
                     class="lu-saas-button"
                     onclick={() => {
-                        onSelect(row.priceId ?? "");
+                        onSelect(row.priceId);
                     }}
                     type="button">Choose {row.plan.name}</button
                 >

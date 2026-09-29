@@ -1,36 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ActivityRow, OrganizationRow, ProjectRow } from "../../src/core";
+import { createFormController } from "../../src/core";
 import ActivityFeed from "../../src/svelte/ActivityFeed.svelte";
 import AdminOrganizations from "../../src/svelte/AdminOrganizations.svelte";
 import OverviewStats from "../../src/svelte/OverviewStats.svelte";
 import ProjectsCard from "../../src/svelte/ProjectsCard.svelte";
+import { activity, CREATED_SENTENCE, HOUR, noop, NOW, organization, project } from "../cards.fixtures";
+import FormHarness from "./FormHarness.svelte";
 
 /**
  * The Svelte port's tests deliberately assert the same behaviours as
- * `__tests__/react/cards.test.tsx`, against the same core. Where the two files
- * differ is only in how a click is dispatched — which is the claim the
- * core/view split makes, checked rather than asserted in a comment.
+ * `__tests__/react/cards.test.tsx`, against the same core and the same
+ * fixtures. Where the two files differ is only in how a click is dispatched —
+ * which is the claim the core/view split makes, checked rather than asserted
+ * in a comment.
  */
-
-const CREATED_SENTENCE = /created the project Website/u;
-const NOW = Date.UTC(2026, 8, 11, 12, 0, 0);
-const HOUR = 3_600_000;
-
-const project = (name: string, overrides: Partial<ProjectRow> = {}): ProjectRow => {
-    return {
-        _creationTime: NOW,
-        _id: `p-${name}`,
-        createdBy: "u1",
-        name,
-        organizationId: "org1",
-        slug: name.toLowerCase(),
-        ...overrides,
-    };
-};
-
-const noop = async (): Promise<void> => {};
 
 describe("overviewStats", () => {
     it("explains an empty tenant instead of showing it four zeroes", () => {
@@ -96,22 +81,23 @@ describe("projectsCard", () => {
     });
 });
 
-describe("activityFeed", () => {
-    const row = (action: string, createdAt: number, meta?: Record<string, unknown>): ActivityRow => {
-        return {
-            _creationTime: createdAt,
-            _id: `a-${createdAt.toString()}`,
-            action,
-            actorId: "u1",
-            createdAt,
-            meta,
-            organizationId: "org1",
-            subjectType: "project",
-        };
-    };
+describe("createFormState", () => {
+    it("destroys its controller when the component unmounts", () => {
+        const controller = createFormController({ fields: { name: {} }, onSubmit: noop });
+        const destroy = vi.spyOn(controller, "destroy");
+        const { unmount } = render(FormHarness, { controller });
 
+        expect(destroy).not.toHaveBeenCalled();
+
+        unmount();
+
+        expect(destroy).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("activityFeed", () => {
     it("renders a sentence, not an identifier", () => {
-        render(ActivityFeed, { now: NOW, resolveActor: () => "Ada Lovelace", rows: [row("project.created", NOW - HOUR, { name: "Website" })] });
+        render(ActivityFeed, { now: NOW, resolveActor: () => "Ada Lovelace", rows: [activity("project.created", NOW - HOUR, { name: "Website" })] });
 
         expect(screen.getByText(CREATED_SENTENCE)).toBeInTheDocument();
         expect(screen.getByText("1h ago")).toBeInTheDocument();
@@ -125,20 +111,6 @@ describe("activityFeed", () => {
 });
 
 describe("adminOrganizations", () => {
-    const organization = (name: string, plan: string, seats: number): OrganizationRow => {
-        return {
-            _creationTime: NOW,
-            _id: `o-${name}`,
-            name,
-            organizationId: `org-${name}`,
-            plan,
-            seats,
-            slug: name.toLowerCase(),
-            status: "active",
-            updatedAt: NOW,
-        };
-    };
-
     it("totals seats across tenants and filters by plan", async () => {
         render(AdminOrganizations, { now: NOW, rows: [organization("Acme", "pro", 12), organization("Globex", "free", 3)] });
 
