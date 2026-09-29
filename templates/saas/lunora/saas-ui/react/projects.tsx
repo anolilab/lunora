@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { createProjectFormController, NAME_MAX_LENGTH } from "../core/project-form";
 import type { ProjectsView } from "../core/projects";
@@ -30,7 +30,16 @@ const ProjectsCard = ({ canWrite, onArchive, onCreate, rows }: ProjectsCardProps
     const [view, setView] = useState<ProjectsView>(DEFAULT_VIEW);
     const nameId = useId();
     const archivedId = useId();
-    const [form, controller] = useForm(() => createProjectFormController(onCreate), [onCreate]);
+    // Built once, reading the latest `onCreate` through a ref: a parent passing
+    // a fresh arrow each render must not rebuild the controller, which would
+    // wipe the typed name and orphan an in-flight submit.
+    const onCreateRef = useRef(onCreate);
+
+    useEffect(() => {
+        onCreateRef.current = onCreate;
+    }, [onCreate]);
+
+    const [form, controller] = useForm(() => createProjectFormController(async (name) => onCreateRef.current(name)));
 
     if (!rows) {
         return (

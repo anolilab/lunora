@@ -5,10 +5,8 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 /**
  * One project per framework: the Svelte port needs its own transform, and it
  * cannot share a pipeline with React. `core/` needs no plugin at all (plain
- * TypeScript, no framework import), so it rides along with React.
- *
- * That `core/` compiles with no plugin is the architecture's smoke test: the
- * day it needs one, logic has leaked into a view.
+ * TypeScript, no framework import), so it rides along with React. Keeping it
+ * framework-free is `eslint.config.js`'s job, not this file's.
  */
 export default getVitestConfig({
     test: {

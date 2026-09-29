@@ -54,4 +54,4 @@ const mapError = (error: unknown): string => {
     return "Something went wrong.";
 };
 
-export { errorCode, mapError, MESSAGES };
+export { mapError };

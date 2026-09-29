@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Plan } from "../../src/core/billing";
-import { currentPlan, formatMoney, isEntitled, isEntitling, pricingRows, seatUsage, subscriptionNotice } from "../../src/core/billing";
+import { currentPlan, formatMoney, isEntitled, isEntitling, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice } from "../../src/core/billing";
 import type { SubscriptionLike } from "../../src/core/types";
 
 const PLANS: ReadonlyArray<Plan> = [
@@ -38,9 +38,14 @@ const subscription = (overrides: Partial<SubscriptionLike> = {}): SubscriptionLi
 };
 
 describe("entitlement", () => {
-    it("keeps a past-due tenant entitled — a dunning window is not a churn event", () => {
-        expect(isEntitling(subscription({ state: "past_due" }))).toBe(true);
-        expect(currentPlan(PLANS, subscription({ state: "past_due" }))?.id).toBe("pro");
+    it("does not entitle a past-due tenant, matching @lunora/payment's ACTIVE_STATES", () => {
+        expect(isEntitling(subscription({ state: "past_due" }))).toBe(false);
+        expect(currentPlan(PLANS, subscription({ state: "past_due" }))?.id).toBe("free");
+    });
+
+    it("matches a plan billed as an add-on in priceIds, like the server's priceIdsOf", () => {
+        expect(currentPlan(PLANS, subscription({ priceId: "price_base", priceIds: ["price_base", "price_scale"] }))?.id).toBe("scale");
+        expect(isEntitled(PLANS, subscription({ priceId: "price_base", priceIds: ["price_base", "price_scale"] }), "sso")).toBe(true);
     });
 
     it("entitles a trial, because a trial that does not entitle is a demo", () => {
@@ -85,6 +90,13 @@ describe("seatUsage", () => {
     it("survives a zero-seat plan without dividing by it", () => {
         expect(seatUsage({ ...PLANS[0]!, seats: 0 }, 3).ratio).toBe(1);
     });
+
+    it("words the usage and the overage for both ports", () => {
+        expect(seatSummary(seatUsage(PLANS[1], 8))).toBe("8 of 10 seats used");
+        expect(seatSummary(seatUsage(PLANS[2], 400))).toBe("400 members, unmetered");
+        expect(seatAlert(seatUsage(PLANS[1], 8))).toBeUndefined();
+        expect(seatAlert(seatUsage(PLANS[1], 11))).toContain("over its seat allowance");
+    });
 });
 
 describe("pricingRows", () => {
@@ -93,6 +105,14 @@ describe("pricingRows", () => {
             ["free", false, false],
             ["pro", true, false],
             ["scale", false, true],
+        ]);
+    });
+
+    it("carries a priceId on exactly the purchasable rows", () => {
+        expect(pricingRows(PLANS, subscription()).map((row) => (row.purchasable ? row.priceId : undefined))).toStrictEqual([
+            undefined,
+            undefined,
+            "price_scale",
         ]);
     });
 

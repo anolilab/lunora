@@ -6,11 +6,15 @@
  */
 
 const WHITESPACE = /\s+/u;
+/** Runs of `_`/`-` in an identifier, read as spaces when it is shown to a person. */
 const SEPARATORS = /[_-]+/gu;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+/** The `YYYY-MM-DD` a timestamp falls in — the grouping key for a feed. */
+const dayKey = (timestamp: number): string => new Date(timestamp).toISOString().slice(0, 10);
 
 /** Elapsed time in words — "just now", "4m ago", "3h ago", "2d ago" — then an absolute date. */
 const relativeTime = (timestamp: number, now: number): string => {
@@ -32,11 +36,8 @@ const relativeTime = (timestamp: number, now: number): string => {
         return `${Math.floor(elapsed / DAY).toString()}d ago`;
     }
 
-    return new Date(timestamp).toISOString().slice(0, 10);
+    return dayKey(timestamp);
 };
-
-/** The `YYYY-MM-DD` a timestamp falls in — the grouping key for a feed. */
-const dayKey = (timestamp: number): string => new Date(timestamp).toISOString().slice(0, 10);
 
 /** Up to two initials for an avatar fallback. Never more: three stops reading as initials. */
 const initials = (name: string): string =>
@@ -54,4 +55,4 @@ const planLabel = (plan: string): string => {
     return spaced === "" ? "Free" : spaced.charAt(0).toUpperCase() + spaced.slice(1);
 };
 
-export { dayKey, initials, planLabel, relativeTime };
+export { dayKey, initials, planLabel, relativeTime, SEPARATORS };

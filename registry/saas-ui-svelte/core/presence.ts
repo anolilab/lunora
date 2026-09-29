@@ -21,8 +21,6 @@ interface PresenceMemberLike {
 }
 
 interface RosterEntry {
-    /** How many tabs this person has open. Worth showing nowhere; worth knowing when debugging. */
-    connections: number;
     /** `true` for the viewer's own entry, so a view can label it "you". */
     isSelf: boolean;
     /** Stable key — the user id when known, else the session id. */
@@ -67,14 +65,12 @@ const presenceRoster = (members: ReadonlyArray<PresenceMemberLike>, currentUserI
         const existing = byPerson.get(key);
 
         if (existing) {
-            existing.connections += 1;
             existing.lastSeen = Math.max(existing.lastSeen, member.lastSeen);
 
             continue;
         }
 
         byPerson.set(key, {
-            connections: 1,
             isSelf: member.userId !== undefined && member.userId === currentUserId,
             key,
             lastSeen: member.lastSeen,

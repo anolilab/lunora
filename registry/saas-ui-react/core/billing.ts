@@ -31,17 +31,15 @@ interface Plan {
 }
 
 /**
- * States that entitle a tenant to their plan. `past_due` is deliberately IN:
- * cutting off a customer the moment a card retry fails is how a dunning
- * window becomes a churn event. `paused` and `canceled` are out.
- *
- * `trialing` is in for the obvious reason, and that is the whole point of a
- * trial — a trial that does not entitle is a demo.
+ * States that entitle a tenant to their plan — exactly `@lunora/payment`'s
+ * `ACTIVE_STATES`, so the screen never renders a plan the server's `check`
+ * would refuse. A `past_due` tenant sees the payment notice, not the feature.
  */
-const ENTITLING_STATES = new Set(["active", "past_due", "trialing"]);
+const ENTITLING_STATES: ReadonlySet<string> = new Set(["active", "trialing"]);
 
 /** Whether a subscription currently entitles its tenant to anything at all. */
-const isEntitling = (subscription: SubscriptionLike | undefined): boolean => subscription !== undefined && ENTITLING_STATES.has(subscription.state);
+const isEntitling = (subscription: SubscriptionLike | undefined): subscription is SubscriptionLike =>
+    subscription !== undefined && ENTITLING_STATES.has(subscription.state);
 
 /**
  * The plan a tenant is actually on. Falls back to the catalog's free plan (the
@@ -51,7 +49,10 @@ const isEntitling = (subscription: SubscriptionLike | undefined): boolean => sub
  */
 const currentPlan = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined): Plan | undefined => {
     if (isEntitling(subscription)) {
-        const matched = plans.find((plan) => plan.priceId !== undefined && plan.priceId === subscription?.priceId);
+        // Every price the subscription bills, like the server's `priceIdsOf`: a
+        // multi-item subscription carries its add-ons in `priceIds`.
+        const billed = new Set(subscription.priceIds ?? [subscription.priceId]);
+        const matched = plans.find((plan) => plan.priceId !== undefined && billed.has(plan.priceId));
 
         if (matched) {
             return matched;
@@ -101,6 +102,17 @@ const seatUsage = (plan: Plan | undefined, memberCount: number): SeatUsage => {
     return { limit, over: memberCount > limit, ratio: limit === 0 ? 1 : Math.min(1, memberCount / limit), used: memberCount };
 };
 
+/** The seat line both ports render — "8 of 10 seats used", or "8 members, unmetered". */
+const seatSummary = (usage: SeatUsage): string =>
+    usage.limit === undefined ? `${usage.used.toString()} members, unmetered` : `${usage.used.toString()} of ${usage.limit.toString()} seats used`;
+
+/** The alert for an organisation over its allowance; `undefined` while it fits. */
+const seatAlert = (usage: SeatUsage): string | undefined =>
+    usage.over ? "This organization is over its seat allowance. Upgrade, or remove members." : undefined;
+
+/** What `Gated` shows in place of a feature the plan lacks, when the caller passes no fallback. */
+const notEntitledLabel = (feature: string): string => `Your plan does not include ${feature}.`;
+
 /**
  * Format a price for display. Falls back to a plain decimal when the runtime
  * has no ICU data (workerd builds without it), because a price rendered as
@@ -116,27 +128,24 @@ const formatMoney = (amountMinor: number, currency: string, locale?: string): st
     }
 };
 
+/** One pricing-table row. Only a purchasable row carries a `priceId`, so a view never has to assert one. */
+type PricingRow = { current: boolean; plan: Plan; price: string } & ({ priceId: string; purchasable: true } | { purchasable: false });
+
 /** The pricing table's rows: the catalog, marked with which one is current. */
-const pricingRows = (
-    plans: ReadonlyArray<Plan>,
-    subscription: SubscriptionLike | undefined,
-): ReadonlyArray<{ current: boolean; plan: Plan; price: string; priceId?: string; purchasable: boolean }> => {
+const pricingRows = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined): ReadonlyArray<PricingRow> => {
     const current = currentPlan(plans, subscription);
 
     return plans.map((plan) => {
-        return {
+        const base = {
             current: plan.id === current?.id,
             plan,
             price: plan.priceMinor === 0 ? "Free" : formatMoney(plan.priceMinor, plan.currency),
-            // Carried rather than re-read from `plan` in the view: reaching back
-            // for it needs a non-null assertion to satisfy `purchasable`, and an
-            // assertion is how the two drift apart later.
-            priceId: plan.priceId,
-            // A plan is purchasable when it has a provider price and is not the one
-            // you are already on. Downgrades go through the portal, which is the
-            // provider's job — proration is not a thing an app should reimplement.
-            purchasable: plan.priceId !== undefined && plan.id !== current?.id,
         };
+
+        // A plan is purchasable when it has a provider price and is not the one
+        // you are already on. Downgrades go through the portal, which is the
+        // provider's job — proration is not a thing an app should reimplement.
+        return plan.priceId !== undefined && !base.current ? { ...base, priceId: plan.priceId, purchasable: true } : { ...base, purchasable: false };
     });
 };
 
@@ -170,5 +179,5 @@ const subscriptionNotice = (subscription: SubscriptionLike | undefined): string 
     }
 };
 
-export type { Plan, SeatUsage };
-export { currentPlan, ENTITLING_STATES, formatMoney, isEntitled, isEntitling, pricingRows, seatUsage, subscriptionNotice };
+export type { Plan, PricingRow, SeatUsage };
+export { currentPlan, formatMoney, isEntitled, isEntitling, notEntitledLabel, pricingRows, seatAlert, seatSummary, seatUsage, subscriptionNotice };

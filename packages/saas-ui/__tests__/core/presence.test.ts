@@ -23,7 +23,7 @@ describe("presenceRoster", () => {
         );
 
         expect(roster.total).toBe(1);
-        expect(roster.entries[0]).toMatchObject({ connections: 2, lastSeen: NOW, name: "Ada" });
+        expect(roster.entries[0]).toMatchObject({ lastSeen: NOW, name: "Ada" });
     });
 
     it("keys anonymous viewers by tab — merging two strangers is worse than showing two", () => {

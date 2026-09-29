@@ -5,7 +5,7 @@
  * which is the argument for them being pure functions over the rows rather than
  * a controller holding derived state. There is nothing to invalidate.
  */
-import { dayKey, relativeTime } from "./format";
+import { dayKey, relativeTime, SEPARATORS } from "./format";
 import type { ActivityRow } from "./types";
 
 /** One rendered feed entry. */
@@ -32,8 +32,6 @@ interface ActivityGroup {
  * `project.created` at the user — a feed is worth less than nothing when it
  * shows identifiers.
  */
-const SEPARATORS = /[_-]+/gu;
-
 const PHRASES: Record<string, string> = {
     "member.invited": "invited a member",
     "member.joined": "joined the organization",
@@ -94,4 +92,4 @@ const groupActivityByDay = (rows: ReadonlyArray<ActivityRow>, now: number): Read
 };
 
 export type { ActivityEntry, ActivityGroup };
-export { describeAction, describeActivity, groupActivityByDay };
+export { describeActivity, groupActivityByDay };

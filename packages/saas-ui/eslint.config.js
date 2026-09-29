@@ -48,6 +48,24 @@ export default createConfig(
             "sonarjs/void-use": "off",
         },
     },
+    // `core/` is the part every port shares, so it must stay framework-free. This
+    // is the rule that enforces it; nothing else does.
+    {
+        files: ["src/core/**/*.ts"],
+        rules: {
+            "no-restricted-imports": [
+                "error",
+                {
+                    patterns: [
+                        {
+                            group: ["react", "react/*", "react-dom", "react-dom/*", "svelte", "svelte/*"],
+                            message: "core/ is shared by every port and must not import a framework — put this in a view.",
+                        },
+                    ],
+                },
+            ],
+        },
+    },
     {
         files: ["src/svelte/**/*.{ts,svelte}", "__tests__/svelte/**/*.{ts,svelte}"],
         languageOptions: { parserOptions: { project: "./tsconfig.svelte.json", tsconfigRootDir: import.meta.dirname } },

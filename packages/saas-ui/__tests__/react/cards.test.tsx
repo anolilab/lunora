@@ -1,27 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ActivityRow, OrganizationRow, ProjectRow } from "../../src/core";
 import { ActivityFeed } from "../../src/react/activity";
 import { AdminOrganizations } from "../../src/react/admin";
 import { OverviewStats } from "../../src/react/overview";
 import { ProjectsCard } from "../../src/react/projects";
-
-const CREATED_SENTENCE = /created the project Website/u;
-const NOW = Date.UTC(2026, 8, 11, 12, 0, 0);
-const HOUR = 3_600_000;
-
-const project = (name: string, overrides: Partial<ProjectRow> = {}): ProjectRow => {
-    return {
-        _creationTime: NOW,
-        _id: `p-${name}`,
-        createdBy: "u1",
-        name,
-        organizationId: "org1",
-        slug: name.toLowerCase(),
-        ...overrides,
-    };
-};
+import { activity, CREATED_SENTENCE, HOUR, noop, NOW, organization, project } from "../cards.fixtures";
 
 describe("overviewStats", () => {
     it("explains an empty tenant instead of showing it four zeroes", () => {
@@ -45,8 +29,6 @@ describe("overviewStats", () => {
 });
 
 describe("projectsCard", () => {
-    const noop = async (): Promise<void> => {};
-
     it("hides the write controls rather than disabling them", () => {
         render(<ProjectsCard canWrite={false} onArchive={noop} onCreate={noop} rows={[project("Alpha")]} />);
 
@@ -75,6 +57,24 @@ describe("projectsCard", () => {
         });
     });
 
+    it("keeps the typed name across a new onCreate, and submits into the latest one", async () => {
+        const first = vi.fn(noop);
+        const latest = vi.fn(noop);
+        const { rerender } = render(<ProjectsCard canWrite onArchive={noop} onCreate={first} rows={[]} />);
+
+        fireEvent.change(screen.getByPlaceholderText("Website redesign"), { target: { value: "Website" } });
+        rerender(<ProjectsCard canWrite onArchive={noop} onCreate={latest} rows={[]} />);
+
+        expect(screen.getByPlaceholderText("Website redesign")).toHaveValue("Website");
+
+        fireEvent.click(screen.getByText("Create"));
+        await vi.waitFor(() => {
+            expect(latest).toHaveBeenCalledWith("Website");
+        });
+
+        expect(first).not.toHaveBeenCalled();
+    });
+
     it("filters by the search box and hides archived rows by default", () => {
         render(<ProjectsCard canWrite={false} onArchive={noop} onCreate={noop} rows={[project("Alpha"), project("Beta", { archivedAt: NOW })]} />);
 
@@ -96,21 +96,8 @@ describe("projectsCard", () => {
 });
 
 describe("activityFeed", () => {
-    const row = (action: string, createdAt: number, meta?: Record<string, unknown>): ActivityRow => {
-        return {
-            _creationTime: createdAt,
-            _id: `a-${createdAt.toString()}`,
-            action,
-            actorId: "u1",
-            createdAt,
-            meta,
-            organizationId: "org1",
-            subjectType: "project",
-        };
-    };
-
     it("renders a sentence, not an identifier", () => {
-        render(<ActivityFeed now={NOW} resolveActor={() => "Ada Lovelace"} rows={[row("project.created", NOW - HOUR, { name: "Website" })]} />);
+        render(<ActivityFeed now={NOW} resolveActor={() => "Ada Lovelace"} rows={[activity("project.created", NOW - HOUR, { name: "Website" })]} />);
 
         expect(screen.getByText(CREATED_SENTENCE)).toBeInTheDocument();
         expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
@@ -125,20 +112,6 @@ describe("activityFeed", () => {
 });
 
 describe("adminOrganizations", () => {
-    const organization = (name: string, plan: string, seats: number): OrganizationRow => {
-        return {
-            _creationTime: NOW,
-            _id: `o-${name}`,
-            name,
-            organizationId: `org-${name}`,
-            plan,
-            seats,
-            slug: name.toLowerCase(),
-            status: "active",
-            updatedAt: NOW,
-        };
-    };
-
     it("totals seats across tenants and filters by plan", () => {
         render(<AdminOrganizations now={NOW} rows={[organization("Acme", "pro", 12), organization("Globex", "free", 3)]} />);
 

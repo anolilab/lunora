@@ -2,7 +2,7 @@
     import type { Snippet } from "svelte";
 
     import type { Plan, SubscriptionLike } from "../core";
-    import { isEntitled } from "../core";
+    import { isEntitled, notEntitledLabel } from "../core";
     import Empty from "./Empty.svelte";
 
     /**
@@ -31,5 +31,5 @@
 {:else if fallback}
     {@render fallback()}
 {:else}
-    <Empty title={`Your plan does not include ${feature}.`} />
+    <Empty title={notEntitledLabel(feature)} />
 {/if}
