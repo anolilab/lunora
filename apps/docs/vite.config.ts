@@ -192,7 +192,12 @@ export default defineConfig(async ({ mode }) => {
             // call behind every client-side navigation. Prerendered pages hid it,
             // because `preferStatic` serves those without touching the function —
             // which is why a hard refresh worked and clicking a link did not.
-            noExternal: ["@c15t/react", "@c15t/ui"],
+            //
+            // `@icons-pack/react-simple-icons` fails the same way: the site
+            // imports it through `icons/*.mjs` deep paths, resolved by the same
+            // kind of wildcard `exports` entry, so the tracer left the whole
+            // package out and every client-side navigation 502'd.
+            noExternal: ["@c15t/react", "@c15t/ui", "@icons-pack/react-simple-icons"],
             optimizeDeps: {
                 exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-wasm"],
                 include: ["react", "react-dom"],
