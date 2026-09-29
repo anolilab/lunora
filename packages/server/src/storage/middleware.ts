@@ -302,7 +302,7 @@ const selectsBucket = (bucket: (name: string) => WrappableStorage, name: string)
  * a runtime object. The generated `StorageBucketName` union is NOT that set (it
  * is seeded from `v.storage()` columns and from the rules themselves), so it
  * cannot be the check — see the bucket-union builder in `@lunora/codegen`'s
- * `emit.ts`, whose docblock spells out why.
+ * `emit/server.ts`, whose docblock spells out why.
  */
 const assertRuleBucketsReachable = (storage: WrappableStorage, ruleBuckets: Iterable<string>): void => {
     const bucketName = storage.bucketName ?? "default";

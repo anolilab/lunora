@@ -30,7 +30,7 @@ const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url))
  * declared return-type text out of `component.ts`, unwrapped of its outer
  * `Promise<…>` — mirroring codegen's own Promise-unwrap convention
  * (`unwrapHandlerReturn` in `discover/functions.ts`) so the comparison lines up
- * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
+ * with what `syntheticAgentApiFunctions` hand-pins in `emit/api.ts`.
  */
 const sourceReturnTypeOf = (constantName: string): string => {
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
@@ -84,7 +84,7 @@ interface ArgShape {
  * Reduce a runtime `v.*` validator to its {@link ArgShape} by reading the same
  * `kind` + `_meta` surface codegen's IR mirrors (`inner` for `optional`,
  * `members`/`value` for `union`/`literal`). Lets the drift guard compare the
- * runtime component's validators against the shape emit.ts hand-pins.
+ * runtime component's validators against the shape emit/api.ts hand-pins.
  */
 const describeValidator = (validator: unknown): ArgShape => {
     const node = validator as { _meta?: Record<string, unknown>; kind: string };
@@ -621,7 +621,7 @@ describe("auto-registered agent runtime functions", () => {
         // declared `: Promise<T>` annotation straight out of the `@lunora/agent`
         // SOURCE instead (syntactic, no type-checker pass) and assert it against
         // the same literal strings `syntheticAgentApiFunctions` hand-pins in
-        // emit.ts (see the "exposes the public thread queries…" test), so a
+        // emit/api.ts (see the "exposes the public thread queries…" test), so a
         // return-shape change in component.ts fails here instead of silently
         // going stale in the generated `api.ts`.
         expect(sourceReturnTypeOf("agentMessages")).toBe("Record<string, unknown>[]");

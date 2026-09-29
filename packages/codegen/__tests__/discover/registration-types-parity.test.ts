@@ -13,7 +13,7 @@ const discoverer = join(here, "..", "..", "src", "discover", "unregistered-proce
  * is not a registration a user exports from `lunora/`.
  */
 const NOT_REGISTRATIONS = new Set([
-    // Shapes of codegen's OWN generated metadata (emit.ts), not user-facing APIs.
+    // Shapes of codegen's OWN generated metadata (emit/), not user-facing APIs.
     "RegisteredDataMigration",
     // The base interface the procedure aliases are built from — never a terminal on its own.
     "RegisteredFunction",

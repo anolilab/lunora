@@ -3,7 +3,7 @@
  * the `ctx.*` helpers and `defineApp` builder methods each backed by an
  * `@lunora/*` add-on. Before this table the same capability was described four
  * times, each drifting independently: the code-usage probe
- * (`discover/feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
+ * (`discover/feature-usage.ts`), the typed `ctx.*` field seam (`emit/server.ts`), the
  * fluent `defineApp` builder method (`emit-app.ts`), and the `has*` flag
  * plumbing (`run-codegen.ts`). Adding a capability now means one row here.
  *
@@ -16,7 +16,7 @@
  *
  * Deliberately **out of scope** (kept in their own bespoke emitters, so they do
  * NOT live here): the umbrella-aware `flags` and the synchronous `access` facade
- * (both special-cased in `emit.ts`), and the per-declaration emitters for
+ * (both special-cased in `emit/`), and the per-declaration emitters for
  * `ai` / `payments` / `vectors` / `containers` / `workflows` / `queues` /
  * `identity` / `env`. Those keep their own construction logic — this table owns
  * only the flat, uniform metadata the four lists were duplicating. A capability
@@ -27,7 +27,7 @@
 /** Determinism tier a capability's `ctx.*` field rides. `"every"` = query+mutation+action; `"action"` = ActionCtx only (external, non-deterministic I/O). */
 type CapabilityTier = "action" | "every";
 
-/** The typed `ctx.*` field seam (`emit.ts`): the exact interface fragment + which ctx tier(s) it rides. */
+/** The typed `ctx.*` field seam (`emit/server.ts`): the exact interface fragment + which ctx tier(s) it rides. */
 interface ServerContextFieldFacet {
     /** The exact fragment spliced into the emitted ctx interface (leading `\n`, `readonly …`). One source of truth for the bytes. */
     field: string;
@@ -72,7 +72,7 @@ interface CapabilityDescriptor {
      * `v.storage()` column, a storage rule) are handled explicitly there.
      */
     requiredPackage?: string;
-    /** The typed `ctx.*` field seam facet — present only for the uniform binding capabilities emitted inline in `emit.ts` (NOT `flags`/`access`). */
+    /** The typed `ctx.*` field seam facet — present only for the uniform binding capabilities emitted inline in `emit/server.ts` (NOT `flags`/`access`). */
     serverCtxField?: ServerContextFieldFacet;
 }
 
@@ -90,7 +90,7 @@ const CAPABILITY_ROWS = [
     // middleware never trips the global `ctx.access` wiring.
     // A handler reading `ctx.access` is the signal that wires it onto every ctx.
     // `access` has a synchronous facade type, so its ctx field stays bespoke in
-    // `emit.ts` (no `serverCtxField` here).
+    // `emit/` (no `serverCtxField` here).
     { contextProperty: "access", key: "access", moduleSpecifier: "@lunora/cloudflare-access", requiredPackage: "@lunora/cloudflare-access" },
     {
         appMethod: { configKey: "ai", doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).", method: "ai" },
@@ -188,7 +188,7 @@ const CAPABILITY_ROWS = [
     // app declares `lunora/notify.ts`, which imports `@lunora/notify` and is
     // itself scanned, so a `ctx.push`-only handler is still caught by the import
     // arm (and by the declared-dependency arm in `buildStudioFeatures`). Its ctx
-    // fields are hand-wired in `emit.ts` off the `lunora/notify.ts` signal, so no
+    // fields are hand-wired in `emit/` off the `lunora/notify.ts` signal, so no
     // `serverCtxField` here — declaring one would emit the fields twice.
     { contextProperty: "notify", key: "notify", moduleSpecifier: "@lunora/notify" },
     {
@@ -201,7 +201,7 @@ const CAPABILITY_ROWS = [
     // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
     // settles real USDC over the network per request. Like `payments`, its ctx
     // field is bespoke (a lazily-built, per-run-metered rail), so no
-    // `serverCtxField` — `emit.ts` hand-wires it.
+    // `serverCtxField` — `emit/` hand-wires it.
     {
         appMethod: {
             configKey: "x402",
@@ -288,7 +288,7 @@ type AppMethodKey = Extract<(typeof CAPABILITY_ROWS)[number], { appMethod: unkno
 const CAPABILITIES: ReadonlyArray<CapabilityDescriptor & { readonly key: CapabilityKey }> = CAPABILITY_ROWS;
 
 /**
- * The typed `ctx.*` field seam keyed by capability id — for `emit.ts`, which
+ * The typed `ctx.*` field seam keyed by capability id — for `emit/server.ts`, which
  * gates each on the matching `has*` flag and splices `field` into the ctx
  * interfaces. Only the uniform binding capabilities appear (NOT `flags`/`access`,
  * whose fields stay bespoke).

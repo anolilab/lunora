@@ -4,7 +4,7 @@ import type { ValidatorIR } from "./ir";
  * Whether a procedure's declared `.output(validator)` — rather than its handler's
  * inferred return type — is what the emitted `FunctionReference` carries.
  *
- * `emit.ts`'s `referenceReturnType` renders from this, and discovery asks it
+ * `emit/qualifiers.ts`'s `referenceReturnType` renders from this, and discovery asks it
  * before reporting a handler return that erased to `unknown`: an erasure the
  * declared output replaces never reaches `_generated/`, so reporting it would
  * name a type that is not in the output and prescribe `.output(...)` as a fix

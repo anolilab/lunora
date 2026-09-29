@@ -106,7 +106,7 @@ const COUNTER_ACTION_PATHS = new Set([
  * A shard whose handler bumps a counter INSIDE a transaction and commits the
  * mutation-replay dedup row atomically with it via `commitMutationBookkeeping`
  * — exactly the pattern generated `handleRpc` mutation branches use
- * (`packages/codegen/src/emit.ts`, the `registered.kind === "mutation"`
+ * (`packages/codegen/src/emit/shard-dispatch.ts`, the `registered.kind === "mutation"`
  * branch), and NOT the post-`handleRpc` `recordPostDispatchBookkeeping`
  * fallback that exists for actions/queries. Real generated mutations commit
  * the dedup row inside the handler's own transaction, so this is the shape

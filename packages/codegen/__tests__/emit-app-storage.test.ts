@@ -93,12 +93,13 @@ describe("emitApp — storage bucket factory", () => {
     // A query re-runs on subscription refreshes with no request behind it, and
     // the reactive cache does not key on the host, so it must never see one.
     it("hands the request origin to non-query synchronous dispatches only", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
         expect(shard).toContain('const requestOrigin = contextKind !== "query" && options.identity === undefined ? this.getCurrentOrigin() : undefined;');
-        expect(shard).toContain("config.storage?.(env, requestOrigin)");
+        expect(shard).toContain("config.storage?.(env, origin)");
+        expect(shard).toContain("const storage = makeStorage(requestOrigin);");
         // `ctx.origin` is the same gated value, so a handler signing its own URLs
         // gets exactly what `ctx.storage` would, and a query gets nothing.
         expect(shard).toContain("origin: requestOrigin,");

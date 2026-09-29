@@ -1996,7 +1996,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
      * `.global()` table's entry is bound to the D1 `globalDb` writer and
      * re-binding it would query the wrong backend.
      *
-     * That premise is false. `packages/codegen/src/emit.ts` binds EVERY table's
+     * That premise is false. `packages/codegen/src/emit/shard.ts` binds EVERY table's
      * facade entry through the one shard ctx-db, `.global()` included, and says
      * why in its own comment: `createShardCtxDb` routes global ops to D1
      * internally and stamps the subscription hooks, so binding a global facade

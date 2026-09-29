@@ -86,7 +86,7 @@ export { assertShapeShardable } from "@lunora/shard-engine";
 
 // Emitter-conditional: the generated shard imports `WhereInput` when the project
 // declares shapes and the two source `*Like`s when it declares `.source()` tables
-// (`packages/codegen/src/emit.ts:4204`, `:4300`).
+// (`packages/codegen/src/emit/shard.ts`).
 export type { ExternalSourceLike, SourceClientLike, WhereInput } from "@lunora/shard-engine";
 
 // Observability is NOT re-exported from here. It lives in `@lunora/observability`

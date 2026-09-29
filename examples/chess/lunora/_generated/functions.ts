@@ -291,11 +291,15 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
     // The fallback covers a context that is not a shard dispatch (`runMutation` is
     // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
     // no transaction to join in that case, so a direct call is all there is.
-    if (registered.kind === "mutation") {
-        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+    //
+    // A query is routed through `ctx.runQuery` for the same reason: that is what
+    // hands it a query view of a mutation's or action's ctx (no request origin,
+    // query-guarded `run*`) instead of the caller's own.
+    if (registered.kind === "mutation" || registered.kind === "query") {
+        const run = (context as { runMutation?: unknown; runQuery?: unknown })[registered.kind === "mutation" ? "runMutation" : "runQuery"];
 
-        if (typeof runMutation === "function") {
-            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        if (typeof run === "function") {
+            return (await run.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
         }
     }
 
