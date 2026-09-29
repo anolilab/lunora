@@ -58,10 +58,18 @@ compiling cleanly.
 
 ## The tenant comes from the identity, never from an argument
 
-No function here takes an `organizationId`. They read
-`ctx.auth.activeOrganizationId`, which is declared in `lunora/identity.ts` and
-validated at the runtime trust boundary before it becomes `ctx.auth`. A
-client-supplied tenant id is a tenant-escape bug with a type annotation on it.
+No function here takes an `organizationId`. They read the
+`activeOrganizationId` claim through `ctx.auth.getIdentity()`; it is declared in
+`lunora/identity.ts` and validated at the runtime trust boundary before it
+becomes `ctx.auth`. A client-supplied tenant id is a tenant-escape bug with a
+type annotation on it.
+
+The client still names the shard — that is how a request reaches a Durable
+Object — so org-scoped calls pass `{ shardKey: organizationId }`, read from
+`saas.me` (which runs on the root shard). Your Worker's `authorizeShard` is what
+makes that safe: it admits a caller to their active organisation's shard and the
+root, nothing else. Leave the `shardKey` off and every tenant lands in `__root__`
+together.
 
 That is also why the contract sets `onInvalid: "reject"`: a malformed claim set
 fails closed with a 401 instead of silently downgrading to anonymous, which in a
@@ -72,25 +80,34 @@ organisation" — a bug that reads as data loss.
 
 1. **Re-export the functions** from your `lunora/` entry so codegen emits
    `api.saas.*`.
-2. **Resolve the identity** in your Worker's `createWorker(...)` call. The
-   snippet is in `lunora/identity.ts`; without it, every org-scoped function
-   fails closed with `UNPROCESSABLE`.
-3. **Enable better-auth's `organization()` and `admin()` plugins** in
-   `lunora/auth/index.ts` — they own the records this item projects.
-4. **Call `internal.saas.syncOrganization`** after an organisation is created,
-   renamed or changes plan, so the admin projection stays current.
+2. **Resolve the identity** in your Worker — on a `defineApp()` worker, in
+   `.extend((env) => ({ resolveIdentity }))` after `.auth(...)`. The snippet is
+   in `lunora/identity.ts`; without it, every org-scoped function fails closed
+   with `UNPROCESSABLE`.
+3. **Gate the shards** with `authorizeShard`: a caller may enter
+   `identity.activeOrganizationId`'s shard and `__root__`, nothing else.
+4. **Enable better-auth's `organization()` and `admin()` plugins** in
+   `lunora/auth/index.ts` — they own the records this item projects — in the
+   options both the request and the migration instance are built from.
+5. **Call `internal.saas.syncOrganization`** from the organization plugin's
+   `organizationHooks` (create, update, delete, member added/removed) so the
+   admin projection stays current. From Worker code, that is
+   `createShardClient(env.SHARD).call(internal.saas.syncOrganization, …)`.
 
 ## Functions
 
-| Function                         | Kind               | Scope                                  |
-| -------------------------------- | ------------------ | -------------------------------------- |
-| `saas.overview`                  | `query` (live)     | The tenant's projects + activity tail  |
-| `saas.listProjects`              | `query` (live)     | The tenant's projects                  |
-| `saas.listActivity`              | `query` (live)     | The tenant's activity feed             |
-| `saas.createProject`             | `mutation`         | Writer roles (`admin`, `owner`)        |
-| `saas.archiveProject`            | `mutation`         | Writer roles                           |
-| `saas.listOrganizations`         | `query` (live)     | Platform admins — reads the projection |
-| `internal.saas.syncOrganization` | `internalMutation` | Server only                            |
+| Function                         | Kind               | Scope                                                  |
+| -------------------------------- | ------------------ | ------------------------------------------------------ |
+| `saas.me`                        | `query` (live)     | The caller's user id, active organisation, role, seats |
+| `saas.overview`                  | `query` (live)     | The tenant's projects + activity tail                  |
+| `saas.createProject`             | `mutation`         | Writer roles (`admin`, `owner`)                        |
+| `saas.archiveProject`            | `mutation`         | Writer roles                                           |
+| `saas.listOrganizations`         | `query` (live)     | Platform admins — reads the projection                 |
+| `internal.saas.syncOrganization` | `internalMutation` | Server only                                            |
+
+Run `saas.me` on the root shard and everything else in the table with
+`{ shardKey: organizationId }` — except `listOrganizations`, which reads the
+`.global()` projection and works from either.
 
 Every query is a subscription: create a project in one tab and the other tabs'
 project lists and activity feeds update without a reload. That is the part no

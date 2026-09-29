@@ -8,6 +8,12 @@
  * fan-out are consequences of that line rather than things the app has to
  * enforce — there is no `WHERE organizationId = ?` to forget.
  *
+ * The line says where the rows belong; the CLIENT still says where a call goes.
+ * Every org-scoped call passes `{ shardKey: organizationId }` (read it from
+ * `saas.me`), and the Worker's `authorizeShard` admits a caller to their own
+ * organisation's shard only. Drop the `shardKey` and the call lands on
+ * `__root__`, where every tenant's rows would sit side by side.
+ *
  * The cost is stated up front, because it shapes every admin screen: a query
  * runs inside ONE shard, so nothing here can list across organisations. That is
  * what `organizations` is for. It is `.global()` (D1-backed), a projection of
