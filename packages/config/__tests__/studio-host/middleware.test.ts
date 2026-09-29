@@ -7,6 +7,29 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createStudioMiddleware, isNonLoopbackHost, requestPathname, STUDIO_PATH, studioMountPath } from "../../src/studio-host/middleware";
 
+/**
+ * The prebuilt `@lunora/studio` bundle, stood in so the asset routes are tested
+ * against a known bundle rather than whatever the workspace last built.
+ */
+const assets = vi.hoisted(() => {
+    return { available: true, chunks: new Map([["studio.js", "console.log('studio');"]]) };
+});
+
+vi.mock(import("../../src/studio-host/assets"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        loadStudioAssets: () => (assets.available ? { script: Buffer.from("studio"), styles: Buffer.from(".studio{}") } : undefined),
+        readStandaloneAsset: (fileName: string) => {
+            const chunk = assets.chunks.get(fileName);
+
+            return chunk === undefined ? undefined : Buffer.from(chunk);
+        },
+        studioAssetsStamp: () => 1,
+    };
+});
+
 /* eslint-disable sonarjs/no-hardcoded-ip -- loopback/LAN fixtures for the bind and transport checks; no real connection is made */
 
 const roots: string[] = [];
@@ -19,8 +42,8 @@ const projectRoot = (): string => {
     return root;
 };
 
-const request = (url: string, remoteAddress = "127.0.0.1"): IncomingMessage =>
-    ({ headers: { host: "localhost:3000" }, method: "GET", socket: { remoteAddress }, url }) as unknown as IncomingMessage;
+const request = (url: string, remoteAddress = "127.0.0.1", extra: { headers?: Record<string, string>; method?: string } = {}): IncomingMessage =>
+    ({ headers: { host: "localhost:3000", ...extra.headers }, method: extra.method ?? "GET", socket: { remoteAddress }, url }) as unknown as IncomingMessage;
 
 interface CapturedResponse {
     body: () => string;
@@ -113,6 +136,87 @@ describe(createStudioMiddleware, () => {
         middleware(request("/__lunora", "192.168.1.20"), captured.response, vi.fn<() => void>());
 
         expect(captured.status()).toBe(403);
+    });
+});
+
+describe("createStudioMiddleware assets and endpoints", () => {
+    afterEach(() => {
+        assets.available = true;
+
+        for (const root of roots.splice(0)) {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("serves the stylesheet and the studio entry", () => {
+        expect.assertions(4);
+
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: projectRoot() });
+        const styles = capture();
+        const script = capture();
+
+        middleware(request("/__lunora/styles.css"), styles.response, vi.fn<() => void>());
+        middleware(request("/__lunora/studio.js"), script.response, vi.fn<() => void>());
+
+        expect(styles.status()).toBe(200);
+        expect(styles.body()).toBe(".studio{}");
+        expect(script.status()).toBe(200);
+        expect(script.body()).toContain("studio");
+    });
+
+    it("404s an unknown module instead of handing it the HTML document", () => {
+        expect.assertions(2);
+
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: projectRoot() });
+        const captured = capture();
+
+        middleware(request("/__lunora/chunk-gone.js"), captured.response, vi.fn<() => void>());
+
+        expect(captured.status()).toBe(404);
+        expect(captured.body()).not.toContain("<html");
+    });
+
+    it("answers a matching ETag with 304", () => {
+        expect.assertions(1);
+
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: projectRoot() });
+        const captured = capture();
+
+        middleware(request("/__lunora/styles.css", "127.0.0.1", { headers: { "if-none-match": 'W/"styles.css-1"' } }), captured.response, vi.fn<() => void>());
+
+        expect(captured.status()).toBe(304);
+    });
+
+    it("says so when @lunora/studio is not installed", () => {
+        expect.assertions(2);
+
+        assets.available = false;
+
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: projectRoot() });
+        const captured = capture();
+
+        middleware(request("/__lunora/styles.css"), captured.response, vi.fn<() => void>());
+
+        expect(captured.status()).toBe(501);
+        expect(captured.body()).toContain("@lunora/studio");
+    });
+
+    it("routes a local endpoint to its JSON handler, CSRF gate first", () => {
+        expect.assertions(2);
+
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: projectRoot() });
+        const captured = capture();
+
+        // A cross-site POST: refused as JSON by the endpoint's own gate, never
+        // answered with the studio document.
+        middleware(
+            request("/__lunora/seed", "127.0.0.1", { headers: { "sec-fetch-site": "cross-site" }, method: "POST" }),
+            captured.response,
+            vi.fn<() => void>(),
+        );
+
+        expect(captured.status()).toBe(403);
+        expect(captured.body()).toContain("cross-origin");
     });
 });
 
