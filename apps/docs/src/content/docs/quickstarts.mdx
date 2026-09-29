@@ -31,13 +31,14 @@ Scaffolded from the official create-vite base with the Lunora layer applied on
 top, so you get the standard Vite project you would have created yourself, plus
 the plugin, codegen, and Studio. (Solid 2.0 is the exception — see below.)
 
-| Framework | Command                         | Guide                             |
-| --------- | ------------------------------- | --------------------------------- |
-| React     | `lunora init app --vite react`  | [React](/docs/frameworks/react)   |
-| Vue       | `lunora init app --vite vue`    | [Vue](/docs/frameworks/vue)       |
-| Solid     | `lunora init app --vite solid`  | [Solid](/docs/frameworks/solid)   |
-| Svelte    | `lunora init app --vite svelte` | [Svelte](/docs/frameworks/svelte) |
-| Solid 2.0 | `lunora init app -t solid-v2`   | [Solid](/docs/frameworks/solid)   |
+| Framework       | Command                           | Guide                                     |
+| --------------- | --------------------------------- | ----------------------------------------- |
+| React           | `lunora init app --vite react`    | [React](/docs/frameworks/react)           |
+| Vue             | `lunora init app --vite vue`      | [Vue](/docs/frameworks/vue)               |
+| Solid           | `lunora init app --vite solid`    | [Solid](/docs/frameworks/solid)           |
+| Svelte          | `lunora init app --vite svelte`   | [Svelte](/docs/frameworks/svelte)         |
+| Solid 2.0       | `lunora init app -t solid-v2`     | [Solid](/docs/frameworks/solid)           |
+| React (Rsbuild) | `lunora init app -t rspack-react` | [`@lunora/rspack`](/docs/packages/rspack) |
 
 React is the default when you do not choose.
 
@@ -48,23 +49,29 @@ renderer package (`@solidjs/web`), a different `jsxImportSource`, and
 `vite-plugin-solid` 3.x. `--vite solid` stays on the stable Solid 1.x line —
 pick `-t solid-v2` to track the 2.0 release candidate.
 
+**React on Rsbuild** (`-t rspack-react`) is a template too: the same React SPA,
+built by Rsbuild through [`@lunora/rspack`](/docs/packages/rspack). The Worker
+runs under `wrangler dev` behind the dev server rather than in-process, so it
+restarts on change; Studio is at the same `/__lunora`.
+
 ### Server-rendered apps
 
 These pair SSR with live subscriptions: the server render resolves data, and the
 client hydrates it into a live query rather than refetching.
 
-| Framework                      | Command                                   | Topology                                |
-| ------------------------------ | ----------------------------------------- | --------------------------------------- |
-| Next.js (App Router)           | `lunora init app -t next`                 | Two workers: OpenNext + a Lunora worker |
-| Next.js on Vite (App Router)   | `lunora init app -t vinext`               | SSR composed into the Lunora worker     |
-| Next.js on Vite (Pages Router) | `lunora init app -t vinext-pages`         | SSR composed into the Lunora worker     |
-| TanStack Start (React)         | `lunora init app -t tanstack-start-react` | Single worker                           |
-| TanStack Start (Solid)         | `lunora init app -t tanstack-start-solid` | Single worker                           |
-| React Router v7                | `lunora init app -t react-router`         | SSR composed into the Lunora worker     |
-| SvelteKit                      | `lunora init app -t sveltekit`            | Standalone Lunora worker                |
-| Astro                          | `lunora init app -t astro`                | Standalone Lunora worker                |
-| Nuxt                           | `lunora init app -t nuxt`                 | Single worker: Lunora mounted in Nitro  |
-| AnalogJS (Angular)             | `lunora init app -t analog`               | Single worker: Lunora mounted in Nitro  |
+| Framework                       | Command                                          | Topology                                |
+| ------------------------------- | ------------------------------------------------ | --------------------------------------- |
+| Next.js (App Router)            | `lunora init app -t next`                        | Two workers: OpenNext + a Lunora worker |
+| Next.js on Vite (App Router)    | `lunora init app -t vinext`                      | SSR composed into the Lunora worker     |
+| Next.js on Vite (Pages Router)  | `lunora init app -t vinext-pages`                | SSR composed into the Lunora worker     |
+| TanStack Start (React)          | `lunora init app -t tanstack-start-react`        | Single worker                           |
+| TanStack Start (React, Rsbuild) | `lunora init app -t tanstack-start-react-rspack` | SSR composed into the Lunora worker     |
+| TanStack Start (Solid)          | `lunora init app -t tanstack-start-solid`        | Single worker                           |
+| React Router v7                 | `lunora init app -t react-router`                | SSR composed into the Lunora worker     |
+| SvelteKit                       | `lunora init app -t sveltekit`                   | Standalone Lunora worker                |
+| Astro                           | `lunora init app -t astro`                       | Standalone Lunora worker                |
+| Nuxt                            | `lunora init app -t nuxt`                        | Single worker: Lunora mounted in Nitro  |
+| AnalogJS (Angular)              | `lunora init app -t analog`                      | Single worker: Lunora mounted in Nitro  |
 
 The two `vinext` rows run [vinext](https://github.com/cloudflare/vinext),
 Cloudflare's reimplementation of the Next.js API surface on Vite. It is

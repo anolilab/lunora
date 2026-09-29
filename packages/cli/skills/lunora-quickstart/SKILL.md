@@ -69,19 +69,21 @@ create-vite base and applies the Lunora layer on top. Use it for a plain SPA:
 templates fetched remotely (via `giget`) from
 `gh:anolilab/lunora/templates/<type>`:
 
-| `-t` value             | Stack                                                      |
-| ---------------------- | ---------------------------------------------------------- |
-| `next`                 | Next.js (App Router, OpenNext on Cloudflare)               |
-| `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes       |
-| `tanstack-start-solid` | TanStack Start (Solid)                                     |
-| `solid-v2`             | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)      |
-| `react-router`         | React Router v7 (framework mode), SSR in the Lunora worker |
-| `astro`                | Astro + a standalone Lunora worker                         |
-| `analog`               | AnalogJS (Angular) — single worker, Lunora in Nitro        |
-| `nuxt`                 | Nuxt (Vue) — single worker, Lunora in Nitro                |
-| `sveltekit`            | SvelteKit + a standalone Lunora worker                     |
-| `expo`                 | React Native (Expo) — iOS/Android/web + a Lunora worker    |
-| `standalone`           | Worker-only Lunora backend, no frontend                    |
+| `-t` value                    | Stack                                                      |
+| ----------------------------- | ---------------------------------------------------------- |
+| `next`                        | Next.js (App Router, OpenNext on Cloudflare)               |
+| `tanstack-start-react`        | TanStack Start (React) — SSR with live-loader routes       |
+| `tanstack-start-solid`        | TanStack Start (Solid)                                     |
+| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild, single worker           |
+| `solid-v2`                    | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)      |
+| `rspack-react`                | React SPA on Rsbuild (`@lunora/rspack`)                    |
+| `react-router`                | React Router v7 (framework mode), SSR in the Lunora worker |
+| `astro`                       | Astro + a standalone Lunora worker                         |
+| `analog`                      | AnalogJS (Angular) — single worker, Lunora in Nitro        |
+| `nuxt`                        | Nuxt (Vue) — single worker, Lunora in Nitro                |
+| `sveltekit`                   | SvelteKit + a standalone Lunora worker                     |
+| `expo`                        | React Native (Expo) — iOS/Android/web + a Lunora worker    |
+| `standalone`                  | Worker-only Lunora backend, no frontend                    |
 
 > There is **no `--template vite`.** SPAs go through `--vite <framework>`; `-t`
 > is only for the bespoke templates above. The one exception is `solid-v2`:

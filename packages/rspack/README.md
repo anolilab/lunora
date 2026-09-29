@@ -68,6 +68,8 @@ export default defineConfig({
 
 `rsbuild dev` now starts the client dev server **and** the Lunora Worker, and routes `/_lunora/*` to it. Nothing else to wire — no hand-written proxy, no second terminal, no `wrangler.dev.jsonc`. One entry registers codegen, binding provisioning, wrangler validation, the Worker, and the proxy.
 
+To start from a working app, `lunora init -t rspack-react` scaffolds a React SPA and `lunora init -t tanstack-start-react-rspack` a TanStack Start app that deploys as one Worker.
+
 On bare Rspack (or webpack 5), the plugin half works on its own — codegen and config only, no Worker:
 
 ```js
@@ -90,6 +92,7 @@ lunoraRsbuild({
     validateWrangler: true, // set false to skip the wrangler.jsonc check
 
     // Rsbuild only:
+    studio: true, // Lunora Studio at /__lunora (needs @lunora/studio)
     worker: true, // false to run the Worker yourself (the proxy is still injected)
     workerPort: 8787, // defaults to the wrangler config's `dev.port`, then 8787
     wranglerArgs: [], // extra arguments appended to `wrangler dev`
@@ -110,7 +113,7 @@ So `lunoraRsbuild` spawns `wrangler dev` and proxies to it. From your seat that 
 | Binding / cron / compatibility-date sync | ✅              | —               |
 | `.dev.vars` scaffolding + `WORKER_ENV`   | ✅ (watch mode) | —               |
 | Worker running on `dev`                  | ✅ (Rsbuild)    | —               |
-| Studio at `/_lunora/__studio`            | ✅ (via proxy)  | —               |
+| Studio at `/__lunora`                    | ✅ (Rsbuild)    | —               |
 | Browser error overlay                    | ❌              | `@lunora/vite`  |
 | Per-module HMR inside the Worker         | ❌ (restarts)   | `@lunora/vite`  |
 | Remote-binding dev (`LUNORA_REMOTE`)     | ❌              | `lunora dev`    |

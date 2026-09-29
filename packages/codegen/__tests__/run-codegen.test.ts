@@ -2190,7 +2190,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits a .buildFrameworkWorker() terminal only when a worker-composition framework adapter is a dependency", () => {
-            expect.assertions(5);
+            expect.assertions(7);
 
             // No framework adapter → standalone only.
             const standalone = runCodegen({ projectRoot: workdir });
@@ -2210,6 +2210,22 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             expect(framework.generated.app).toContain("public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp");
             expect(framework.generated.app).toContain("withFrameworkWorker");
             expect(framework.generated.app).toContain("private assemble(host?: FrameworkHostHandler)");
+
+            // A hand-composed `src/worker.ts` (the Rsbuild TanStack Start template)
+            // needs the terminal with no adapter installed — and a bundler plugin
+            // alone must NOT switch on framework-host output for a plain SPA.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, devDependencies: { "@lunora/rspack": "*" }, name: "fixture-app" }, undefined, 2)}\n`,
+                "utf8",
+            );
+
+            expect(runCodegen({ projectRoot: workdir }).generated.app).not.toContain("buildFrameworkWorker");
+
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "worker.ts"), "export {};\n", "utf8");
+
+            expect(runCodegen({ projectRoot: workdir }).generated.app).toContain("public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp");
         });
 
         it("collects onConnect/onDisconnect exports into the LUNORA_LIFECYCLE_HOOKS manifest and wires the shard override", () => {

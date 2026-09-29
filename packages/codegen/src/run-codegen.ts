@@ -984,7 +984,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasBrowser: featureUsage.browser,
         // Worker-composition framework adapters expose a `withLunora` over
         // `withFrameworkWorker`; when one is installed, surface `.buildFrameworkWorker()`.
-        hasFramework: dependencies.has("@lunora/astro") || dependencies.has("@lunora/svelte") || dependencies.has("@lunora/vue"),
+        // So does a hand-composed entry — an app that folds its framework's SSR
+        // handler in itself, as the Rsbuild TanStack Start template does, with no
+        // adapter to depend on. The path is `@lunora/config`'s
+        // `COMPOSED_WORKER_ENTRY`, the file `lunora deploy` bundles in place of
+        // `main`; spelled out because `@lunora/config` depends on this package.
+        hasFramework:
+            dependencies.has("@lunora/astro") ||
+            dependencies.has("@lunora/svelte") ||
+            dependencies.has("@lunora/vue") ||
+            existsSync(join(options.projectRoot, "src", "worker.ts")),
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.

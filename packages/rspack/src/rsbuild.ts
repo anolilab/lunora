@@ -1,8 +1,11 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+
 import { lunoraLine } from "@lunora/config";
+import { createStudioMiddleware, isNonLoopbackHost, studioMountPath } from "@lunora/config/studio-host";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
-import type { LunoraRspackOptions } from "./types";
+import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 import type { WorkerProcess } from "./worker";
 import { resolveWorkerPort, startWorker } from "./worker";
 
@@ -13,6 +16,15 @@ const LUNORA_PATH = "/_lunora";
 const RSBUILD_PLUGIN_NAME = "lunora:rsbuild";
 
 interface LunoraRsbuildOptions extends LunoraRspackOptions {
+    /**
+     * Serve Lunora Studio at `/__lunora` on the dev server — the same URL, and
+     * the same app, as `@lunora/vite`. Needs `@lunora/studio` installed.
+     * `false` opts out.
+     *
+     * Defaults to `true`.
+     */
+    studio?: boolean;
+
     /**
      * Run `wrangler dev` alongside the dev server and proxy {@link LUNORA_PATH}
      * to it. `false` opts out — for a project that starts the Worker itself, or
@@ -38,10 +50,19 @@ interface LunoraRsbuildOptions extends LunoraRspackOptions {
  * OPTIONAL peer, so its types must not reach this package's published `.d.ts`.
  */
 interface RsbuildApiLike {
+    getRsbuildConfig: () => Readonly<RsbuildConfigLike>;
     modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
     modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
-    onBeforeStartDevServer: (callback: () => Promise<void> | void) => void;
+    onAfterStartDevServer: (callback: (params: { port: number }) => Promise<void> | void) => void;
+    onBeforeStartDevServer: (callback: (params: { server: DevServerLike }) => Promise<void> | void) => void;
     onCloseDevServer: (callback: () => Promise<void> | void) => void;
+}
+
+/** The slice of Rsbuild's dev server this uses: its Connect middleware stack. */
+interface DevServerLike {
+    middlewares: {
+        use: (handler: (request: IncomingMessage, response: ServerResponse, next: () => void) => void) => unknown;
+    };
 }
 
 /** A single entry of Rsbuild's array-form `server.proxy`. */
@@ -63,6 +84,8 @@ interface RspackConfigLike {
 /** The slice of Rsbuild's config this plugin writes. */
 interface RsbuildConfigLike {
     server?: {
+        base?: string;
+        host?: string;
         proxy?: ProxyConfigLike;
     };
 }
@@ -95,6 +118,39 @@ const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): P
 };
 
 /**
+ * Serve Lunora Studio at `/__lunora` — the same middleware, and so the same URL
+ * and app, as `@lunora/vite`.
+ *
+ * Mounted in `onBeforeStartDevServer`, which runs it AHEAD of Rsbuild's
+ * built-ins: registered after them, the `/_lunora` proxy and the SPA history
+ * fallback would answer a deep link like `/__lunora/data` with the app's own
+ * `index.html`. `server.base` and `server.host` are read at that point, after
+ * every plugin's `modifyRsbuildConfig`, and before Rsbuild fills in defaults —
+ * so an unset host (Rsbuild's `0.0.0.0` default) is told apart from an explicit
+ * `--host`.
+ */
+const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
+    api.onBeforeStartDevServer(({ server }) => {
+        const { base, host } = api.getRsbuildConfig().server ?? {};
+
+        server.middlewares.use(
+            createStudioMiddleware({
+                apiSpec: options.apiSpec,
+                base,
+                isNonLoopbackBind: isNonLoopbackHost(host),
+                projectRoot: options.projectRoot,
+                schemaDirectory: options.schemaDir,
+            }),
+        );
+    });
+
+    api.onAfterStartDevServer(({ port }) => {
+        // eslint-disable-next-line no-console -- startup notice, beside Rsbuild's own URL banner
+        console.info(lunoraLine(`studio on http://localhost:${String(port)}${studioMountPath(api.getRsbuildConfig().server?.base)}`));
+    });
+};
+
+/**
  * Lunora Rsbuild plugin — the one-command dev story.
  *
  * `rsbuild dev` starts the client dev server AND the Lunora Worker, and routes
@@ -124,8 +180,7 @@ const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): P
  */
 const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     const resolved = resolveOptions(options);
-    const runWorker = options?.worker !== false;
-    const port = resolveWorkerPort(resolved.projectRoot, options?.workerPort);
+    const port = resolveWorkerPort(resolved.projectRoot, options?.workerPort, options?.wranglerArgs);
     // ONE instance, built here rather than inside `modifyRspackConfig` — Rsbuild
     // invokes that callback once per environment, and a per-environment instance
     // defeats the plugin's own in-flight guard: an SSR project would run
@@ -155,7 +210,11 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 };
             });
 
-            if (!runWorker) {
+            if (options?.studio !== false) {
+                mountStudio(api, resolved);
+            }
+
+            if (options?.worker === false) {
                 return;
             }
 
@@ -170,6 +229,10 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 // means a Worker with every secret `undefined` for the whole
                 // session, surfacing as auth failures rather than a clear error.
                 await codegenPlugin.prepareDevSession();
+                // Also before the spawn: wrangler bundles the Worker at startup, and
+                // on a fresh clone the `_generated/app` it imports does not exist
+                // until a codegen pass writes it.
+                await codegenPlugin.generateForDev();
 
                 // eslint-disable-next-line no-console -- startup notice, before any compilation has a logger
                 console.info(lunoraLine(`starting the worker on http://127.0.0.1:${String(port)} …`));
@@ -185,5 +248,5 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     };
 };
 
-export type { LunoraRsbuildOptions, ProxyConfigLike, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
+export type { DevServerLike, LunoraRsbuildOptions, ProxyConfigLike, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
 export { LUNORA_PATH, lunoraRsbuild, RSBUILD_PLUGIN_NAME, withLunoraProxy };

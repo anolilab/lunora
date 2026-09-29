@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
+import type { DevServerLike, RsbuildApiLike, RsbuildConfigLike, RspackConfigLike } from "../src/rsbuild";
 import { lunoraRsbuild, withLunoraProxy } from "../src/rsbuild";
 import { startWorker } from "../src/worker";
 import { createFixture } from "./fixture";
@@ -39,12 +39,14 @@ const captureSetup = (plugin: ReturnType<typeof lunoraRsbuild>): { rsbuild: Rsbu
     let startedDevServer = false;
 
     const api: RsbuildApiLike = {
+        getRsbuildConfig: () => rsbuild,
         modifyRsbuildConfig: (callback) => {
             rsbuild = callback(rsbuild);
         },
         modifyRspackConfig: (callback) => {
             rspack = callback(rspack);
         },
+        onAfterStartDevServer: () => {},
         onBeforeStartDevServer: () => {
             startedDevServer = true;
         },
@@ -97,10 +99,12 @@ describe(lunoraRsbuild, () => {
         let config: RsbuildConfigLike = { server: { proxy: { "/_lunora": { target: "http://127.0.0.1:9999" } } } };
 
         plugin.setup({
+            getRsbuildConfig: () => config,
             modifyRsbuildConfig: (callback) => {
                 config = callback(config);
             },
             modifyRspackConfig: () => {},
+            onAfterStartDevServer: () => {},
             onBeforeStartDevServer: () => {},
             onCloseDevServer: () => {},
         });
@@ -137,20 +141,24 @@ describe(lunoraRsbuild, () => {
         expect(rspack.plugins).toHaveLength(1);
     });
 
-    it("scaffolds .dev.vars BEFORE spawning the worker", async () => {
-        expect.assertions(2);
+    it("scaffolds .dev.vars and runs codegen BEFORE spawning the worker", async () => {
+        expect.assertions(4);
 
         vi.spyOn(console, "info").mockImplementation(() => {});
         vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const root = fixture();
-        let beforeStart: (() => Promise<void> | void) | undefined;
+        let beforeStart: ((params: { server: DevServerLike }) => Promise<void> | void) | undefined;
 
-        const plugin = lunoraRsbuild({ projectRoot: root, validateWrangler: false, workerPort: 1 });
+        const plugin = lunoraRsbuild({ projectRoot: root, studio: false, validateWrangler: false, workerPort: 1 });
 
         plugin.setup({
+            getRsbuildConfig: () => {
+                return {};
+            },
             modifyRsbuildConfig: (callback) => callback({}),
             modifyRspackConfig: (callback) => callback({}),
+            onAfterStartDevServer: () => {},
             onBeforeStartDevServer: (callback) => {
                 beforeStart = callback;
             },
@@ -160,9 +168,11 @@ describe(lunoraRsbuild, () => {
         // Port 1 is privileged, so the spawn fails fast — all this asserts is the
         // ORDER of what happened before it did.
         const existsBefore = existsSync(join(root, ".dev.vars"));
+        const generatedApp = join(root, "lunora", "_generated", "app.ts");
+        const generatedBefore = existsSync(generatedApp);
 
         try {
-            await beforeStart?.();
+            await beforeStart?.({ server: { middlewares: { use: () => {} } } });
         } catch {
             // The spawn is expected to fail; only the ordering above is asserted.
         }
@@ -174,13 +184,20 @@ describe(lunoraRsbuild, () => {
         // diagnose.
         expect(existsBefore).toBe(false);
         expect(existsSync(join(root, ".dev.vars"))).toBe(true);
+
+        // wrangler also BUNDLES the Worker at startup, and the Worker imports
+        // `_generated/app`. On a fresh clone only a codegen pass writes it, and no
+        // compilation has run yet — so without this, a first `rsbuild dev` died on
+        // "Could not resolve ../lunora/_generated/app.js".
+        expect(generatedBefore).toBe(false);
+        expect(existsSync(generatedApp)).toBe(true);
     }, 45_000);
 
     it("still injects the proxy under worker: false, but starts nothing", () => {
         expect.assertions(2);
 
         const root = fixture();
-        const { rsbuild, startedDevServer } = captureSetup(lunoraRsbuild({ projectRoot: root, validateWrangler: false, worker: false }));
+        const { rsbuild, startedDevServer } = captureSetup(lunoraRsbuild({ projectRoot: root, studio: false, validateWrangler: false, worker: false }));
 
         // A project running the Worker itself still wants the same-origin route —
         // getting `ws` right by hand is the mistake this prevents.

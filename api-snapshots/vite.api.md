@@ -140,9 +140,7 @@ interface ResolvedLunoraPluginOptions {
 
 ### `STUDIO_PATH` (const)
 
-```ts
-const STUDIO_PATH = "/__lunora";
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `Solution` (type)
 

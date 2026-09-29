@@ -70,10 +70,12 @@ type Template =
     | "next"
     | "nuxt"
     | "react-router"
+    | "rspack-react"
     | "solid-v2"
     | "standalone"
     | "sveltekit"
     | "tanstack-start-react"
+    | "tanstack-start-react-rspack"
     | "tanstack-start-solid"
     | "vinext"
     | "vinext-pages";
@@ -1489,8 +1491,14 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     // different renderer package, JSX source and Vite plugin major.
     { description: "Solid 2.0 SPA — the Solid 2 line (@solidjs/web, vite-plugin-solid 3)", label: "Solid 2", value: "solid-v2" },
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
+    { description: "React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server", label: "React · Rsbuild", value: "rspack-react" },
     { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
+    {
+        description: "TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker",
+        label: "TanStack Start · React · Rsbuild",
+        value: "tanstack-start-react-rspack",
+    },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
     { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },
