@@ -2603,6 +2603,12 @@ const readStandaloneAsset: (fileName: string, resolveFrom?: string) => Buffer | 
 const renderStudioHtml: (config: StudioHtmlConfig) => string;
 ```
 
+### `requestPathname` (const)
+
+```ts
+const requestPathname: (url: string) => string;
+```
+
 ### `resolveAdminToken` (const)
 
 ```ts

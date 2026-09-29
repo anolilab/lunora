@@ -73,14 +73,18 @@ const sendOk = (response: ServerResponse, body: Buffer | string, contentType: st
 };
 
 /**
- * Parse the request pathname, tolerating a query string and a trailing slash so
- * `/__lunora`, `/__lunora?x`, `/__lunora/`, and `/__lunora/?x` all match.
+ * The pathname of a request's `url`, the way every studio host routes on it:
+ * query dropped, and dot segments resolved — so `/_lunora/../x` routes as the
+ * `/x` it will reach, not as a `/_lunora` path. A url `URL` cannot parse falls
+ * back to a plain query strip.
  */
-const pathnameOf = (url: string): string => {
+const requestPathname = (url: string): string => {
     try {
-        return new URL(url, "http://localhost").pathname.replace(TRAILING_SLASH, "");
+        return new URL(url, "http://localhost").pathname;
     } catch {
-        return url;
+        const queryIndex = url.indexOf("?");
+
+        return queryIndex === -1 ? url : url.slice(0, queryIndex);
     }
 };
 
@@ -163,7 +167,8 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
     };
 
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
-        const requestPath = pathnameOf(request.url ?? "");
+        // Trailing slash dropped so `/__lunora` and `/__lunora/` both match the mount.
+        const requestPath = requestPathname(request.url ?? "").replace(TRAILING_SLASH, "");
         // Accept both spellings: the base-prefixed URL a browser follows from the
         // announced link, and the bare one the studio document's asset URLs use.
         const pathname = basePrefix !== "" && requestPath.startsWith(basePrefix) ? requestPath.slice(basePrefix.length) : requestPath;
@@ -240,4 +245,4 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
 };
 
 export type { StudioMiddlewareOptions };
-export { createStudioMiddleware, isNonLoopbackHost, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioMountPath };
+export { createStudioMiddleware, isNonLoopbackHost, requestPathname, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioMountPath };

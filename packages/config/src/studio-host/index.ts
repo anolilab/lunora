@@ -17,7 +17,7 @@ export { parseDevVariable, resolveAdminToken } from "./admin-token";
 export { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
 export { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, resolveStandaloneDirectory, studioAssetsStamp } from "./assets";
 export type { StudioMiddlewareOptions } from "./middleware";
-export { createStudioMiddleware, isNonLoopbackHost, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioMountPath } from "./middleware";
+export { createStudioMiddleware, isNonLoopbackHost, requestPathname, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioMountPath } from "./middleware";
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit } from "./policy-scaffold-handler";
 export { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";
 export { default as renderStudioHtml } from "./render-html";

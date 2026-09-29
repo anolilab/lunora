@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createStudioMiddleware, isNonLoopbackHost, STUDIO_PATH, studioMountPath } from "../../src/studio-host/middleware";
+import { createStudioMiddleware, isNonLoopbackHost, requestPathname, STUDIO_PATH, studioMountPath } from "../../src/studio-host/middleware";
 
 /* eslint-disable sonarjs/no-hardcoded-ip -- loopback/LAN fixtures for the bind and transport checks; no real connection is made */
 
@@ -143,5 +143,23 @@ describe(studioMountPath, () => {
         expect(studioMountPath("/")).toBe("/__lunora");
         expect(studioMountPath("/app/")).toBe("/app/__lunora");
         expect(studioMountPath("/app")).toBe("/app/__lunora");
+    });
+});
+
+describe(requestPathname, () => {
+    it("drops the query and keeps the root and trailing slashes", () => {
+        expect.assertions(3);
+
+        // `lunora dev` routes its studio at `/`, so the root must stay `/`.
+        expect(requestPathname("/")).toBe("/");
+        expect(requestPathname("/__lunora/?tab=data")).toBe("/__lunora/");
+        expect(requestPathname("/_lunora/rpc?x=1")).toBe("/_lunora/rpc");
+    });
+
+    it("routes a dot-segment path as the path it resolves to", () => {
+        expect.assertions(1);
+
+        // Not a `/_lunora` path, so a host must not proxy it as one.
+        expect(requestPathname("/_lunora/../__admin")).toBe("/__admin");
     });
 });
