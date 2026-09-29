@@ -69,6 +69,9 @@ export default defineSchema({
         currentPeriodEnd: v.optional(v.number()),
         currentPeriodStart: v.optional(v.number()),
         priceId: v.string(),
+        // Every price a multi-item subscription bills; the store writes it, and
+        // `lunora/payment/schema.ts` declares it.
+        priceIds: v.optional(v.array(v.string())),
         provider: v.string(),
         providerSubscriptionId: v.string(),
         quantity: v.number(),
@@ -101,7 +104,7 @@ export default defineSchema({
     // lunora:add:ratelimit:end
     // lunora:add:saas:start
     .extend(saas.extension)
+    // lunora:add:saas:end
     // lunora:add:presence:start
     .extend(presence.extension);
 // lunora:add:presence:end
-// lunora:add:saas:end

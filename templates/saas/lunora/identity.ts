@@ -7,7 +7,8 @@
  * `ctx.auth`, and it types what `ctx.auth.getIdentity()` resolves to —
  * `identity.activeOrganizationId` only compiles because the claim is declared
  * below. Note that claims are NOT flat properties on `ctx.auth`: `userId` is
- * the only one of those, and every other claim comes through `getIdentity()`.
+ * the only one of those, and every other claim comes through `getIdentity()` —
+ * which does not repeat `userId`, so read it off `ctx.auth.userId`.
  *
  * Why the kit needs this at all: organisations, members and invitations live in
  * better-auth's D1 tables, which are not Lunora tables. A function cannot read
@@ -23,17 +24,33 @@
  * right end of the trade: an anonymous downgrade turns "your credential is
  * broken" into "you have no organisation", which reads as data loss.
  *
- * Wire the matching resolver in your Worker entry, where `createWorker` is
- * called — `getAuth(env).api.getSession({ headers: request.headers })` returns
- * the better-auth session, and `session.activeOrganizationId` is the claim:
+ * Wire the matching resolver in your Worker entry — on a `defineApp()` worker,
+ * in `.extend((env) => ({ resolveIdentity }))` after `.auth(...)`, which
+ * replaces the userId-only resolver `.auth()` installs. The organization plugin
+ * puts `activeOrganizationId` on the session, but NOT the caller's role in it:
+ * that lives on better-auth's `member` row, so look it up. The same lookup is
+ * the membership check — a session can still name an organisation its user
+ * has since been removed from, and that must not become a tenant claim:
  *
  * ```ts
  * resolveIdentity: async (request) => {
- *     const session = await getAuth(env).api.getSession({ headers: request.headers });
- *     if (!session) return undefined;
+ *     const auth = getAuth(env);
+ *     const session = await auth.api.getSession({ headers: request.headers });
+ *     if (!session) return null;
+ *     const { activeOrganizationId } = session.session as { activeOrganizationId?: string | null };
+ *     const member = activeOrganizationId
+ *         ? await (await auth.$context).adapter.findOne<{ role: string }>({
+ *               model: "member",
+ *               where: [
+ *                   { field: "organizationId", value: activeOrganizationId },
+ *                   { field: "userId", value: session.user.id },
+ *               ],
+ *           })
+ *         : null;
  *     return {
- *         activeOrganizationId: session.session.activeOrganizationId ?? undefined,
- *         orgRole: session.session.activeOrganizationRole ?? undefined,
+ *         activeOrganizationId: member ? activeOrganizationId : undefined,
+ *         appRole: (session.user as { role?: string | null }).role ?? undefined,
+ *         orgRole: member?.role,
  *         userId: session.user.id,
  *     };
  * },
