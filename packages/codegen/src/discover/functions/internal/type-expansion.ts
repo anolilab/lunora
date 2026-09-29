@@ -4,13 +4,13 @@ import { Node } from "ts-morph";
 import type { QualifiedImport } from "./name-rendering";
 import { annotationRendering, classifyType, isGloballyDeclared } from "./name-rendering";
 
-/** JS identifier allowlist — mirrors `emit.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
+/** JS identifier allowlist — mirrors `emit/shared.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
 
 /**
  * Render an expanded object-type property key for splicing into generated TS:
  * bare when it's a JS identifier, otherwise JSON-quoted (a valid TS member name).
- * Mirrors `emit.ts`'s `renderPropertyKey` so this expansion path can't inject a
+ * Mirrors `emit/shared.ts`'s `renderPropertyKey` so this expansion path can't inject a
  * non-identifier property name (e.g. `"a; b"`) verbatim into `_generated/*`.
  */
 const renderExpandedPropertyKey = (propertyName: string): string => (IDENTIFIER_RE.test(propertyName) ? propertyName : JSON.stringify(propertyName));

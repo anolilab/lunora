@@ -1733,7 +1733,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     //
     // The old exemption was justified on the grounds that a `.global()` table's
     // entry is bound to the D1 `globalDb` writer and re-binding it would query
-    // the wrong backend. That premise is false: `packages/codegen/src/emit.ts`
+    // the wrong backend. That premise is false: `packages/codegen/src/emit/shard.ts`
     // binds every table's facade through the one shard ctx-db, `.global()`
     // included, precisely because `createShardCtxDb` routes global ops to D1
     // internally and stamps the subscription hooks — binding a global facade

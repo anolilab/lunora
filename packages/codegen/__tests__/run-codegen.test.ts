@@ -2588,7 +2588,7 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
         it("names the index module when the handler imports the type through a DIRECTORY", () => {
             expect.assertions(5);
 
-            // `emit.ts` appends `.js` to a rebased relative qualifier, because
+            // `emit/qualifiers.ts` appends `.js` to a rebased relative qualifier, because
             // the generated files are consumed under NodeNext. Extension
             // substitution covers a file — `./lib/shapes.js` finds
             // `lib/shapes.ts` — but a directory has nothing to substitute, so
@@ -2767,7 +2767,7 @@ export const get = query.input({}).query(async (): Promise<Envelope> => null as 
             expect.assertions(4);
 
             // The emitted qualifier is the specifier the USER wrote, and none of
-            // emit.ts's three rebasers touch an alias. Written out verbatim it
+            // emit/qualifiers.ts's three rebasers touch an alias. Written out verbatim it
             // resolves under the authoring project's own tsconfig and fails from a
             // sibling package or under a dedicated strict config for generated
             // output — which is the pattern this repo itself ships. Falling back
