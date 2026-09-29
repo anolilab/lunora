@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, resolve as resolvePath } from "node:path";
 
@@ -66,7 +66,10 @@ const readWranglerTarget = (
     const explicit = flagValue(wranglerArgs, "--config", "-c");
     const path = explicit === undefined ? findWranglerFile(projectRoot) : resolvePath(projectRoot, explicit);
 
-    if (path === undefined) {
+    // A `--config` naming a missing file is wrangler's to report — clearly, when
+    // it starts — not a raw ENOENT from here, which would surface while the
+    // Rsbuild config itself is still loading.
+    if (path === undefined || !existsSync(path)) {
         return undefined;
     }
 

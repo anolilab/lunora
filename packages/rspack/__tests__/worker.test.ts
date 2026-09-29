@@ -114,6 +114,18 @@ describe(resolveWorkerPort, () => {
         expect(resolveWorkerPort(root, undefined, ["--config=wrangler.alt.jsonc"])).toBe(9123);
     });
 
+    it("leaves a --config that names a missing file for wrangler to report", () => {
+        expect.assertions(1);
+
+        const root = createFixture({ wranglerDevPort: 8799 });
+
+        roots.push(root);
+
+        // Runs while `rsbuild.config.ts` is loading, so a throw here would take
+        // the config down with a bare ENOENT instead of wrangler's own message.
+        expect(resolveWorkerPort(root, undefined, ["--config", "missing.jsonc"])).toBe(8787);
+    });
+
     it("falls back to 8787 when nothing pins a port", () => {
         expect.assertions(1);
 
