@@ -4311,6 +4311,9 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../config
+      '@lunora/studio':
+        specifier: workspace:*
+        version: link:../studio
     devDependencies:
       '@rsbuild/core':
         specifier: catalog:build

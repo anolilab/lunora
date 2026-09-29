@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -198,6 +198,36 @@ describe(startWorker, () => {
                 });
             });
         }
+    }, 45_000);
+
+    it("creates the assets directory wrangler dev refuses to start without", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const root = createFixture();
+
+        roots.push(root);
+
+        const wranglerPath = join(root, "wrangler.jsonc");
+
+        // The directory is the gitignored build output, so a fresh clone has none
+        // — and wrangler exits before listening when it is missing.
+        writeFileSync(
+            wranglerPath,
+            readFileSync(wranglerPath, "utf8").replace('"name": "lunora-app",', '"name": "lunora-app",\n    "assets": { "directory": "./dist/client" },'),
+            "utf8",
+        );
+
+        const binDirectory = stubWranglerOnPath();
+
+        vi.stubEnv("PATH", `${binDirectory}:${process.env.PATH ?? ""}`);
+
+        const worker = await startWorker({ port: await freePort(), projectRoot: root });
+
+        await worker.stop();
+
+        expect(existsSync(join(root, "dist", "client"))).toBe(true);
     }, 45_000);
 
     it("resolves once the worker accepts connections, and stop() ends it", async () => {

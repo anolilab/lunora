@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { connect } from "node:net";
+import { dirname, resolve as resolvePath } from "node:path";
 
 import { formatLunoraEvent, lunoraLine } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -55,6 +57,30 @@ const resolveWorkerPort = (projectRoot: string, explicit?: number): number => {
     }
 
     return DEFAULT_WORKER_PORT;
+};
+
+/**
+ * Create the wrangler config's `assets.directory` when it does not exist yet.
+ *
+ * `wrangler dev` refuses to start without it, and under Rsbuild it is normally
+ * absent: the dev server serves the client from memory, and the directory is the
+ * gitignored build output — so a fresh clone of any app that binds assets would
+ * die here before its first `rsbuild build`. An empty directory is exactly what
+ * the Worker should see in dev; the dev server, not wrangler, serves the client.
+ */
+const ensureAssetsDirectory = (projectRoot: string): void => {
+    const wranglerPath = findWranglerFile(projectRoot);
+
+    if (wranglerPath === undefined) {
+        return;
+    }
+
+    const { parsed } = readWranglerJsonc<{ assets?: { directory?: unknown } }>(wranglerPath);
+
+    if (typeof parsed?.assets?.directory === "string") {
+        // Relative to the config file, as wrangler resolves it.
+        mkdirSync(resolvePath(dirname(wranglerPath), parsed.assets.directory), { recursive: true });
+    }
 };
 
 /** `true` once something accepts a TCP connection on `port`. */
@@ -172,6 +198,8 @@ const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> 
             `could not start the worker: port ${String(options.port)} is already in use. Stop whatever is serving there (another \`rsbuild dev\` or \`lunora dev\`?), or set \`workerPort\`.`,
         );
     }
+
+    ensureAssetsDirectory(options.projectRoot);
 
     const args = ["dev", "--port", String(options.port), "--var", "WORKER_ENV:development", ...(options.wranglerArgs ?? [])];
     // Package managers install `wrangler.cmd` on Windows, and Node will not launch
