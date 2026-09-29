@@ -147,6 +147,43 @@ describe("generateSql", () => {
         expect(user).toContain("no such column: bodyy");
     });
 
+    it("asks for a rewrite of the statement being edited, without calling it a failure", async () => {
+        expect.assertions(3);
+
+        const ai = binding("SELECT * FROM messages ORDER BY createdAt LIMIT 10");
+
+        await generateSql(ai, { editSql: "SELECT * FROM messages", prompt: "order by createdAt and limit to 10" }, SCHEMA);
+
+        const user = (ai.run.mock.calls[0]?.[1] as { messages: { content: string; role: string }[] }).messages[1]?.content ?? "";
+
+        expect(user).toContain("SELECT * FROM messages");
+        expect(user).toContain("Rewrite this statement");
+        // A working statement must not be described as one that failed: a repair
+        // prompt invites the model to invent a fault it can be seen to fix.
+        expect(user).not.toContain("was attempted and failed");
+    });
+
+    it("refuses a rewrite target over the cap rather than rewriting a truncated copy", async () => {
+        expect.assertions(2);
+
+        const ai = binding("SELECT 1");
+        const result = await generateSql(ai, { editSql: `SELECT ${"1, ".repeat(1000)}1`, prompt: "add a column" }, SCHEMA);
+
+        expect(result).toStrictEqual({ degraded: true, reason: "too-long" });
+        expect(ai.run).not.toHaveBeenCalled();
+    });
+
+    it("drops a reply that exhausted the output budget, since a cut-off statement can still read as SELECT", async () => {
+        expect.assertions(1);
+
+        const ai = {
+            run: vi.fn<() => Promise<unknown>>(() => Promise.resolve({ response: "SELECT id, body FROM messages WHERE", usage: { completion_tokens: 1024 } })),
+        };
+        const result = await generateSql(ai, { prompt: "all messages" }, SCHEMA);
+
+        expect(result).toStrictEqual({ degraded: true, reason: "empty-response" });
+    });
+
     it("refuses an empty prompt without calling the model", async () => {
         expect.assertions(2);
 

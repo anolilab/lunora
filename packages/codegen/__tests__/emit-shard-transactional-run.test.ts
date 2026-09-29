@@ -55,7 +55,7 @@ describe("emitShard — transactional ctx.runMutation", () => {
         expect(methodBody(emitted, "public override async handleRpc(")).toContain("await this.runMutationTransaction(ctx, async () => {");
         expect(methodBody(emitted, "protected override async runReactor(")).toContain("await this.runMutationTransaction(ctx, async () =>");
         expect(emitted).toContain(
-            'dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind, async (work) => this.runMutationTransaction(ctx, work))',
+            'dispatchRun("mutation", reference.__lunoraRef, fnArgs, target, kind, async (work) => this.runMutationTransaction(target, work))',
         );
     });
 
@@ -179,11 +179,11 @@ describe("emitShard — ctx.run* caller guard", () => {
 
         const emitted = shard();
 
-        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind)');
-        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind,');
-        // `runQuery` passes it too: its untracked form builds a fresh ctx, so the
-        // kind cannot be recovered from the ctx it is handed.
-        expect(methodBody(emitted, "private buildCtx(")).toContain("                    contextKind,\n                );");
+        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind)');
+        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, target, kind,');
+        // `runQuery` passes it too: it hands the callee a query context, so the
+        // caller's kind cannot be recovered from the ctx it is handed.
+        expect(methodBody(emitted, "private buildCtx(")).toContain("                        kind,\n                    );");
     });
 
     it("checks the caller before the registry lookup, so the refusal does not depend on the target", () => {

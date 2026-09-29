@@ -240,7 +240,7 @@ describe("createVectorSyncHook: cross-shard namespace isolation (codegen write p
             vectorIndexes: {},
         };
 
-        // Mirrors `emit.ts`'s `buildCtx`: each shard DO builds its OWN onWrite
+        // Mirrors `emit/shard-context.ts`'s `buildCtx`: each shard DO builds its OWN onWrite
         // hook, scoped by ITS OWN shard key — never a shared, namespace-less hook.
         const shardAHook = createVectorSyncHook({ namespace: "shard-a", schema, vectors });
         const shardBHook = createVectorSyncHook({ namespace: "shard-b", schema, vectors });

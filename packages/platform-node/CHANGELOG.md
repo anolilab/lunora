@@ -1,3 +1,33 @@
+## @lunora/platform-node [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.105...@lunora/platform-node@1.0.0-alpha.106) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.151
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/queue:** upgraded to 1.0.0-alpha.78
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.152
+* **@lunora/do:** upgraded to 1.0.0-alpha.181
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.62
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.163
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.99
+* **@lunora/storage:** upgraded to 1.0.0-alpha.91
+
+## @lunora/platform-node [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.104...@lunora/platform-node@1.0.0-alpha.105) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.150
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.151
+* **@lunora/do:** upgraded to 1.0.0-alpha.180
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.98
+
 ## @lunora/platform-node [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.103...@lunora/platform-node@1.0.0-alpha.104) (2026-09-28)
 
 ### Features

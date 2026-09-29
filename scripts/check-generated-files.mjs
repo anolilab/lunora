@@ -169,7 +169,7 @@ if (!existsSync(cliBin)) {
  *
  * `lunora codegen` runs out of `packages/lunora/dist/bin.mjs`, which loads
  * `@lunora/cli` then `@lunora/codegen` from THEIR `dist/`. Edit
- * `packages/codegen/src/emit.ts`, run this without rebuilding, and the sweep
+ * `packages/codegen/src/emit/`, run this without rebuilding, and the sweep
  * regenerates every example with the OLD emitter, matches the committed tree,
  * and prints a tick — the drift it exists to catch, reported as absent. CI
  * happens to build first (`lint.yml`'s "Build packages" step), but nothing in

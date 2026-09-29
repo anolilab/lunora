@@ -1,3 +1,10 @@
+## @lunora/queue [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.77...@lunora/queue@1.0.0-alpha.78) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+
 ## @lunora/queue [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.76...@lunora/queue@1.0.0-alpha.77) (2026-09-28)
 
 

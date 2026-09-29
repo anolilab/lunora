@@ -5,7 +5,7 @@
  *
  * Reference model: a record references a stored R2 object through a first-class
  * `v.storage(bucket?)` schema validator. Codegen emits the `{ table: [field, …] }`
- * map of those columns (`buildStorageColumns` in `@lunora/codegen`'s `emit.ts`),
+ * map of those columns (`buildStorageColumns` in `@lunora/codegen`'s `emit/shard-metadata.ts`),
  * the generated shard overrides `ShardDO.storageColumns()` with it, and both
  * correlation reads scan ONLY those declared columns — never the whole shard.
  *

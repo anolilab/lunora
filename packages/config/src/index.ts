@@ -24,7 +24,17 @@ export type {
     DockerLike,
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
-export type { DeployDriver, DeployRequest, DevRequest, DriverToolchain, SecretRequest, TailRequest, ToolchainCommand } from "./deploy-driver";
+export type {
+    DeployDriver,
+    DeployRequest,
+    DevRequest,
+    DriverToolchain,
+    ProjectedConfig,
+    ProjectionPurpose,
+    SecretRequest,
+    TailRequest,
+    ToolchainCommand,
+} from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -56,9 +66,18 @@ export {
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
-export { DEFAULT_DEPLOY_TARGET, deployTargetIds, isRunnableTarget, resolveDeployDriver, runnableTargetIds } from "./driver-registry";
-export type { GeneratedClassModule, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
+export type { ToolchainInvocation } from "./driver-registry";
+export {
+    DEFAULT_DEPLOY_TARGET,
+    deployTargetIds,
+    isRunnableTarget,
+    planToolchainInvocation,
+    resolveDeployDriver,
+    runnableTargetIds,
+    targetRunsOwnDevServer,
+} from "./driver-registry";
+export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
@@ -69,7 +88,16 @@ export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export { default as LunoraReporter } from "./lunora-reporter";
 export type { PackageManager, PackageManagerProbe } from "./package-manager";
-export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand } from "./package-manager";
+export {
+    addArgsFor,
+    detectInstalledManagers,
+    detectPackageManager,
+    execArgsFor,
+    installArgsFor,
+    runScriptArgsFor,
+    runScriptCommand,
+    toolchainExecArgs,
+} from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
@@ -143,5 +171,7 @@ export {
     paintBadge,
     STEP_BADGE_NAMES,
 } from "./tui-theme";
+export type { GeneratedClassModule } from "./worker-entry";
+export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES } from "./worker-entry";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";

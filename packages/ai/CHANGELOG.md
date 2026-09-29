@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.102...@lunora/ai@1.0.0-alpha.103) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
 ## @lunora/ai [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.101...@lunora/ai@1.0.0-alpha.102) (2026-09-28)
 
 

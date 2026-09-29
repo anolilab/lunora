@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.102",
+    "version": "1.0.0-alpha.103",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
@@ -80,6 +80,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "sqlite-vec": "catalog:sql",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

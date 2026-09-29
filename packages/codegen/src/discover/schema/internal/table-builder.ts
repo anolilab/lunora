@@ -75,13 +75,13 @@ const RESERVED_TABLE_NAMES = new Set([
 ]);
 
 /**
- * ES reserved words. `emit.ts` interpolates the table name raw into a bare
+ * ES reserved words. `emit/drizzle.ts` interpolates the table name raw into a bare
  * `const ${name} = sqliteTable(...)` binding (and into `.references((): AnySQLiteColumn => ${name}._id)`
  * for every FK) — a table named after a keyword produces a syntax error in the
  * generated Drizzle module, not a type error, so this must be rejected at
  * discovery time. Kept as a separate set from `RESERVED_TABLE_NAMES`: that one
  * is about `ctx.db` member shadowing, this one is about generated-code syntax.
- * If `emit.ts` ever stops emitting table names as bare `const` bindings, this
+ * If `emit/drizzle.ts` ever stops emitting table names as bare `const` bindings, this
  * check becomes unnecessary.
  *
  * Scope is "illegal as a `const` binding in an ES module", which is wider than
@@ -144,7 +144,7 @@ const RESERVED_JS_WORDS = new Set([
 /**
  * Table names are interpolated raw into generated type names (`Doc_${name}`)
  * and unquoted property keys — they must be JS identifiers. Must stay in
- * sync with `IDENTIFIER_RE` in `emit.ts` (the emit-side E1 gate is
+ * sync with `IDENTIFIER_RE` in `emit/shared.ts` (the emit-side E1 gate is
  * defense-in-depth behind this check).
  */
 const TABLE_NAME_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
@@ -238,7 +238,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
     const [tableArgument, optionsExpression] = initializer.getArguments();
 
     // The relation's target table feeds straight into the generated
-    // `OneRelation<"...">` / `ManyRelation<"...">` type (see `emit.ts`'s
+    // `OneRelation<"...">` / `ManyRelation<"...">` type (see `emit/data-model.ts`'s
     // relation-type emission) — codegen resolves it statically, so a
     // non-literal (or missing) target must fail loudly rather than degrade to
     // a placeholder that still compiles.

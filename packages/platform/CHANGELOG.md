@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.42...@lunora/platform@1.0.0-alpha.43) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
 ## @lunora/platform [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.41...@lunora/platform@1.0.0-alpha.42) (2026-09-28)
 
 ### Features

@@ -5,16 +5,11 @@ import { join } from "node:path";
 import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import {
-    defaultWorkerSpawner,
-    detectDevFlavor,
-    negatableDevFlags,
-    planDevCommand,
-    resolveInspectorPort,
-    resolveWorkerPort,
-    runDevCommand,
-} from "../../src/commands/dev/handler";
+import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
+import { detectDevFlavor } from "../../src/commands/dev/lifecycle";
+import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
+import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
+import type { DevCommandOptions } from "../../src/commands/dev/types";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
@@ -671,6 +666,44 @@ describe("lunora dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        // celld has no Vite integration and refuses Cloudflare-only wrangler
+        // keys, so its dev server runs on the projected config — as the
+        // `celld` binary itself, not through the package manager — even in a
+        // project whose dependencies would otherwise pick the Vite flavor.
+        it("serves a celld-target app with `celld dev` on the projected config", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app", observability: { enabled: true } }), "utf8");
+
+            let spawned: string[] | undefined;
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                flavor: "vite",
+                logger: silentLogger(),
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: (descriptor) => {
+                    spawned = [descriptor.command, ...descriptor.args];
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                target: "celld",
+            });
+
+            expect(result.plan.flavor).toBe("wrangler");
+            expect(spawned).toStrictEqual(["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"]);
+            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
+            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
+                main: "src/server.ts",
+                name: "app",
+                vars: { WORKER_ENV: "development" },
+            });
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {

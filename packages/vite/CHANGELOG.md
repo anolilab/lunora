@@ -1,3 +1,33 @@
+## @lunora/vite [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.280...@lunora/vite@1.0.0-alpha.281) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.238
+* **@lunora/config:** upgraded to 1.0.0-alpha.283
+* **@lunora/studio:** upgraded to 1.0.0-alpha.241
+
+## @lunora/vite [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.279...@lunora/vite@1.0.0-alpha.280) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.237
+* **@lunora/config:** upgraded to 1.0.0-alpha.282
+* **@lunora/studio:** upgraded to 1.0.0-alpha.240
+
+## @lunora/vite [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.278...@lunora/vite@1.0.0-alpha.279) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.281
+* **@lunora/studio:** upgraded to 1.0.0-alpha.239
+
 ## @lunora/vite [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.277...@lunora/vite@1.0.0-alpha.278) (2026-09-28)
 
 ### Features

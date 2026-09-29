@@ -450,3 +450,5 @@ const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinitio
 
 export type { BrowserRenderResult, BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
 export { browserTool, containerTool, fsTool };
+export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
+export { jsCodeTool } from "./js-code-tool";
