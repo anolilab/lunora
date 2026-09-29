@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.238",
+    "version": "1.0.0-alpha.239",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -89,6 +89,7 @@
         "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
+        "diff": "catalog:frontend",
         "html-to-image": "catalog:frontend",
         "motion": "catalog:frontend",
         "recharts": "catalog:frontend",

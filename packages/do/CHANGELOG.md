@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.178...@lunora/do@1.0.0-alpha.179) (2026-09-29)
+
+### Features
+
+* **studio:** inline AI rewrite for the SQL console ([#508](https://github.com/anolilab/lunora/issues/508)) ([c50eebb](https://github.com/anolilab/lunora/commit/c50eebb04a768e3d6840b8274ee458360808bd0d))
+
 ## @lunora/do [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.177...@lunora/do@1.0.0-alpha.178) (2026-09-28)
 
 
