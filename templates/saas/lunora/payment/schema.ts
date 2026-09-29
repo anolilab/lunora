@@ -71,6 +71,21 @@ export const paymentTables = {
         currentPeriodEnd: v.optional(v.number()),
         currentPeriodStart: v.optional(v.number()),
         priceId: v.string(),
+
+        /**
+         * EVERY price/product id the subscription bills — a Stripe subscription is a
+         * list of items, and a base plan alongside an add-on or a metered price is
+         * ordinary. `priceId` stays the primary one.
+         *
+         * Declaring this is what gives you MULTI-ITEM entitlements: `hasActivePrice`
+         * and `resolveEntitlements` test membership in this list, falling back to
+         * `[priceId]` when it is absent. Omit the column and an add-on or metered
+         * price never grants its plan.
+         *
+         * Optional, so no backfill: rows written before it (and by the webhook path,
+         * which carries one price id) read as absent.
+         */
+        priceIds: v.optional(v.array(v.string())),
         provider: v.string(),
         providerSubscriptionId: v.string(),
         quantity: v.number(),

@@ -1,7 +1,7 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    "main": "virtual:lunora/worker",
+    "main": "lunora/server.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "d1_databases": [{ "binding": "DB", "database_name": "{{name}}-db", "database_id": "<replace-with-d1-create-id>" }],
