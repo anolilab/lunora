@@ -1485,7 +1485,7 @@ export interface AiAvailableResult {
 export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
 
 /** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
-export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
+export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "too-long" | "unsafe-response";
 
 /** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
 export interface BackRelation {
