@@ -316,8 +316,8 @@ const CODE_TOOL_SCHEMA = jsonSchema<ToolScript>({
  * SCRIPT that composes several of the tools you hand `codeTool` — chaining a
  * later call's input to an earlier call's output — and the whole thing runs in a
  * single turn. This is a SAFE interpreted data-flow between whitelisted tools
- * (no `eval`, no isolate), so it runs natively in workerd; arbitrary-code
- * execution (the Cloudflare Worker Loader path) is a separate future mode.
+ * (no `eval`, no isolate), so it runs natively in workerd; for arbitrary code
+ * in a Worker Loader isolate, see `jsCodeTool`.
  *
  * Each composed tool dispatches through the same durable context a normal call
  * gets (inheriting RLS), with a per-step idempotency key. A code-mode script runs

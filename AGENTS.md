@@ -53,6 +53,7 @@ pnpm run lint:package-json        # package.json key order (:fix)
 pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/auth-ui
 pnpm run test:templates           # templates/* scaffold, install, build, typecheck
 pnpm run test:workerd             # the `workerd` vitest projects (12 packages) — see below
+pnpm run test:celld               # platform + engine TCK against a live celld (needs the `celld` binary)
 pnpm run e2e                      # Playwright suite in tests/e2e
 bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh, generated-check.sh too)
 ```

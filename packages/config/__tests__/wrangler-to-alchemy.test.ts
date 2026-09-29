@@ -89,6 +89,7 @@ describe("wranglerToAlchemy", () => {
             send_email: [{ name: "MAILER" }],
             services: [{ binding: "AUTH", service: "auth-worker" }],
             tail_consumers: [{ service: "logs-worker" }],
+            worker_loaders: [{ binding: "LOADER" }],
         } as WranglerConfigShape);
 
         expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
@@ -99,6 +100,7 @@ describe("wranglerToAlchemy", () => {
             "send_email",
             "services",
             "tail_consumers",
+            "worker_loaders",
         ]);
     });
 

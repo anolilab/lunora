@@ -319,6 +319,7 @@ const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 interface DeployDriver {
     readonly id: string;
     readonly name: string;
+    readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -327,6 +328,7 @@ interface DeployDriver {
 
 ```ts
 interface DeployRequest {
+    configPath?: string;
     dryRun?: boolean;
     entry?: string;
     environment?: string;
@@ -476,9 +478,11 @@ interface DockerLike {
 interface DriverToolchain {
     deploy: (request: DeployRequest) => ToolchainCommand;
     dev: (request: DevRequest) => ToolchainCommand;
-    secretList: (request: SecretRequest) => ToolchainCommand;
-    secretPut: (request: SecretRequest) => ToolchainCommand;
-    tail: (request: TailRequest) => ToolchainCommand;
+    readonly devServer: "own" | "workerd";
+    readonly prebuildsContainerImages: boolean;
+    secretList?: (request: SecretRequest) => ToolchainCommand;
+    secretPut?: (request: SecretRequest) => ToolchainCommand;
+    tail?: (request: TailRequest) => ToolchainCommand;
 }
 ```
 
@@ -633,6 +637,7 @@ interface InferredBindings {
     usesR2sql: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
+    usesWorkerLoader: boolean;
     usesX402Charge: boolean;
     usesX402Pay: boolean;
     workflows: InferredWorkflow[];
@@ -841,6 +846,22 @@ interface PostCodegenHookResult {
 }
 ```
 
+### `ProjectedConfig` (interface)
+
+```ts
+interface ProjectedConfig {
+    configPath: string;
+    dropped: ReadonlyArray<string>;
+    write: () => void;
+}
+```
+
+### `ProjectionPurpose` (type)
+
+```ts
+type ProjectionPurpose = "deploy" | "dev";
+```
+
 ### `ROOT_SKILL_NAME` (const)
 
 ```ts
@@ -1000,7 +1021,21 @@ interface TailRequest {
 ```ts
 interface ToolchainCommand {
     args: ReadonlyArray<string>;
+    onPath?: boolean;
     tool: string;
+}
+```
+
+### `ToolchainInvocation` (interface)
+
+```ts
+interface ToolchainInvocation {
+    command: ToolchainCommand;
+    commit: () => void;
+    projection: {
+        configPath: string;
+        dropped: ReadonlyArray<string>;
+    } | undefined;
 }
 ```
 
@@ -1385,6 +1420,12 @@ const planDevVariablesScaffold: (input: {
 }) => ScaffoldPlan;
 ```
 
+### `planToolchainInvocation` (const)
+
+```ts
+const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
 ### `projectUsesUmbrella` (const)
 
 ```ts
@@ -1549,6 +1590,21 @@ const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[]
 
 ```ts
 const streamContainerLogs: (options: ContainerLogStreamOptions) => ContainerLogStreamHandle;
+```
+
+### `targetRunsOwnDevServer` (const)
+
+```ts
+const targetRunsOwnDevServer: (target: string) => boolean;
+```
+
+### `toolchainExecArgs` (const)
+
+```ts
+const toolchainExecArgs: (manager: PackageManager, command: ToolchainCommand) => {
+    args: string[];
+    command: string;
+};
 ```
 
 ### `updateDevServerState` (const)

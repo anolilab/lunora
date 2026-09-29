@@ -410,8 +410,8 @@
               "run": "pnpm run lint:registry:sync"
 
     # Guards packages/platform-node/docs/index.mdx's capability table against
-    # NODE_CAPABILITIES in packages/platform/src/capabilities.ts. No build needed — the
-    # checker imports capabilities.ts directly via Node's TS type stripping.
+    # NODE_CAPABILITIES in packages/platform/src/capabilities/node.ts. No build needed — the
+    # checker imports capabilities/node.ts directly via Node's TS type stripping.
     "node-capabilities-docs":
         "name": "Lint (node capabilities docs)"
         "if": "needs.files-changed.outputs.node_capabilities_docs == 'true'"

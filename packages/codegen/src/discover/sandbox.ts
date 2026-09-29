@@ -18,6 +18,7 @@ const TOOL_FLAGS: Record<string, keyof SandboxUsage> = {
     browserTool: "usesSandboxBrowser",
     containerTool: "usesSandboxContainer",
     fsTool: "usesSandboxFs",
+    jsCodeTool: "usesSandboxLoader",
 };
 
 /**
@@ -28,7 +29,8 @@ const TOOL_FLAGS: Record<string, keyof SandboxUsage> = {
  * `ls`/`read`/`write`/`rm`/`stat` died on FUNCTION_NOT_FOUND) and provisioning
  * the `BROWSER` wrangler binding (`browserTool` only — the browser op runs on
  * `ctx.browser` inside the dispatcher, while `fsTool` reads a hand-declared R2
- * bucket).
+ * bucket). `jsCodeTool` is the exception: it calls the `LOADER` binding off the
+ * tool's own env, so it needs no dispatcher — only the `workerLoaders` gate.
  */
 interface SandboxUsage {
     /** `import { browserTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
@@ -37,11 +39,13 @@ interface SandboxUsage {
     usesSandboxContainer: boolean;
     /** `import { fsTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
     usesSandboxFs: boolean;
+    /** `import { jsCodeTool } from "@lunora/agent"` (or `/sandbox`) appears in `lunora/`. */
+    usesSandboxLoader: boolean;
 }
 
 /** All-`false` usage — the starting point of every scan, and the answer for a project importing no sandbox tool. */
 const noSandboxUsage = (): SandboxUsage => {
-    return { usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false };
+    return { usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false, usesSandboxLoader: false };
 };
 
 /** Which sandbox tools a single import declaration pulls in (all-`false` if not the sandbox module). */
