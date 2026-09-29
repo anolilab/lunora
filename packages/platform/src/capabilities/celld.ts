@@ -41,7 +41,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "unsupported",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env. `<provider>/<model>` gateway slugs ride that same binding, so they are unsupported too",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
         authJurisdictionMove: {

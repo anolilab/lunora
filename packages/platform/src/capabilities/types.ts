@@ -132,7 +132,17 @@ export interface PlatformCapabilities {
          */
         agents?: Capability;
 
-        /** AI inference (Workers AI / Bedrock / OpenAI). */
+        /**
+         * AI inference — `ctx.ai` (Workers AI / Bedrock / OpenAI).
+         *
+         * Covers every model id `ctx.ai.model(...)` resolves, including
+         * `"<provider>/<model>"` catalog slugs and `dynamic/<route>` ids, which
+         * route through Cloudflare AI Gateway over the same `AI` binding rather
+         * than a binding of their own. A host rating this `native` must say how
+         * slugs resolve there; one without a gateway is honest to rate the
+         * Workers AI half and note the slug half missing. Usage accounting rides
+         * `ctx.trace` / `ctx.metrics`, which need no key.
+         */
         ai?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;

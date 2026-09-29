@@ -84,7 +84,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option. Write sync and the `backfillVectors` admin op (paged embedding of pre-existing rows; re-walks a table only when its fingerprinted config changes: index names, source field, dimensions, metric, metadata keys, declared `model`, or the table's soft-delete field. A Shape B `select`/`metadata` edit, or an `embed` swap with no declared `model`, still needs `restart: true`) are Lunora's, carried by ShardHost: pages are read under `runSerialized` and synced on the shard's after-commit chain. Shard-local tables only: `.global()` plus a vector index is rejected, since D1/Hyperdrive writes never reach that chain",
         },
-        ai: { level: "native", note: "Workers AI" },
+        ai: {
+            level: "native",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing or the gateway's stored keys, `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway)",
+        },
         browser: { level: "native", note: "Browser Rendering" },
         images: { level: "native", note: "Cloudflare Images binding" },
         containers: {

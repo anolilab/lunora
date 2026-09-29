@@ -142,7 +142,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED, and an index's declared `model` is accepted but read by nothing",
         },
-        ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
+        ai: {
+            level: "unsupported",
+            note: "No Workers AI-equivalent binding implemented, and no AI Gateway to route `<provider>/<model>` slugs through — pass a bring-your-own AI SDK model from an action instead",
+        },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },
