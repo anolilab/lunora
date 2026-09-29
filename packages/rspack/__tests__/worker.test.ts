@@ -102,6 +102,18 @@ describe(resolveWorkerPort, () => {
         expect(resolveWorkerPort(root, 9001)).toBe(9001);
     });
 
+    it("reads the config `--config` points wrangler at, not the default file", () => {
+        expect.assertions(2);
+
+        const root = createFixture({ wranglerDevPort: 8799 });
+
+        roots.push(root);
+        writeFileSync(join(root, "wrangler.alt.jsonc"), '{ "name": "alt", "dev": { "port": 9123 } }\n', "utf8");
+
+        expect(resolveWorkerPort(root, undefined, ["--config", "wrangler.alt.jsonc"])).toBe(9123);
+        expect(resolveWorkerPort(root, undefined, ["--config=wrangler.alt.jsonc"])).toBe(9123);
+    });
+
     it("falls back to 8787 when nothing pins a port", () => {
         expect.assertions(1);
 
@@ -228,6 +240,33 @@ describe(startWorker, () => {
         await worker.stop();
 
         expect(existsSync(join(root, "dist", "client"))).toBe(true);
+    }, 45_000);
+
+    it("creates the assets directory of the config and env wrangler is started with", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const root = createFixture();
+
+        roots.push(root);
+        writeFileSync(
+            join(root, "wrangler.alt.jsonc"),
+            '{ "name": "alt", "assets": { "directory": "./dist/top" }, "env": { "staging": { "assets": { "directory": "./dist/staging" } } } }\n',
+            "utf8",
+        );
+
+        const binDirectory = stubWranglerOnPath();
+
+        vi.stubEnv("PATH", `${binDirectory}:${process.env.PATH ?? ""}`);
+
+        const worker = await startWorker({ port: await freePort(), projectRoot: root, wranglerArgs: ["-c", "wrangler.alt.jsonc", "--env=staging"] });
+
+        await worker.stop();
+
+        // The env block's `assets` replaces the top-level one, as in wrangler.
+        expect(existsSync(join(root, "dist", "staging"))).toBe(true);
+        expect(existsSync(join(root, "dist", "top"))).toBe(false);
     }, 45_000);
 
     it("resolves once the worker accepts connections, and stop() ends it", async () => {

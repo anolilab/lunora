@@ -31,6 +31,50 @@ interface WorkerProcess {
     stop: () => Promise<void>;
 }
 
+/** The slice of a wrangler config this module reads. */
+interface WranglerSlice {
+    assets?: { directory?: unknown };
+    dev?: { port?: unknown };
+    env?: Record<string, { assets?: { directory?: unknown } } | undefined>;
+}
+
+/** The value of `--name value`, `--name=value` or `-n value` in `args`, last one winning, as a CLI parser reads it. */
+const flagValue = (args: ReadonlyArray<string>, long: string, short: string): string | undefined => {
+    let value: string | undefined;
+
+    for (const [index, argument] of args.entries()) {
+        if (argument.startsWith(`${long}=`)) {
+            value = argument.slice(long.length + 1);
+        } else if ((argument === long || argument === short) && index + 1 < args.length) {
+            value = args[index + 1];
+        }
+    }
+
+    return value;
+};
+
+/**
+ * The wrangler config `wrangler dev` will actually load, given the arguments it
+ * is spawned with: `--config`/`-c` picks the file (relative to the project), and
+ * `--env`/`-e` the environment block — so what is read here is what wrangler
+ * reads, not the default file next to a project that points somewhere else.
+ */
+const readWranglerTarget = (
+    projectRoot: string,
+    wranglerArgs: ReadonlyArray<string> = [],
+): { config: WranglerSlice; env?: string; path: string } | undefined => {
+    const explicit = flagValue(wranglerArgs, "--config", "-c");
+    const path = explicit === undefined ? findWranglerFile(projectRoot) : resolvePath(projectRoot, explicit);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerSlice>(path);
+
+    return parsed === undefined ? undefined : { config: parsed, env: flagValue(wranglerArgs, "--env", "-e"), path };
+};
+
 /**
  * The port the Worker should serve on: an explicit option, then the wrangler
  * config's `dev.port`, then {@link DEFAULT_WORKER_PORT}.
@@ -41,22 +85,15 @@ interface WorkerProcess {
  * that picks one deterministic port has no such problem, and a port already in
  * use surfaces as wrangler's own clear error rather than a silent relocation.
  */
-const resolveWorkerPort = (projectRoot: string, explicit?: number): number => {
+const resolveWorkerPort = (projectRoot: string, explicit?: number, wranglerArgs?: ReadonlyArray<string>): number => {
     if (explicit !== undefined) {
         return explicit;
     }
 
-    const wranglerPath = findWranglerFile(projectRoot);
+    // `dev` is top-level only in wrangler — an `env` block cannot override it.
+    const port = readWranglerTarget(projectRoot, wranglerArgs)?.config.dev?.port;
 
-    if (wranglerPath !== undefined) {
-        const { parsed } = readWranglerJsonc<{ dev?: { port?: unknown } }>(wranglerPath);
-
-        if (typeof parsed?.dev?.port === "number") {
-            return parsed.dev.port;
-        }
-    }
-
-    return DEFAULT_WORKER_PORT;
+    return typeof port === "number" ? port : DEFAULT_WORKER_PORT;
 };
 
 /**
@@ -68,18 +105,20 @@ const resolveWorkerPort = (projectRoot: string, explicit?: number): number => {
  * die here before its first `rsbuild build`. An empty directory is exactly what
  * the Worker should see in dev; the dev server, not wrangler, serves the client.
  */
-const ensureAssetsDirectory = (projectRoot: string): void => {
-    const wranglerPath = findWranglerFile(projectRoot);
+const ensureAssetsDirectory = (projectRoot: string, wranglerArgs?: ReadonlyArray<string>): void => {
+    const target = readWranglerTarget(projectRoot, wranglerArgs);
 
-    if (wranglerPath === undefined) {
+    if (target === undefined) {
         return;
     }
 
-    const { parsed } = readWranglerJsonc<{ assets?: { directory?: unknown } }>(wranglerPath);
+    // An `--env` block's own `assets` replaces the top-level one.
+    const envAssets = target.env === undefined ? undefined : target.config.env?.[target.env]?.assets;
+    const directory = (envAssets ?? target.config.assets)?.directory;
 
-    if (typeof parsed?.assets?.directory === "string") {
+    if (typeof directory === "string") {
         // Relative to the config file, as wrangler resolves it.
-        mkdirSync(resolvePath(dirname(wranglerPath), parsed.assets.directory), { recursive: true });
+        mkdirSync(resolvePath(dirname(target.path), directory), { recursive: true });
     }
 };
 
@@ -199,7 +238,7 @@ const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> 
         );
     }
 
-    ensureAssetsDirectory(options.projectRoot);
+    ensureAssetsDirectory(options.projectRoot, options.wranglerArgs);
 
     const args = ["dev", "--port", String(options.port), "--var", "WORKER_ENV:development", ...(options.wranglerArgs ?? [])];
     // Package managers install `wrangler.cmd` on Windows, and Node will not launch

@@ -180,7 +180,7 @@ const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions):
  */
 const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     const resolved = resolveOptions(options);
-    const port = resolveWorkerPort(resolved.projectRoot, options?.workerPort);
+    const port = resolveWorkerPort(resolved.projectRoot, options?.workerPort, options?.wranglerArgs);
     // ONE instance, built here rather than inside `modifyRspackConfig` — Rsbuild
     // invokes that callback once per environment, and a per-environment instance
     // defeats the plugin's own in-flight guard: an SSR project would run
