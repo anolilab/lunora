@@ -124,6 +124,14 @@ export interface RagContext {
     conversationId?: string;
 
     /**
+     * Optional `ctx.metrics` — an `ActionCtx`'s `ctx.metrics` satisfies it. When
+     * present, every embed counts its tokens and cost into the durable
+     * `gen_ai.usage.*` series, like a `ctx.ai.model(...)` call. `unknown` for the
+     * same decoupling reason as `trace`; `defineRag` narrows it.
+     */
+    metrics?: unknown;
+
+    /**
      * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
      * it structurally. When present, `defineRag` wraps each embedding-model
      * call in a `generation` span carrying `gen_ai.operation.name: "embeddings"`

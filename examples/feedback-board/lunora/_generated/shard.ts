@@ -124,23 +124,6 @@ const storageStub = {
     },
 };
 
-const aiStub: LunoraAi = {
-    embeddingModel: () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
-    },
-    model: () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
-    },
-    run: async () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
-    },
-    // workersai is a callable-with-properties; a bare throwing arrow isn't
-    // structurally assignable, so cast it. Never invoked (the stub throws first).
-    workersai: (() => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, or pass \`ai\` to createShardDO().");
-    }) as unknown as LunoraAi["workersai"],
-};
-
 // Bound in-process `ctx.run*` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -840,18 +823,6 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
             const { identity, ip, userId } = caller;
 
-            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
-            // function path + trace id into createAi, which folds them into the
-            // gateway's native `metadata` only when a gateway is configured (absent
-            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
-            // re-run must not borrow a concurrent dispatch's trace, so read
-            // `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
-            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
-            const ai: LunoraAi = aiBinding
-                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
-                : aiStub;
-
             const secrets = createSecrets(env);
 
             // Which dispatch this ctx belongs to. Drives the two deferral facades
@@ -1075,9 +1046,31 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 span,
                 storage: contextStorage,
                 trace,
-                ai,
                 secrets,
             };
+            const isAction = contextKind === "action";
+
+            // ActionCtx-only helpers (external, non-deterministic I/O): constructed
+            // and attached only for an `action` so query/mutation ctx never carry them.
+            if (isAction) {
+
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+            // function path + trace id into createAi, which folds them into the
+            // gateway's `metadata`. Mirror the tracer's anchor guard — a deferred
+            // subscription re-run must not borrow a concurrent dispatch's trace, so
+            // read `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
+            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            // `telemetry` gives every model call an `ai.generate` / `ai.stream` span
+            // and `gen_ai.usage.*` token + cost counters attributed to this function.
+            const ai: LunoraAi = createAi({
+                binding: aiBinding as AiBindingLike | undefined,
+                env: env as Record<string, unknown>,
+                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                telemetry: { metrics, trace },
+            });
+                ctx.ai = ai;
+            }
 
             const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
                 target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);
@@ -1129,6 +1122,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
                 if (queryView === undefined) {
                     const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(ctx);
+                    delete descriptors.ai;
                     // Writable and configurable, like the plain fields they replace.
                     const field = (value: unknown): PropertyDescriptor => ({ configurable: true, enumerable: true, value, writable: true });
 

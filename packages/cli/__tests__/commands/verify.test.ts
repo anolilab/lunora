@@ -165,8 +165,8 @@ describe("lunora verify", () => {
                 "utf8",
             );
             writeFileSync(
-                join(workdir, "lunora", "summarize.ts"),
-                `import { action } from "@lunora/server";\n\nexport const summarize = action({ args: {}, handler: async (ctx) => ctx.ai.run("@cf/meta/llama", { prompt: "hi" }) });\n`,
+                join(workdir, "lunora", "capture.ts"),
+                `import { action } from "@lunora/server";\n\nexport const capture = action({ args: {}, handler: async (ctx) => ctx.browser.screenshot("https://example.com") });\n`,
                 "utf8",
             );
             const { logger } = recordingLogger();
@@ -175,7 +175,7 @@ describe("lunora verify", () => {
 
             expect(result.code).toBe(1);
             expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
-            expect(result.errors.some((error) => error.toLowerCase().includes("ai"))).toBe(true);
+            expect(result.errors.some((error) => error.toLowerCase().includes("browser"))).toBe(true);
         });
 
         describe("--env", () => {

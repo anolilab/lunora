@@ -123,7 +123,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         agents: {
             level: "unsupported",
-            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. The loop's inference has no home either — ai is unsupported on this target",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. That missing mount is the whole gap: inference is not, since a model factory or AI SDK model object needs no binding and `ai` is emulated here through LUNORA_AI_PROXY_URL",
         },
         objectStorageBackups: {
             level: "emulated",
@@ -142,7 +142,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED, and an index's declared `model` is accepted but read by nothing",
         },
-        ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
+        ai: {
+            level: "emulated",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids and `ctx.ai.run` are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
+        },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },

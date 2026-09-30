@@ -244,6 +244,21 @@ export const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
 export const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
 
 /**
+ * Env var carrying the base URL of a self-hosted OpenAI-compatible proxy
+ * (LiteLLM, OpenRouter, your own), e.g. `https://ai-proxy.internal/v1`.
+ *
+ * When set, `ctx.ai.model("<provider>/<model>")` sends the slug unchanged as the
+ * `model` of an OpenAI chat-completions request to this URL instead of routing
+ * it through Cloudflare AI Gateway — which needs no `AI` binding, so it is how
+ * `ctx.ai` works on hosts without Workers AI (celld). `@cf/…` ids still need
+ * the binding.
+ */
+export const AI_PROXY_URL_ENV = "LUNORA_AI_PROXY_URL";
+
+/** Env var carrying the bearer token sent to {@link AI_PROXY_URL_ENV}, when the proxy requires one. */
+export const AI_PROXY_TOKEN_ENV = "LUNORA_AI_PROXY_TOKEN";
+
+/**
  * Parse {@link AI_GATEWAY_TAGS_ENV} into tag fields. Non-string values are
  * dropped rather than coerced — a number silently becoming `"1"` is a worse
  * outcome than the tag being absent and visibly so.
@@ -283,6 +298,22 @@ export const readAiGatewayEnvTags = (env: Record<string, unknown>): Record<strin
 };
 
 /**
+ * Warn once per isolate when {@link AI_GATEWAY_TOKEN_ENV} is set but the caller
+ * is the Workers AI binding, which has no field to carry it.
+ */
+export const warnIgnoredBindingToken = (env: Record<string, unknown>): void => {
+    if (warnedWorkersAiBindingToken || readEnv(env, AI_GATEWAY_TOKEN_ENV) === undefined) {
+        return;
+    }
+
+    warnedWorkersAiBindingToken = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[lunora:ai] ${AI_GATEWAY_TOKEN_ENV} is set, but the Workers AI binding cannot send a gateway auth token — Cloudflare's native gateway option has no authorization field. The token is ignored on this path; use a bring-your-own AI SDK provider (which sends cf-aig-authorization), or make the AI Gateway unauthenticated for Workers AI.`,
+    );
+};
+
+/**
  * Resolve the Cloudflare AI Gateway coordinates from the Worker `env`, or
  * `undefined` when the gateway is not configured (both `LUNORA_AI_GATEWAY_ACCOUNT_ID`
  * and `LUNORA_AI_GATEWAY_ID` must be present). Opt-in and backward-compatible:
@@ -318,12 +349,8 @@ export const resolveAiGateway = (
     if (token !== undefined) {
         headers["cf-aig-authorization"] = `Bearer ${token}`;
 
-        if (consumer === "workers-ai-binding" && !warnedWorkersAiBindingToken) {
-            warnedWorkersAiBindingToken = true;
-            // eslint-disable-next-line no-console
-            console.warn(
-                `[lunora:ai] ${AI_GATEWAY_TOKEN_ENV} is set, but the Workers AI binding cannot send a gateway auth token — Cloudflare's native gateway option has no authorization field. The token is ignored on this path; use a bring-your-own AI SDK provider (which sends cf-aig-authorization), or make the AI Gateway unauthenticated for Workers AI.`,
-            );
+        if (consumer === "workers-ai-binding") {
+            warnIgnoredBindingToken(env);
         }
     }
 

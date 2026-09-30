@@ -13,6 +13,7 @@ import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
+import checkAi from "./ai-checks";
 import type { DoctorOptions } from "./index";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -30,6 +31,9 @@ type FindingLevel = "fail" | "info" | "pass" | "warn";
 const DOCTOR_CODES = [
     "admin-token-missing",
     "admin-token-set",
+    "ai-binding-missing",
+    "ai-gateway-default",
+    "ai-gateway-token-unused",
     "cli-shadowed",
     "cpu-limit-missing",
     "d1-placeholder-id",
@@ -438,24 +442,15 @@ const checkAdminToken = (cwd: string, findings: Finding[]): void => {
     }
 };
 
-/**
- * Every declared container, workflow and agent must be exported by the worker
- * entry — wrangler rejects a `class_name` the worker doesn't export, so the
- * failure lands at deploy, on a project where `tsc`, codegen and the tests are
- * all green. Inference already computes the status for all three kinds; this
- * surfaces it proactively (the generators auto-wire it, but a hand-declared
- * entry can still miss it). Skips cleanly when nothing is declared.
- *
- * Containers used to be the only kind checked here, which made the omission
- * invisible: a project could pass `doctor` and still deploy three workflows with
- * no workflow to run. `collectExportGaps` covers all three from one place, so a
- * fourth kind cannot be added to inference and silently skipped here.
- */
-const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<void> => {
-    let inferred: Awaited<ReturnType<typeof inferLunoraBindings>>;
+type InferredBindings = Awaited<ReturnType<typeof inferLunoraBindings>>;
 
+/**
+ * Infer the project's bindings once for every check that needs them, or
+ * `undefined` (reported as `declared-export-unchecked`) when the scan fails.
+ */
+const inferBindings = async (cwd: string, findings: Finding[]): Promise<InferredBindings | undefined> => {
     try {
-        inferred = await inferLunoraBindings({ projectRoot: cwd });
+        return await inferLunoraBindings({ projectRoot: cwd });
     } catch (error: unknown) {
         // Best-effort — other checks own the real failures, so this does not fail
         // the run. It is still SAID: a silent return made a skipped check
@@ -470,9 +465,24 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
             message: `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ${error instanceof Error ? error.message : String(error)}`,
         });
 
-        return;
+        return undefined;
     }
+};
 
+/**
+ * Every declared container, workflow and agent must be exported by the worker
+ * entry — wrangler rejects a `class_name` the worker doesn't export, so the
+ * failure lands at deploy, on a project where `tsc`, codegen and the tests are
+ * all green. Inference already computes the status for all three kinds; this
+ * surfaces it proactively (the generators auto-wire it, but a hand-declared
+ * entry can still miss it). Skips cleanly when nothing is declared.
+ *
+ * Containers used to be the only kind checked here, which made the omission
+ * invisible: a project could pass `doctor` and still deploy three workflows with
+ * no workflow to run. `collectExportGaps` covers all three from one place, so a
+ * fourth kind cannot be added to inference and silently skipped here.
+ */
+const checkDeclaredExports = (inferred: InferredBindings, findings: Finding[]): void => {
     const gaps = collectExportGaps(inferred);
     const declared = [
         ...inferred.containers.map((entry) => {
@@ -717,7 +727,14 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkVectorMetadataIndexes(cwd, findings);
     checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
-    await checkDeclaredExports(cwd, findings);
+
+    const inferred = await inferBindings(cwd, findings);
+
+    if (inferred !== undefined) {
+        checkDeclaredExports(inferred, findings);
+    }
+
+    checkAi(parsed, cwd, inferred?.usesAi === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };
 

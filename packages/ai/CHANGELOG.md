@@ -1,3 +1,143 @@
+## @lunora/ai [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.103...@lunora/ai@1.0.0-alpha.104) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* **ai:** `ctx.ai` is no longer present on query and mutation contexts at
+runtime. Code reaching it through a cast from a query or mutation now gets
+`undefined`; move the inference into an action.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(platform): state ai gateway routing in the capability matrix
+
+The `ai` rating now covers the `<provider>/<model>` and `dynamic/<route>` ids
+`ctx.ai.model()` routes through AI Gateway: native on Cloudflare over the same
+`AI` binding, and part of the existing `unsupported` rating on node and celld,
+which have no gateway (or `env.AI` binding) to route through.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(cli): add ai gateway provisioning and doctor checks
+
+Add `lunora ai gateway`, which creates (or reuses) a Cloudflare AI Gateway over
+the REST API (POST/GET /accounts/{account_id}/ai-gateway/gateways) and writes
+LUNORA_AI_GATEWAY_ID + LUNORA_AI_GATEWAY_ACCOUNT_ID into the wrangler `vars`,
+preserving comments. The id defaults to the worker name (--id overrides); log
+collection is on by default (--no-logs turns it off); --dry-run makes no API
+call and edits nothing. Credentials come from CLOUDFLARE_API_TOKEN and
+CLOUDFLARE_ACCOUNT_ID (falling back to wrangler `account_id`).
+
+`lunora doctor` gains three codes: ai-binding-missing (warn),
+ai-gateway-token-unused (warn) and ai-gateway-default (info).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(studio): add ai usage panel
+
+New Observability page (tab `aiUsage`) showing what ctx.ai.model(...) calls cost:
+total spend, input/output tokens and call count, a per-minute cost sparkline, breakdowns
+by function path and by model, and the recent ai.generate / ai.stream calls linking
+through to their trace.
+
+Totals read the durable gen_ai.usage.{input_tokens,output_tokens,cost} counter series
+from getMetricHistory: bucket `sum` is the tokens/USD spent, bucket `count` the calls
+(one ctx.metrics.count per call). Calls = max(input count, output count) so a call
+reporting both is not counted twice. Cost stays split by lunora.usage.cost.source;
+estimated (or unlabelled) cost is always marked "Estimated" and never shown as
+provider-reported. With no history yet, totals fall back to the live trace ring and
+the page says they reset on hibernation.
+
+The pure fold lives in features/ai-usage/ai-usage.ts with unit tests in the node
+`unit` project.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(ai): route provider slugs to a self-hosted proxy off cloudflare
+
+LUNORA_AI_PROXY_URL (+ LUNORA_AI_PROXY_TOKEN) points ctx.ai at any
+OpenAI-compatible proxy (LiteLLM, OpenRouter, your own). "<provider>/<model>"
+slugs go there unchanged instead of AI Gateway, and no AI binding is needed, so
+ctx.ai works on celld. @cf/... ids and ctx.ai.run still need the binding.
+
+celld's `ai` capability moves from unsupported to emulated, so codegen emits
+ctx.ai there again. lunora doctor skips the binding and default-gateway checks
+when the proxy var is set.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): settle stream spans on cancel and share usage accounting
+
+- Stream telemetry re-emits parts through a ReadableStream, so an ai.stream span closes on
+  consumer cancel and fails on an upstream error; a TransformStream's flush never ran on
+  either, leaving the span and its gen_ai.usage counters pending forever.
+- recordUsage/modelIdOf live in usage.ts and are shared with defineRag, whose embeds now
+  also count into ctx.metrics (RagContext.metrics), so RAG spend reaches the durable
+  history. The duplicate EmbedSpan/EmbedTracer types are gone in favour of AiSpan/AiTracer.
+- The binding path selects the gateway by LUNORA_AI_GATEWAY_ID alone; the account id is
+  only needed for a bring-your-own provider's baseURL.
+- No per-call slug metadata on top of an explicit gateway's own, which could exceed AI
+  Gateway's 5-key limit and get the whole object rejected.
+- createAi no longer throws without a binding, provider or proxy: it returns a facade whose
+  calls throw one directed error (embeddings and ai.run included), so codegen always emits
+  createAi and drops its aiStub.
+- node rates ai as emulated through LUNORA_AI_PROXY_URL, like celld.
+- Docs: unified-catalog providers are paid through Unified Billing on the run path; keys
+  stored on the gateway apply only to gateway-path providers.
+* **ai:** createAi({}) returns a throwing facade instead of throwing at construction.
+Every ctx.ai app now bundles @ai-sdk/openai and @ai-sdk/anthropic.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): align ai doctor checks with the runtime
+
+- ai-gateway-token-unused now fires whenever ctx.ai is used with LUNORA_AI_GATEWAY_TOKEN set:
+  the Workers AI binding cannot send it, with or without a gateway id.
+- The checks read top-level vars, env.<name>.vars and .dev.vars, so a proxy or gateway id
+  set outside top-level vars no longer triggers a spurious finding.
+- Binding inference runs once in runDoctor and feeds both the export and AI checks.
+- WranglerConfig types the `ai` binding; the env var names live in one CLI module.
+- `lunora ai gateway` reuses @lunora/config's applyModify (now exported from
+  @lunora/config/cloudflare) and returns one failure shape from its resolvers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): count cost-only ai calls and fold usage per model
+
+- The history call count takes the largest series count per (function, model) pair and sums
+  across pairs, so a call that reported only a cost is counted and two models' counts are
+  never merged by max.
+- One slice-based flow serves both the history and live halves.
+- ai.embed spans (defineRag) show up in recent calls.
+- formatUsd/formatTokens move to reports/metrics-format and use the renderer's locale.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(platform-node): match the ai row to the emulated rating
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): refuse a proxy token over plain http
+
+- LUNORA_AI_PROXY_TOKEN is never sent to a non-HTTPS LUNORA_AI_PROXY_URL off loopback; the
+  proxy provider throws a directed error on use instead, as it does for an unparsable URL.
+- `lunora ai gateway --dry-run` warns when the account id a real run needs is missing.
+- doctor reads an unreadable .dev.vars as unset instead of aborting the run.
+- The node `agents` note no longer claims `ai` is unsupported there.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): record stream usage that arrived before an upstream error
+
+A stream that emitted its `finish` part and then errored lost that usage: the span failed
+before recordUsage ran. The instrumented stream now settles once with its outcome and the
+error, so usage is recorded first and the error is then rethrown to fail the span.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* **ai:** AI Gateway model routing, per-function AI spend, and ctx.ai action-only ([#910](https://github.com/anolilab/lunora/issues/910)) ([f0e8623](https://github.com/anolilab/lunora/commit/f0e8623068b35d7c05bdb1b131761b95de768f9c))
+
 ## @lunora/ai [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.102...@lunora/ai@1.0.0-alpha.103) (2026-09-29)
 
 ### Features

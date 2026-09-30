@@ -1100,7 +1100,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "aiUsage" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)
@@ -2639,6 +2639,29 @@ const MESSAGE_IDS: readonly [
     "Open the trace {trace}",
     "No evals recorded",
     "Call recordEvaluation from a graded run and its score shows up here.",
+    "AI usage",
+    "Tokens and spend from ctx.ai.model calls — totals, per function and per model, and the recent calls behind them.",
+    "Estimated",
+    "Partly estimated",
+    "Derived from a price table, not reported by the provider.",
+    "Includes cost derived from a price table, not reported by the provider.",
+    "Input tokens",
+    "Output tokens",
+    "Cost",
+    "Recent calls",
+    "Model",
+    "stream",
+    "failed",
+    "Cost per minute",
+    "No cost reported",
+    "{provider} provider-reported · {estimated} estimated",
+    "Total cost",
+    "By model",
+    "Spend shows up here once an action calls ctx.ai.model(...) — tokens and cost per function and per model.",
+    "No AI usage recorded",
+    "No durable history yet — these totals come from the live trace ring and reset when the shard hibernates.",
+    "Totals cover the retained metric history (up to the last 24 hours).",
+    "No recent calls in the live trace ring — it empties when the shard hibernates.",
     "Search traces",
     "search trace, span, or function",
     "Errors only",

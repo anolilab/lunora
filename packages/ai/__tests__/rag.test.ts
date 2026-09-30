@@ -1709,6 +1709,31 @@ describe("defineRag ctx.trace instrumentation", () => {
         }
     });
 
+    it("counts each embed's usage into ctx.metrics, like a model call", async () => {
+        expect.hasAssertions();
+
+        const { vectors } = memoryVectors();
+        const counts: [string, number | undefined, Record<string, unknown> | undefined][] = [];
+        const ctx = {
+            ...tracingCtx(vectors),
+            metrics: {
+                count: (name: string, value?: number, attributes?: Record<string, unknown>) => {
+                    counts.push([name, value, attributes]);
+                },
+            },
+        };
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await docs(ctx).retrieve("hello");
+
+        expect(counts).toContainEqual([
+            "gen_ai.usage.cost",
+            0.0002,
+            { "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5", "lunora.usage.cost.source": "provider" },
+        ]);
+        expect(counts.some(([name]) => name === "gen_ai.usage.input_tokens")).toBe(true);
+    });
+
     it("embeds untraced when the context has no `trace` (a hand-built ctx)", async () => {
         expect.assertions(2);
 
