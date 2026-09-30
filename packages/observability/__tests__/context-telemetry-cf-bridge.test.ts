@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { HostSpanLike, HostTracingLike, SpanHandle, TracerDeps } from "../src/context-telemetry";
-import { createTracer } from "../src/context-telemetry";
+import { createTracer, setHostSpanAttributes } from "../src/context-telemetry";
 
 /**
  * Unit coverage for the opt-in Cloudflare custom-spans bridge in
@@ -267,5 +267,61 @@ describe("createTracer cloudflare custom-spans bridge", () => {
 
         await expect(trace("span", body)).rejects.toThrow("handler blew up");
         expect(body).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses the native setAttributes and recordException when the runtime has them", async () => {
+        expect.assertions(4);
+
+        const bags: Record<string, boolean | number | string>[] = [];
+        const exceptions: { message: string; name: string }[] = [];
+        const span: HostSpanLike = {
+            isTraced: true,
+            recordException: (exception) => {
+                exceptions.push(exception);
+            },
+            setAttribute: () => {
+                throw new Error("setAttribute must not be used when setAttributes exists");
+            },
+            setAttributes: (attributes) => {
+                bags.push(attributes);
+            },
+        };
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new TypeError("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect(bags).toHaveLength(1);
+        expect(bags[0]).toMatchObject({ "error.message": "kaboom", "lunora.function_path": "messages:list", "lunora.ok": false });
+        expect(exceptions).toStrictEqual([{ message: "kaboom", name: "TypeError" }]);
+    });
+});
+
+describe(setHostSpanAttributes, () => {
+    it("falls back to setAttribute per key, dropping non-primitives", () => {
+        expect.assertions(1);
+
+        const span = makeFakeSpan();
+
+        setHostSpanAttributes(span, { a: 1, b: "x", c: null, d: true });
+
+        expect(span.writes).toStrictEqual([
+            ["a", 1],
+            ["b", "x"],
+            ["d", true],
+        ]);
+    });
+
+    it("writes nothing to an untraced span", () => {
+        expect.assertions(1);
+
+        const span = makeFakeSpan(false);
+
+        setHostSpanAttributes(span, { a: 1 });
+
+        expect(span.writes).toHaveLength(0);
     });
 });

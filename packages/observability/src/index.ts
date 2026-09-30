@@ -49,7 +49,7 @@ export type {
     TracedFetchDeps,
     TracerDeps,
 } from "./context-telemetry";
-export { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
+export { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan, setHostSpanAttributes } from "./context-telemetry";
 export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps } from "./database-telemetry";
 export { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
 export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput } from "./function-metrics";

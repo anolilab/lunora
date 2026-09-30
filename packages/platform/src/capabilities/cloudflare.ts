@@ -113,7 +113,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         hostTraceFusion: {
             level: "native",
-            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
+            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Feature-detected on top: span.recordException for failed spans (redacted message only), span.setAttributes for the attribute mirror, and tracing.getActiveSpan to put the ctx.span wide event on the invocation's root span. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
         },
         logArchive: {
             level: "native",

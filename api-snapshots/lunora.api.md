@@ -3427,6 +3427,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `setHostSpanAttributes` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `upsertIssueState` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.

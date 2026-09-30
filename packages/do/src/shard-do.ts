@@ -58,6 +58,7 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    setHostSpanAttributes,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -476,8 +477,11 @@ interface TelemetrySink {
      * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
      * older compat date / when unsampled. This only ADDS a CF-side span; the
      * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
-     * source of truth. The bridge is now workerd-validated as available and
-     * side-effect-free inside a real DO (our recorded spans stay intact); CF's
+     * source of truth. Where the runtime has them, failures also get a native
+     * `recordException` and the `ctx.span` wide event is mirrored onto
+     * `tracing.getActiveSpan()` (the invocation root). The bridge is now
+     * workerd-validated as available and side-effect-free inside a real DO (our
+     * recorded spans stay intact); CF's
      * exported parent-linking under sampling is still unverified, so it stays
      * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
@@ -6381,6 +6385,15 @@ abstract class ShardDO {
         // dispatch tore its entry down still honours the trace's sampling decision.
         const resolvedAnchor = anchor ?? resolveTraceAnchor(undefined);
 
+        // Warm the memoized probe at dispatch start so the synchronous wide-event
+        // mirror in `recordDispatchRootSpan` finds it resolved even when the
+        // handler never opens a `ctx.trace` span.
+        if (sink?.fuseCloudflareTraces === true) {
+            resolveHostTracing().catch(() => {
+                /* unreachable: the probe catches its own failures */
+            });
+        }
+
         return createTracer({
             anchor: resolvedAnchor,
             // Raw span error messages/stacktraces in dev only — production
@@ -7791,22 +7804,36 @@ abstract class ShardDO {
         const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
         try {
-            this.spans.push(
-                dispatchRootSpan({
-                    anchor,
-                    // Raw failure messages in dev only — matches `makeTracer`'s
-                    // `captureRaw` posture for this synthetic root span.
-                    captureRaw: isDevEnvironment(this.env),
-                    // The wide event, if the handler attached one through `ctx.span`.
-                    ...(collected === undefined ? {} : { collected }),
-                    durationMs,
-                    failure,
-                    functionPath,
-                    shardKey: this.runner.shardKey,
-                    startTs: startedAt,
-                    userId: this.getCurrentUserId(),
-                }),
-            );
+            const rootSpan = dispatchRootSpan({
+                anchor,
+                // Raw failure messages in dev only — matches `makeTracer`'s
+                // `captureRaw` posture for this synthetic root span.
+                captureRaw: isDevEnvironment(this.env),
+                // The wide event, if the handler attached one through `ctx.span`.
+                ...(collected === undefined ? {} : { collected }),
+                durationMs,
+                failure,
+                functionPath,
+                shardKey: this.runner.shardKey,
+                startTs: startedAt,
+                userId: this.getCurrentUserId(),
+            });
+
+            this.spans.push(rootSpan);
+
+            // Fused: land the (already redacted) wide-event attributes on the
+            // host's own invocation span too. Every `ctx.trace` custom span has
+            // ended by now, so `getActiveSpan()` is the invocation's root span —
+            // the host-side twin of this dispatch.
+            // ponytail: reads the memoized probe synchronously; on the isolate's
+            // first dispatch the import may not have settled and the mirror skips.
+            if (wide?.sink?.fuseCloudflareTraces === true && rootSpan.attributes !== undefined) {
+                const hostSpan = cloudflareTracing?.getActiveSpan?.();
+
+                if (hostSpan !== undefined) {
+                    setHostSpanAttributes(hostSpan, rootSpan.attributes);
+                }
+            }
         } catch {
             // Best-effort — span capture must never fail a served request.
         }
@@ -10124,6 +10151,10 @@ abstract class ShardDO {
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.
+            // Deliberately WITHOUT `{ retryAlarm: false }`: this is an admin
+            // request, not the alarm, and an in-flight alarm it interrupts (the
+            // scheduler / poll tick that re-arms itself) must retry against the
+            // restored state, or the self-re-arming chain could stop for good.
             this.state.abort?.("lunora PITR restore");
         }
 

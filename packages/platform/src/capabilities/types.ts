@@ -279,7 +279,8 @@ export interface PlatformCapabilities {
          * Merging Lunora's spans into the HOST's own trace tree, so its native
          * tracing shows one nested tree instead of two unrelated ones — the
          * sink's `fuseCloudflareTraces` opt-in, which reaches `cloudflare:workers`'
-         * `tracing.enterSpan`.
+         * `tracing.enterSpan` (plus, where present, `getActiveSpan` for the
+         * invocation root and a span's `setAttributes` / `recordException`).
          *
          * Rated because it is the one telemetry surface that reaches past
          * `ShardHost` into a provider API. Everything else in the pipeline is
