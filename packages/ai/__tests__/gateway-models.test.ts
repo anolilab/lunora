@@ -1,9 +1,9 @@
 import { generateText, streamText } from "ai";
 import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import createAi from "../src/create-ai";
-import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV } from "../src/gateway";
+import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_PROXY_TOKEN_ENV, AI_PROXY_URL_ENV } from "../src/gateway";
 import type { AiBindingLike, AiSpan, AiTelemetry, AiTracer } from "../src/types";
 
 type RunCall = [string, Record<string, unknown>, Record<string, unknown> | undefined];
@@ -97,6 +97,39 @@ const usage = {
     inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: undefined, total: 1000 },
     outputTokens: { reasoning: undefined, text: undefined, total: 500 },
 };
+
+describe("self-hosted proxy", () => {
+    it("sends a slug to LUNORA_AI_PROXY_URL as an OpenAI chat completion, with no binding", async () => {
+        expect.assertions(4);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => Response.json(chatCompletion("hello from proxy")));
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const ai = createAi({ env: { [AI_PROXY_TOKEN_ENV]: "secret", [AI_PROXY_URL_ENV]: "https://ai-proxy.test/v1" } });
+            const { text } = await generateText({ model: ai.model("anthropic/claude-sonnet-5"), prompt: "hi" });
+
+            expect(text).toBe("hello from proxy");
+
+            const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(url).toBe("https://ai-proxy.test/v1/chat/completions");
+            expect(JSON.parse(init.body as string)).toMatchObject({ model: "anthropic/claude-sonnet-5" });
+            expect(new Headers(init.headers).get("authorization")).toBe("Bearer secret");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it("rejects a Workers AI id when only a proxy is configured", () => {
+        expect.assertions(1);
+
+        const ai = createAi({ env: { [AI_PROXY_URL_ENV]: "https://ai-proxy.test/v1" } });
+
+        expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/binding/);
+    });
+});
 
 describe("gateway catalog models", () => {
     it("routes a `<provider>/<model>` slug through the account's default gateway over the binding", async () => {

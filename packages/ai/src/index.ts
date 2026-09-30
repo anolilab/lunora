@@ -8,6 +8,8 @@ export {
     AI_GATEWAY_METADATA_MAX_KEYS,
     AI_GATEWAY_TAGS_ENV,
     AI_GATEWAY_TOKEN_ENV,
+    AI_PROXY_TOKEN_ENV,
+    AI_PROXY_URL_ENV,
     buildAiGatewayMetadataFields,
     readAiGatewayEnvTags,
     resolveAiGateway,

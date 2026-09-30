@@ -244,6 +244,21 @@ export const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
 export const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
 
 /**
+ * Env var carrying the base URL of a self-hosted OpenAI-compatible proxy
+ * (LiteLLM, OpenRouter, your own), e.g. `https://ai-proxy.internal/v1`.
+ *
+ * When set, `ctx.ai.model("<provider>/<model>")` sends the slug unchanged as the
+ * `model` of an OpenAI chat-completions request to this URL instead of routing
+ * it through Cloudflare AI Gateway — which needs no `AI` binding, so it is how
+ * `ctx.ai` works on hosts without Workers AI (celld). `@cf/…` ids still need
+ * the binding.
+ */
+export const AI_PROXY_URL_ENV = "LUNORA_AI_PROXY_URL";
+
+/** Env var carrying the bearer token sent to {@link AI_PROXY_URL_ENV}, when the proxy requires one. */
+export const AI_PROXY_TOKEN_ENV = "LUNORA_AI_PROXY_TOKEN";
+
+/**
  * Parse {@link AI_GATEWAY_TAGS_ENV} into tag fields. Non-string values are
  * dropped rather than coerced — a number silently becoming `"1"` is a worse
  * outcome than the tag being absent and visibly so.

@@ -718,6 +718,17 @@ describe("runDoctor", () => {
             expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
         });
 
+        it("is quiet when a self-hosted proxy replaces the binding and gateway", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ vars: { LUNORA_AI_PROXY_URL: "https://ai-proxy.internal/v1" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
         it("warns that a gateway token without a gateway id is unused", async () => {
             expect.assertions(1);
 

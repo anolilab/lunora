@@ -30,7 +30,8 @@ const hasVariable = (variables: Record<string, unknown> | undefined, key: string
  * with no gateway id is a WARN (`ai-gateway-token-unused`): the token only rides
  * along with an explicit gateway. `ctx.ai` used with no `LUNORA_AI_GATEWAY_ID`
  * is an INFO (`ai-gateway-default`): slugs go through the account's `default`
- * gateway, which works but is shared by everything on the account.
+ * gateway, which works but is shared by everything on the account. Neither
+ * binding nor gateway check fires when `LUNORA_AI_PROXY_URL` is set.
  */
 const checkAi = (parsed: WranglerConfig | undefined, usesAi: boolean, findings: Finding[]): void => {
     if (parsed === undefined) {
@@ -39,8 +40,10 @@ const checkAi = (parsed: WranglerConfig | undefined, usesAi: boolean, findings: 
 
     const { vars } = parsed;
     const hasGatewayId = hasVariable(vars, "LUNORA_AI_GATEWAY_ID");
+    // A self-hosted proxy replaces both the binding and the gateway for slugs.
+    const hasProxy = hasVariable(vars, "LUNORA_AI_PROXY_URL");
 
-    if (usesAi) {
+    if (usesAi && !hasProxy) {
         const binding = (parsed as WranglerAiShape).ai?.binding;
 
         if (typeof binding !== "string" || binding.length === 0) {
@@ -62,7 +65,7 @@ const checkAi = (parsed: WranglerConfig | undefined, usesAi: boolean, findings: 
         });
     }
 
-    if (usesAi && !hasGatewayId) {
+    if (usesAi && !hasGatewayId && !hasProxy) {
         findings.push({
             code: "ai-gateway-default",
             fix: "Run `lunora ai gateway` to create a gateway for this app and write LUNORA_AI_GATEWAY_ID into wrangler vars.",

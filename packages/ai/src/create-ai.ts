@@ -1,3 +1,4 @@
+import { createOpenAI } from "@ai-sdk/openai";
 import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
@@ -5,9 +6,18 @@ import { anthropic } from "workers-ai-provider/anthropic";
 import { openai } from "workers-ai-provider/openai";
 
 import type { AiGatewayMetadata } from "./gateway";
-import { AI_DEFAULT_EMBEDDING_MODEL_ENV, AI_DEFAULT_MODEL_ENV, buildAiGatewayMetadataFields, readAiGatewayEnvTags, readEnv, resolveAiGateway } from "./gateway";
+import {
+    AI_DEFAULT_EMBEDDING_MODEL_ENV,
+    AI_DEFAULT_MODEL_ENV,
+    AI_PROXY_TOKEN_ENV,
+    AI_PROXY_URL_ENV,
+    buildAiGatewayMetadataFields,
+    readAiGatewayEnvTags,
+    readEnv,
+    resolveAiGateway,
+} from "./gateway";
 import instrumentModel from "./telemetry";
-import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+import type { AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
 
 /**
  * Wire-format plugins for AI Gateway catalog models. `openai` parses every
@@ -23,6 +33,14 @@ const GATEWAY_PROVIDER_PLUGINS = [openai, anthropic];
  * own routing test, which is what actually sends these through AI Gateway.
  */
 const isGatewayModelId = (modelId: string): boolean => !modelId.startsWith("@") && modelId.includes("/");
+
+/** The Workers AI provider when only a proxy is configured: every `@cf/…` id needs the binding. */
+const workersAiUnavailable = (): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `@lunora/ai: Workers AI ids need the \`binding\` (env.AI); only "<provider>/<model>" slugs route through ${AI_PROXY_URL_ENV}`,
+    );
+};
 
 /**
  * Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
@@ -102,9 +120,16 @@ const resolveGatewayOption = (
 const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider, telemetry } = options;
 
-    if (!provider && !binding) {
-        throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
+    const proxyURL = readEnv(env, AI_PROXY_URL_ENV);
+
+    if (!provider && !binding && proxyURL === undefined) {
+        throw new LunoraError("INTERNAL", `@lunora/ai: createAi requires a \`binding\` (env.AI), a pre-built \`provider\`, or ${AI_PROXY_URL_ENV} in env`);
     }
+
+    // A self-hosted OpenAI-compatible proxy takes the `"<provider>/<model>"` slugs
+    // instead of AI Gateway; the slug is forwarded unchanged as the request's model.
+    const proxy: { chat: (modelId: string) => LanguageModel; embedding: (modelId: string) => EmbeddingModel } | undefined =
+        proxyURL === undefined ? undefined : createOpenAI({ apiKey: readEnv(env, AI_PROXY_TOKEN_ENV) ?? "", baseURL: proxyURL, name: "lunora-proxy" });
 
     // A caller-supplied provider wins; otherwise construct one from the binding.
     // `binding` is present when `provider` is absent (guarded above). An explicit
@@ -133,10 +158,15 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // the account's `default` gateway when none is configured. `@cf/…` ids are
     // unaffected.
     const workersai: WorkersAiProviderLike =
-        provider ?? createWorkersAI({ binding: binding as AiBindingLike, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS });
+        provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS }) : workersAiUnavailable);
 
-    const resolveModelId = (modelId: string): LanguageModel =>
-        isGatewayModelId(modelId) && gatewayMetadataFields !== undefined ? workersai(modelId, { metadata: gatewayMetadataFields }) : workersai(modelId);
+    const resolveModelId = (modelId: string): LanguageModel => {
+        if (proxy !== undefined && isGatewayModelId(modelId)) {
+            return proxy.chat(modelId);
+        }
+
+        return isGatewayModelId(modelId) && gatewayMetadataFields !== undefined ? workersai(modelId, { metadata: gatewayMetadataFields }) : workersai(modelId);
+    };
 
     const model = (input?: ModelInput): LanguageModel => {
         const requestedId = input ?? effectiveDefaultModel;
@@ -158,6 +188,10 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     };
 
     const resolveEmbeddingModel = (modelId: string): EmbeddingModel => {
+        if (proxy !== undefined && isGatewayModelId(modelId)) {
+            return proxy.embedding(modelId);
+        }
+
         const factory = workersai.textEmbeddingModel;
 
         if (typeof factory !== "function") {

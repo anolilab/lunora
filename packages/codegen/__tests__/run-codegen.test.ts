@@ -4339,7 +4339,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("telemetry: { metrics, trace },");
             // Inference is action-only: ctx.ai is attached inside the isAction
             // block, never on a query/mutation ctx.
-            expect(output).toMatch(/if \(isAction\) \{[\s\S]*?const ai: LunoraAi = aiBinding[\s\S]*?ctx\.ai = ai;\n {12}\}/u);
+            expect(output).toMatch(
+                /if \(isAction\) \{[\s\S]*?const ai: LunoraAi =\s*aiBinding \|\| \(env as Record<string, unknown>\)\.LUNORA_AI_PROXY_URL[\s\S]*?ctx\.ai = ai;\n {12}\}/u,
+            );
             expect(output).not.toMatch(/^ {16}ai,$/mu);
             // Correlation ids are threaded into the gateway metadata, reading the
             // dispatch trace under the same anchor guard the tracer uses.

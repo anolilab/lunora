@@ -90,6 +90,19 @@ without a code change.
 
 `@cf/…` ids stay on Workers AI, exactly as before.
 
+### Your own proxy (celld, or no Cloudflare)
+
+Set `LUNORA_AI_PROXY_URL` to any OpenAI-compatible endpoint (LiteLLM,
+OpenRouter, a self-hosted proxy) and `<provider>/<model>` slugs go there instead
+of AI Gateway. The slug is sent unchanged as the request's `model`, and
+`LUNORA_AI_PROXY_TOKEN` (a secret) is sent as the bearer token. No `AI` binding is
+needed, so this is how `ctx.ai` works on celld. `@cf/…` ids and `ctx.ai.run`
+still need the binding.
+
+```jsonc
+{ "vars": { "LUNORA_AI_PROXY_URL": "https://ai-proxy.internal/v1" } }
+```
+
 ### Bring your own provider
 
 An AI SDK model object passes straight through, for a provider or feature the

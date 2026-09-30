@@ -210,7 +210,7 @@ describe("gatePlatformFeatures", () => {
     });
 
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
         const usage: FeatureUsage = { ...ALL_OFF, ai: true, kv: true, mail: true, scheduler: true, storage: true, vectors: true };
@@ -221,11 +221,10 @@ describe("gatePlatformFeatures", () => {
         expect(result.usage.storage).toBe(true);
         expect(result.usage.scheduler).toBe(true);
         expect(result.usage.mail).toBe(true);
+        // Emulated through LUNORA_AI_PROXY_URL, so ctx.ai is still emitted.
+        expect(result.usage.ai).toBe(true);
         expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
-        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
-            "ai",
-            "vectors",
-        ]);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["vectors"]);
     });
 });
 

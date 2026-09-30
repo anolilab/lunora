@@ -45,7 +45,7 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
     // ctx.ai falls back to this when neither `env.AI` nor a `config.ai` thunk
     // resolves a binding — every method throws a directed error rather than a
     // bare "undefined is not a function".
-    const aiMissing = `throw new Error("ctx.ai: no AI binding found. Add an \\\`ai\\\` binding (env.AI) to wrangler.jsonc, or pass \\\`ai\\\` to createShardDO().");`;
+    const aiMissing = `throw new Error("ctx.ai: no AI binding found. Add an \\\`ai\\\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \\\`ai\\\` to createShardDO().");`;
 
     return {
         // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
@@ -64,9 +64,12 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
             const aiTrace = options.identity ? undefined : this.getCurrentTrace();
             // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
             // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
-            const ai: LunoraAi = aiBinding
+            // \`LUNORA_AI_PROXY_URL\` stands in for the binding on hosts without Workers AI
+            // (celld): \`"<provider>/<model>"\` slugs go to that OpenAI-compatible proxy.
+            const ai: LunoraAi =
+                aiBinding || (env as Record<string, unknown>).LUNORA_AI_PROXY_URL
                 ? createAi({
-                      binding: aiBinding as AiBindingLike,
+                      binding: aiBinding as AiBindingLike | undefined,
                       env: env as Record<string, unknown>,
                       metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
                       telemetry: { metrics, trace },
