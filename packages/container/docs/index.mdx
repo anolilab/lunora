@@ -314,7 +314,14 @@ runs the command through the runtime's native `ctx.container.exec()`, unshelled,
 reads stdout and stderr under the same `maxOutputBytes` cap (killing the process
 if it overruns, or when `timeoutMs` fires), and answers the contract itself. The
 container still has to start the usual way, so exec needs a `defaultPort` (or a
-`.port(n)` handle), as before.
+`.port(n)` handle), as before. The command gets the container's start env
+(`env`, `secrets`, `secretsStore` values, or a `start({ envVars })` override),
+with the call's own `env` over it. `maxOutputBytes` caps stdout and stderr each.
+
+<Callout type="warn">
+    On Cloudflare this path skips an image-side `/__lunora/exec` runner entirely, so any allowlist, user switch or audit logging that runner applied no longer
+    runs. Put those restrictions in the image itself (a non-root default user, a restricted `PATH`), and gate model-chosen commands at the caller.
+</Callout>
 
 Where the runtime has no native exec, the runner inside the container serves the
 route instead. Accept a POST at **`/__lunora/exec`** taking

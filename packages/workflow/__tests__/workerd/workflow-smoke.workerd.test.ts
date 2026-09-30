@@ -62,7 +62,7 @@ describe("@lunora/workflow (workerd)", () => {
 
         try {
             // No env binding under the class name: only `ctx.exports` can supply it.
-            const viaExports = createWorkflowContext({}, [{ binding: "SmokeWorkflow", exportName: "smokeWorkflow" }], exports);
+            const viaExports = createWorkflowContext({}, [{ className: "SmokeWorkflow", exportName: "smokeWorkflow" }], exports);
 
             await viaExports.get<SmokeParams>("smokeWorkflow").create({ id, params: { orderId: "7" } });
             await instance.waitForStatus("complete");

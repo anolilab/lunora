@@ -2,7 +2,7 @@
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
@@ -1035,9 +1035,9 @@ const terminatePriorInstance = async (
     exportName: string,
     priorInstanceId: string,
 ): Promise<void> => {
-    const binding = resolveWorkflowBinding(source.env, source.exports, agentClassName(exportName)) as AgentWorkflowBindingLike | undefined;
+    const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(source.env, source.exports, agentClassName(exportName), ["get"]);
 
-    if (!binding || typeof binding.get !== "function") {
+    if (binding === undefined) {
         return;
     }
 
@@ -1091,9 +1091,9 @@ const wakeDequeuedRun = async (
     threadKey: string,
     dequeuedInstanceId: string,
 ): Promise<void> => {
-    const binding = resolveWorkflowBinding(deps.env, deps.exports, agentClassName(deps.exportName)) as AgentWorkflowBindingLike | undefined;
+    const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(deps.env, deps.exports, agentClassName(deps.exportName), ["get"]);
 
-    if (!binding || typeof binding.get !== "function") {
+    if (binding === undefined) {
         return;
     }
 

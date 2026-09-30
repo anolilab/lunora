@@ -110,7 +110,7 @@ interface CronJob {
      * Set when the job targets a durable workflow rather than a function: the
      * workflow's stable name (`defineWorkflow({ name })`) when one was declared,
      * otherwise `""`. `@lunora/codegen` statically resolves the concrete
-     * `lunora/workflows.ts` export + its `WORKFLOW_*` binding for the emitted
+     * `lunora/workflows.ts` export + its class name for the emitted
      * dispatch map, so this authoring-time value is informational only.
      */
     workflow?: string;
@@ -350,8 +350,8 @@ const cronJobs = (): CronJobsBuilder => {
         }
 
         // Workflow target — starts a durable workflow INSTANCE per fire (args ⇒
-        // its `params`). The concrete `lunora/workflows.ts` export + `WORKFLOW_*`
-        // binding is resolved statically by `@lunora/codegen`; the builder only
+        // its `params`). The concrete `lunora/workflows.ts` export + its class
+        // name is resolved statically by `@lunora/codegen`; the builder only
         // records the optional stable-name override for `.jobs()` introspection.
         let dispatchTarget: { functionPath: string } | { workflow: string };
 

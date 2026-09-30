@@ -29,6 +29,22 @@ describe("buildBindingManifest", () => {
         expect(manifest.version).toBe(BINDING_MANIFEST_VERSION);
     });
 
+    it("models workflows declared in exports as class-keyed requirements, and reports other export types", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            exports: {
+                OrderPipelineWorkflow: { name: "order-pipeline", type: "workflow" },
+                SomeObject: { type: "durable-object" },
+            },
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", resource: "order-pipeline", type: "workflow" },
+        ]);
+        expect(manifest.unknown).toContain("exports.SomeObject");
+    });
+
     it("models the media, stream, VPC, and artifacts bindings and both pipeline spellings", () => {
         expect.assertions(2);
 

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1022,6 +1022,45 @@ describe("reconcileWranglerBindings", () => {
             // Another Worker's workflow is not this worker's to move.
             expect(readConfig().workflows).toEqual([{ binding: "OTHER", class_name: "Remote", name: "remote", script_name: "other-worker" }]);
             expect(result.updated).toContain("workflows/OrderPipelineWorkflow → exports");
+        });
+
+        it("keeps a moved binding's deployed name when the declaration differs, and warns", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-09-01",
+                    name: "app",
+                    workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "orders-v1" }],
+                }),
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(readConfig().exports.OrderPipelineWorkflow.name).toBe("orders-v1");
+            expect(result.warnings.join(" ")).toContain('is deployed as "orders-v1" but declared as "order-pipeline"');
+        });
+
+        it("leaves workflows[] alone and warns when the installed wrangler cannot run workflow exports", () => {
+            expect.assertions(3);
+
+            mkdirSync(join(root, "node_modules", "wrangler"), { recursive: true });
+            writeFileSync(join(root, "node_modules", "wrangler", "package.json"), JSON.stringify({ name: "wrangler", version: "4.129.0" }));
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-09-01",
+                    name: "app",
+                    workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }],
+                }),
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(readConfig().exports).toBeUndefined();
+            expect(readConfig().workflows).toHaveLength(1);
+            expect(result.warnings.join(" ")).toContain("wrangler 4.129 (needs >= 4.142)");
         });
 
         const SETTINGS = {

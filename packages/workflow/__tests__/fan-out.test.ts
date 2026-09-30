@@ -162,7 +162,7 @@ const makeDeps = (
 
                 return id;
             },
-            parentBinding: "ParentWorkflow",
+            parentClassName: "ParentWorkflow",
             resolveBinding: () => {
                 return { create, get };
             },
@@ -221,11 +221,14 @@ describe("createParallel", () => {
         // Deterministic ids derived from the parent instance id + declaration index.
         expect(create.mock.calls[0]?.[0]).toStrictEqual({
             id: "parent-1-c0",
-            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c0", index: 0, parentBinding: "ParentWorkflow", parentId: "parent-1" }, x: 1 },
+            params: {
+                [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" },
+                x: 1,
+            },
         });
         expect(create.mock.calls[1]?.[0]).toStrictEqual({
             id: "parent-1-c1",
-            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c1", index: 1, parentBinding: "ParentWorkflow", parentId: "parent-1" } },
+            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c1", index: 1, parentClassName: "ParentWorkflow", parentId: "parent-1" } },
         });
     });
 
@@ -655,7 +658,7 @@ describe("createParallel", () => {
 
                 return id;
             },
-            parentBinding: "ParentWorkflow",
+            parentClassName: "ParentWorkflow",
             resolveBinding: (workflow: string) => {
                 if (workflow === "undoSecond") {
                     throw new Error("no Workflow binding for undoSecond");
@@ -718,7 +721,7 @@ describe("createSpawn", () => {
         const step = makeStep();
         const { create, deps } = makeDeps(step);
 
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "ParentWorkflow", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await createSpawn(deps)("child", { [BRANCH_MARKER_KEY]: forged }).catch((error_: unknown) => error_);
 
@@ -735,18 +738,28 @@ describe("branch marker helpers", () => {
     it("extracts a well-formed marker and ignores anything else", () => {
         expect.assertions(3);
 
-        const marker = { eventType: "lunora:branch:x", index: 0, parentBinding: "ParentWorkflow", parentId: "p1" };
+        const marker = { eventType: "lunora:branch:x", index: 0, parentClassName: "ParentWorkflow", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker, other: 1 })).toEqual(marker);
         expect(extractBranchMarker({ other: 1 })).toBeUndefined();
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: { eventType: "x" } })).toBeUndefined();
     });
 
-    it("rejects a shape-valid marker whose parentBinding is not a workflow export key", () => {
+    it("accepts the export keys of `_`- and `$`-prefixed workflow exports", () => {
+        expect.assertions(2);
+
+        for (const parentClassName of ["_ordersWorkflow", "$ordersWorkflow"]) {
+            const marker = { eventType: "lunora:branch:x", index: 0, parentClassName, parentId: "p1" };
+
+            expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker })).toStrictEqual(marker);
+        }
+    });
+
+    it("rejects a shape-valid marker whose parentClassName is not a workflow export key", () => {
         expect.assertions(1);
 
         // Attacker-chosen env key that is not a Workflow binding must not be dereferenced.
-        const forged = { eventType: "lunora:branch:x", index: 0, parentBinding: "SECRETS", parentId: "p1" };
+        const forged = { eventType: "lunora:branch:x", index: 0, parentClassName: "SECRETS", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
@@ -755,7 +768,7 @@ describe("branch marker helpers", () => {
         expect.assertions(1);
 
         // Attacker-chosen event type outside `lunora:branch:*` must not be sent.
-        const forged = { eventType: "attacker:event", index: 0, parentBinding: "ParentWorkflow", parentId: "p1" };
+        const forged = { eventType: "attacker:event", index: 0, parentClassName: "ParentWorkflow", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
@@ -891,7 +904,7 @@ describe("spawn create-or-attach (a step body that failed after `create` landed)
 });
 
 describe("signalBranchParent", () => {
-    const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "ParentWorkflow", parentId: "parent-1" };
+    const marker = { eventType: "lunora:branch:c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" };
 
     it("sends the outcome event to the parent instance", async () => {
         expect.assertions(2);
@@ -1022,7 +1035,7 @@ describe("signalBranchParent", () => {
 });
 
 describe("signalBranchParentSafe", () => {
-    const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "ParentWorkflow", parentId: "parent-1" };
+    const marker = { eventType: "lunora:branch:c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" };
 
     it("swallows a rejecting parent send (terminated parent) and logs it instead of throwing", async () => {
         expect.assertions(2);

@@ -1,3 +1,32 @@
+diff --git a/dist/lib/container.d.ts b/dist/lib/container.d.ts
+index 83e084ff646b52054db0f389652531880491518d..1ea521cd25bef2e95a05347c0beb7045998c70dd 100644
+--- a/dist/lib/container.d.ts
++++ b/dist/lib/container.d.ts
+@@ -245,7 +245,7 @@ export declare class Container<Env = Cloudflare.Env> extends DurableObject<Env>
+      * When the counter transitions to 0, renew the activity timeout so the
+      * inactivity window starts fresh from the moment the last request completes.
+      */
+-    private decrementInflight;
++    protected decrementInflight(): void;
+     /**
+      * Schedule a task to be executed in the future.
+      *
+@@ -287,10 +287,13 @@ export declare class Container<Env = Cloudflare.Env> extends DurableObject<Env>
+     private onStopCalled;
+     private state;
+     private monitor;
+-    private startInFlight;
++    protected startInFlight?: Promise<unknown>;
+     private monitoredPromise;
+     private sleepAfterMs;
+-    private inflightRequests;
++    protected inflightRequests: number;
++    /** Patched (Lunora): the `durable_object`-policy image reference and size `start()` forwards. */
++    protected image?: string;
++    protected instance?: string | { vcpu: number; memoryMib: number; diskMb: number };
+     private outboundByHostOverrides;
+     private outboundHandlerOverride?;
+     private allowedHostsOverride?;
 diff --git a/dist/lib/container.js b/dist/lib/container.js
 index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..33d5bd400a54866e7a6a4dcbeb69e967c24550a8 100644
 --- a/dist/lib/container.js

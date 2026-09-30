@@ -545,7 +545,7 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `InboundChannelHandler` (type)
 
 ```ts
-type InboundChannelHandler = (request: Request, env: Record<string, unknown>, context?: {
+type InboundChannelHandler = (request: Request, env: Record<string, unknown>, context: {
     exports?: unknown;
 }) => Promise<Response>;
 ```

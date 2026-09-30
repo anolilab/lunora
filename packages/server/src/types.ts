@@ -1509,7 +1509,7 @@ interface ScheduledJob {
  */
 interface SchedulableWorkflowReference {
     /** The workflow/agent export key — its generated class name (present on a generated ref). */
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     /** The workflow/agent export/stable name (present on a generated ref). */
     readonly name?: string;

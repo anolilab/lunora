@@ -66,7 +66,9 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
     }
 
     const targets = discoverContainerInfo(cwd, "lunora").containers.flatMap((container) =>
-        container.image?.kind === "build" ? [{ buildDir: container.image.buildDir, exportName: container.exportName }] : [],
+        container.schedulingPolicy === undefined && container.image.kind === "build"
+            ? [{ buildDir: container.image.buildDir, exportName: container.exportName }]
+            : [],
     );
 
     if (targets.length === 0) {

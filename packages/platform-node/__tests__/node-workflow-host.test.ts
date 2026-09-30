@@ -338,6 +338,26 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         await expect(second.status()).resolves.toMatchObject({ status: "complete" });
     });
 
+    it("deleting by the run id also frees the caller-supplied id", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const first = await host.bindings.trivial.create({ id: "order-2" });
+
+        // `first.id` is the engine run id, not "order-2".
+        const byRunId = await host.bindings.trivial.get(first.id);
+
+        await byRunId.delete();
+
+        const second = await host.bindings.trivial.create({ id: "order-2" });
+
+        expect(second.id).not.toBe(first.id);
+    });
+
     it("deleteBatch reports one entry per input position: duplicates deleted once, unknown ids as errors", async () => {
         expect.hasAssertions();
 
@@ -838,7 +858,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(host.env.EXTRA).toBe("kept");
         expect(host.env.OrderPipelineWorkflow).toBe(host.bindings.orderPipeline);
 
-        const workflows = createWorkflowContext(host.env, [{ binding: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
+        const workflows = createWorkflowContext(host.env, [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
         const instance = await workflows.get("orderPipeline").create({ params: { orderId: "123" } });
 
         const status2 = await instance.status();

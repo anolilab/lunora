@@ -9,7 +9,7 @@ import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
 
 /**
- * Name a schedule target for an error message: a workflow/agent binding, a
+ * Name a schedule target for an error message: a workflow/agent class, a
  * function reference's path, or the bare `"ns:fn"` string the loosely-typed
  * `ctx.scheduler` surface still accepts.
  */
@@ -18,7 +18,7 @@ const targetLabel = (target: CronTarget): string => {
         return target as unknown as string;
     }
 
-    return (isWorkflowReference(target) ? target.binding : target.__lunoraRef) ?? "<unknown>";
+    return (isWorkflowReference(target) ? target.className : target.__lunoraRef) ?? "<unknown>";
 };
 
 /**
@@ -90,14 +90,14 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         if (isWorkflowReference(target)) {
             // A workflow/agent target starts a fresh durable instance on fire; carry
             // its export key (the generated class name) so the runtime can `create()` it.
-            if (typeof target.binding !== "string" || target.binding.length === 0) {
+            if (typeof target.className !== "string" || target.className.length === 0) {
                 throw new LunoraError(
                     "INTERNAL",
-                    "@lunora/scheduler: workflow/agent schedule target is missing its `binding` — pass the generated `workflows.<name>` / `agents.<name>` reference",
+                    "@lunora/scheduler: workflow/agent schedule target is missing its `className` — pass the generated `workflows.<name>` / `agents.<name>` reference",
                 );
             }
 
-            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.binding });
+            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.className });
 
             return scheduled.id;
         }

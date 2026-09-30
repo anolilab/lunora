@@ -531,26 +531,26 @@ export interface CronJobIR {
 
     /**
      * Set when the job targets a durable workflow (a `lunora/workflows.ts`
-     * export) instead of a function: the workflow's `WORKFLOW_*` binding name
-     * plus its export name. On each fire the worker starts a new workflow
+     * export) instead of a function: the workflow's class name (its
+     * `ctx.exports` key) plus its export name. On each fire the worker starts a new workflow
      * INSTANCE (the {@link CronJobIR.args} become its `params`) rather than
      * dispatching a one-shot function.
      */
-    workflow?: { binding: string; exportName: string };
+    workflow?: { className: string; exportName: string };
 }
 
-/**
- * A container lifted from a `defineContainer()` export in
- * `lunora/containers.ts`. Carries everything the emitters and the config layer
- * need to wire wrangler (`containers[]` + the Durable Object binding +
- * migration class) and the generated `_generated/containers.ts` DO class.
- * Names are derived via `@lunora/container`'s shared helpers so codegen and
- * the config layer can never disagree.
- */
-export interface ContainerIR {
+/** A normalized container image source, as written into `wrangler.jsonc`. */
+export type ContainerImageIR =
+    { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+
+/** A `durable_object` container's named image — a Dockerfile or a registry digest, never a Railpack build. */
+export type ContainerNamedImageIR = Exclude<ContainerImageIR, { kind: "build" }>;
+
+/** The fields every container carries, whichever scheduling policy it uses. */
+export interface ContainerIRBase {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
     bindingName: string;
-    /** Static Dockerfile build args (wrangler `image_vars`), when declared as literals. */
+    /** Static Dockerfile build args (wrangler `image_vars` / named-image `build_vars`), when declared as literals. */
     buildArgs?: Record<string, string>;
     /** Generated DO class name, e.g. `TranscoderContainer`. */
     className: string;
@@ -563,38 +563,10 @@ export interface ContainerIR {
     enableInternet?: boolean;
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
-
-    /**
-     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
-     * registry reference (`registry`), or a Railpack source directory (`build`)
-     * that the deploy step builds and pushes before wrangler runs. Absent under
-     * the `durable_object` scheduling policy — see {@link ContainerIR.images}.
-     */
-    image?:
-        { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
-
-    /**
-     * Named images a `durable_object`-scheduled container can start from
-     * (wrangler `containers[].images`), normalized like {@link ContainerIR.image}.
-     * Set only under that policy, where {@link ContainerIR.image} is absent: the
-     * definition's `image` then names a default among these at runtime.
-     */
-    images?: Record<string, { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { kind: "registry"; reference: string }>;
-    /** Static `instanceType`, when declared. */
+    /** Static `instanceType`, when declared (the default size, under `durable_object`). */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
-    /** Static `maxInstances`, when declared. */
-    maxInstances?: number;
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
-    /** Static rolling-deploy tuning, when declared as literals. */
-    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
-
-    /**
-     * `"durable_object"` when the container picks its image and instance size
-     * per start (wrangler `scheduling_policy`); `undefined` for the default
-     * policy. Also the `containerRuntimeScheduling` platform signal.
-     */
-    schedulingPolicy?: "durable_object";
 
     /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means
@@ -602,6 +574,44 @@ export interface ContainerIR {
      */
     sleepAfter?: number | string;
 }
+
+/** A container under the default scheduling policy: one application image, a cap, and a rollout. */
+export interface DefaultScheduledContainerIR extends ContainerIRBase {
+    /**
+     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
+     * registry reference (`registry`), or a Railpack source directory (`build`)
+     * that the deploy step builds and pushes before wrangler runs.
+     */
+    image: ContainerImageIR;
+    /** Static `maxInstances`, when declared. */
+    maxInstances?: number;
+    /** Static rolling-deploy tuning, when declared as literals. */
+    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
+    /** Absent under the default policy — the union's discriminant. */
+    schedulingPolicy?: never;
+}
+
+/**
+ * A container under the `durable_object` scheduling policy (wrangler
+ * `scheduling_policy`): each instance picks its image and size per start. Also
+ * the `containerRuntimeScheduling` platform signal.
+ */
+export interface DurableObjectScheduledContainerIR extends ContainerIRBase {
+    /** The named images an instance can start from (wrangler `containers[].images`). */
+    images?: Record<string, ContainerNamedImageIR>;
+    schedulingPolicy: "durable_object";
+}
+
+/**
+ * A container lifted from a `defineContainer()` export in
+ * `lunora/containers.ts`, discriminated on its scheduling policy. Carries
+ * everything the emitters and the config layer need to wire wrangler
+ * (`containers[]` + the Durable Object binding + migration class) and the
+ * generated `_generated/containers.ts` DO class. Names are derived via
+ * `@lunora/container`'s shared helpers so codegen and the config layer can
+ * never disagree.
+ */
+export type ContainerIR = DefaultScheduledContainerIR | DurableObjectScheduledContainerIR;
 
 /**
  * A workflow lifted from a `defineWorkflow()` export in `lunora/workflows.ts`.

@@ -2492,7 +2492,7 @@ const SHAPE_POKE_CURSOR_TABLE = "__shape_poke_cursor";
 
 ```ts
 interface SchedulableWorkflowReferenceLike {
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }
@@ -3437,7 +3437,6 @@ interface WorkflowInstanceStatusResult {
 
 ```ts
 interface WorkflowMetadata {
-    binding: string;
     className: string;
     exportName: string;
     name: string;

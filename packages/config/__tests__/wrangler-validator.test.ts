@@ -2759,7 +2759,7 @@ export const schema = defineSchema({
             );
 
             expect(report.errors).toStrictEqual([
-                "workflows[0].schedules must be an array of cron expression strings",
+                "workflows[0].schedules must be a non-empty array of cron expression strings",
                 "workflows[0].limits.steps must be a positive integer",
                 'workflows[0].default_retention.error_retention must be a duration string (e.g. "7 days")',
             ]);

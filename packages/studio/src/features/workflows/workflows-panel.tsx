@@ -215,7 +215,6 @@ const WorkflowsPanel = (): ReactElement => {
                                     <TableHead>{t("Export")}</TableHead>
                                     <TableHead>{t("Name")}</TableHead>
                                     <TableHead>{t("Class")}</TableHead>
-                                    <TableHead>{t("Binding")}</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -224,7 +223,6 @@ const WorkflowsPanel = (): ReactElement => {
                                         <TableCell className="font-mono text-xs">{workflow.exportName}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{workflow.name}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{workflow.className}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{workflow.binding}</TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>

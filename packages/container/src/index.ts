@@ -28,7 +28,10 @@ export {
     containerBuildTag,
     containerClassName,
     defineContainer,
+    DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS,
+    isCloudflareRegistryDigest,
     isContainerDefinition,
+    isManagedImage,
     normalizeContainerImage,
     resolveContainerEnvVars,
 } from "./define-container";

@@ -6105,7 +6105,7 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 
 ```ts
 interface SchedulableWorkflowReference {
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }

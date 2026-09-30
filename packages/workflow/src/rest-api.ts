@@ -21,9 +21,8 @@
 import { LunoraError } from "@lunora/errors";
 
 import { capErrorBody } from "../../../shared/cap-error-body";
+import { cloudflareRestRequest } from "../../../shared/cloudflare-rest";
 import type { WorkflowInstanceStatus } from "./types";
-
-const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
 
 /**
  * The Cloudflare instance statuses as an exhaustive lookup. The `satisfies`
@@ -177,32 +176,20 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
     // reference cannot trip "Illegal invocation" in receiver-strict runtimes
     // (where `fetch` must run with the global as its `this`). An injected
     // `config.fetch` is used as-is — the caller owns its binding.
-    const fetchImpl = config.fetch ?? globalThis.fetch.bind(globalThis);
-    const base = `${API_BASE}/${config.accountId}/workflows`;
-
     const request = async (path: string, init?: RequestInit): Promise<Record<string, unknown>> => {
-        const response = await fetchImpl(`${base}${path}`, {
-            ...init,
-            headers: { Authorization: `Bearer ${config.apiToken}`, "Content-Type": "application/json" },
+        const outcome = await cloudflareRestRequest({
+            accountId: config.accountId,
+            apiToken: config.apiToken,
+            ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
+            ...(init === undefined ? {} : { init }),
+            path: `/workflows${path}`,
         });
 
-        const text = await response.text();
-        // Cloudflare always wraps in `{ success, errors, result, ... }`; a non-2xx
-        // OR `success: false` is a failure. Parse defensively — an HTML error page
-        // from a gateway 5xx is not JSON.
-        let body: Record<string, unknown>;
-
-        try {
-            body = JSON.parse(text) as Record<string, unknown>;
-        } catch {
-            throw new WorkflowsRestError(response.status, text);
+        if (!outcome.ok) {
+            throw new WorkflowsRestError(outcome.status, outcome.text);
         }
 
-        if (!response.ok || body["success"] === false) {
-            throw new WorkflowsRestError(response.status, text);
-        }
-
-        return body;
+        return outcome.body;
     };
 
     return {

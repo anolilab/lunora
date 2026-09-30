@@ -842,8 +842,11 @@ export const support = defineAgent({
 // mount on any HTTP route (e.g. an httpRouter POST handler):
 import { dispatchAgentChannel } from "@lunora/agent/channels";
 
-const handler = dispatchAgentChannel([{ agent: support, binding: "SUPPORT_AGENT" }]);
-// handler(request, env) → 200 (claimed / Discord PONG), 401 (bad signature), 204 (declined)
+// `className` is the agent's generated class — its `ctx.exports` key.
+const handler = dispatchAgentChannel([{ agent: support, className: "SupportAgentWorkflow" }]);
+
+// Pass the Worker ctx: on Cloudflare the agent is reached as ctx.exports.SupportAgentWorkflow.
+// handler(c.req.raw, c.env, c.executionCtx) → 200 (claimed / Discord PONG), 401 (bad signature), 204 (declined)
 ```
 
 `dispatchAgentChannel` detects the channel from the signature headers and

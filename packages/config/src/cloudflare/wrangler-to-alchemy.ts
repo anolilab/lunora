@@ -204,6 +204,9 @@ const UNSUPPORTED_FIELDS = [
     "vectorize",
     "worker_loaders",
     "workflows",
+    // Lunora declares its workflows and agents here; the translation has no
+    // workflow construct, so they are reported rather than silently dropped.
+    "exports",
 ] as const;
 
 const collectUnsupported = (config: WranglerConfigShape, unsupported: string[]): void => {

@@ -68,7 +68,7 @@ describe(dispatchAgentEmail, () => {
             return { input: email.subject ?? "", owner: "acct-1", threadKey: "thread-1", title: "Support" };
         };
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
         await handler(message, { SupportAgentWorkflow: support.binding }, {});
@@ -90,7 +90,7 @@ describe(dispatchAgentEmail, () => {
             return { input: email.subject ?? "", owner: "acct-1", threadKey: "thread-1", title: "Support" };
         };
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage(UNAUTHENTICATED_EMAIL);
 
         await handler(message, { SupportAgentWorkflow: support.binding }, {});
@@ -110,7 +110,7 @@ describe(dispatchAgentEmail, () => {
         const onEmail: AgentEmailMapper = () => {
             return { input: "x", threadKey: "t" };
         };
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage(raw);
 
         await handler(message, { SupportAgentWorkflow: support.binding }, {});
@@ -216,7 +216,7 @@ describe(dispatchAgentEmail, () => {
 
         const onEmail: AgentEmailMapper = () => null;
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
         await handler(message, { SupportAgentWorkflow: support.binding }, {});
@@ -238,8 +238,8 @@ describe(dispatchAgentEmail, () => {
         };
 
         const handler = dispatchAgentEmail([
-            { agent: { onEmail: decline }, binding: "SalesAgentWorkflow" },
-            { agent: { onEmail: claim }, binding: "SupportAgentWorkflow" },
+            { agent: { onEmail: decline }, className: "SalesAgentWorkflow" },
+            { agent: { onEmail: claim }, className: "SupportAgentWorkflow" },
         ]);
         const { message } = fakeMessage();
 
@@ -260,8 +260,8 @@ describe(dispatchAgentEmail, () => {
         };
 
         const handler = dispatchAgentEmail([
-            { agent: { onEmail: claim }, binding: "FirstAgentWorkflow" },
-            { agent: { onEmail: claim }, binding: "SecondAgentWorkflow" },
+            { agent: { onEmail: claim }, className: "FirstAgentWorkflow" },
+            { agent: { onEmail: claim }, className: "SecondAgentWorkflow" },
         ]);
         const { message } = fakeMessage();
 
@@ -277,7 +277,7 @@ describe(dispatchAgentEmail, () => {
         const claim: AgentEmailMapper = (email: InboundEmail) => {
             return { input: email.subject ?? "", threadKey: "t" };
         };
-        const handler = dispatchAgentEmail([{ agent: { onEmail: claim }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail: claim }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
         // No SupportAgentWorkflow binding on env → a permanently misconfigured deployment, so
@@ -300,7 +300,7 @@ describe(dispatchAgentEmail, () => {
                 threadKey: "t",
             }) as unknown as ReturnType<AgentEmailMapper>;
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
         await handler(message, { SupportAgentWorkflow: support.binding }, {});

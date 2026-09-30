@@ -171,6 +171,9 @@ const toMs = (duration: number | string): number => {
  */
 const ALIAS_DEFINITION_ID = "@lunora/platform-node:alias";
 
+/** The store key of the reverse alias pointer a run carries back to its caller-supplied id. */
+const aliasOfKey = (runId: string): string => `@lunora/platform-node:alias-of:${runId}`;
+
 /** The per-attempt info a `step.do` callback receives. `count` is 1 because the adapter makes exactly one `ctx.step` call per name. */
 const stepContext = (name: string, attempt: number, config: WorkflowStepConfigLike): WorkflowStepContextLike => {
     return {
@@ -606,7 +609,7 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
      * cannot write the run back; unlike `terminate` it leaves no tombstone, so
      * a deleted run reads back as `unknown`.
      */
-    const deleteRun = async (id: string, aliasId?: string): Promise<boolean> => {
+    const deleteRun = async (id: string): Promise<boolean> => {
         const current = await store.load(id);
 
         if (current === undefined || current.definitionId === ALIAS_DEFINITION_ID) {
@@ -616,19 +619,23 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         terminated.add(id);
         await store.delete(id);
 
-        // The caller-supplied id is freed with the run: a surviving alias would
-        // turn a later `create({ id })` into a "retried create" of the deleted run.
-        if (aliasId !== undefined) {
-            await store.delete(aliasId);
+        // The caller-supplied id is freed with the run, however the run was
+        // reached: a surviving alias would turn a later `create({ id })` into a
+        // "retried create" of the deleted run.
+        const reverse = await store.load(aliasOfKey(id));
+
+        if (reverse !== undefined) {
+            await store.delete(reverse.snapshot as string);
+            await store.delete(aliasOfKey(id));
         }
 
         return true;
     };
 
-    const instanceFor = (id: string, aliasId?: string): WorkflowInstanceLike => {
+    const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
             delete: async () => {
-                await deleteRun(id, aliasId);
+                await deleteRun(id);
             },
             id,
             pause: () =>
@@ -752,7 +759,7 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
         // A retried create with the same id is the same run, not a second one.
         if (existing?.definitionId === ALIAS_DEFINITION_ID) {
-            return instanceFor(existing.snapshot as string, createOptions.id);
+            return instanceFor(existing.snapshot as string);
         }
 
         // An id that already names a real run is refused rather than aliased
@@ -776,8 +783,16 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
             status: "failed",
             updatedAt: Date.now(),
         });
+        // The reverse pointer, so deleting the run by either id frees the alias.
+        await store.save({
+            definitionId: ALIAS_DEFINITION_ID,
+            runId: aliasOfKey(result.runId),
+            snapshot: createOptions.id,
+            status: "failed",
+            updatedAt: Date.now(),
+        });
 
-        return instanceFor(result.runId, createOptions.id);
+        return instanceFor(result.runId);
     };
 
     const bindings: Record<string, WorkflowBindingLike> = {};
@@ -808,23 +823,17 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 }
 
                 const result: WorkflowBatchDeleteResult = { deleted: [], errors: [] };
-                const deletedIds = new Set<string>();
+                // Per input id: a duplicate repeats its first outcome, as Cloudflare does —
+                // re-resolving it would miss, since the first delete freed its alias.
+                const outcomes = new Map<string, boolean>();
 
                 for (const instanceId of instanceIds) {
-                    // Keyed by the caller's id as well as the run's: deleting a run
-                    // frees its alias, so a repeated alias no longer resolves to it.
-                    if (deletedIds.has(instanceId)) {
-                        result.deleted.push({ id: instanceId });
-
-                        continue;
-                    }
-
                     // eslint-disable-next-line no-await-in-loop -- see above
-                    const runId = await resolveAlias(instanceId);
+                    const deleted = outcomes.get(instanceId) ?? (await deleteRun(await resolveAlias(instanceId)));
 
-                    // eslint-disable-next-line no-await-in-loop -- see above
-                    if (deletedIds.has(runId) || (await deleteRun(runId, runId === instanceId ? undefined : instanceId))) {
-                        deletedIds.add(runId).add(instanceId);
+                    outcomes.set(instanceId, deleted);
+
+                    if (deleted) {
                         result.deleted.push({ id: instanceId });
                     } else {
                         result.errors.push({ code: 404, id: instanceId, message: `workflow instance "${instanceId}" not found` });
@@ -833,11 +842,7 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
                 return result;
             },
-            get: async (instanceId) => {
-                const runId = await resolveAlias(instanceId);
-
-                return instanceFor(runId, runId === instanceId ? undefined : instanceId);
-            },
+            get: async (instanceId) => instanceFor(await resolveAlias(instanceId)),
         };
 
         bindings[exportName] = binding;

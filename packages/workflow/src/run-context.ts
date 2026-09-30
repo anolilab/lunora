@@ -11,7 +11,7 @@ import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire } from "../../../shared/wire-codec";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { dedupNamespace, pinDedupId } from "./dedup-id";
 import { workflowClassName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
@@ -69,9 +69,9 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // use, so no generated map is needed for the workflow body to spawn children.
     const resolveBinding: WorkflowBindingResolver = (workflow: string) => {
         const key = workflowClassName(workflow);
-        const binding = resolveWorkflowBinding(options.env, options.exports, key) as WorkflowBindingLike | undefined;
+        const binding = resolveWorkflowHandle<WorkflowBindingLike>(options.env, options.exports, key, ["create", "get"]);
 
-        if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
+        if (binding === undefined) {
             throw new LunoraError(
                 "INTERNAL",
                 `@lunora/workflow: cannot spawn child workflow "${workflow}" — no "${key}" on ctx.exports or env (is it declared in lunora/workflows.ts?)`,
@@ -119,7 +119,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         instanceId: options.event.instanceId,
         log,
         nextChildId,
-        parentBinding: workflowClassName(options.exportName),
+        parentClassName: workflowClassName(options.exportName),
         resolveBinding,
         step: options.step,
     };
