@@ -14,6 +14,7 @@ import type { BackupStore, ScheduledControllerLike, WorkerOptions } from "./crea
 import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { streamExportRows } from "./export-stream";
+import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 import { toHex } from "./storage-admin-routes";
 
@@ -330,26 +331,22 @@ const previewBackupRetention = async (options: WorkerOptions): Promise<BackupRet
  * (plus a manifest sidecar) to `backupStore`. The snapshot is keyed by the
  * trigger's `scheduledTime`, so it is named after the moment it represents.
  *
- * Requires `backupStore`, `queryCoordinator` and an admin token — the export
- * fans out to each shard's admin gate, which the bearer authenticates. Missing
- * prerequisites throw so the platform records a failed cron invocation rather
- * than silently skipping the backup.
+ * Requires `backupStore` and an admin token — the export fans out to each
+ * shard's admin gate, which the bearer authenticates. Missing prerequisites
+ * throw so the platform records a failed cron invocation rather than silently
+ * skipping the backup.
  */
 const runScheduledBackup = async (
     options: WorkerOptions,
+    coordinator: QueryCoordinator,
     shardDO: ShardNamespaceLike,
     adminToken: string | undefined,
     controller: ScheduledControllerLike,
 ): Promise<void> => {
     const store = options.backupStore;
-    const coordinator = options.queryCoordinator;
 
     if (!store) {
         throw new LunoraError("scheduled backup requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
-    }
-
-    if (!coordinator) {
-        throw new LunoraError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
     }
 
     if (!adminToken || adminToken.length === 0) {

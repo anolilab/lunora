@@ -431,6 +431,7 @@ export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-di
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";
 export { ShardRunner } from "./shard-runner";
+export { stubByName } from "./sibling-channel";
 export { runSocketPool } from "./socket-pool";
 export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";

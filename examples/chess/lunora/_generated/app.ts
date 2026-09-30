@@ -3,7 +3,7 @@
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
@@ -293,7 +293,16 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["profiles", "lobbies", "games", "moves", "ratelimit_buckets"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["profiles", { mode: { kind: "root" } }],
+            ["lobbies", { mode: { kind: "root" } }],
+            ["games", { mode: { kind: "root" } }],
+            ["moves", { mode: { kind: "root" } }],
+            ["ratelimit_buckets", { mode: { kind: "root" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

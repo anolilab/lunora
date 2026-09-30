@@ -79,6 +79,8 @@ lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
             [--format json]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset] [--format json]
+lunora shards prune [--tables <a,b>]    # drop empty shards from the shard registry
+            [--dry-run] [--format json]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
                   [--schema <s>] [--no-procedures] # existing Postgres/MySQL DB
                   [--format json]
@@ -1044,6 +1046,25 @@ Targeting a non-local worker needs `--prod` plus an explicit `--url`, and prompt
 unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
 visible to other local processes through the process table. See
 [@lunora/seed](/docs/packages/seed) for using the same generator inside tests.
+
+### `lunora shards`
+
+Maintains the shard registry, the record of which shards hold `.shardBy()` rows
+that cross-shard export, backups, CDC sync and migrations fan out to. A shard
+registers when it first writes a table and is never removed on its own, so
+fan-outs keep visiting shards that have since emptied. `prune` asks every
+registered shard to drop its entry for each table it holds no rows of.
+
+```bash
+lunora shards prune --dry-run         # list the empty registered shards, change nothing
+lunora shards prune                   # remove them from the registry
+lunora shards prune --tables messages # only the shards listed for `messages`
+```
+
+Each shard checks its own rows, so a shard written during the prune keeps (or
+regains) its entry. A shard the prune cannot reach keeps its entry too, and the
+command exits `1` so you can re-run it. Needs a registry: an app without
+`.shardRegistry(...)` gets a `400`. See [Sharding](/docs/concepts/sharding#the-shard-registry).
 
 ### `lunora introspect`
 

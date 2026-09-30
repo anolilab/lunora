@@ -35,7 +35,7 @@ import { Project } from "ts-morph";
 
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
-import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
+import { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -598,11 +598,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return { refused: EXIT_CODE.USAGE };
     }
 
-    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
     return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
 };

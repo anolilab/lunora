@@ -341,6 +341,18 @@ describe("framework-compose-plugin", () => {
             expect(code.indexOf(".scheduler(")).toBeLessThan(code.indexOf(".httpRouter("));
         });
 
+        it("wires the shard registry into the composed entry for a .shardBy() schema", async () => {
+            expect.assertions(2);
+
+            // Keyed on the generated `shardRegistry` module, like the scheduler:
+            // without the call, cross-shard export and CDC sync refuse every
+            // `.shardBy()` table on a class-A app.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["shardRegistry"] });
+
+            expect(code).toContain(".shardRegistry((env) => env.SHARD_REGISTRY)");
+            expect(code).toContain(`export * from "./lunora/_generated/shardRegistry";`);
+        });
+
         it("composes nothing scheduler-shaped when the binding is absent", async () => {
             expect.assertions(2);
 

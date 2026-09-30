@@ -224,6 +224,70 @@ doesn't pin a shard is a **fan-out**: codegen routes it through the Query
 Coordinator Worker, which dispatches to every shard and merges the results.
 Avoid this in hot paths.
 
+## The shard registry
+
+A Durable Object namespace can't list the objects in it, so a fan-out needs a
+record of which shards exist. That record is `ShardRegistryDO`: each shard
+registers its key the first time it writes a `.shardBy()` table, and cross-shard
+export, `lunora backup`, CDC sync and data migrations fan out to the keys it
+lists.
+
+Vite-first apps (`wrangler.main` set to `virtual:lunora/worker`) are wired
+automatically once the schema has a `.shardBy()` table. With a hand-written
+worker entry, declare the registry on the builder, export the class, and bind it:
+
+```ts
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .shardRegistry((env) => env.SHARD_REGISTRY)
+    .build();
+
+export const ShardDO = app.ShardDO;
+export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";
+```
+
+```jsonc
+"durable_objects": {
+    "bindings": [
+        { "name": "SHARD", "class_name": "ShardDO" },
+        { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+    ],
+},
+"migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
+],
+```
+
+`lunora dev` adds the binding and migration for you once the class is exported.
+
+Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
+naming it rather than quietly covering the default shard alone. Root and
+`.global()` tables don't need a registry.
+
+A key stays registered after its shard empties, so fan-outs keep visiting it
+until you prune:
+
+```bash
+lunora shards prune --dry-run   # list the registered shards that hold no rows
+lunora shards prune             # remove them from the registry
+```
+
+Each listed shard checks its own rows and removes its entry only if it holds
+none of that table. A shard that is written again later registers again on
+that write. A shard the prune can't reach keeps its entry, and the command
+exits non-zero so you can re-run it. Soft-deleted rows still count as rows.
+
+Gate who can write to which shard with `authorizeShard` (see below). A client
+that can invent shard keys can otherwise grow the registry faster than you
+prune it.
+
+<Callout type="warn">
+    Shards register when they write, so a shard whose rows were written **before** the registry was bound is not listed until it is written again. Bind the
+    registry before you shard a populated table. A newly registered shard can take up to 30 seconds to appear in a worker's fan-out, including the worker that
+    served the write.
+</Callout>
+
 ## Securing shard access
 
 Once you shard, the shard key is a client-supplied address, so one tenant could

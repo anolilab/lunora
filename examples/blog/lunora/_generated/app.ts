@@ -9,7 +9,7 @@ import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
@@ -463,7 +463,14 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["posts", "drafts", "ratelimit_buckets"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["posts", { mode: { kind: "root" } }],
+            ["drafts", { mode: { kind: "root" } }],
+            ["ratelimit_buckets", { mode: { kind: "root" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
 
         if (this.schedulerDeclaration) {
             options.schedulerDO = this.schedulerDeclaration.namespace(env);

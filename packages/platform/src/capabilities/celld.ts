@@ -67,7 +67,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: {
             level: "emulated",
-            note: "Same coordinator + relay tier as on Cloudflare, over cells rather than Durable Objects. It rides namespace stubs, so the celld gap that would bite — an RPC stub cannot cross an isolate boundary — does not apply to the fetch-shaped hops the tier makes; a remote cell call cannot be retried once its body starts streaming, because celld keeps no replay copy",
+            note: "Same coordinator + relay tier as on Cloudflare, over cells rather than Durable Objects. It rides namespace stubs, so the celld gap that would bite — an RPC stub cannot cross an isolate boundary — does not apply to the fetch-shaped hops the tier makes; a remote cell call cannot be retried once its body starts streaming, because celld keeps no replay copy. Shard keys come from ShardRegistryDO exactly as on Cloudflare: each shard registers on its first write to a .shardBy() table, so one written before the registry was bound is not listed until it is written again",
         },
         durableStreams: {
             level: "emulated",

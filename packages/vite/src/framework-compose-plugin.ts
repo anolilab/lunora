@@ -182,6 +182,10 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // project declare the binding with no scheduler code and get
     // `TypeError: ….scheduler is not a function` at worker boot.
     const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => env.SCHEDULER })` : "";
+    // The shard registry's twin of the above: keyed on the generated
+    // `shardRegistry` module (a schema with `.shardBy()` tables), whose star
+    // re-export forwards `ShardRegistryDO`.
+    const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => env.SHARD_REGISTRY)` : "";
 
     // `configureApp` receives the builder and returns it, so the framework wiring
     // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
@@ -237,7 +241,7 @@ ${wiring.imports}
 import { defineApp } from "${base}/app";${appConfigImport}
 
 const app = ${configureOpen}defineApp()
-    .shard((env) => env.SHARD)${schedulerCall}${configureClose}
+    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 

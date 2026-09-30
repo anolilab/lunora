@@ -2071,3 +2071,12 @@ export interface StaleMigrationImportIR {
     /** Which migration guide covers this platform. */
     platform: "convex" | "firebase" | "supabase";
 }
+
+/**
+ * Whether a table is `.shardBy()` — the one spelling of that check. `shardMode`
+ * has exactly one object-typed member today, so `.kind === "shardBy"` is a no-op
+ * under the current type; it is kept so this still discriminates correctly if
+ * the union ever grows a second object-shaped shard mode.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
+export const isShardByTable = (table: Pick<TableIR, "shardMode">): boolean => typeof table.shardMode === "object" && table.shardMode.kind === "shardBy";

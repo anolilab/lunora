@@ -8,9 +8,13 @@
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
+    ],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
     // Cloudflare Workflows are NOT Durable Objects — they live in their own
     // `workflows[]` array with no migration entry. `class_name` must be exported

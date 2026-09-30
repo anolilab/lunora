@@ -53,6 +53,7 @@ import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
 import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
+import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
 import schemaDeclaresRelationGraph from "./relation-graph";
@@ -279,7 +280,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // `@lunora/server`, so the `featureUsage` arm (which keys `scheduler` on
         // a `@lunora/scheduler` import) cannot see one.
         cronTriggers: crons.length > 0,
-        crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
+        crossShardFanout: schema.tables.some((table) => isShardByTable(table)),
         containerEgressPolicy: codeSignals.containerEgressPolicy,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),

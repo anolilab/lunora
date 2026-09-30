@@ -49,6 +49,9 @@
  */
 import { jsonResponse } from "../../../shared/json-response";
 
+/** Ceiling on one registry round trip from a shard. */
+const REGISTER_TIMEOUT_MS = 5000;
+
 /** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
 const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
 
@@ -328,4 +331,31 @@ class ShardRegistryDO {
     }
 }
 
-export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO };
+/** A registry stub, as a caller inside `@lunora/do` resolves it. */
+type RegistryStub = { fetch: (url: string, init?: RequestInit) => Promise<Response> };
+
+/**
+ * `POST` one `(table, shardKey)` pair to {@link ShardRegistryDO}'s `/register` or
+ * `/unregister` route — the client half for a caller inside `@lunora/do` (the
+ * runtime's `createDynamicShardRegistry` is the worker-side twin). Throws on a
+ * non-2xx answer.
+ */
+const postRegistration = async (stub: RegistryStub, route: "/register" | "/unregister", table: string, shardKey: string): Promise<void> => {
+    const response = await stub.fetch(`https://shard-registry.internal${route}`, {
+        body: JSON.stringify({ shardKey, table }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+        // Bounded, so a stuck registry cannot pin the shard's background work.
+        signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+        throw new Error(`shard registry ${route} returned ${String(response.status)}: ${await response.text()}`);
+    }
+};
+
+const registerShardKey = async (stub: RegistryStub, table: string, shardKey: string): Promise<void> => postRegistration(stub, "/register", table, shardKey);
+
+const unregisterShardKey = async (stub: RegistryStub, table: string, shardKey: string): Promise<void> => postRegistration(stub, "/unregister", table, shardKey);
+
+export { registerShardKey, SHARD_REGISTRY_DO_NAME, ShardRegistryDO, unregisterShardKey };
