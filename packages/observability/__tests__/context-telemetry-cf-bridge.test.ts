@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { HostSpanLike, HostTracingLike, SpanHandle, TracerDeps } from "../src/context-telemetry";
-import { createTracer, setHostSpanAttributes } from "../src/context-telemetry";
+import type { SpanHandle, TracerDeps } from "../src/context-telemetry";
+import { createTracer } from "../src/context-telemetry";
+import type { HostSpanLike, HostTracingLike } from "../src/host-span";
+import { setHostSpanAttributes } from "../src/host-span";
 
 /**
  * Unit coverage for the opt-in Cloudflare custom-spans bridge in

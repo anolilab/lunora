@@ -193,7 +193,7 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */
 const workflowTarget = (workflow: WorkflowIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: workflow.className, exportName: workflow.exportName } };
+    return { workflow: { className: workflow.className, exportName: workflow.exportName } };
 };
 
 /**
@@ -205,7 +205,7 @@ const workflowTarget = (workflow: WorkflowIR): Pick<CronJobIR, "workflow"> => {
  * params.
  */
 const agentTarget = (agent: AgentIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: agent.className, exportName: agent.exportName } };
+    return { workflow: { className: agent.className, exportName: agent.exportName } };
 };
 
 /**
@@ -249,7 +249,7 @@ const resolveReferenceAccess = <Definition>(
 /**
  * Resolve the cron's target argument into either a function dispatch
  * (`{ functionPath }`) or a durable-workflow start
- * (`{ workflow: { binding, exportName } }`).
+ * (`{ workflow: { className, exportName } }`).
  *
  * Targets mirror the generated reference objects in `_generated/api.ts`: a
  * `workflows.NAME` access is the canonical generated workflow reference; an

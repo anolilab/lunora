@@ -215,7 +215,7 @@ interface WorkflowBindingLike<Params = Record<string, unknown>> {
 
 ```ts
 interface WorkflowBindingSpec {
-    binding: string;
+    className: string;
     exportName: string;
 }
 ```

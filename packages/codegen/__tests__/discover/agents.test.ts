@@ -411,7 +411,7 @@ describe("emit (agents)", () => {
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
         expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
-        expect(shard).toContain('{ binding: "SupportAgentWorkflow", exportName: "support" },');
+        expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
         expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
         expect(shard).toContain("agents,");
     });

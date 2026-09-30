@@ -3,7 +3,7 @@ import { isDuplicateInstanceError } from "@lunora/workflow";
 import { jsonSchema } from "ai";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { agentClassName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
@@ -144,7 +144,7 @@ const finalAnswer = (history: ReadonlyArray<AgentMessageRow>): string => {
  */
 const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubToolInput, string> => {
     if (typeof options.name !== "string" || options.name.length === 0) {
-        throw new LunoraError("INTERNAL", "@lunora/agent: agent.asTool requires a `name` (the child agent's export name, selecting its AGENT_* binding)");
+        throw new LunoraError("INTERNAL", "@lunora/agent: agent.asTool requires a `name` (the child agent's export name, selecting its exported workflow)");
     }
 
     if (typeof options.description !== "string" || options.description.length === 0) {
@@ -176,9 +176,9 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             return `Sub-agent "${name}" was not started: the maximum delegation depth of ${String(MAX_DELEGATION_DEPTH)} is already reached. Answer with what you have instead of delegating further.`;
         }
 
-        const binding = resolveWorkflowBinding(context.env, context.exports, agentKey) as AgentWorkflowBindingLike | undefined;
+        const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(context.env, context.exports, agentKey, ["create", "get"]);
 
-        if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
+        if (binding === undefined) {
             throw new LunoraError(
                 "INTERNAL",
                 `@lunora/agent: agent.asTool("${name}") found no "${agentKey}" on ctx.exports or env — declare the "${name}" agent so codegen wires it`,

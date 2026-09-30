@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverContainers } from "../../src/discover/containers";
 import { emitContainers, emitServer, emitShard } from "../../src/emit";
-import type { SchemaIR } from "../../src/ir";
+import type { DefaultScheduledContainerIR, SchemaIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -146,7 +146,7 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: "./w", env: { LOG_LEVEL: level }, sleepAfter: 60 * 5 });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect(container).toBeDefined();
         // sleepAfter was a non-literal expression — lifted as undefined, not an error.
@@ -182,6 +182,24 @@ describe("discover/containers", () => {
         ]);
     });
 
+    it("applies the same image rules as defineContainer: registry digests and a declared default image", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", images: { base: { registry: "docker.io/acme/app:1" } } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/digest-pinned \(@sha256\) reference under registry.cloudflare.com/u);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", image: "gpu", images: { base: "./container" } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`image` "gpu" must name an entry of `images`/u);
+    });
+
     it("rejects default-policy fields on a durable_object container, and images without the policy", () => {
         expect.assertions(2);
 
@@ -208,7 +226,10 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: { build: "./services/worker/" } });
         `);
 
-        expect(discoverContainers(newProject(), workdir)[0]?.image).toStrictEqual({ buildDir: "./services/worker", kind: "build" });
+        expect((discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[])[0]?.image).toStrictEqual({
+            buildDir: "./services/worker",
+            kind: "build",
+        });
     });
 
     it("lifts literal enableInternet and sleepAfter for the advisor", () => {
@@ -219,7 +240,7 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: "./w", enableInternet: false, sleepAfter: "30s" });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect(container?.enableInternet).toBe(false);
         expect(container?.sleepAfter).toBe("30s");
@@ -332,7 +353,7 @@ describe("emit (containers)", () => {
             export const worker = defineContainer({ ...base, maxInstances, instanceType, buildArgs: { NODE_VERSION } });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect({
             buildArgs: container?.buildArgs,
@@ -486,7 +507,7 @@ describe("emit (containers)", () => {
             export const worker = defineContainer({ ...base, maxInstances });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect({ instanceType: container?.instanceType, maxInstances: container?.maxInstances }).toStrictEqual({ instanceType: "standard-2", maxInstances: 3 });
     });
@@ -509,7 +530,7 @@ describe("emit (containers)", () => {
             export const worker = defineContainer({ image: "./containers/worker", maxInstances, rollout: { gracePeriodSeconds } });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect({ maxInstances: container?.maxInstances, rollout: container?.rollout }).toStrictEqual({ maxInstances: 3, rollout: { gracePeriodSeconds: 30 } });
     });

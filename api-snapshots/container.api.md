@@ -251,6 +251,15 @@ interface CustomContainerInstanceType {
 }
 ```
 
+### `DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS` (const)
+
+```ts
+const DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS: readonly [
+    "maxInstances",
+    "rollout"
+];
+```
+
 ### `DefaultScheduledContainerConfig` (interface)
 
 ```ts
@@ -375,10 +384,22 @@ const defineContainer: {
 };
 ```
 
+### `isCloudflareRegistryDigest` (const)
+
+```ts
+const isCloudflareRegistryDigest: (reference: unknown) => boolean;
+```
+
 ### `isContainerDefinition` (const)
 
 ```ts
 const isContainerDefinition: (value: unknown) => value is ContainerDefinition;
+```
+
+### `isManagedImage` (const)
+
+```ts
+const isManagedImage: (name: string) => boolean;
 ```
 
 ### `normalizeContainerImage` (const)
@@ -472,8 +493,6 @@ class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOpti
 
 ```ts
 class LunoraContainer<Env = unknown> extends Container<Env> {
-    protected image?: string;
-    protected instance?: ContainerRuntimeInstanceType;
     constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string, jurisdiction?: DurableObjectJurisdiction);
     lunoraSnapshot(options?: {
         name?: string;
@@ -719,9 +738,18 @@ class Container<Env = Cloudflare.Env> extends DurableObject<Env> {
     onActivityExpired(): Promise<void>;
     onError(error: unknown): unknown;
     renewActivityTimeout(): void;
+    protected decrementInflight(): void;
     schedule<T = string>(when: Date | number, callback: string, payload?: T): Promise<Schedule<T>>;
     containerFetch(requestOrUrl: Request | string | URL, portOrInit?: number | RequestInit, portParam?: number): Promise<Response>;
     fetch(request: Request): Promise<Response>;
+    protected startInFlight?: Promise<unknown>;
+    protected inflightRequests: number;
+    protected image?: string;
+    protected instance?: string | {
+        vcpu: number;
+        memoryMib: number;
+        diskMb: number;
+    };
     private get effectiveAllowedHosts();
     private get effectiveDeniedHosts();
     deleteSchedules(name: string): void;
@@ -811,7 +839,7 @@ type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 ### `LunoraStartOptions` (type)
 
 ```ts
-type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & StartSelection & {
+type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & Pick<StartOverride, "image" | "instanceType"> & {
     snapshot?: ContainerSnapshot;
 };
 ```
@@ -910,10 +938,11 @@ interface StartAndWaitForPortsOptions {
 }
 ```
 
-### `StartSelection` (interface)
+### `StartOverride` (interface)
 
 ```ts
-interface StartSelection {
+interface StartOverride {
+    envVars?: Record<string, string>;
     image?: string;
     instanceType?: ContainerRuntimeInstanceType;
 }

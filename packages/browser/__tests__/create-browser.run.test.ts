@@ -141,24 +141,22 @@ describe("guardrails", () => {
         expect(calls[0]).toStrictEqual({ guardrails: { allowedDomains: [] } });
     });
 
-    it("refuses more hosts than Browser Run guardrails accept, before launching", async () => {
+    it("refuses more hosts than Browser Run guardrails accept, at createBrowser", () => {
         expect.assertions(2);
 
         const { calls, launch } = captureLaunch();
         const allowedHosts = Array.from({ length: 51 }, (_, index) => `h${String(index)}.example.com`);
-        const browser = createBrowser({ allowedHosts, binding: plainBinding, launch });
 
-        await expect(browser.launch(async () => "ok")).rejects.toThrow(/at most 50/u);
+        expect(() => createBrowser({ allowedHosts, binding: plainBinding, launch })).toThrow(/at most 50/u);
         expect(calls).toHaveLength(0);
     });
 
-    it("refuses a wildcard entry, which guardrails would widen past the exact-match allowlist", async () => {
+    it("refuses a wildcard entry, which guardrails would widen past the exact-match allowlist", () => {
         expect.assertions(2);
 
         const { calls, launch } = captureLaunch();
-        const browser = createBrowser({ allowedHosts: ["example.com", "*"], binding: plainBinding, launch });
 
-        await expect(browser.launch(async () => "ok")).rejects.toThrow(/contains "\*"/u);
+        expect(() => createBrowser({ allowedHosts: ["example.com", "*"], binding: plainBinding, launch })).toThrow(/contains "\*"/u);
         expect(calls).toHaveLength(0);
     });
 });

@@ -28,7 +28,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import { isDuplicateInstanceError, NonRetryableError } from "./errors";
 import type {
@@ -114,8 +114,12 @@ const BRANCH_EVENT_PREFIX = `${RESERVED_EVENT_TYPE_PREFIX}branch:`;
 /** The completion event a branch child sends to its parent. Discriminated so an `undefined` value is distinguishable from a failure. */
 type BranchOutcome = { error: { message: string; name: string }; status: "error" } | { status: "ok"; value?: unknown };
 
-/** The shape `workflowClassName` gives every workflow export key: `OrderPipelineWorkflow`. */
-const WORKFLOW_EXPORT_KEY = /^[A-Z]\w*Workflow$/u;
+/**
+ * The shape `workflowClassName` gives every workflow export key — an identifier
+ * codegen accepts (`[A-Za-z_$][\w$]*`, first letter upper-cased) followed by
+ * `Workflow`: `OrderPipelineWorkflow`, `_ordersWorkflow`, `$ordersWorkflow`.
+ */
+const WORKFLOW_EXPORT_KEY = /^[A-Z_$][\w$]*Workflow$/u;
 
 /** The marker the parent injects into a child's params and the child reads back to address its parent. */
 interface BranchMarker {
@@ -124,7 +128,7 @@ interface BranchMarker {
     /** Declaration-order index of the branch (for log correlation). */
     index: number;
     /** The parent workflow's own export key (its generated class name) — how the child reaches back. */
-    parentBinding: string;
+    parentClassName: string;
     /** The parent workflow instance id. */
     parentId: string;
 }
@@ -148,7 +152,7 @@ interface FanOutDeps {
     /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). Free to return any length — every result is folded through {@link boundInstanceId} before it reaches `create`. */
     nextChildId: (explicit?: string) => string;
     /** The running workflow's own export key — passed to children so they can signal back. */
-    parentBinding: string;
+    parentClassName: string;
     /** Resolve a child workflow's binding by export name. */
     resolveBinding: WorkflowBindingResolver;
     /** The native Cloudflare durable-step API. */
@@ -505,7 +509,12 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             planned.map((plan) =>
                 deps.step.do(`${SPAWN_STEP_PREFIX}${plan.childId}`, async (): Promise<BranchOutcome | undefined> => {
                     const binding = deps.resolveBinding(plan.item.workflow);
-                    const marker: BranchMarker = { eventType: plan.eventType, index: plan.index, parentBinding: deps.parentBinding, parentId: deps.instanceId };
+                    const marker: BranchMarker = {
+                        eventType: plan.eventType,
+                        index: plan.index,
+                        parentClassName: deps.parentClassName,
+                        parentId: deps.instanceId,
+                    };
 
                     const { attached, instance } = await createOrAttach(binding, {
                         id: plan.childId,
@@ -650,7 +659,7 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
 
     if (
         typeof candidate.eventType !== "string" ||
-        typeof candidate.parentBinding !== "string" ||
+        typeof candidate.parentClassName !== "string" ||
         typeof candidate.parentId !== "string" ||
         typeof candidate.index !== "number"
     ) {
@@ -661,11 +670,11 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
     // constrain the parent dereference to a workflow export key and the send to
     // the branch event namespace. Legitimate markers always satisfy both
     // (createParallel stamps `workflowClassName` keys and `lunora:branch:*` types).
-    if (!WORKFLOW_EXPORT_KEY.test(candidate.parentBinding) || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
+    if (!WORKFLOW_EXPORT_KEY.test(candidate.parentClassName) || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
         return undefined;
     }
 
-    return { eventType: candidate.eventType, index: candidate.index, parentBinding: candidate.parentBinding, parentId: candidate.parentId };
+    return { eventType: candidate.eventType, index: candidate.index, parentClassName: candidate.parentClassName, parentId: candidate.parentId };
 };
 
 /** Return the child's params with the internal branch marker removed — the shape the user handler's `ctx.params` should see. */
@@ -692,9 +701,9 @@ const signalBranchParent = async (
     marker: BranchMarker,
     outcome: BranchOutcome,
 ): Promise<void> => {
-    const binding = resolveWorkflowBinding(deps.env, deps.exports, marker.parentBinding) as { get?: (id: string) => Promise<WorkflowInstanceLike> } | undefined;
+    const binding = resolveWorkflowHandle<{ get: (id: string) => Promise<WorkflowInstanceLike> }>(deps.env, deps.exports, marker.parentClassName, ["get"]);
 
-    if (!binding || typeof binding.get !== "function") {
+    if (binding === undefined) {
         return;
     }
 

@@ -74,9 +74,13 @@ export { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 export type {
     AgentIR,
     AuthApiCallIR,
+    ContainerImageIR,
     ContainerIR,
+    ContainerNamedImageIR,
     ContextPropertyCallIR,
     CronJobIR,
+    DefaultScheduledContainerIR,
+    DurableObjectScheduledContainerIR,
     FlagsIR,
     FunctionIR,
     HttpRouteIR,

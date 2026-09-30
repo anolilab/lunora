@@ -3666,7 +3666,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const LUNORA_WORKFLOWS_INFO = JSON.parse(");
             expect(output).toContain(") as WorkflowsResult;");
             expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
-                workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+                workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             });
         });
 

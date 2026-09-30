@@ -173,11 +173,11 @@ const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsS
  */
 const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
     for (const container of discoverContainerInfo(cwd, "lunora").containers) {
-        const { image } = container;
+        const image = container.schedulingPolicy === undefined ? container.image : undefined;
         // A `durable_object` container's local sources are its named images.
         const dockerfiles = [
             ...(image?.kind === "dockerfile" ? [{ field: "image", path: image.dockerfilePath }] : []),
-            ...Object.entries(container.images ?? {}).flatMap(([name, named]) =>
+            ...Object.entries(container.schedulingPolicy === "durable_object" ? (container.images ?? {}) : {}).flatMap(([name, named]) =>
                 named.kind === "dockerfile" ? [{ field: `images["${name}"]`, path: named.dockerfilePath }] : [],
             ),
         ];

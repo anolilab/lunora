@@ -152,6 +152,8 @@ interface ManifestConfigShape extends WranglerConfigShape {
     assets?: { binding?: string; directory?: string };
     browser?: { binding?: string };
     containers?: ReadonlyArray<{ class_name?: string; image?: string; max_instances?: number }>;
+    /** Top-level exports; only `type: "workflow"` entries map to a binding requirement (see {@link collectWorkflowExports}). */
+    exports?: Record<string, { name?: string; type?: string } | null | undefined>;
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
     images?: { binding?: string };
     media?: { binding?: string };
@@ -223,6 +225,7 @@ const KNOWN_BINDING_FIELDS = new Set<string>([
     ...ARRAY_SECTIONS.map((section) => section.field as string),
     ...SINGLETON_SECTIONS.map((section) => section.field),
     "durable_objects",
+    "exports",
     "queues",
 ]);
 
@@ -316,7 +319,25 @@ const collectQueueBindings = (config: ManifestConfigShape, unnamed: string[]): B
     return out;
 };
 
-const collectBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => [
+/**
+ * Workflows declared in wrangler `exports` — how Lunora declares its workflows
+ * and agents. Reached as `ctx.exports.<Class>`, so the requirement's `binding`
+ * is the class key. Any other export type is not modelled here and is reported
+ * in `unknown` rather than dropped.
+ */
+const collectWorkflowExports = (config: ManifestConfigShape, unmodelled: string[]): BindingRequirement[] =>
+    Object.entries(config.exports ?? {}).flatMap(([className, entry]) => {
+        if (entry?.type !== "workflow") {
+            unmodelled.push(`exports.${className}`);
+
+            return [];
+        }
+
+        return [{ binding: className, className, resource: entry.name, type: "workflow" as const }];
+    });
+
+const collectBindings = (config: ManifestConfigShape, unnamed: string[], unmodelled: string[]): BindingRequirement[] => [
+    ...collectWorkflowExports(config, unmodelled),
     ...collectArrayBindings(config, unnamed),
     ...collectDurableObjectBindings(config, unnamed),
     ...collectQueueBindings(config, unnamed),
@@ -338,13 +359,15 @@ const buildBindingManifest = (config: ManifestConfigShape): BindingManifest => {
     // sections, for the same reason: an under-provisioned deploy must be visible
     // here rather than at runtime.
     const unnamed: string[] = [];
-    const bindings = collectBindings(config, unnamed)
+    const unmodelled: string[] = [];
+    const bindings = collectBindings(config, unnamed, unmodelled)
         .map((requirement) => compact(requirement))
         .toSorted((a, b) => a.type.localeCompare(b.type) || a.binding.localeCompare(b.binding));
 
     const unknown = [
         ...Object.keys(config).filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field)),
         ...unnamed.map((field) => `${field} (entry with no binding name)`),
+        ...unmodelled,
     ].toSorted((a, b) => a.localeCompare(b));
 
     return {

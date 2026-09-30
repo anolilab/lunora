@@ -33,7 +33,7 @@ const baseOptions = {
 };
 
 describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
-    it("wires `composed.email` to `dispatchAgentEmail` with the agent definition + its `AGENT_*` binding", () => {
+    it("wires `composed.email` to `dispatchAgentEmail` with the agent definition + its class name", () => {
         expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, emailAgents: [{ className: "SupportAgentWorkflow", exportName: "support" }] });
@@ -43,7 +43,7 @@ describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
         expect(output).toContain('import { dispatchAgentEmail } from "@lunora/agent/inbound";');
         expect(output).toContain('import * as lunoraAgentDefinitions from "../agents.js";');
         expect(output).toContain("composed.email = dispatchAgentEmail([");
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, binding: "SupportAgentWorkflow" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, className: "SupportAgentWorkflow" },');
     });
 
     it("wires every `onEmail` agent as its own dispatch target", () => {
@@ -57,8 +57,8 @@ describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
             ],
         });
 
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, binding: "SupportAgentWorkflow" },');
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.sales, binding: "SalesAgentWorkflow" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, className: "SupportAgentWorkflow" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.sales, className: "SalesAgentWorkflow" },');
     });
 
     it("keeps a manual `.onEmail(...)` handler able to override the auto-wired default (agent block precedes it)", () => {

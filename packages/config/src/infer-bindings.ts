@@ -140,9 +140,9 @@ const PAYMENT_PROVIDER_SECRETS = "STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Str
  * provision — wrangler rejects a `containers[].class_name` (and its Durable
  * Object binding) that the worker doesn't export.
  */
-interface InferredContainer extends ContainerIR {
+type InferredContainer = ContainerIR & {
     exported: boolean;
-}
+};
 
 /**
  * A `defineWorkflow` declaration plus whether its generated

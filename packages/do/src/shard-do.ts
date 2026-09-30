@@ -264,7 +264,7 @@ import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
@@ -2551,6 +2551,18 @@ abstract class ShardDO {
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
+
+        // Settle the host-tracing probe before the first dispatch, so every
+        // dispatch — including the isolate's first — reads it synchronously (the
+        // root-span mirror in `recordDispatchRootSpan` has no await to wait on).
+        // Memoized and self-catching, so the gate costs one dynamic import once.
+        state
+            .blockConcurrencyWhile?.(async () => {
+                await resolveHostTracing();
+            })
+            .catch(() => {
+                /* unreachable: the probe catches its own failures */
+            });
 
         // Build the provider-neutral Cloudflare host adapters and mount the
         // host-neutral shard engine runner. The runner owns the platform contract
@@ -6393,15 +6405,6 @@ abstract class ShardDO {
         // dispatch tore its entry down still honours the trace's sampling decision.
         const resolvedAnchor = anchor ?? resolveTraceAnchor(undefined);
 
-        // Warm the memoized probe at dispatch start so the synchronous wide-event
-        // mirror in `recordDispatchRootSpan` finds it resolved even when the
-        // handler never opens a `ctx.trace` span.
-        if (sink?.fuseCloudflareTraces === true) {
-            resolveHostTracing().catch(() => {
-                /* unreachable: the probe catches its own failures */
-            });
-        }
-
         return createTracer({
             anchor: resolvedAnchor,
             // Raw span error messages/stacktraces in dev only — production
@@ -7832,9 +7835,7 @@ abstract class ShardDO {
             // Fused: land the (already redacted) wide-event attributes on the
             // host's own invocation span too. Every `ctx.trace` custom span has
             // ended by now, so `getActiveSpan()` is the invocation's root span —
-            // the host-side twin of this dispatch.
-            // ponytail: reads the memoized probe synchronously; on the isolate's
-            // first dispatch the import may not have settled and the mirror skips.
+            // the host-side twin of this dispatch. The probe settled at construction.
             if (wide?.sink?.fuseCloudflareTraces === true && rootSpan.attributes !== undefined) {
                 const hostSpan = cloudflareTracing?.getActiveSpan?.();
 
@@ -9177,25 +9178,20 @@ abstract class ShardDO {
      * `LunoraError` so the studio surfaces an actionable message instead of a
      * generic 500.
      */
-    private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
+    private declaredWorkflowHandle(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
             throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
-        const binding = resolveWorkflowBinding(this.env, this.state.exports, metadata.binding);
+        const binding = resolveWorkflowHandle<WorkflowBindingHandle>(this.env, this.state.exports, metadata.className, ["create", "get"]);
 
-        if (
-            typeof binding !== "object" ||
-            binding === null ||
-            typeof (binding as WorkflowBindingHandle).create !== "function" ||
-            typeof (binding as WorkflowBindingHandle).get !== "function"
-        ) {
-            throw new LunoraError("BAD_REQUEST", `workflow binding "${metadata.binding}" is not available on this deployment`);
+        if (binding === undefined) {
+            throw new LunoraError("BAD_REQUEST", `workflow "${metadata.className}" is not available on this deployment`);
         }
 
-        return binding as WorkflowBindingHandle;
+        return binding;
     }
 
     /**
@@ -9208,7 +9204,7 @@ abstract class ShardDO {
      */
     private async handleCreateWorkflowInstance(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseCreateWorkflowInstanceArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.create({ id: parsed.id, params: parsed.params });
         const snapshot = await instance.status();
@@ -9228,7 +9224,7 @@ abstract class ShardDO {
      */
     private async handleGetWorkflowInstanceStatus(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseGetWorkflowInstanceStatusArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.get(parsed.id);
         const snapshot = await instance.status();
@@ -9877,7 +9873,7 @@ abstract class ShardDO {
      * statically-discovered list) to find its generated `QUEUE_*` binding, then
      * reads `env[binding]` and validates it carries `send`/`sendBatch`. A bad export
      * name or a missing/malformed binding throws a 400 `LunoraError` so the studio
-     * surfaces an actionable message. Mirrors {@link resolveWorkflowBinding}.
+     * surfaces an actionable message. Mirrors {@link declaredWorkflowHandle}.
      */
     private resolveQueueBinding(exportName: string): { binding: QueueBindingHandle; metadata: QueueMetadata } {
         const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);

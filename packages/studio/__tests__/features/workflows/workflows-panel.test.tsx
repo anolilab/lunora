@@ -11,8 +11,8 @@ import { createMockClient } from "../../mock-client";
 
 const METADATA: WorkflowsResult = {
     workflows: [
-        { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-        { binding: "WORKFLOW_BILLING", className: "BillingWorkflow", exportName: "billing", name: "billing" },
+        { className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+        { className: "BillingWorkflow", exportName: "billing", name: "billing" },
     ],
 };
 
@@ -35,8 +35,8 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("workflowsPanel", () => {
-    it("lists each workflow's export, name, class, and binding", async () => {
-        expect.assertions(4);
+    it("lists each workflow's export, name, and class", async () => {
+        expect.assertions(3);
 
         render(renderPanel(createWorkflowsClient()));
 
@@ -45,7 +45,6 @@ describe("workflowsPanel", () => {
         expect(row.textContent).toContain("orderPipeline");
         expect(row.textContent).toContain("order-pipeline");
         expect(row.textContent).toContain("OrderPipelineWorkflow");
-        expect(row.textContent).toContain("WORKFLOW_ORDER_PIPELINE");
     });
 
     it("sorts workflows by export name", async () => {

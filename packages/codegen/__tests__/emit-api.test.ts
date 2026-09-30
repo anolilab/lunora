@@ -43,7 +43,7 @@ describe("emitApi", () => {
         // Typed reference carries AgentRunInput.
         expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
         // Runtime object carries the AGENT_* binding + stable name.
-        expect(rendered).toContain('support: { isLunoraWorkflow: true, binding: "SupportAgentWorkflow", name: "agent-support" },');
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, className: "SupportAgentWorkflow", name: "agent-support" },');
         expect(rendered).toContain("export interface AgentsRef {");
         expect(rendered).toContain("export const agents: AgentsRef = {");
     });
@@ -104,7 +104,7 @@ describe("emitApi", () => {
         // eslint-disable-next-line no-secrets/no-secrets -- generated TS generic, not a credential
         expect(rendered).toContain("digestPipeline: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.digestPipeline>>;");
         // Runtime object carries the WORKFLOW_* binding + name.
-        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, binding: "DigestPipelineWorkflow", name: "digestPipeline" },');
+        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, className: "DigestPipelineWorkflow", name: "digestPipeline" },');
         expect(rendered).toContain("export const workflows: WorkflowsRef = {");
         expect(rendered).toContain("export interface WorkflowsRef {");
     });

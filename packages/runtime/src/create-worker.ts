@@ -28,7 +28,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -3297,9 +3297,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         label: string,
         instanceId?: string,
     ): Promise<void> => {
-        const candidate = resolveWorkflowBinding(source.env, source.context?.exports, binding);
+        const candidate = resolveWorkflowHandle<WorkflowBindingLike>(source.env, source.context?.exports, binding, ["create"]);
 
-        if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
+        if (candidate === undefined) {
             throw new LunoraError(`${label} targets workflow "${binding}", which is on neither ctx.exports nor env`, {
                 code: "CRON_JOB_FAILED",
                 status: 500,
@@ -3319,7 +3319,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            await (candidate as WorkflowBindingLike).create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
+            await candidate.create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
         } catch (error: unknown) {
             if (!isDuplicateInstanceError(error)) {
                 throw error;
@@ -5335,8 +5335,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // Code-defined crons: run every job declared under the firing expression.
-        // Failures join `errors` for the combined rethrow below. `env` carries the
-        // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
+        // Failures join `errors` for the combined rethrow below. A workflow-targeting
+        // job starts its instance off the Worker's `ctx.exports` (or `env`).
         const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 

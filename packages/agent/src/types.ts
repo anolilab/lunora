@@ -1355,12 +1355,12 @@ export type AgentTokenSink = (event: AgentLiveEvent) => void;
 export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text: string) => void) => Promise<AgentGenerateResult>;
 
 /**
- * Spec entry codegen emits per agent: `{ binding: "SupportAgentWorkflow", exportName: "support" }`.
+ * Spec entry codegen emits per agent: `{ className: "SupportAgentWorkflow", exportName: "support" }`.
  * @experimental
  */
 export interface AgentBindingSpec {
     /** The agent's export key — its generated class name, e.g. `SupportAgentWorkflow`. */
-    binding: string;
+    className: string;
     exportName: string;
 
     /**

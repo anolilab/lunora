@@ -14,8 +14,11 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 
+import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "@lunora/codegen";
 import { containerBuildTag } from "@lunora/container";
 
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
@@ -25,7 +28,8 @@ import { readManifest } from "./lunora-manifest";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import collectWarnings from "./reconcile-warnings";
-import { objectBindingEntries, settingLeaf, stringEntries } from "./validate-bindings";
+import { objectBindingEntries, stringEntries } from "./validate-bindings";
+import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
@@ -288,7 +292,9 @@ const wranglerInstanceType = (instanceType: NonNullable<InferredContainer["insta
 };
 
 /** The wrangler `containers[].image` for an inferred default-policy container. */
-const imageRefFor = (container: InferredContainer, image: NonNullable<InferredContainer["image"]>): string => {
+const imageRefFor = (container: DefaultScheduledContainerIR): string => {
+    const { image } = container;
+
     if (image.kind === "dockerfile") {
         return image.dockerfilePath;
     }
@@ -309,7 +315,7 @@ const imageRefFor = (container: InferredContainer, image: NonNullable<InferredCo
  * `build_vars`, or a registry `image`). The instance size is chosen at start,
  * and the policy takes no `max_instances` or rollout, so none are written.
  */
-const durableObjectContainerEntryFor = (container: InferredContainer): Record<string, unknown> => {
+const durableObjectContainerEntryFor = (container: DurableObjectScheduledContainerIR): Record<string, unknown> => {
     const images: Record<string, Record<string, unknown>> = {};
 
     for (const [name, image] of Object.entries(container.images ?? {})) {
@@ -333,15 +339,15 @@ const durableObjectContainerEntryFor = (container: InferredContainer): Record<st
 
 /** Render one wrangler `containers[]` entry from an inferred container. Pure. */
 const containerEntryFor = (container: InferredContainer): Record<string, unknown> => {
-    const { image } = container;
-
-    if (container.schedulingPolicy === "durable_object" || image === undefined) {
+    if (container.schedulingPolicy === "durable_object") {
         return durableObjectContainerEntryFor(container);
     }
 
+    const { image } = container;
+
     const entry: Record<string, unknown> = {
         class_name: container.className,
-        image: imageRefFor(container, image),
+        image: imageRefFor(container),
     };
 
     if (image.kind === "dockerfile") {
@@ -413,7 +419,7 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
 
         // Named images are the part of a `durable_object` entry the app keeps
         // editing, and a missing one fails `start({ image })` at runtime.
-        const images = declared === "durable_object" ? durableObjectContainerEntryFor(container).images : undefined;
+        const images = container.schedulingPolicy === "durable_object" ? durableObjectContainerEntryFor(container).images : undefined;
 
         if (images !== undefined && JSON.stringify(entry.images) !== JSON.stringify(images)) {
             nextText = applyModify(nextText, ["containers", index, "images"], images);
@@ -443,52 +449,57 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
 };
 
 /**
- * Each `defineWorkflow` deploy setting as a leaf path inside a wrangler
- * `exports.<Class>` entry, with the value the declaration gives it. Leaves rather
- * than whole blocks, so a `limits` block that also carries a hand-set key keeps
- * it, and so a setting is written or reported one field at a time.
+ * The oldest toolchain that declares and runs Workflows in `exports`: wrangler
+ * 4.142.0 and `@cloudflare/vite-plugin` 1.61.0. An older one ignores the field,
+ * so moving a `workflows[]` binding into `exports` under it unregisters the
+ * workflow.
  */
-const workflowSettingLeaves = (workflow: InferredWorkflow): ReadonlyArray<{ path: ReadonlyArray<string>; value: unknown }> => [
-    { path: ["schedules"], value: workflow.schedules === undefined ? undefined : [...workflow.schedules] },
-    { path: ["limits", "steps"], value: workflow.limits?.steps },
-    { path: ["default_retention", "success_retention"], value: workflow.defaultRetention?.successRetention },
-    { path: ["default_retention", "error_retention"], value: workflow.defaultRetention?.errorRetention },
+const WORKFLOW_EXPORTS_TOOLCHAIN: ReadonlyArray<{ minimum: readonly [number, number]; name: string }> = [
+    { minimum: [4, 142], name: "wrangler" },
+    { minimum: [1, 61], name: "@cloudflare/vite-plugin" },
 ];
 
-/** The deploy settings a `defineWorkflow` declares, in wrangler's spelling — merged onto a new entry. Pure. */
-const workflowSettingsFor = (workflow: InferredWorkflow): Record<string, unknown> => {
-    const settings: Record<string, unknown> = {};
+/** The installed `major.minor` of `name` as resolved from the project, or `undefined` when it is not installed. */
+const installedVersion = (projectRoot: string, name: string): readonly [number, number] | undefined => {
+    try {
+        const manifest = createRequire(join(projectRoot, "package.json")).resolve(`${name}/package.json`);
+        const [major = 0, minor = 0] = String((JSON.parse(readFileSync(manifest, "utf8")) as { version?: unknown }).version)
+            .split(".")
+            .map(Number);
 
-    for (const { path, value } of workflowSettingLeaves(workflow)) {
-        if (value === undefined) {
-            continue;
-        }
-
-        const [head, child] = path as [string, string | undefined];
-
-        settings[head] = child === undefined ? value : { ...(settings[head] as Record<string, unknown> | undefined), [child]: value };
+        return [major, minor];
+    } catch {
+        return undefined;
     }
-
-    return settings;
 };
 
-/** The settings a wrangler `workflows[]` binding carries that a workflow export accepts too. */
-const BINDING_SETTING_KEYS = ["default_retention", "limits", "schedules"] as const;
+/** A warning naming each installed toolchain package too old for workflow `exports`, or `undefined` when none is. */
+const workflowExportsToolchainGap = (projectRoot: string): string | undefined => {
+    const stale = WORKFLOW_EXPORTS_TOOLCHAIN.flatMap(({ minimum, name }) => {
+        const version = installedVersion(projectRoot, name);
+
+        return version !== undefined && (version[0] < minimum[0] || (version[0] === minimum[0] && version[1] < minimum[1]))
+            ? [`${name} ${version.join(".")} (needs >= ${minimum.join(".")})`]
+            : [];
+    });
+
+    return stale.length === 0
+        ? undefined
+        : `workflows are declared in wrangler \`exports\`, which ${stale.join(" and ")} cannot run — reconcile left workflows[] untouched. Upgrade (\`pnpm add -D wrangler@^4.143.1 @cloudflare/vite-plugin@^1.62.1\`) and re-run.`;
+};
 
 /**
- * Render one wrangler `exports.<Class>` entry from an inferred workflow or agent
- * — an agent compiles onto a Cloudflare Workflow, so its footprint is identical.
- * `carried` holds settings a replaced `workflows[]` binding had set by hand,
- * kept so the move changes where the workflow is declared and nothing else;
- * the declaration's own settings win over them. Pure.
+ * Environment blocks are not rewritten (no reconcile step writes into them), so
+ * a `workflows[]` in one keeps bindings the runtime no longer reads — named here.
  */
-const workflowExportFor = (
-    workflow: InferredAgent | InferredWorkflow,
-    settings: Record<string, unknown>,
-    carried: Record<string, unknown>,
-): Record<string, unknown> => {
-    return { type: "workflow", name: workflow.name, ...carried, ...settings };
-};
+const environmentWorkflowWarnings = (parsed: WranglerShape): string[] =>
+    Object.entries(parsed.env ?? {}).flatMap(([environment, block]) =>
+        Array.isArray((block as { workflows?: unknown } | null)?.workflows)
+            ? [
+                  `env.${environment}.workflows declares workflow bindings, but Lunora now declares workflows in \`exports\` and resolves them on ctx.exports — move them to that environment's own \`exports\` by hand.`,
+              ]
+            : [],
+    );
 
 /**
  * Bring each EXISTING `exports.<Class>` workflow entry a `defineWorkflow` export
@@ -516,11 +527,12 @@ const retuneWorkflowExports = (
             continue;
         }
 
-        for (const leaf of workflowSettingLeaves(workflow)) {
-            const current = settingLeaf(entry, leaf.path);
-            const label = `exports/${workflow.className}.${leaf.path.join(".")}`;
+        for (const { of, path } of WORKFLOW_SETTINGS) {
+            const value = of(workflow);
+            const current = settingLeaf(entry, path);
+            const label = `exports/${workflow.className}.${path.join(".")}`;
 
-            if (leaf.value === undefined) {
+            if (value === undefined) {
                 if (current !== undefined) {
                     warnings.push(
                         `${label} is set in wrangler.jsonc but defineWorkflow "${workflow.exportName}" does not declare it — reconcile leaves it in place. Remove it by hand if it was dropped from the definition.`,
@@ -530,8 +542,8 @@ const retuneWorkflowExports = (
                 continue;
             }
 
-            if (JSON.stringify(current) !== JSON.stringify(leaf.value)) {
-                nextText = applyModify(nextText, ["exports", workflow.className, ...leaf.path], leaf.value);
+            if (JSON.stringify(current) !== JSON.stringify(value)) {
+                nextText = applyModify(nextText, ["exports", workflow.className, ...path], value);
                 updated.push(label);
             }
         }
@@ -562,8 +574,13 @@ const reconcileWorkflows = (
     text: string,
     parsed: WranglerShape,
     workflows: ReadonlyArray<InferredWorkflow>,
-    agents: ReadonlyArray<InferredAgent> = [],
+    agents: ReadonlyArray<InferredAgent>,
+    toolchainGap: string | undefined,
 ): ReconcileStep => {
+    if (toolchainGap !== undefined) {
+        return { added: [], text, warnings: [toolchainGap] };
+    }
+
     // Agents declare no deploy settings; only a `defineWorkflow` contributes any.
     const declared: ReadonlyArray<{ settings: Record<string, unknown>; workflow: InferredAgent | InferredWorkflow }> = [
         ...workflows.map((workflow) => {
@@ -579,6 +596,7 @@ const reconcileWorkflows = (
     const exported = parsed.exports ?? {};
     const added: string[] = [];
     const updated: string[] = [];
+    const warnings: string[] = [];
     let nextText = text;
 
     for (const { settings, workflow } of declared) {
@@ -587,9 +605,26 @@ const reconcileWorkflows = (
         }
 
         const binding = moved.find((entry) => entry.class_name === workflow.className);
-        const carried = Object.fromEntries(BINDING_SETTING_KEYS.flatMap((key) => (binding?.[key] === undefined ? [] : [[key, binding[key]]])));
+        // Settings set by hand on the binding move with it; the declaration's own win.
+        const carried = Object.fromEntries(
+            WORKFLOW_SETTING_KEYS.flatMap((key) => {
+                const value = settingLeaf(binding, [key]);
 
-        nextText = applyModify(nextText, ["exports", workflow.className], workflowExportFor(workflow, settings, carried));
+                return value === undefined ? [] : [[key, value]];
+            }),
+        );
+        // A moved binding keeps its DEPLOYED name: Cloudflare keys a workflow's
+        // instances by name, so taking the declaration's instead would start a
+        // new, empty workflow and orphan every running instance.
+        const name = binding?.name ?? workflow.name;
+
+        if (binding?.name !== undefined && binding.name !== workflow.name) {
+            warnings.push(
+                `workflows/${workflow.className} is deployed as "${binding.name}" but declared as "${workflow.name}" — its export keeps "${binding.name}" so running instances survive. Change the declaration to match, or rename deliberately (it starts a new, empty workflow).`,
+            );
+        }
+
+        nextText = applyModify(nextText, ["exports", workflow.className], { type: "workflow", ...carried, ...settings, name });
         (binding === undefined ? added : updated).push(`exports/${workflow.className}`);
     }
 
@@ -602,9 +637,11 @@ const reconcileWorkflows = (
         updated.push(...moved.map((entry) => `workflows/${String(entry.class_name)} → exports`));
     }
 
+    warnings.push(...environmentWorkflowWarnings(parsed));
+
     const retune = retuneWorkflowExports(nextText, exported, workflows);
 
-    return { added, text: retune.text, updated: [...updated, ...retune.updated], warnings: retune.warnings };
+    return { added, text: retune.text, updated: [...updated, ...retune.updated], warnings: [...warnings, ...retune.warnings] };
 };
 
 /**
@@ -732,7 +769,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,
-            run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows, exportedAgents),
+            run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows, exportedAgents, workflowExportsToolchainGap(projectRoot)),
         },
         {
             enabled: inferred.queues.length > 0,

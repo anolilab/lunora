@@ -85,7 +85,9 @@ const emitContainerFragments = (
 
     const specEntries = containers
         .map((container) => {
-            const maxInstances = container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
+            // The `.any()` pool size; a `durable_object` container has no cap to size it by.
+            const maxInstances =
+                container.schedulingPolicy !== undefined || container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
 
             return `    { binding: "${container.bindingName}", exportName: "${container.exportName}"${maxInstances} },`;
         })
@@ -315,7 +317,7 @@ const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: s
         assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
     }
 
-    const specEntries = workflows.map((workflow) => `    { binding: "${workflow.className}", exportName: "${workflow.exportName}" },`).join("\n");
+    const specEntries = workflows.map((workflow) => `    { className: "${workflow.className}", exportName: "${workflow.exportName}" },`).join("\n");
 
     return {
         build: `
@@ -390,7 +392,7 @@ const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; co
     }
 
     const specEntries = agents
-        .map((agent) => `    { binding: "${agent.className}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
+        .map((agent) => `    { className: "${agent.className}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
         .join("\n");
 
     return {
@@ -444,7 +446,6 @@ const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): {
     const metadata: WorkflowsResult = {
         workflows: workflows.map((workflow) => {
             return {
-                binding: workflow.className,
                 className: workflow.className,
                 exportName: workflow.exportName,
                 name: workflow.name,

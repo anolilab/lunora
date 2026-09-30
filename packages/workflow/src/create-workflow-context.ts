@@ -8,14 +8,14 @@
  * Node-safe (structural binding types only) so it's unit-testable with
  * plain-object env doubles.
  */
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import createWorkflows from "./create-workflows";
 import type { WorkflowBindingLike, Workflows } from "./types";
 
 /** Wiring info for one declared workflow, emitted by codegen into the generated shard. */
 export interface WorkflowBindingSpec {
     /** The workflow's export key — its generated class name, e.g. `OrderPipelineWorkflow`. */
-    binding: string;
+    className: string;
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 }
@@ -32,9 +32,9 @@ export const createWorkflowContext = (env: Record<string, unknown>, specs: Reado
     const bindings: Record<string, WorkflowBindingLike> = {};
 
     for (const spec of specs) {
-        const binding = resolveWorkflowBinding(env, exports, spec.binding) as WorkflowBindingLike | undefined;
+        const binding = resolveWorkflowHandle<WorkflowBindingLike>(env, exports, spec.className, ["create", "createBatch", "get"]);
 
-        if (binding && typeof binding.create === "function" && typeof binding.createBatch === "function" && typeof binding.get === "function") {
+        if (binding !== undefined) {
             bindings[spec.exportName] = binding;
         }
     }

@@ -3,7 +3,7 @@ import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
-import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, AgentWorkflowBindingLike } from "./types";
 
@@ -33,12 +33,12 @@ const createAgentContext = (
 
     for (const spec of specs) {
         const resolve = (): AgentWorkflowBindingLike => {
-            const binding = resolveWorkflowBinding(env, exports, spec.binding) as AgentWorkflowBindingLike | undefined;
+            const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(env, exports, spec.className, ["create", "get"]);
 
-            if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
+            if (binding === undefined) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `@lunora/agent: no "${spec.binding}" on ctx.exports or env for agent "${spec.exportName}" — run codegen/dev so wrangler.jsonc declares it`,
+                    `@lunora/agent: no "${spec.className}" on ctx.exports or env for agent "${spec.exportName}" — run codegen/dev so wrangler.jsonc declares it`,
                 );
             }
 

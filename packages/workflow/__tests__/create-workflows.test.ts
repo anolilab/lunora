@@ -91,7 +91,7 @@ describe("createWorkflows", () => {
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "ParentWorkflow", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await workflows
             .get("orderPipeline")
@@ -112,7 +112,7 @@ describe("createWorkflows", () => {
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "ParentWorkflow", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await workflows
             .get("orderPipeline")

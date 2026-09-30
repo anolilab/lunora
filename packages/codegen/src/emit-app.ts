@@ -1625,7 +1625,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const emailAgentsBlock =
         emailAgents.length > 0
             ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.className)} },`).join("\n")}
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
         ]);
 
 `

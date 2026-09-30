@@ -345,7 +345,7 @@ describe("emit (workflows)", () => {
         const shard = emitShard({ schema: EMPTY_SCHEMA, workflows: discover() });
 
         expect(shard).toContain('import { createWorkflowContext } from "@lunora/workflow";');
-        expect(shard).toContain('{ binding: "OrderPipelineWorkflow", exportName: "orderPipeline" },');
+        expect(shard).toContain('{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" },');
         expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);");
         expect(shard).toContain("workflows,");
     });

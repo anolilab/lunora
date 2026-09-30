@@ -25,6 +25,16 @@ const RUNTIME_INSTANCE_TYPES = new Set(["lite", "standard-1", "standard-2", "sta
 /** Prefix of the Cloudflare-managed images a `durable_object` container can start without declaring them. */
 const MANAGED_IMAGE_PREFIX = "cloudflare/";
 
+/** Whether an image name is a Cloudflare-managed image (`cloudflare/debian-trixie`), which needs no `images` entry. */
+const isManagedImage = (name: string): boolean => name.startsWith(MANAGED_IMAGE_PREFIX);
+
+/**
+ * The default-policy keys the `durable_object` policy refuses — wrangler rejects
+ * `max_instances` under it, and a rollout has nothing to roll. One table, read by
+ * `defineContainer` and by codegen's static discovery.
+ */
+const DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS = ["maxInstances", "rollout"] as const;
+
 /** Cloudflare's caps on `containers[].images`: entry count and name length. */
 const MAX_NAMED_IMAGES = 100;
 const MAX_IMAGE_NAME_LENGTH = 128;
@@ -373,7 +383,7 @@ const assertValidNamedImage = (name: string, source: ContainerNamedImageSource):
 const assertValidDurableObjectScheduling = (config: DurableObjectScheduledContainerConfig): void => {
     // Default-policy fields a JS caller (or a cast) could still pass. Wrangler
     // rejects `max_instances` under this policy, and a rollout has nothing to roll.
-    for (const field of ["maxInstances", "rollout"] as const) {
+    for (const field of DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS) {
         if ((config as { [key in typeof field]?: unknown })[field] !== undefined) {
             throw new TypeError(`defineContainer: \`${field}\` is not supported with schedulingPolicy "durable_object"`);
         }
@@ -389,7 +399,7 @@ const assertValidDurableObjectScheduling = (config: DurableObjectScheduledContai
         assertValidNamedImage(name, source);
     }
 
-    if (config.image !== undefined && !Object.hasOwn(config.images ?? {}, config.image) && !config.image.startsWith(MANAGED_IMAGE_PREFIX)) {
+    if (config.image !== undefined && !Object.hasOwn(config.images ?? {}, config.image) && !isManagedImage(config.image)) {
         throw new TypeError(
             `defineContainer: \`image\` "${config.image}" must name an entry of \`images\` or a Cloudflare-managed "${MANAGED_IMAGE_PREFIX}…" image`,
         );
@@ -515,7 +525,10 @@ export {
     containerBuildTag,
     containerClassName,
     defineContainer,
+    DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS,
+    isCloudflareRegistryDigest,
     isContainerDefinition,
+    isManagedImage,
     normalizeContainerImage,
     parseDurationSeconds,
     resolveContainerEnvVariables as resolveContainerEnvVars,

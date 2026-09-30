@@ -398,7 +398,7 @@ describe("discover/crons", () => {
                 args: { region: "eu" },
                 cron: "0 9 * * *",
                 name: "nightly digest",
-                workflow: { binding: "DigestPipelineWorkflow", exportName: "digestPipeline" },
+                workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" },
             },
         ]);
     });
@@ -428,7 +428,7 @@ describe("discover/crons", () => {
         const workflows = discoverWorkflows(project, workdir);
 
         expect(discoverCrons(project, workdir, workflows)).toEqual([
-            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "DigestPipelineWorkflow", exportName: "digestPipeline" } },
+            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" } },
         ]);
     });
 
@@ -481,7 +481,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "SupportAgentWorkflow", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -532,7 +532,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "SupportAgentWorkflow", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -567,7 +567,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "SupportAgentWorkflow", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
 
@@ -603,7 +603,7 @@ describe("emitCrons", () => {
         expect.assertions(3);
 
         const output = emitCrons([
-            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "DigestWorkflow", exportName: "digest" } },
+            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestWorkflow", exportName: "digest" } },
             { args: {}, cron: "0 9 * * *", functionPath: "email:report", name: "report" },
         ]);
 

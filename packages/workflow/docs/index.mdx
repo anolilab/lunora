@@ -578,10 +578,21 @@ needs Wrangler 4.142.0 or newer (or `@cloudflare/vite-plugin` 1.61.0 or newer)
 to run locally.
 
 A project with a `workflows[]` binding for a class Lunora declares has it moved
-into `exports` on the next reconcile. Cloudflare shares instances between a
-binding and an export with the same `name`, so running instances carry over.
-Settings you set by hand on the binding move with it. A binding to another
-Worker's workflow (`script_name`) is left alone.
+into `exports` on the next reconcile, under the binding's deployed `name` (a
+different declared `name` is reported, not applied). Cloudflare shares
+instances between a binding and an export with the same `name`, so running
+instances carry over. Settings you set by hand on the binding move with it. A
+binding to another Worker's workflow (`script_name`) is left alone. When the
+installed wrangler is older than 4.142 (or `@cloudflare/vite-plugin` older than
+1.61), reconcile leaves `workflows[]` untouched and warns with the upgrade
+command. A `workflows[]` block inside an `env.<name>` environment is reported,
+not rewritten.
+
+<Callout type="warn">
+    Work queued before the upgrade still names the old `WORKFLOW_*` / `AGENT_*` bindings: a `ctx.scheduler.runAfter(workflows.x, …)` job that has not fired yet,
+    and a `ctx.parallel` branch still running. After the deploy the scheduled job fails and is dead-lettered, and the branch cannot signal its parent (the
+    parent waits out its timeout). Let the scheduler drain and in-flight fan-outs finish before deploying the upgrade.
+</Callout>
 
 On celld, which has no workflow `exports`, the deploy projection turns each
 export back into a `workflows[]` binding named after the class. The runtime
