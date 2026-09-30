@@ -124,23 +124,6 @@ const storageStub = {
     },
 };
 
-const aiStub: LunoraAi = {
-    embeddingModel: () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \`ai\` to createShardDO().");
-    },
-    model: () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \`ai\` to createShardDO().");
-    },
-    run: async () => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \`ai\` to createShardDO().");
-    },
-    // workersai is a callable-with-properties; a bare throwing arrow isn't
-    // structurally assignable, so cast it. Never invoked (the stub throws first).
-    workersai: (() => {
-        throw new Error("ctx.ai: no AI binding found. Add an \`ai\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \`ai\` to createShardDO().");
-    }) as unknown as LunoraAi["workersai"],
-};
-
 // Bound in-process `ctx.run*` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -1080,17 +1063,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const aiTrace = options.identity ? undefined : this.getCurrentTrace();
             // `telemetry` gives every model call an `ai.generate` / `ai.stream` span
             // and `gen_ai.usage.*` token + cost counters attributed to this function.
-            // `LUNORA_AI_PROXY_URL` stands in for the binding on hosts without Workers AI
-            // (celld): `"<provider>/<model>"` slugs go to that OpenAI-compatible proxy.
-            const ai: LunoraAi =
-                aiBinding || (env as Record<string, unknown>).LUNORA_AI_PROXY_URL
-                ? createAi({
-                      binding: aiBinding as AiBindingLike | undefined,
-                      env: env as Record<string, unknown>,
-                      metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
-                      telemetry: { metrics, trace },
-                  })
-                : aiStub;
+            const ai: LunoraAi = createAi({
+                binding: aiBinding as AiBindingLike | undefined,
+                env: env as Record<string, unknown>,
+                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                telemetry: { metrics, trace },
+            });
                 ctx.ai = ai;
             }
 

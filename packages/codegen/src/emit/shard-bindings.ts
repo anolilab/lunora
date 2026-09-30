@@ -37,23 +37,20 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
  * when the project doesn't use Workers AI. Extracted from `emitShard` so
  * its body stays flat (the gating lives here, not as inline ternaries).
  */
-const emitAiFragments = (hasAi: boolean): { build: string; configField: string; stub: string } => {
+const emitAiFragments = (hasAi: boolean): { build: string; configField: string } => {
     if (!hasAi) {
-        return { build: "", configField: "", stub: "" };
+        return { build: "", configField: "" };
     }
-
-    // ctx.ai falls back to this when neither `env.AI` nor a `config.ai` thunk
-    // resolves a binding — every method throws a directed error rather than a
-    // bare "undefined is not a function".
-    const aiMissing = `throw new Error("ctx.ai: no AI binding found. Add an \\\`ai\\\` binding (env.AI) to wrangler.jsonc, set LUNORA_AI_PROXY_URL to an OpenAI-compatible proxy, or pass \\\`ai\\\` to createShardDO().");`;
 
     return {
         // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
         // override, else `env.AI`). createAi is provider-agnostic — a Workers AI id,
-        // a `"<provider>/<model>"` slug routed through AI Gateway, or any AI SDK
-        // model object — so a handler is never locked to Workers AI. Falls back to
-        // `aiStub`. An ActionCtx-only helper: inference is external,
-        // non-deterministic I/O, so a query/mutation ctx never carries it.
+        // a `"<provider>/<model>"` slug routed through AI Gateway (or the
+        // `LUNORA_AI_PROXY_URL` proxy on a host without the binding), or any AI SDK
+        // model object — and with no binding it returns a facade whose calls throw a
+        // directed error, so there is no stub here. An ActionCtx-only helper:
+        // inference is external, non-deterministic I/O, so a query/mutation ctx
+        // never carries it.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
             // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
@@ -64,41 +61,18 @@ const emitAiFragments = (hasAi: boolean): { build: string; configField: string; 
             const aiTrace = options.identity ? undefined : this.getCurrentTrace();
             // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
             // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
-            // \`LUNORA_AI_PROXY_URL\` stands in for the binding on hosts without Workers AI
-            // (celld): \`"<provider>/<model>"\` slugs go to that OpenAI-compatible proxy.
-            const ai: LunoraAi =
-                aiBinding || (env as Record<string, unknown>).LUNORA_AI_PROXY_URL
-                ? createAi({
-                      binding: aiBinding as AiBindingLike | undefined,
-                      env: env as Record<string, unknown>,
-                      metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
-                      telemetry: { metrics, trace },
-                  })
-                : aiStub;
+            const ai: LunoraAi = createAi({
+                binding: aiBinding as AiBindingLike | undefined,
+                env: env as Record<string, unknown>,
+                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                telemetry: { metrics, trace },
+            });
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
         // built from `env.AI` (the conventional binding the config layer
         // auto-reconciles); the thunk lets a caller point it elsewhere or inject
         // a double in tests.
         configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
-        stub: `
-const aiStub: LunoraAi = {
-    embeddingModel: () => {
-        ${aiMissing}
-    },
-    model: () => {
-        ${aiMissing}
-    },
-    run: async () => {
-        ${aiMissing}
-    },
-    // workersai is a callable-with-properties; a bare throwing arrow isn't
-    // structurally assignable, so cast it. Never invoked (the stub throws first).
-    workersai: (() => {
-        ${aiMissing}
-    }) as unknown as LunoraAi["workersai"],
-};
-`,
     };
 };
 

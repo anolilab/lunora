@@ -68,14 +68,18 @@ const model = ctx.ai.model("anthropic/claude-sonnet-5"); // or "openai/gpt-5", "
 
 A `"<provider>/<model>"` id is routed through [Cloudflare AI
 Gateway](https://developers.cloudflare.com/ai-gateway/) over the same `AI`
-binding, so the app holds **no provider API key**. The gateway pays the provider
-one of two ways, both set up once in the Cloudflare dashboard:
+binding, so the app holds **no provider API key**. Which way the provider is
+paid depends on the provider, and is set up once in the Cloudflare dashboard:
 
 - **[Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)**
-  — Cloudflare holds the provider credentials and bills the calls against
-  prepaid credits.
-- **[Bring your own keys](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)**
-  — your provider keys, stored on the gateway (Secrets Store), not in the app.
+  — for the unified-catalog providers (OpenAI, Anthropic, Google, xAI, Groq,
+  DeepSeek). Their calls take the binding's run path, where Cloudflare holds
+  the provider credentials and bills against prepaid credits; a key stored on
+  the gateway is not used for them.
+- **[Keys stored on the gateway](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)**
+  — for the other OpenAI-compatible providers (Mistral, Perplexity, Cerebras,
+  OpenRouter, Fireworks, …), which only exist on the gateway path. The key lives
+  in the gateway's Secrets Store, not in the app.
 
 Calls go to the gateway named by `LUNORA_AI_GATEWAY_ID`, or to the account's
 auto-created `default` gateway when it is unset. `lunora ai gateway` creates a

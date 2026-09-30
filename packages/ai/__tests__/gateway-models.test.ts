@@ -58,6 +58,8 @@ const fakeBinding = (): AiBindingLike & { runCalls: RunCall[] } => {
 interface RecordedSpan {
     attributes: Record<string, unknown>;
     name: string;
+    /** How the span's body ended; absent while it is still open. */
+    settled?: "error" | "ok";
 }
 
 /** A tracer + metrics double that records what usage accounting reports. */
@@ -78,7 +80,17 @@ const fakeTelemetry = (): AiTelemetry & { counts: [string, number | undefined, R
 
         spans.push(recorded);
 
-        return function_(trace, span);
+        try {
+            const result = await function_(trace, span);
+
+            recorded.settled = "ok";
+
+            return result;
+        } catch (error) {
+            recorded.settled = "error";
+
+            throw error;
+        }
     };
 
     return {
@@ -161,6 +173,29 @@ describe("gateway catalog models", () => {
         expect((binding.runCalls[0] as RunCall)[0]).toBe("anthropic/claude-sonnet-5");
     });
 
+    it("selects the gateway by LUNORA_AI_GATEWAY_ID alone on the binding path", async () => {
+        expect.assertions(1);
+
+        const binding = fakeBinding();
+        const ai = createAi({ binding, env: { [AI_GATEWAY_ID_ENV]: "my-gateway" } });
+
+        await generateText({ model: ai.model("openai/gpt-5"), prompt: "hi" });
+
+        expect((binding.runCalls[0] as RunCall)[2]?.gateway).toMatchObject({ id: "my-gateway" });
+    });
+
+    it("adds no per-call metadata on top of an explicit gateway's own", async () => {
+        expect.assertions(1);
+
+        const binding = fakeBinding();
+        const metadata = { a: "1", b: "2", c: "3", d: "4", e: "5" };
+        const ai = createAi({ binding, gateway: { id: "g", metadata }, metadata: { functionPath: "chat:send", traceId: "a".repeat(32) } });
+
+        await generateText({ model: ai.model("openai/gpt-5"), prompt: "hi" });
+
+        expect((binding.runCalls[0] as RunCall)[2]?.gateway).toStrictEqual({ id: "g", metadata });
+    });
+
     it("uses the configured gateway for slugs when LUNORA_AI_GATEWAY_ID is set", async () => {
         expect.assertions(1);
 
@@ -214,6 +249,7 @@ describe("usage telemetry", () => {
                     "lunora.usage.cost.source": "estimated",
                 },
                 name: "ai.generate",
+                settled: "ok",
             },
         ]);
         expect(telemetry.counts).toContainEqual(["gen_ai.usage.input_tokens", 1000, { "gen_ai.request.model": "gpt-4o-mini" }]);
@@ -289,6 +325,52 @@ describe("usage telemetry", () => {
         await expect(result.text).resolves.toBe("hello");
         expect(telemetry.spans[0]?.name).toBe("ai.stream");
         expect(telemetry.spans[0]?.attributes).toMatchObject({ "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 500 });
+    });
+
+    it("closes a stream's span when the consumer cancels it", async () => {
+        expect.assertions(1);
+
+        const telemetry = fakeTelemetry();
+        const model = new MockLanguageModelV4({
+            doStream: async () => {
+                return { stream: new ReadableStream({ pull: () => new Promise(() => {}) }) };
+            },
+            modelId: "gpt-4o-mini",
+        });
+        const wrapped = createAi({ binding: fakeBinding(), telemetry }).model(model) as MockLanguageModelV4;
+        const { stream } = await wrapped.doStream({ prompt: [] });
+
+        await stream.cancel("client went away");
+
+        await vi.waitFor(() => {
+            expect(telemetry.spans[0]?.settled).toBe("ok");
+        });
+    });
+
+    it("fails a stream's span when the upstream stream errors", async () => {
+        expect.assertions(2);
+
+        const telemetry = fakeTelemetry();
+        const model = new MockLanguageModelV4({
+            doStream: async () => {
+                return {
+                    stream: new ReadableStream({
+                        pull: (controller) => {
+                            controller.error(new Error("upstream reset"));
+                        },
+                    }),
+                };
+            },
+            modelId: "gpt-4o-mini",
+        });
+        const wrapped = createAi({ binding: fakeBinding(), telemetry }).model(model) as MockLanguageModelV4;
+        const { stream } = await wrapped.doStream({ prompt: [] });
+
+        await expect(stream.getReader().read()).rejects.toThrow("upstream reset");
+
+        await vi.waitFor(() => {
+            expect(telemetry.spans[0]?.settled).toBe("error");
+        });
     });
 
     it("returns models unwrapped when no telemetry is configured", () => {

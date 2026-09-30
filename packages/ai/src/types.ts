@@ -200,7 +200,8 @@ export interface LunoraAi {
      * Resolve a {@link LanguageModel}: a `@cf/…` id → Workers AI, a
      * `"<provider>/<model>"` slug or `dynamic/<route>` → Cloudflare AI Gateway
      * over the same binding (Unified Billing or the gateway's stored keys — no
-     * provider key in the app), an object → passthrough.
+     * provider key in the app) or, with `LUNORA_AI_PROXY_URL` set, to that
+     * OpenAI-compatible proxy; an object → passthrough.
      */
     model: (model?: ModelInput) => LanguageModel;
 

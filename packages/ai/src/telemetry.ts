@@ -1,58 +1,14 @@
 import type { LanguageModel, LanguageModelMiddleware } from "ai";
 import { wrapLanguageModel } from "ai";
 
-import { estimateModelCost } from "./pricing";
-import type { AiMetrics, AiSpan, AiTelemetry } from "./types";
-import reportedCostOf from "./usage";
+import type { AiSpan, AiTelemetry, AiTracer } from "./types";
+import type { CallOutcome } from "./usage";
+import { modelIdOf, recordUsage } from "./usage";
 
-/** The already-built (non-string) arm of {@link LanguageModel} — what `wrapLanguageModel` takes. */
-type LanguageModelObject = Exclude<LanguageModel, string>;
+const NOOP_SPAN: AiSpan = { setAttribute: () => {}, setAttributes: () => {} };
 
-/**
- * The slice of a finished call's result that usage accounting reads. Structural
- * rather than the spec's `LanguageModelV4Usage` so a provider that omits a
- * token bucket (they are all optional in practice) never trips a property read.
- */
-interface CallOutcome {
-    providerMetadata?: unknown;
-    usage?: {
-        inputTokens?: { total?: number };
-        outputTokens?: { total?: number };
-    };
-}
-
-/** A finite, non-negative token count, or `undefined`. */
-const tokenCount = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
-
-/**
- * Attach one call's usage to its span and count it into the function's durable
- * metric series. A provider-reported (gateway) cost always wins over an
- * estimate, and the source is stamped next to it so a dashboard never presents
- * a derived number as a measured one.
- */
-const recordUsage = (modelId: string, outcome: CallOutcome, span: AiSpan | undefined, metrics: AiMetrics | undefined): void => {
-    const inputTokens = tokenCount(outcome.usage?.inputTokens?.total);
-    const outputTokens = tokenCount(outcome.usage?.outputTokens?.total);
-    const reported = reportedCostOf(outcome.providerMetadata);
-    const cost = reported ?? estimateModelCost(modelId, { inputTokens, outputTokens });
-    const costSource = reported === undefined ? "estimated" : "provider";
-    const modelAttributes = { "gen_ai.request.model": modelId };
-
-    if (inputTokens !== undefined) {
-        span?.setAttribute("gen_ai.usage.input_tokens", inputTokens);
-        metrics?.count("gen_ai.usage.input_tokens", inputTokens, modelAttributes);
-    }
-
-    if (outputTokens !== undefined) {
-        span?.setAttribute("gen_ai.usage.output_tokens", outputTokens);
-        metrics?.count("gen_ai.usage.output_tokens", outputTokens, modelAttributes);
-    }
-
-    if (cost !== undefined) {
-        span?.setAttributes({ "gen_ai.usage.cost": cost, "lunora.usage.cost.source": costSource });
-        metrics?.count("gen_ai.usage.cost", cost, { ...modelAttributes, "lunora.usage.cost.source": costSource });
-    }
-};
+/** Stands in for an absent `ctx.trace`, so the middleware has one code path. */
+const noopTracer: AiTracer = async (_name, function_) => function_(noopTracer, NOOP_SPAN);
 
 /**
  * Middleware that opens an `ai.generate` / `ai.stream` span around every model
@@ -61,24 +17,16 @@ const recordUsage = (modelId: string, outcome: CallOutcome, span: AiSpan | undef
  * AI usage view reads).
  *
  * A stream's span stays open until the stream finishes, so its duration is the
- * whole generation rather than the time to the first byte. A consumer that
- * abandons the stream leaves that span unfinished; it is dropped with the
- * request rather than reported with made-up numbers.
+ * whole generation rather than the time to the first byte. It closes on normal
+ * end and on consumer cancellation (with whatever usage arrived by then), and
+ * fails with the upstream error when the stream errors.
  */
-const usageMiddleware = (modelId: string, { metrics, trace }: AiTelemetry): LanguageModelMiddleware => {
+const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTelemetry): LanguageModelMiddleware => {
     const attributes = { "gen_ai.operation.name": "chat", "gen_ai.request.model": modelId };
 
     return {
-        wrapGenerate: async ({ doGenerate }) => {
-            if (trace === undefined) {
-                const result = await doGenerate();
-
-                recordUsage(modelId, result, undefined, metrics);
-
-                return result;
-            }
-
-            return trace(
+        wrapGenerate: async ({ doGenerate }) =>
+            trace(
                 "ai.generate",
                 async (_trace, span) => {
                     const result = await doGenerate();
@@ -88,41 +36,57 @@ const usageMiddleware = (modelId: string, { metrics, trace }: AiTelemetry): Lang
                     return result;
                 },
                 attributes,
-            );
-        },
+            ),
 
         wrapStream: async ({ doStream }) => {
             type StreamResult = Awaited<ReturnType<typeof doStream>>;
+            type StreamPart = StreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
 
-            const instrument = (result: StreamResult, onFinish: (outcome: CallOutcome) => void): StreamResult => {
+            // Re-emits the stream part by part, remembering the `finish` part's
+            // usage. A `TransformStream`'s `flush` never runs on cancel or on an
+            // upstream error, which left the span (and its counters) pending forever.
+            const instrument = (result: StreamResult, onFinish: (outcome: CallOutcome) => void, onError: (error: unknown) => void): StreamResult => {
+                const reader = result.stream.getReader();
                 let outcome: CallOutcome = {};
 
                 return {
                     ...result,
-                    stream: result.stream.pipeThrough(
-                        new TransformStream({
-                            flush: () => {
-                                onFinish(outcome);
-                            },
-                            transform: (part, controller) => {
-                                if (part.type === "finish") {
-                                    outcome = { providerMetadata: part.providerMetadata, usage: part.usage };
-                                }
+                    stream: new ReadableStream<StreamPart>({
+                        cancel: async (reason) => {
+                            onFinish(outcome);
+                            await reader.cancel(reason);
+                        },
+                        pull: async (controller) => {
+                            let next: ReadableStreamReadResult<StreamPart>;
 
-                                controller.enqueue(part);
-                            },
-                        }),
-                    ),
+                            try {
+                                next = await reader.read();
+                            } catch (error) {
+                                onError(error);
+                                controller.error(error);
+
+                                return;
+                            }
+
+                            if (next.done) {
+                                onFinish(outcome);
+                                controller.close();
+
+                                return;
+                            }
+
+                            if (next.value.type === "finish") {
+                                outcome = { providerMetadata: next.value.providerMetadata, usage: next.value.usage };
+                            }
+
+                            controller.enqueue(next.value);
+                        },
+                    }),
                 };
             };
 
-            if (trace === undefined) {
-                return instrument(await doStream(), (outcome) => {
-                    recordUsage(modelId, outcome, undefined, metrics);
-                });
-            }
-
             const streamed = Promise.withResolvers<StreamResult>();
+            // Settles once: a later resolve/reject on a settled promise is a no-op.
             const finished = Promise.withResolvers<CallOutcome>();
 
             trace(
@@ -130,7 +94,7 @@ const usageMiddleware = (modelId: string, { metrics, trace }: AiTelemetry): Lang
                 async (_trace, span) => {
                     // A failed dispatch throws here, so the tracer marks the span
                     // errored before the rejection reaches the caller below.
-                    streamed.resolve(instrument(await doStream(), finished.resolve));
+                    streamed.resolve(instrument(await doStream(), finished.resolve, finished.reject));
                     recordUsage(modelId, await finished.promise, span, metrics);
                 },
                 attributes,
@@ -139,13 +103,6 @@ const usageMiddleware = (modelId: string, { metrics, trace }: AiTelemetry): Lang
             return streamed.promise;
         },
     };
-};
-
-/** A model's stable id for attribution, defensively; `"unknown"` keeps the series grouped rather than dropped. */
-const modelIdOf = (model: LanguageModelObject): string => {
-    const id = (model as { modelId?: unknown }).modelId;
-
-    return typeof id === "string" && id.length > 0 ? id : "unknown";
 };
 
 /**
@@ -159,7 +116,7 @@ const instrumentModel = (model: LanguageModel, telemetry: AiTelemetry | undefine
     let instrumented: LanguageModel = model;
 
     if (telemetry !== undefined && typeof model !== "string") {
-        instrumented = wrapLanguageModel({ middleware: usageMiddleware(requestedId ?? modelIdOf(model), telemetry), model });
+        instrumented = wrapLanguageModel({ middleware: usageMiddleware(requestedId ?? modelIdOf(model) ?? "unknown", telemetry), model });
     }
 
     return instrumented;

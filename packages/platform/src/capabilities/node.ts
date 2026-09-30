@@ -143,8 +143,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED, and an index's declared `model` is accepted but read by nothing",
         },
         ai: {
-            level: "unsupported",
-            note: "No Workers AI-equivalent binding implemented, and no AI Gateway to route `<provider>/<model>` slugs through — pass a bring-your-own AI SDK model from an action instead",
+            level: "emulated",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids and `ctx.ai.run` are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
         },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },

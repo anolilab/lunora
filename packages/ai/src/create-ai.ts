@@ -9,12 +9,13 @@ import type { AiGatewayMetadata } from "./gateway";
 import {
     AI_DEFAULT_EMBEDDING_MODEL_ENV,
     AI_DEFAULT_MODEL_ENV,
+    AI_GATEWAY_ID_ENV,
     AI_PROXY_TOKEN_ENV,
     AI_PROXY_URL_ENV,
     buildAiGatewayMetadataFields,
     readAiGatewayEnvTags,
     readEnv,
-    resolveAiGateway,
+    warnIgnoredBindingToken,
 } from "./gateway";
 import instrumentModel from "./telemetry";
 import type { AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
@@ -34,13 +35,18 @@ const GATEWAY_PROVIDER_PLUGINS = [openai, anthropic];
  */
 const isGatewayModelId = (modelId: string): boolean => !modelId.startsWith("@") && modelId.includes("/");
 
-/** The Workers AI provider when only a proxy is configured: every `@cf/…` id needs the binding. */
-const workersAiUnavailable = (): never => {
+/** The one error for every call that needs the Workers `AI` binding and has none. */
+const bindingRequired = (subject: string): never => {
     throw new LunoraError(
         "INTERNAL",
-        `@lunora/ai: Workers AI ids need the \`binding\` (env.AI); only "<provider>/<model>" slugs route through ${AI_PROXY_URL_ENV}`,
+        `@lunora/ai: ${subject} needs the \`AI\` binding (env.AI). Add an \`ai\` binding to wrangler.jsonc, or set ${AI_PROXY_URL_ENV} to an OpenAI-compatible proxy for "<provider>/<model>" slugs.`,
     );
 };
+
+/** Stands in for the Workers AI provider when there is no binding (a proxy-only host such as celld, or nothing configured). */
+const workersAiUnavailable = (): never => bindingRequired("this model id");
+
+workersAiUnavailable.textEmbeddingModel = (): never => bindingRequired("this embedding model id");
 
 /**
  * Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
@@ -81,18 +87,19 @@ const resolveGatewayOption = (
         return undefined;
     }
 
-    // `"workers-ai-binding"`: this env-derived option feeds the Workers AI binding
-    // (`createWorkersAI({ binding, gateway })` / `ai.run`), whose native `gateway`
-    // option has no authorization field — so `resolved.headers` (incl. any
-    // `cf-aig-authorization`) is discarded here, and `resolveAiGateway` warns once
-    // when an auth token was configured. See `AI_GATEWAY_TOKEN_ENV`.
-    const resolved = resolveAiGateway(env, metadata, "workers-ai-binding");
+    // The binding routes with the account's own credentials, so the gateway id
+    // alone selects the gateway; the account id only builds a bring-your-own
+    // provider's `baseURL` (`resolveAiGateway`). Its native `gateway` option has
+    // no authorization field, so a configured token is warned about, not sent.
+    const gatewayId = readEnv(env, AI_GATEWAY_ID_ENV);
 
-    if (resolved === undefined) {
+    if (gatewayId === undefined) {
         return undefined;
     }
 
-    return metadataFields === undefined ? { id: resolved.gatewayId } : { id: resolved.gatewayId, metadata: metadataFields };
+    warnIgnoredBindingToken(env);
+
+    return metadataFields === undefined ? { id: gatewayId } : { id: gatewayId, metadata: metadataFields };
 };
 
 /**
@@ -103,6 +110,11 @@ const resolveGatewayOption = (
  * provider) or any AI SDK {@link LanguageModel}/{@link EmbeddingModel} object
  * (`@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, …), so apps are never
  * locked to Workers AI. Pair `embed` with `@lunora/bindings/vectors` for RAG.
+ *
+ * Without a binding, a string id resolves only as a `"<provider>/<model>"` slug
+ * through {@link AI_PROXY_URL_ENV}; everything else that needs the binding
+ * throws a directed error when called, never at construction — so the
+ * generated `ctx.ai` is always this facade.
  *
  * Combine with the re-exported `generateText`/`streamText`/`generateObject`/
  * `embed`/`tool` from this package:
@@ -121,18 +133,13 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider, telemetry } = options;
 
     const proxyURL = readEnv(env, AI_PROXY_URL_ENV);
-
-    if (!provider && !binding && proxyURL === undefined) {
-        throw new LunoraError("INTERNAL", `@lunora/ai: createAi requires a \`binding\` (env.AI), a pre-built \`provider\`, or ${AI_PROXY_URL_ENV} in env`);
-    }
-
     // A self-hosted OpenAI-compatible proxy takes the `"<provider>/<model>"` slugs
     // instead of AI Gateway; the slug is forwarded unchanged as the request's model.
     const proxy: { chat: (modelId: string) => LanguageModel; embedding: (modelId: string) => EmbeddingModel } | undefined =
         proxyURL === undefined ? undefined : createOpenAI({ apiKey: readEnv(env, AI_PROXY_TOKEN_ENV) ?? "", baseURL: proxyURL, name: "lunora-proxy" });
 
-    // A caller-supplied provider wins; otherwise construct one from the binding.
-    // `binding` is present when `provider` is absent (guarded above). An explicit
+    // A caller-supplied provider wins; otherwise construct one from the binding,
+    // and with neither every Workers AI call throws a directed error. An explicit
     // `gateway` wins; else an env-configured AI Gateway routes Workers AI through
     // it (opt-in), so token + dollar-cost telemetry is computed by the gateway.
     // Resolved once so the raw `ai.run()` path below routes through the same gateway.
@@ -140,8 +147,10 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const resolvedGateway = resolveGatewayOption(gateway, env, effectiveMetadata);
     // Catalog slugs carry the correlation fields per call, so a slug routed to the
     // account's `default` gateway (no `LUNORA_AI_GATEWAY_ID`) is still attributed
-    // to its function and trace in the AI Gateway logs.
-    const gatewayMetadataFields = buildAiGatewayMetadataFields(effectiveMetadata);
+    // to its function and trace in the AI Gateway logs. Not on top of an explicit
+    // gateway's own `metadata`: the provider merges the two, which could push the
+    // object past AI Gateway's key limit and get it rejected whole.
+    const gatewayMetadataFields = gateway?.metadata === undefined ? buildAiGatewayMetadataFields(effectiveMetadata) : undefined;
 
     // The model defaults come from `env` when the caller did not pass them, for
     // the same reason the gateway does: the generated shard builds this facade as
@@ -154,18 +163,23 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const effectiveDefaultModel = defaultModel ?? readEnv(env, AI_DEFAULT_MODEL_ENV);
     const effectiveDefaultEmbeddingModel = defaultEmbeddingModel ?? readEnv(env, AI_DEFAULT_EMBEDDING_MODEL_ENV);
     // `providers` routes `"<provider>/<model>"` slugs through AI Gateway over the
-    // same binding (Unified Billing, or keys stored on the gateway), defaulting to
+    // same binding (Unified Billing for unified-catalog providers, a key stored on
+    // the gateway for gateway-path-only ones), defaulting to
     // the account's `default` gateway when none is configured. `@cf/…` ids are
     // unaffected.
     const workersai: WorkersAiProviderLike =
         provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS }) : workersAiUnavailable);
 
     const resolveModelId = (modelId: string): LanguageModel => {
-        if (proxy !== undefined && isGatewayModelId(modelId)) {
+        if (!isGatewayModelId(modelId)) {
+            return workersai(modelId);
+        }
+
+        if (proxy !== undefined) {
             return proxy.chat(modelId);
         }
 
-        return isGatewayModelId(modelId) && gatewayMetadataFields !== undefined ? workersai(modelId, { metadata: gatewayMetadataFields }) : workersai(modelId);
+        return gatewayMetadataFields === undefined ? workersai(modelId) : workersai(modelId, { metadata: gatewayMetadataFields });
     };
 
     const model = (input?: ModelInput): LanguageModel => {
@@ -230,10 +244,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
 
     const run = async (modelId: string, inputs: Record<string, unknown>, runOptions?: Record<string, unknown>): Promise<unknown> => {
         if (!binding) {
-            throw new LunoraError(
-                "INTERNAL",
-                "@lunora/ai: ai.run requires the `binding` (env.AI) — it is unavailable when only a custom `provider` was supplied",
-            );
+            return bindingRequired("ai.run");
         }
 
         // Route raw `ai.run()` binding calls through the same resolved AI Gateway
