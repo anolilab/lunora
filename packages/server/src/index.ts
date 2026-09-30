@@ -234,6 +234,7 @@ export type {
     WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
+    WorkflowInstanceEvent,
     WorkflowInstanceStatus,
     Workflows,
     WorkflowStatusResult,

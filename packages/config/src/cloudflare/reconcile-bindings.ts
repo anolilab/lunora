@@ -25,7 +25,7 @@ import { readManifest } from "./lunora-manifest";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import collectWarnings from "./reconcile-warnings";
-import { objectBindingEntries, stringEntries } from "./validate-bindings";
+import { objectBindingEntries, settingLeaf, stringEntries } from "./validate-bindings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
@@ -415,12 +415,91 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
 };
 
 /**
+ * Each `defineWorkflow` deploy setting as a leaf path inside a wrangler
+ * `workflows[]` entry, with the value the declaration gives it. Leaves rather
+ * than whole blocks, so a `limits` block that also carries a hand-set key keeps
+ * it, and so a setting is written or reported one field at a time.
+ */
+const workflowSettingLeaves = (workflow: InferredWorkflow): ReadonlyArray<{ path: ReadonlyArray<string>; value: unknown }> => [
+    { path: ["schedules"], value: workflow.schedules === undefined ? undefined : [...workflow.schedules] },
+    { path: ["limits", "steps"], value: workflow.limits?.steps },
+    { path: ["default_retention", "success_retention"], value: workflow.defaultRetention?.successRetention },
+    { path: ["default_retention", "error_retention"], value: workflow.defaultRetention?.errorRetention },
+];
+
+/**
  * Render one wrangler `workflows[]` entry from an inferred workflow or agent —
  * an agent compiles onto a Cloudflare Workflow, so its wrangler footprint is
  * identical: a `{ binding, class_name, name }` entry in the same array. Pure.
  */
 const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<string, unknown> => {
     return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
+};
+
+/** The deploy settings a `defineWorkflow` declares, in wrangler's spelling — merged onto a new entry. Pure. */
+const workflowSettingsFor = (workflow: InferredWorkflow): Record<string, unknown> => {
+    const settings: Record<string, unknown> = {};
+
+    for (const { path, value } of workflowSettingLeaves(workflow)) {
+        if (value === undefined) {
+            continue;
+        }
+
+        const [head, child] = path as [string, string | undefined];
+
+        settings[head] = child === undefined ? value : { ...(settings[head] as Record<string, unknown> | undefined), [child]: value };
+    }
+
+    return settings;
+};
+
+/**
+ * Bring each EXISTING `workflows[]` entry a `defineWorkflow` export generates in
+ * line with the settings it declares: a declared leaf that differs is written
+ * at its own path (so comments elsewhere in the entry survive). A leaf the
+ * export does not declare but the entry carries is left alone and reported:
+ * without an ownership record, a setting since removed from `defineWorkflow`
+ * and one set by hand look the same, and deleting the second is the worse
+ * mistake — but a stale `schedules` keeps starting instances, so it is named.
+ */
+const retuneWorkflows = (
+    text: string,
+    existing: NonNullable<WranglerShape["workflows"]>,
+    workflows: ReadonlyArray<InferredWorkflow>,
+): { text: string; updated: string[]; warnings: string[] } => {
+    let nextText = text;
+    const updated: string[] = [];
+    const warnings: string[] = [];
+
+    for (const [index, entry] of existing.entries()) {
+        const workflow = workflows.find((candidate) => candidate.className === entry.class_name);
+
+        if (workflow === undefined || entry.script_name !== undefined) {
+            continue;
+        }
+
+        for (const leaf of workflowSettingLeaves(workflow)) {
+            const current = settingLeaf(entry, leaf.path);
+            const label = `workflows/${workflow.className}.${leaf.path.join(".")}`;
+
+            if (leaf.value === undefined) {
+                if (current !== undefined) {
+                    warnings.push(
+                        `${label} is set in wrangler.jsonc but defineWorkflow "${workflow.exportName}" does not declare it — reconcile leaves it in place. Remove it by hand if it was dropped from the definition.`,
+                    );
+                }
+
+                continue;
+            }
+
+            if (JSON.stringify(current) !== JSON.stringify(leaf.value)) {
+                nextText = applyModify(nextText, ["workflows", index, ...leaf.path], leaf.value);
+                updated.push(label);
+            }
+        }
+    }
+
+    return { text: nextText, updated, warnings };
 };
 
 /**
@@ -431,11 +510,13 @@ const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<st
  * second step rewriting `workflows[]` off the now-stale `parsed`). Workflows and
  * agents are NOT Durable Objects, so — unlike containers — this writes ONLY the
  * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
- * `observability` toggle.
+ * `observability` toggle. An existing workflow entry has its declared deploy
+ * settings brought in line by {@link retuneWorkflows}.
  *
- * Add-only: an entry whose `class_name` no declaration generates is left in
- * place and reported by `orphanedEntryWarnings` (`reconcile-warnings.ts`) instead — see there for
- * why removal needs ownership this file cannot establish. Pure.
+ * Add-only for ENTRIES: an entry whose `class_name` no declaration generates is
+ * left in place and reported by `orphanedEntryWarnings` (`reconcile-warnings.ts`)
+ * instead — see there for why removal needs ownership this file cannot
+ * establish. Pure.
  */
 const reconcileWorkflows = (
     text: string,
@@ -448,19 +529,30 @@ const reconcileWorkflows = (
     const missingWorkflows = workflows.filter((workflow) => !existingClasses.has(workflow.className));
     const missingAgents = agents.filter((agent) => !existingClasses.has(agent.className));
 
-    if (missingWorkflows.length === 0 && missingAgents.length === 0) {
-        return { added: [], text };
-    }
-
-    const nextText = applyModify(
-        text,
-        ["workflows"],
-        [...existing, ...missingWorkflows.map((workflow) => workflowEntryFor(workflow)), ...missingAgents.map((agent) => workflowEntryFor(agent))],
-    );
+    // Append first, retune second: the append rewrites the array from `parsed`,
+    // which would undo a retune written before it, while appending never moves
+    // an existing entry's index.
+    const appended =
+        missingWorkflows.length === 0 && missingAgents.length === 0
+            ? text
+            : applyModify(
+                  text,
+                  ["workflows"],
+                  [
+                      ...existing,
+                      ...missingWorkflows.map((workflow) => {
+                          return { ...workflowEntryFor(workflow), ...workflowSettingsFor(workflow) };
+                      }),
+                      ...missingAgents.map((agent) => workflowEntryFor(agent)),
+                  ],
+              );
+    const retune = retuneWorkflows(appended, existing, workflows);
 
     return {
         added: [...missingWorkflows.map((workflow) => `workflows/${workflow.className}`), ...missingAgents.map((agent) => `workflows/${agent.className}`)],
-        text: nextText,
+        text: retune.text,
+        updated: retune.updated,
+        warnings: retune.warnings,
     };
 };
 

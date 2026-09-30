@@ -242,6 +242,46 @@ describe("discover/workflows", () => {
 
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow("`name` must be a static string literal");
     });
+
+    it("lifts the static deploy settings", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            export const etl = defineWorkflow({
+                handler: async () => undefined,
+                schedules: ["0 * * * *", "0 9 * * MON-FRI"],
+                limits: { steps: 25_000 },
+                defaultRetention: { successRetention: "3 days" },
+            });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect([workflow?.schedules, workflow?.limits, workflow?.defaultRetention]).toStrictEqual([
+            ["0 * * * *", "0 9 * * MON-FRI"],
+            { steps: 25_000 },
+            { successRetention: "3 days" },
+        ]);
+    });
+
+    it.each([
+        [`schedules: ["not a cron"]`, `schedule "not a cron" is not a valid cron expression`],
+        [`schedules: []`, "`schedules` must be a non-empty inline array"],
+        [`limits: { steps: max }`, "`limits.steps` must be a static number literal"],
+        [`defaultRetention: retention`, "`defaultRetention` must be an inline object literal"],
+    ])("rejects a non-static or invalid setting (%s)", (setting, message) => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            const max = 5;
+            const retention = {};
+            export const etl = defineWorkflow({ handler: async () => undefined, ${setting} });
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(message);
+    });
 });
 
 describe("emit (workflows)", () => {

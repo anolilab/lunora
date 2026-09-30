@@ -29,14 +29,52 @@ export interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     id?: string;
     /** The event payload the instance is triggered with — surfaced as `event.payload`. */
     params?: Params;
-    /** Instance retention policy (defaults to the account maximum). */
-    retention?: { errorRetention?: string; successRetention?: string };
+    /** Instance retention policy (defaults to the workflow's `defaultRetention`, else the plan default). */
+    retention?: WorkflowRetention;
 }
 
 /** Result of `Workflow.deleteBatch`. Mirrors Cloudflare's `WorkflowBatchDeleteResult`: one entry per input position. */
 export interface WorkflowBatchDeleteResult {
     deleted: { id: string }[];
     errors: { code: number; id: string; message: string }[];
+}
+
+/**
+ * One event a workflow instance emitted, as `WorkflowInstance.subscribe()`
+ * streams it. Mirrors Cloudflare's `WorkflowInstanceEvent` loosely: the three
+ * fields every event carries are typed, and the per-`type` payload (`stepName`,
+ * `attempt`, `output`, `error`, `durationMs`, …) is left open, because the
+ * upstream union has thirty members and grows with the engine — a closed copy
+ * here would reject the next event kind Cloudflare ships.
+ */
+export interface WorkflowInstanceEventLike {
+    [field: string]: unknown;
+    /** Monotonic per-instance id; pass one as `cursor` to resume after it. */
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    /** `workflow_started`, `step_completed`, `attempt_errored`, `rollback_started`, … */
+    type: string;
+}
+
+/** Options for `WorkflowInstance.subscribe()`, mirroring Cloudflare's subscribe options type. */
+export interface WorkflowInstanceSubscribeOptionsLike {
+    /** Start after this `eventId` instead of replaying the whole history. */
+    cursor?: number;
+    /** Only stream events of these types. */
+    filter?: string[];
+}
+
+/**
+ * A live subscription to one instance's events, mirroring Cloudflare's
+ * subscription type: `next()` replays the history first, then
+ * waits for new events, and reports `done` once the instance completes, errors
+ * or is terminated. Cloudflare's subscription is also `Disposable`; that half is
+ * not mirrored because the ES2024 lib this package compiles against has no
+ * `Symbol.dispose`, and the native object keeps it either way.
+ */
+export interface WorkflowInstanceSubscriptionLike {
+    next: () => Promise<IteratorResult<WorkflowInstanceEventLike, void>>;
 }
 
 /** A live handle to a single workflow instance. Mirrors `WorkflowInstance`. */
@@ -49,6 +87,8 @@ export interface WorkflowInstanceLike {
     resume: () => Promise<void>;
     sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    /** Stream the instance's events — its full history first, then new ones as it runs. */
+    subscribe: (options?: WorkflowInstanceSubscribeOptionsLike) => Promise<WorkflowInstanceSubscriptionLike>;
     terminate: () => Promise<void>;
 }
 
@@ -516,8 +556,23 @@ export type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> 
 
 /** Author-supplied config for `defineWorkflow`. */
 export interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
+    /**
+     * How long finished instances keep their state and logs unless `create({
+     * retention })` says otherwise — written to `workflows[].default_retention`.
+     * Durations are Cloudflare's (`"3 days"`, `"12 hours"`); the plan's maximum
+     * applies (30 days on Workers Paid, 3 on Free).
+     */
+    defaultRetention?: WorkflowRetention;
+
     /** The workflow body — the multi-step durable program. */
     handler: WorkflowHandler<Params, Output>;
+
+    /**
+     * Per-instance limits, written to `workflows[].limits`. `steps` raises (or
+     * lowers) the cap on steps one instance may execute — 10,000 by default,
+     * up to 25,000.
+     */
+    limits?: { steps?: number };
 
     /**
      * Optional override for the deployed workflow name — the `workflows[].name`
@@ -527,6 +582,24 @@ export interface WorkflowConfig<Params = Record<string, unknown>, Output = unkno
      * export name (`orderPipeline` → `WORKFLOW_ORDER_PIPELINE`).
      */
     name?: string;
+
+    /**
+     * Cron expressions that each start a new instance with no params — written
+     * to `workflows[].schedules`, so no separate `scheduled()` handler is
+     * needed. Five-field Cloudflare cron syntax (`"0 * * * *"`).
+     *
+     * Deploy configuration: codegen reads these statically, so each entry must
+     * be a string literal.
+     */
+    schedules?: ReadonlyArray<string>;
+}
+
+/** Instance retention durations. Mirrors `default_retention` / `create({ retention })`. */
+export interface WorkflowRetention {
+    /** Kept this long after the instance errors. */
+    errorRetention?: string;
+    /** Kept this long after the instance completes or is terminated. */
+    successRetention?: string;
 }
 
 /**

@@ -59,6 +59,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "The `worker_loaders` binding (Dynamic Workers, in open beta): `load()` compiles a script into its own isolate, `globalOutbound: null` removes its network, and `limits.cpuMs` bounds it",
         },
         workflowRollback: { level: "native", note: "Workflows step rollback (the step.do rollback option)" },
+        workflowSchedules: {
+            level: "native",
+            note: "wrangler workflows[].schedules — Cloudflare creates an instance on each cron tick, no scheduled() handler involved",
+        },
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {

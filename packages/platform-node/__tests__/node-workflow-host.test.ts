@@ -217,7 +217,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(status.status).toBe("unknown");
     });
 
-    it("pause and restart are not implemented; terminate reports terminated, not unknown", async () => {
+    it("pause, restart and subscribe are not implemented; terminate reports terminated, not unknown", async () => {
         expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
@@ -229,6 +229,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
 
         await expect(instance.pause()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
         await expect(instance.restart()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+        await expect(instance.subscribe()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
 
         await instance.terminate();
 

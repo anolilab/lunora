@@ -1571,7 +1571,7 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     id?: string;
     /** The event payload the instance is triggered with — surfaced as `event.payload`. */
     params?: Params;
-    /** Instance retention policy (defaults to the account maximum). */
+    /** Instance retention policy (defaults to the workflow's `defaultRetention`, else the plan default). */
     retention?: { errorRetention?: string; successRetention?: string };
 }
 
@@ -1586,6 +1586,15 @@ interface WorkflowEventDefinition<Payload = unknown> {
     readonly type: string;
 }
 
+/** One event `WorkflowInstance.subscribe()` streams. Mirrors `@lunora/workflow`'s `WorkflowInstanceEventLike`. */
+interface WorkflowInstanceEvent {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
+}
+
 /** A live handle to a single workflow instance. Mirrors `@lunora/workflow`'s `WorkflowInstanceLike`. */
 interface WorkflowInstance {
     delete: () => Promise<void>;
@@ -1595,6 +1604,8 @@ interface WorkflowInstance {
     resume: () => Promise<void>;
     sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    /** Stream the instance's events — its full history first, then new ones as it runs. */
+    subscribe: (options?: { cursor?: number; filter?: string[] }) => Promise<{ next: () => Promise<IteratorResult<WorkflowInstanceEvent, void>> }>;
     terminate: () => Promise<void>;
 }
 
@@ -2905,6 +2916,7 @@ export type {
     WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
+    WorkflowInstanceEvent,
     WorkflowInstanceStatus,
     Workflows,
     WorkflowStatusResult,

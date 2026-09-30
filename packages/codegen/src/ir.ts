@@ -617,8 +617,12 @@ export interface WorkflowIR {
     bindingName: string;
     /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow`. */
     className: string;
+    /** Static `defaultRetention` literal → `workflows[].default_retention`. */
+    defaultRetention?: { errorRetention?: string; successRetention?: string };
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
+    /** Static `limits` literal → `workflows[].limits`. */
+    limits?: { steps?: number };
 
     /**
      * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
@@ -626,6 +630,13 @@ export interface WorkflowIR {
      * definition overrides it.
      */
     name: string;
+
+    /**
+     * Static `schedules` cron literals → `workflows[].schedules`. Each one
+     * starts an instance on Cloudflare; gated by the `workflowSchedules`
+     * capability, since a host that ignores them would never run the workflow.
+     */
+    schedules?: ReadonlyArray<string>;
 
     /**
      * Durable step labels lifted from the handler body — the first string-literal

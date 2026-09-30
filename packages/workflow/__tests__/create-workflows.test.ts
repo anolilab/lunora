@@ -15,6 +15,13 @@ const fakeInstance = (id: string): WorkflowInstanceLike => {
         status: async () => {
             return { status: "running" };
         },
+        subscribe: async () => {
+            return {
+                next: async () => {
+                    return { done: true, value: undefined };
+                },
+            };
+        },
         terminate: async () => undefined,
     };
 };

@@ -2021,6 +2021,10 @@ interface WranglerConfig {
         cache?: {
             enabled?: boolean;
         } | null;
+        default_retention?: unknown;
+        limits?: unknown;
+        name?: unknown;
+        schedules?: unknown;
         type?: string;
     } | null> | null;
     flagship?: ReadonlyArray<{
@@ -2223,7 +2227,10 @@ interface WranglerValidationReport {
 interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
+    default_retention?: unknown;
+    limits?: unknown;
     name?: string;
+    schedules?: unknown;
     script_name?: string;
 }
 ```

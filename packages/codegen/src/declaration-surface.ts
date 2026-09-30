@@ -302,6 +302,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         vectorStore: schema.vectorIndexes.length > 0,
         workerLoaders: sandboxUsage.usesSandboxLoader,
         workflowRollback: codeSignals.workflowRollback,
+        // Read off the workflow IR like `cronTriggers` off the crons: the cron
+        // list is deploy configuration a host either turns into instances or
+        // silently ignores, and ignoring it means the workflow never runs.
+        workflowSchedules: workflows.some((workflow) => workflow.schedules !== undefined),
     });
     const featureUsage = platformGate.usage;
     // The gate's `vectorStore` verdict, named once for both consumers below.

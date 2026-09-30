@@ -29,6 +29,40 @@ const workflowBindingName = (exportName: string): string => `WORKFLOW_${exportNa
  */
 const workflowDefaultName = (exportName: string): string => exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "-").toLowerCase();
 
+const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+
+/**
+ * Shape-check the deploy settings (`schedules`, `limits`, `defaultRetention`)
+ * for JS callers and values assembled at runtime. Codegen reads the same keys
+ * statically (and validates each cron expression) before they reach wrangler;
+ * this only keeps a malformed value from being carried silently on the
+ * definition. Ranges — the 25,000-step ceiling, the plan's retention maximum —
+ * are Cloudflare's to enforce at deploy, so they can move without a release.
+ */
+const workflowSettingsProblem = (config: Pick<WorkflowConfig, "defaultRetention" | "limits" | "schedules">): string | undefined => {
+    // Read as `unknown`: the typed shape is exactly what an untrusted caller may not honour.
+    const { defaultRetention, limits, schedules } = config as Record<"defaultRetention" | "limits" | "schedules", unknown>;
+    const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+    if (schedules !== undefined && !(Array.isArray(schedules) && schedules.length > 0 && schedules.every((schedule) => isNonEmptyString(schedule)))) {
+        return "`schedules` must be a non-empty array of cron expression strings";
+    }
+
+    const steps = isObject(limits) ? limits.steps : undefined;
+
+    if (limits !== undefined && (!isObject(limits) || (steps !== undefined && !(Number.isInteger(steps) && (steps as number) > 0)))) {
+        return "`limits` must be an object whose `steps` is a positive integer";
+    }
+
+    const durations = isObject(defaultRetention) ? [defaultRetention.errorRetention, defaultRetention.successRetention] : [];
+
+    if (defaultRetention !== undefined && (!isObject(defaultRetention) || durations.some((value) => value !== undefined && !isNonEmptyString(value)))) {
+        return '`defaultRetention` must be an object of duration strings (e.g. "7 days")';
+    }
+
+    return undefined;
+};
+
 /**
  * Declare a durable workflow deployed alongside the app. Pure validation +
  * branding: codegen discovers the export, emits the `WorkflowEntrypoint`
@@ -52,6 +86,10 @@ const workflowDefaultName = (exportName: string): string => exportName.replaceAl
  *         );
  *         return order;
  *     },
+ *     // Deploy settings, written into the wrangler `workflows[]` entry.
+ *     schedules: ["0 * * * *"],
+ *     limits: { steps: 25_000 },
+ *     defaultRetention: { successRetention: "3 days", errorRetention: "30 days" },
  * });
  * ```
  */
@@ -62,6 +100,12 @@ const defineWorkflow = <Params = Record<string, unknown>, Output = unknown>(conf
 
     if (config.name !== undefined && (typeof config.name !== "string" || config.name.length === 0)) {
         throw new TypeError("defineWorkflow: `name` must be a non-empty string when provided");
+    }
+
+    const settingsProblem = workflowSettingsProblem(config);
+
+    if (settingsProblem !== undefined) {
+        throw new TypeError(`defineWorkflow: ${settingsProblem}`);
     }
 
     return { ...config, isLunoraWorkflow: true };

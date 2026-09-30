@@ -45,6 +45,13 @@ const fakeBinding = (): { binding: WorkflowBindingLike; sent: { id: string; payl
             status: async () => {
                 return { status: "running" as const };
             },
+            subscribe: async () => {
+                return {
+                    next: async () => {
+                        return { done: true, value: undefined };
+                    },
+                };
+            },
             terminate: async () => undefined,
         };
     };

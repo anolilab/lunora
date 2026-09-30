@@ -28,6 +28,7 @@ import {
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
+    validateWorkflowSettings,
     WORKFLOWS_RULE,
 } from "./validate-bindings";
 import {
@@ -153,6 +154,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateTailConsumers(wrangler, errors);
     validateContainers(wrangler, errors, warnings);
     validateRequiredFieldEntries(wrangler.workflows, "workflows", WORKFLOWS_RULE, errors);
+    validateWorkflowSettings(wrangler, errors);
     validateQueues(wrangler, errors);
     validateRequiredFieldEntries(wrangler.secrets_store_secrets, "secrets_store_secrets", SECRETS_STORE_RULE, errors);
 

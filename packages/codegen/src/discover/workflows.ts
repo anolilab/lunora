@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
+import { isValidCronExpression } from "@lunora/scheduler";
 import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
-import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
@@ -46,6 +47,95 @@ const isDefineWorkflow = (identifier: Identifier): boolean => {
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
 const stringProperty = stringPropertyFor("workflow");
+
+/** Read a property's numeric-literal value, or throw a located diagnostic. */
+const numberProperty = (expression: Expression, exportName: string, property: string): number => {
+    if (Node.isNumericLiteral(expression)) {
+        return expression.getLiteralValue();
+    }
+
+    throw diagnosticAt(
+        expression,
+        `workflow "${exportName}": \`${property}\` must be a static number literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+    );
+};
+
+/** The initializer of `object.<name>` when it is a plain `name: value` assignment. */
+const assignedProperty = (object: ObjectLiteralExpression, name: string): Expression | undefined => {
+    const property = findObjectProperty(object, name);
+
+    return property && Node.isPropertyAssignment(property) ? property.getInitializerOrThrow() : undefined;
+};
+
+/** Require an inline object literal for a nested settings block (`limits`, `defaultRetention`). */
+const objectProperty = (expression: Expression, exportName: string, property: string): ObjectLiteralExpression => {
+    if (Node.isObjectLiteralExpression(expression)) {
+        return expression;
+    }
+
+    throw diagnosticAt(
+        expression,
+        `workflow "${exportName}": \`${property}\` must be an inline object literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+    );
+};
+
+/**
+ * Lift `schedules: ["0 * * * *", …]` — each a string literal holding a valid
+ * cron expression, since the list is written verbatim to wrangler and a typo
+ * would otherwise surface only as a rejected deploy.
+ */
+const schedulesFrom = (expression: Expression, exportName: string): string[] => {
+    if (!Node.isArrayLiteralExpression(expression) || expression.getElements().length === 0) {
+        throw diagnosticAt(expression, `workflow "${exportName}": \`schedules\` must be a non-empty inline array of cron expression string literals`);
+    }
+
+    return expression.getElements().map((element) => {
+        const schedule = stringProperty(element, exportName, "schedules[]");
+
+        if (!isValidCronExpression(schedule)) {
+            throw diagnosticAt(element, `workflow "${exportName}": schedule "${schedule}" is not a valid cron expression`);
+        }
+
+        return schedule;
+    });
+};
+
+/** Lift the optional deploy settings (`schedules`, `limits`, `defaultRetention`). */
+const settingsFrom = (argument: ObjectLiteralExpression, exportName: string): Pick<WorkflowIR, "defaultRetention" | "limits" | "schedules"> => {
+    const settings: Pick<WorkflowIR, "defaultRetention" | "limits" | "schedules"> = {};
+    const schedules = assignedProperty(argument, "schedules");
+
+    if (schedules !== undefined) {
+        settings.schedules = schedulesFrom(schedules, exportName);
+    }
+
+    const limits = assignedProperty(argument, "limits");
+
+    if (limits !== undefined) {
+        const steps = assignedProperty(objectProperty(limits, exportName, "limits"), "steps");
+
+        settings.limits = steps === undefined ? {} : { steps: numberProperty(steps, exportName, "limits.steps") };
+    }
+
+    const retention = assignedProperty(argument, "defaultRetention");
+
+    if (retention !== undefined) {
+        const block = objectProperty(retention, exportName, "defaultRetention");
+        const defaultRetention: NonNullable<WorkflowIR["defaultRetention"]> = {};
+
+        for (const key of ["errorRetention", "successRetention"] as const) {
+            const value = assignedProperty(block, key);
+
+            if (value !== undefined) {
+                defaultRetention[key] = stringProperty(value, exportName, `defaultRetention.${key}`);
+            }
+        }
+
+        settings.defaultRetention = defaultRetention;
+    }
+
+    return settings;
+};
 
 /**
  * True when a call expression is a native durable-step invocation —
@@ -193,7 +283,7 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
     }
 
-    return ir;
+    return { ...ir, ...settingsFrom(argument, exportName) };
 };
 
 /**
@@ -276,8 +366,9 @@ const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
 /**
  * Discover every workflow the project declares: exported `defineWorkflow()`
  * calls in `lunora/workflows.ts`. Returns `[]` when the file doesn't exist. The
- * only wrangler-relevant literal is the optional `name` override; the workflow
- * body is runtime-only, so codegen never evaluates it.
+ * wrangler-relevant literals are the optional `name` override and the deploy
+ * settings (`schedules`, `limits`, `defaultRetention`); the workflow body is
+ * runtime-only, so codegen never evaluates it.
  */
 const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowIR[] => {
     const workflowsPath = join(lunoraDirectory, WORKFLOWS_FILENAME);

@@ -1014,8 +1014,16 @@ const WORKFLOWS_FILENAME = "workflows.ts";
 interface WorkflowIR {
     bindingName: string;
     className: string;
+    defaultRetention?: {
+        errorRetention?: string;
+        successRetention?: string;
+    };
     exportName: string;
+    limits?: {
+        steps?: number;
+    };
     name: string;
+    schedules?: ReadonlyArray<string>;
     steps: ReadonlyArray<WorkflowStepIR>;
 }
 ```

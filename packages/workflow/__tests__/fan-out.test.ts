@@ -48,6 +48,7 @@ const makeInstance = (id: string): WorkflowInstanceLike => {
         status: vi.fn<() => Promise<WorkflowStatusResult>>(async () => {
             return { status: "running" };
         }),
+        subscribe: vi.fn<WorkflowInstanceLike["subscribe"]>(),
         terminate: vi.fn<() => Promise<void>>(),
     };
 };

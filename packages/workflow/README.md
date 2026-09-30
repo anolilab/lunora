@@ -192,7 +192,9 @@ export const checkout = mutation.input({ orderId: v.string() }).mutation(async (
 });
 ```
 
-A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `deleteBatch([...ids])` (up to 100), `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, `delete()`, and the untyped `sendEvent({ type, payload })`.
+A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `deleteBatch([...ids])` (up to 100), `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, `delete()`, `subscribe({ cursor?, filter? })` (streams the instance's event history, then new events), and the untyped `sendEvent({ type, payload })`.
+
+`defineWorkflow` also takes deploy settings, which codegen writes into the workflow's `wrangler.jsonc` entry: `schedules` (cron expressions that each start an instance), `limits: { steps }`, and `defaultRetention: { successRetention, errorRetention }`. Scheduled workflows are refused on the Node and celld targets.
 
 ### Runtime requirements
 

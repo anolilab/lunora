@@ -2916,7 +2916,25 @@ interface WorkflowInstance {
         type: string;
     }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    subscribe: (options?: {
+        cursor?: number;
+        filter?: string[];
+    }) => Promise<{
+        next: () => Promise<IteratorResult<WorkflowInstanceEvent, void>>;
+    }>;
     terminate: () => Promise<void>;
+}
+```
+
+### `WorkflowInstanceEvent` (interface)
+
+```ts
+interface WorkflowInstanceEvent {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
 }
 ```
 
@@ -5264,6 +5282,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `WorkflowInstance` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `WorkflowInstanceEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

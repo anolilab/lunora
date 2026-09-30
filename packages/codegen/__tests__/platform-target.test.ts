@@ -214,6 +214,19 @@ describe("gatePlatformFeatures", () => {
         ).toStrictEqual(refused);
     });
 
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates scheduled workflows per target (%s)", async (target, refused) => {
+        expect.assertions(1);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { workflowSchedules: true });
+
+        expect(result.signals.workflowSchedules).toBe(!refused);
+    });
+
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
         expect.assertions(7);
 

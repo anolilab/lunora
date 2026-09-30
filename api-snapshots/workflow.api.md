@@ -245,8 +245,13 @@ type WorkflowBranchOutputs<B extends ReadonlyArray<WorkflowBranch>> = {
 
 ```ts
 interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
+    defaultRetention?: WorkflowRetention;
     handler: WorkflowHandler<Params, Output>;
+    limits?: {
+        steps?: number;
+    };
     name?: string;
+    schedules?: ReadonlyArray<string>;
 }
 ```
 
@@ -256,10 +261,7 @@ interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
 interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     id?: string;
     params?: Params;
-    retention?: {
-        errorRetention?: string;
-        successRetention?: string;
-    };
+    retention?: WorkflowRetention;
 }
 ```
 
@@ -338,6 +340,18 @@ interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
 }
 ```
 
+### `WorkflowInstanceEventLike` (interface)
+
+```ts
+interface WorkflowInstanceEventLike {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
+}
+```
+
 ### `WorkflowInstanceLike` (interface)
 
 ```ts
@@ -352,6 +366,7 @@ interface WorkflowInstanceLike {
         type: string;
     }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    subscribe: (options?: WorkflowInstanceSubscribeOptionsLike) => Promise<WorkflowInstanceSubscriptionLike>;
     terminate: () => Promise<void>;
 }
 ```
@@ -371,6 +386,23 @@ interface WorkflowInstancePage {
 
 ```ts
 type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+```
+
+### `WorkflowInstanceSubscribeOptionsLike` (interface)
+
+```ts
+interface WorkflowInstanceSubscribeOptionsLike {
+    cursor?: number;
+    filter?: string[];
+}
+```
+
+### `WorkflowInstanceSubscriptionLike` (interface)
+
+```ts
+interface WorkflowInstanceSubscriptionLike {
+    next: () => Promise<IteratorResult<WorkflowInstanceEventLike, void>>;
+}
 ```
 
 ### `WorkflowInstanceSummary` (interface)
@@ -400,6 +432,15 @@ interface WorkflowLogger {
 
 ```ts
 type WorkflowParallelFunction = <const B extends ReadonlyArray<WorkflowBranch>>(branches: B) => Promise<WorkflowBranchOutputs<B>>;
+```
+
+### `WorkflowRetention` (interface)
+
+```ts
+interface WorkflowRetention {
+    errorRetention?: string;
+    successRetention?: string;
+}
 ```
 
 ### `WorkflowRollbackContextLike` (interface)

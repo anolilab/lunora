@@ -35,6 +35,37 @@ describe("defineWorkflow", () => {
     });
 });
 
+describe("defineWorkflow deploy settings", () => {
+    it("carries schedules, limits and defaultRetention through", () => {
+        expect.assertions(1);
+
+        const definition = defineWorkflow({
+            defaultRetention: { errorRetention: "30 days", successRetention: "3 days" },
+            handler: async () => undefined,
+            limits: { steps: 25_000 },
+            schedules: ["0 * * * *", "*/15 * * * *"],
+        });
+
+        expect([definition.schedules, definition.limits, definition.defaultRetention]).toStrictEqual([
+            ["0 * * * *", "*/15 * * * *"],
+            { steps: 25_000 },
+            { errorRetention: "30 days", successRetention: "3 days" },
+        ]);
+    });
+
+    it.each([
+        [{ schedules: [] }, /`schedules` must be a non-empty array/],
+        [{ schedules: ["0 * * * *", ""] }, /`schedules` must be a non-empty array/],
+        [{ limits: { steps: 0 } }, /`limits` must be an object whose `steps` is a positive integer/],
+        [{ limits: { steps: 1.5 } }, /`limits` must be an object whose `steps` is a positive integer/],
+        [{ defaultRetention: { successRetention: "" } }, /`defaultRetention` must be an object of duration strings/],
+    ])("rejects a malformed setting %j", (settings, message) => {
+        expect.assertions(1);
+
+        expect(() => defineWorkflow({ handler: async () => undefined, ...settings })).toThrow(message);
+    });
+});
+
 describe("isWorkflowDefinition", () => {
     it("rejects non-definitions", () => {
         expect.assertions(4);

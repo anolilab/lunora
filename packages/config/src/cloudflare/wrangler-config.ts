@@ -38,7 +38,13 @@ interface WranglerContainerEntry {
 interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
+    /** `{ success_retention?, error_retention? }` durations; shape-checked by `validateWorkflowSettings`. */
+    default_retention?: unknown;
+    /** `{ steps? }`; shape-checked by `validateWorkflowSettings`. */
+    limits?: unknown;
     name?: string;
+    /** Cron strings that each start an instance; shape-checked by `validateWorkflowSettings`. */
+    schedules?: unknown;
     /** Present when the class lives in ANOTHER Worker — then it is that script's to export. */
     script_name?: string;
 }
@@ -101,7 +107,13 @@ interface WranglerConfig {
     // typically use a single `export default` entrypoint, so this is passthrough.
     // Parsed from untrusted JSONC, so the map or any entry may be `null`;
     // `validateExports` guards against that at runtime.
-    exports?: Record<string, { cache?: { enabled?: boolean } | null; type?: string } | null> | null;
+    // A `type: "workflow"` entry declares a Workflow this Worker defines (keyed
+    // by class name) with the same settings a `workflows[]` binding takes; see
+    // `validateWorkflowSettings`.
+    exports?: Record<
+        string,
+        { cache?: { enabled?: boolean } | null; default_retention?: unknown; limits?: unknown; name?: unknown; schedules?: unknown; type?: string } | null
+    > | null;
     // Cloudflare Flagship feature-flag bindings (`@lunora/flags` binding mode).
     // The `app_id` is a remote Flagship app Lunora can't mint — warn, don't fail.
     // See `HINT_BINDING_RULES`.

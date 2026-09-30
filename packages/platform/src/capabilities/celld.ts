@@ -195,9 +195,13 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "celld does not implement step rollback: a step.do with a rollback option fails at first use (`step rollbackOptions are not implemented in celld`)",
         },
+        workflowSchedules: {
+            level: "unsupported",
+            note: "Not verified against celld: whether it reads a workflows[] entry's `schedules` list and starts instances from it is unknown, so a scheduled workflow is refused rather than deployed onto a host that may never start it. Rate it once that is checked",
+        },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). Instance `delete`, binding `deleteBatch` and function-valued `retries.delay` have not been verified against celld. The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
+            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). Instance `delete` and `subscribe`, binding `deleteBatch`, function-valued `retries.delay`, and the `limits` / `default_retention` binding settings have not been verified against celld. The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
         },
     },
 };

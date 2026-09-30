@@ -236,7 +236,8 @@ const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
 
 /**
  * Report every `durable_objects.bindings[].class_name` and
- * `workflows[].class_name` the worker entry does not export.
+ * `workflows[].class_name` (and `exports` workflow class) the worker entry does
+ * not export.
  *
  * `.scheduler(...)` and `.workflow(...)` on the generated app builder write the
  * binding and the migration entry but cannot add the `export { SchedulerDO }`
@@ -278,6 +279,14 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEnt
         // which that script exports, not this entry.
         if (typeof workflow?.class_name === "string" && workflow.class_name.length > 0 && workflow.script_name === undefined) {
             declared.push({ className: workflow.class_name, label: "workflows" });
+        }
+    }
+
+    // A workflow declared in `exports` is keyed by its class name and is always
+    // this Worker's own — there is no `script_name` form to carve out.
+    for (const [className, exportEntry] of Object.entries(wrangler.exports ?? {})) {
+        if (exportEntry?.type === "workflow") {
+            declared.push({ className, label: "workflows" });
         }
     }
 

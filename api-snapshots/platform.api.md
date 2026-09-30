@@ -319,6 +319,7 @@ interface PlatformCapabilities {
         workerLoaders?: Capability;
         workflowRollback?: Capability;
         workflows?: Capability;
+        workflowSchedules?: Capability;
     };
     id: string;
     name: string;

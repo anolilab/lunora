@@ -422,6 +422,37 @@ export const charge = defineStep("charge", {
 });
 ```
 
+### Deploy settings (`schedules`, `limits`, `defaultRetention`)
+
+Three optional keys on `defineWorkflow` are deploy configuration: codegen reads
+them statically (string and number literals only) and writes them into the
+workflow's `wrangler.jsonc` entry.
+
+```ts
+export const nightlyReport = defineWorkflow({
+    handler: async (ctx) => {
+        /* … */
+    },
+    // Each cron tick starts a new instance with no params — no scheduled() handler needed.
+    schedules: ["0 3 * * *"],
+    // Raise the per-instance step cap (10,000 by default, up to 25,000).
+    limits: { steps: 25_000 },
+    // How long finished instances keep their state, unless create({ retention }) overrides it.
+    defaultRetention: { successRetention: "3 days", errorRetention: "30 days" },
+});
+```
+
+These land as `schedules`, `limits.steps`, and
+`default_retention.{success_retention,error_retention}`. Each cron expression is
+checked at codegen. When you change a setting, the existing entry is updated.
+When you remove one, it stays in `wrangler.jsonc` and reconcile warns about it,
+because a removed setting and a hand-set one look the same. Delete it by hand.
+
+<Callout type="warn">
+    `schedules` needs a host that starts instances itself. It is refused with a `platform_unsupported_feature` diagnostic on `target: "node"` (nothing reads the
+    list there) and on celld (not verified). `limits` and `defaultRetention` are ignored by the Node host.
+</Callout>
+
 ## Start and manage instances
 
 Codegen wires a typed `ctx.workflows` handle onto **mutations and actions**.
@@ -462,7 +493,26 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 
 `create`/`get` hand back the native Cloudflare instance, which exposes its own
 lifecycle: `status()` (returns `status` + `output`/`error`), `pause()`, `resume()`,
-`restart()`, `terminate()`, `delete()` (stops the instance and frees its state), and the untyped `sendEvent({ type, payload })`.
+`restart()`, `terminate()`, `delete()` (stops the instance and frees its state), `subscribe()`, and the untyped `sendEvent({ type, payload })`.
+
+`subscribe({ cursor?, filter? })` streams the instance's events without polling.
+It replays the full history, then waits for new events until the instance
+completes, errors, or is terminated. Each event carries `eventId`, `instanceId`,
+`timestamp`, and a `type` (`workflow_started`, `step_completed`,
+`attempt_errored`, `rollback_started`, …) plus that type's fields. The typed
+mirror leaves those fields open so new event types still type-check:
+
+```ts
+const instance = await ctx.workflows.get("orderPipeline").get(instanceId);
+const subscription = await instance.subscribe({ filter: ["step_completed", "workflow_completed"] });
+
+for (let event = await subscription.next(); !event.done; event = await subscription.next()) {
+    console.log(event.value.type, event.value.stepName);
+}
+```
+
+The Node host rejects `subscribe()` with `NOT_IMPLEMENTED`, because its engine
+keeps no per-instance event log.
 
 ### Listing instances and step timelines
 
@@ -498,7 +548,8 @@ save). It:
    `lunora/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
 2. Wires the typed `ctx.workflows` handle.
 3. Reconciles the `binding`, `class_name`, and `name` entries of
-   `wrangler.jsonc`'s `workflows[]` array from the same definition.
+   `wrangler.jsonc`'s `workflows[]` array from the same definition, plus any
+   [deploy settings](#deploy-settings-schedules-limits-defaultretention).
 
 Your worker entry must re-export the generated classes so wrangler can find
 them:
@@ -516,6 +567,28 @@ The resulting binding:
     "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
 }
 ```
+
+### Why a `workflows[]` binding, not `exports`
+
+Wrangler 4.139+ can declare a Workflow in the top-level `exports` field instead,
+and a Worker can reach it through `ctx.exports` without a binding. Lunora still
+writes a `workflows[]` binding, for these reasons:
+
+- `ctx.workflows` resolves each workflow off `env`, and that `env` is the same
+  object in the shard Durable Object that runs your mutations, in the Worker that
+  runs actions, and in every generated `WorkflowEntrypoint` (`ctx.spawn`,
+  `ctx.parallel`). Cloudflare documents `ctx.exports` workflow access for the
+  Worker that declares the export, and its Context API is documented as
+  stateless-only. Durable Object access is not documented.
+- Running exported workflows locally needs `@cloudflare/vite-plugin` 1.61.0 or
+  Wrangler 4.142.0. The pinned versions are older.
+- Vitest's `introspectWorkflow()` still needs a binding.
+
+A binding and an export with the same `name` share their instances. If you add
+an export by hand, validation checks what Cloudflare enforces: the export needs a
+`name`, it must name the same class as the binding, the two may not set one
+setting to different values, and a binding to another Worker's workflow may not
+reuse the name. The worker entry must also export the export's class.
 
 ## Advisor lints
 

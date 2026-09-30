@@ -954,6 +954,46 @@ describe("reconcileWranglerBindings", () => {
             expect(result.added).toEqual(["workflows/SendReceiptWorkflow"]);
             expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toEqual(["OrderPipelineWorkflow", "SendReceiptWorkflow"]);
         });
+
+        const SETTINGS = {
+            defaultRetention: { errorRetention: "30 days", successRetention: "3 days" },
+            limits: { steps: 25_000 },
+            schedules: ["0 * * * *"],
+        };
+
+        it("writes the declared schedules, limits and default_retention onto a new entry", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [{ ...ORDER_PIPELINE, ...SETTINGS }] }));
+
+            expect(readConfig().workflows).toStrictEqual([
+                {
+                    binding: "WORKFLOW_ORDER_PIPELINE",
+                    class_name: "OrderPipelineWorkflow",
+                    default_retention: { error_retention: "30 days", success_retention: "3 days" },
+                    limits: { steps: 25_000 },
+                    name: "order-pipeline",
+                    schedules: ["0 * * * *"],
+                },
+            ]);
+        });
+
+        it("retunes an existing entry's declared settings and reports, but keeps, an undeclared one", () => {
+            expect.assertions(4);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [{ ...ORDER_PIPELINE, ...SETTINGS }] }));
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ workflows: [{ ...ORDER_PIPELINE, limits: { steps: 20_000 }, schedules: ["*/15 * * * *"] }] }),
+            );
+
+            expect(result.updated).toStrictEqual(["workflows/OrderPipelineWorkflow.schedules", "workflows/OrderPipelineWorkflow.limits.steps"]);
+            expect(readConfig().workflows[0]).toMatchObject({ limits: { steps: 20_000 }, schedules: ["*/15 * * * *"] });
+            // Dropped from the definition, or set by hand — indistinguishable, so kept and named.
+            expect(readConfig().workflows[0].default_retention).toStrictEqual({ error_retention: "30 days", success_retention: "3 days" });
+            expect(result.warnings.join(" ")).toContain("workflows/OrderPipelineWorkflow.default_retention.success_retention is set in wrangler.jsonc");
+        });
     });
 
     describe("agents", () => {

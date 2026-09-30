@@ -27,7 +27,11 @@ interface ContainerEntry {
 interface WorkflowEntry {
     binding?: string;
     class_name?: string;
+    default_retention?: unknown;
+    limits?: unknown;
     name?: string;
+    schedules?: unknown;
+    script_name?: string;
 }
 
 interface QueueProducerEntry {

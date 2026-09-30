@@ -659,6 +659,13 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
                 await runtime.signal(id, event.type, event.payload);
             },
+            subscribe: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be subscribed to — the visulima engine keeps no per-instance event log to replay`,
+                    ),
+                ),
             status: async (): Promise<WorkflowStatusResult> => {
                 // The store read comes first and answers two of the three cases
                 // outright, so the miss path costs one load rather than the two

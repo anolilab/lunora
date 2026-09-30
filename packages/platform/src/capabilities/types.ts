@@ -35,7 +35,7 @@
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
  * `scheduler`, `secrets`, `vectorStore`, `workerLoaders`, `workflowRollback`,
- * `workflows`.
+ * `workflowSchedules`, `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
@@ -83,7 +83,8 @@
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`).
+ * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`,
+ * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -522,8 +523,24 @@ export interface PlatformCapabilities {
          * than a step that fails on first use.
          */
         workflowRollback?: Capability;
+
         /** Durable workflows (step-based). */
         workflows?: Capability;
+
+        /**
+         * Cron-started workflow instances — `defineWorkflow({ schedules })`,
+         * written to the wrangler `workflows[].schedules` list, where the host
+         * itself creates an instance on each tick (no `scheduled()` handler).
+         *
+         * Rated apart from `workflows` and from `cronTriggers` because it is
+         * neither: a host can run workflows it is asked to create, and dispatch
+         * declared crons to `scheduled()`, and still never start a workflow off
+         * its own schedule list. That host would build the app green and the
+         * workflow would simply never run. Gate-bearing: codegen sets the
+         * `workflowSchedules` `PlatformSignals` flag when a workflow declares
+         * `schedules`.
+         */
+        workflowSchedules?: Capability;
     };
     /** Platform identifier used in codegen and config (e.g. "cloudflare", "aws"). */
     id: string;

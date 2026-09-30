@@ -281,6 +281,8 @@ interface PlatformSignals {
     workerLoaders?: boolean;
     /** A `defineStep({ rollback })` compensation. */
     workflowRollback?: boolean;
+    /** A `defineWorkflow({ schedules })` cron list. */
+    workflowSchedules?: boolean;
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
@@ -299,6 +301,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "vectorStore",
     "workerLoaders",
     "workflowRollback",
+    "workflowSchedules",
 ] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
@@ -317,6 +320,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     vectorStore: "vector indexes (`.vectorize()`)",
     workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",
     workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
+    workflowSchedules: "scheduled workflow instances (`defineWorkflow({ schedules })`)",
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */
