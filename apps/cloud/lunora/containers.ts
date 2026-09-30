@@ -63,9 +63,12 @@ export const buildBox = defineContainer({
  * so `maxInstances` bounds how many projects provision at once per cell.
  */
 export const provisionBox = defineContainer({
-    // ponytail: only the Cloudflare API until the box README lists what Alchemy
-    // itself needs (state backend, registry); widen here, never with enableInternet.
-    allowedHosts: ["api.cloudflare.com"],
+    // The Cloudflare API, plus Alchemy's state store: a Worker named
+    // `alchemy-state-store` on the cell's own workers.dev subdomain (see
+    // containers/provision/README.md). The subdomain is per account, hence the
+    // glob on the account label only. The npm version check is left blocked on
+    // purpose — it times out in 3s and nothing depends on it.
+    allowedHosts: ["api.cloudflare.com", "alchemy-state-store.*.workers.dev"],
     defaultPort: 8080,
     enableInternet: false,
     image: "./containers/provision",

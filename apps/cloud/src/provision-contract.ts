@@ -76,15 +76,16 @@ export const BINDING_SUPPORT = {
     queue_producer: "provisioned",
     r2: "provisioned",
     vectorize: "unsupported",
-    workflow: "bound",
+    workflow: "unsupported",
 } as const satisfies Record<BindingRequirement["type"], "bound" | "provisioned" | "routed" | "unsupported">;
 
 /** Why an `unsupported` type is refused — shown verbatim in the deploy error. */
-export const UNSUPPORTED_REASONS: Record<Extract<keyof typeof BINDING_SUPPORT, "container" | "hyperdrive" | "pipeline" | "vectorize">, string> = {
+export const UNSUPPORTED_REASONS: Record<Extract<keyof typeof BINDING_SUPPORT, "container" | "hyperdrive" | "pipeline" | "vectorize" | "workflow">, string> = {
     container: "containers need an image built and pushed per deploy, which Workers for Platforms cannot run",
     hyperdrive: "Hyperdrive points at your own database; bring-your-own origins are not supported on Lunora Cloud yet",
     pipeline: "a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry",
     vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
+    workflow: "Workflows register per account script, and Workers for Platforms scripts have no such registration yet",
 };
 
 /**
@@ -166,8 +167,22 @@ export interface TenantDeploymentSpec {
  * - `lunora-release-{scriptName}` owns one release's Worker, referencing the
  *   project stack's resources. Destroying it never touches project data.
  */
+
+/**
+ * A binding as the box receives it. Provisioned types carry the name the control
+ * plane computed with {@link tenantResourceName}: the box is plain JavaScript and
+ * never re-derives it, so the naming rule lives in exactly one place.
+ */
+export type ProvisionBinding = BindingRequirement & { resourceName?: string };
+
 export type ProvisionJob =
-    | { action: "deploy"; spec: Omit<TenantDeploymentSpec, "bundle"> & { bundle: string } }
+    | {
+          action: "deploy";
+          spec: Omit<TenantDeploymentSpec, "bundle" | "manifest"> & {
+              bundle: string;
+              manifest: Omit<DeployManifest, "bindings"> & { bindings: ProvisionBinding[] };
+          };
+      }
     | { action: "destroy"; alias: string; deleteProjectResources: boolean; dispatchNamespace: string; scriptName: string };
 
 /** One NDJSON line of the provision box's reply. Exactly one `result` or `error` ends the stream. */

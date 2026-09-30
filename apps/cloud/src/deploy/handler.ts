@@ -236,6 +236,13 @@ const bindingSetError = (bindings: BindingRequirement[]): string | undefined => 
         return "manifest declares more than one assets binding";
     }
 
+    // Alchemy (and so the provision box) always binds uploaded assets as `ASSETS`.
+    const assets = bindings.find((entry) => entry.type === "assets");
+
+    if (assets && assets.binding !== "ASSETS") {
+        return `the assets binding must be named ASSETS on Lunora Cloud, not ${assets.binding}`;
+    }
+
     return undefined;
 };
 

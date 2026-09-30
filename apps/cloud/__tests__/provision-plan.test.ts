@@ -69,14 +69,14 @@ describe("provision plan: deploy", () => {
         );
 
         expect(project?.resources).toStrictEqual([
-            { id: "d1-acme-db", kind: "d1", name: "acme-db" },
-            { id: "kv-acme-cache", kind: "kv", name: "acme-cache" },
-            { id: "r2-acme-files", kind: "r2", name: "acme-files" },
+            { id: "d1-acme--db", kind: "d1", name: "acme--db" },
+            { id: "kv-acme--cache", kind: "kv", name: "acme--cache" },
+            { id: "r2-acme--files", kind: "r2", name: "acme--files" },
         ]);
         expect(release?.bindings).toStrictEqual([
-            { binding: "DB", id: "d1-acme-db", kind: "ref", resource: "d1" },
-            { binding: "CACHE", id: "kv-acme-cache", kind: "ref", resource: "kv" },
-            { binding: "FILES", id: "r2-acme-files", kind: "ref", resource: "r2" },
+            { binding: "DB", id: "d1-acme--db", kind: "ref", resource: "d1" },
+            { binding: "CACHE", id: "kv-acme--cache", kind: "ref", resource: "kv" },
+            { binding: "FILES", id: "r2-acme--files", kind: "ref", resource: "r2" },
         ]);
     });
 
@@ -91,7 +91,7 @@ describe("provision plan: deploy", () => {
             ]),
         );
 
-        expect(project?.consumers).toStrictEqual([{ id: "queue-acme-jobs-consumer", queueId: "queue-acme-jobs", scriptName: "lunora-cloud-production" }]);
+        expect(project?.consumers).toStrictEqual([{ id: "queue-acme--jobs-consumer", queueId: "queue-acme--jobs", scriptName: "lunora-cloud-production" }]);
         // The consumer entry itself binds nothing.
         expect(release?.bindings.map((binding) => binding.binding)).toStrictEqual(["JOBS", "EVENTS"]);
     });
@@ -126,7 +126,7 @@ describe("provision plan: deploy", () => {
             { binding: "BROWSER", kind: "browser" },
             { binding: "IMAGES", kind: "images" },
             { binding: "SHARD", className: "ShardDO", kind: "durable_object" },
-            { binding: "METRICS", dataset: "acme_metrics", kind: "analytics_engine" },
+            { binding: "METRICS", dataset: "acme__metrics", kind: "analytics_engine" },
         ]);
     });
 

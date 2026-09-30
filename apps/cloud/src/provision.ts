@@ -16,6 +16,7 @@ import { provisionBox } from "../lunora/containers";
 import { sha256HexBytes } from "./deploy/keys";
 import readNdjson from "./lib/read-ndjson";
 import type { ProvisionEvent, ProvisionJob, TenantDeploymentSpec } from "./provision-contract";
+import { BINDING_SUPPORT, tenantResourceName } from "./provision-contract";
 
 export interface ProvisionResult {
     bundleHash: string;
@@ -55,6 +56,16 @@ export const provisionBoxFrom = (env: Record<string, unknown>): ContainerAccesso
         .provisionBox;
 
 /** Base64 for the job body — chunked, since spreading a whole bundle into `fromCharCode` overflows the stack. */
+/** The manifest with every provisioned binding's resource name attached — the box never derives names itself. */
+const withResourceNames = (spec: TenantDeploymentSpec): Extract<ProvisionJob, { action: "deploy" }>["spec"]["manifest"] => {
+    return {
+        ...spec.manifest,
+        bindings: spec.manifest.bindings.map((requirement) =>
+            BINDING_SUPPORT[requirement.type] === "provisioned" ? { ...requirement, resourceName: tenantResourceName(spec.alias, requirement) } : requirement,
+        ),
+    };
+};
+
 const toBase64 = (data: ArrayBuffer): string => {
     const bytes = new Uint8Array(data);
     let binary = "";
@@ -133,7 +144,11 @@ export const createAlchemyProvisioner = (options: AlchemyProvisionerOptions): Pr
             const { bundle, ...rest } = spec;
             const [bundleHash] = await Promise.all([
                 sha256HexBytes(bundle),
-                runJob(options.box.get(spec.alias), { action: "deploy", spec: { ...rest, bundle: toBase64(bundle) } }, options.onLog),
+                runJob(
+                    options.box.get(spec.alias),
+                    { action: "deploy", spec: { ...rest, bundle: toBase64(bundle), manifest: withResourceNames(spec) } },
+                    options.onLog,
+                ),
             ]);
 
             // The dispatcher's URL, not the box's: tenants are reached through the

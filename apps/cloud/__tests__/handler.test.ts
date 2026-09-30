@@ -338,7 +338,6 @@ describe("deploy manifest validation", () => {
             { binding: "JOBS_IN", resource: "jobs", type: "queue_consumer" },
             { binding: "JOBS", resource: "jobs", type: "queue_producer" },
             { binding: "FILES", resource: "files", type: "r2" },
-            { binding: "FLOW", className: "OrderFlow", type: "workflow" },
         ];
         const assets = {
             config: { html_handling: "auto-trailing-slash", not_found_handling: "single-page-application", run_worker_first: ["/api/*"] },
@@ -379,6 +378,7 @@ describe("deploy manifest validation", () => {
                 { binding: "PG", type: "hyperdrive" },
                 { binding: "STREAM", type: "pipeline" },
                 { binding: "INDEX", type: "vectorize" },
+                { binding: "FLOW", className: "OrderFlow", type: "workflow" },
             ]),
         );
 
@@ -386,6 +386,13 @@ describe("deploy manifest validation", () => {
         expect(error).toContain("hyperdrive (PG): Hyperdrive points at your own database");
         expect(error).toContain("pipeline (STREAM): a pipeline needs its stream and sink configured");
         expect(error).toContain("vectorize (INDEX): an index needs its dimensions and metric");
+        expect(error).toContain("workflow (FLOW): Workflows register per account script");
+    });
+
+    it("refuses an assets binding not named ASSETS", async () => {
+        await expect(
+            refusal({ assets: { files: [{ content: b64("x"), path: "/x" }] }, ...manifest([{ binding: "STATIC", type: "assets" }]) }),
+        ).resolves.toContain("must be named ASSETS");
     });
 
     it("refuses an unknown binding type", async () => {

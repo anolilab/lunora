@@ -152,10 +152,13 @@ filesystem for its state and the full SDK surface, and a converge over many
 resources outlives what a request should hold. Why not the build box: that one
 runs untrusted tenant code (`postinstall`, build scripts) and must never share a
 machine with the cell's Cloudflare API token. The provision box runs only our
-code, with egress limited to the Cloudflare API, and receives
+code, with egress limited to the Cloudflare API and Alchemy's state-store Worker, and receives
 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` from the Worker's env at start. That
 token therefore needs edit rights on everything the box creates: Workers Scripts
-(dispatch namespaces), D1, R2, Workers KV, Queues and Analytics Engine.
+(dispatch namespaces), D1, R2, Workers KV, Queues and Analytics Engine, plus
+Secrets Store edit and Workers subdomain read for Alchemy's state store. Run
+`alchemy provider cloudflare bootstrap` once per new cell so two first deploys
+do not race to create that store (details in `containers/provision/README.md`).
 
 What each binding type gets (provisioned, bound, routed or refused) is
 `BINDING_SUPPORT` in the contract; GAPS.md has the table. Queue consumers are

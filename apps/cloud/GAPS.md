@@ -37,15 +37,15 @@ authoritative matrix:
 | `queue_producer`   | provisioned    | per project; the control plane is attached as its consumer              |
 | `queue_consumer`   | routed         | control-plane `queue()` routes queue name → alias → `/_lunora/queue`    |
 | `durable_object`   | bound          | class lives in the tenant bundle                                        |
-| `workflow`         | bound          | class lives in the tenant bundle                                        |
 | `ai`               | bound          | account capability                                                      |
 | `browser`          | bound          | account capability                                                      |
 | `images`           | bound          | account capability                                                      |
-| `assets`           | bound          | uploaded with the release                                               |
+| `assets`           | bound          | uploaded with the release; the binding must be named `ASSETS`           |
 | `hyperdrive`       | 🔨 unsupported | bring-your-own origin; refused at deploy                                |
 | `vectorize`        | 🔨 unsupported | wrangler.jsonc carries no dimensions/metric; refused at deploy          |
 | `pipeline`         | 🔨 unsupported | wrangler.jsonc carries no stream/sink config; refused at deploy         |
 | `container`        | 🔨 unsupported | needs a per-deploy image build + push WfP cannot run; refused at deploy |
+| `workflow`         | 🔨 unsupported | registered per account script; no dispatch-namespace variant yet        |
 
 - Two Alchemy stacks per project: `lunora-project-<alias>` owns the provisioned
   resources, `lunora-release-<scriptName>` one release's Worker. Teardown

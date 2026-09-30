@@ -6,12 +6,12 @@ import { createAlchemyProvisioner } from "../src/provision";
 import type { ProvisionJob, TenantDeploymentSpec } from "../src/provision-contract";
 
 const spec: TenantDeploymentSpec = {
-    alias: "org__project",
+    alias: "org-project",
     bundle: new TextEncoder().encode("export default {}").buffer,
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
-    scriptName: "org__project-v1",
+    scriptName: "org-project-v1",
     secrets: { LUNORA_ADMIN_TOKEN: "t" },
     tags: ["org:org", "project:project", "env:production"],
 };
@@ -64,12 +64,12 @@ describe(createAlchemyProvisioner, () => {
 
         expect(result).toStrictEqual({
             bundleHash: await sha256HexBytes(spec.bundle),
-            scriptName: "org__project-v1",
-            url: "https://org__project-v1.lunora.app",
+            scriptName: "org-project-v1",
+            url: "https://org-project-v1.lunora.app",
         });
         expect(onLog.mock.calls).toStrictEqual([["creating d1"], ["uploading"]]);
         expect(calls).toHaveLength(1);
-        expect(calls[0]?.name).toBe("org__project");
+        expect(calls[0]?.name).toBe("org-project");
 
         const job = calls[0]?.job;
 
