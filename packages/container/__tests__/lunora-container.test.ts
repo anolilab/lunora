@@ -35,7 +35,11 @@ const fakeDurableObjectContext = (overrides: FakeContextOverrides = {}): Record<
         blockConcurrencyWhile: async () => {},
         container: overrides.container ?? { running: false },
         storage: {
-            delete: async (key: string) => stored.delete(key),
+            delete: async (keys: string | string[]) => {
+                for (const key of Array.isArray(keys) ? keys : [keys]) {
+                    stored.delete(key);
+                }
+            },
             deleteAlarm: async () => {},
             get: async (key: string) => stored.get(key),
             getAlarm: async () => null,
@@ -477,6 +481,124 @@ describe("lunoraContainer start({ envVars }) override persists", () => {
         await instance.startAndWaitForPorts();
 
         expect(instance.envVars).toStrictEqual({ DATABASE_URL: "postgres://secret", LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
+    });
+});
+
+describe("lunoraContainer durable_object scheduling", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const agentComputer = defineContainer({
+        image: "base",
+        images: { base: "./container", gpu: "./gpu" },
+        instanceType: "lite",
+        schedulingPolicy: "durable_object",
+    });
+    const images = { base: "registry.cloudflare.com/acct/base@sha256:aaa", gpu: "registry.cloudflare.com/acct/gpu@sha256:bbb" };
+    const basePrototype = (instance: object): { start: (options?: unknown) => Promise<void>; startAndWaitForPorts: () => Promise<void> } =>
+        Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: (options?: unknown) => Promise<void>; startAndWaitForPorts: () => Promise<void> };
+
+    type SchedulingProbe = {
+        image?: string;
+        instance?: unknown;
+        lunoraSnapshot: (options?: { name?: string }) => Promise<unknown>;
+        start: (options?: Record<string, unknown>) => Promise<void>;
+        startAndWaitForPorts: () => Promise<void>;
+    };
+
+    const scheduled = (container: Record<string, unknown> = {}): { context: Record<string, unknown>; instance: SchedulingProbe } => {
+        const context = fakeDurableObjectContext({ container: { images, running: false, ...container } });
+
+        return { context, instance: new LunoraContainer(context as never, {}, agentComputer, "agentComputer") as unknown as SchedulingProbe };
+    };
+
+    it("starts the definition's default image and size when the start names none", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        await instance.startAndWaitForPorts();
+
+        expect(instance.image).toBe(images.base);
+        expect(instance.instance).toBe("lite");
+    });
+
+    it("persists an explicit image and size, so a fresh DO instance restarts with them", async () => {
+        expect.assertions(3);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        await instance.start({ image: "gpu", instanceType: "standard-2" });
+
+        expect(instance.image).toBe(images.gpu);
+
+        const second = new LunoraContainer(context as never, {}, agentComputer, "agentComputer") as unknown as SchedulingProbe;
+
+        await second.startAndWaitForPorts();
+
+        expect(second.image).toBe(images.gpu);
+        expect(second.instance).toBe("standard-2");
+    });
+
+    it("passes a managed image through and refuses an unknown name with the declared list", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ image: "cloudflare/debian-trixie" });
+
+        expect(instance.image).toBe("cloudflare/debian-trixie");
+        await expect(scheduled().instance.start({ image: "missing" })).rejects.toThrow(/no image named "missing" — declared images: base, gpu/u);
+    });
+
+    it("forwards a snapshot as containerSnapshot and refuses one alongside an image", async () => {
+        expect.assertions(3);
+
+        const { instance } = scheduled();
+        const baseStart = vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        const snapshot = { id: "snap-1", size: 42 };
+
+        await instance.start({ snapshot });
+
+        expect(baseStart.mock.calls[0]![0]).toStrictEqual({ containerSnapshot: snapshot });
+        await expect(instance.start({ image: "base", snapshot })).rejects.toThrow(/an image or a snapshot, not both/u);
+        expect(baseStart).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a different selection or a snapshot restore on a running instance", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled({ monitor: async () => new Promise<never>(() => {}), running: true });
+
+        await expect(instance.start({ image: "gpu" })).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(instance.start({ snapshot: { id: "snap-1", size: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("snapshots a running container and refuses when it is stopped", async () => {
+        expect.assertions(3);
+
+        const snapshotContainer = vi.fn(async (options: { name?: string }) => {
+            return { id: "snap-1", name: options.name, size: 7 };
+        });
+        const { instance } = scheduled({ monitor: async () => new Promise<never>(() => {}), running: true, snapshotContainer });
+
+        await expect(instance.lunoraSnapshot({ name: "before-upgrade" })).resolves.toStrictEqual({ id: "snap-1", name: "before-upgrade", size: 7 });
+        expect(snapshotContainer).toHaveBeenCalledWith({ name: "before-upgrade" });
+        await expect(scheduled().instance.lunoraSnapshot()).rejects.toThrow(/needs a running container/u);
+    });
+
+    it("refuses image, size and snapshot selection on a default-policy container", async () => {
+        expect.assertions(2);
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, defineContainer({ image: "./app" }), "app") as unknown as SchedulingProbe;
+
+        await expect(instance.start({ image: "base" })).rejects.toThrow(/needs schedulingPolicy "durable_object"/u);
+        await expect(instance.lunoraSnapshot()).rejects.toThrow(/snapshots need schedulingPolicy "durable_object"/u);
     });
 });
 

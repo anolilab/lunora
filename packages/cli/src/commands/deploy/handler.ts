@@ -65,11 +65,9 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
         return undefined;
     }
 
-    const targets = discoverContainerInfo(cwd, "lunora")
-        .containers.filter((container) => container.image.kind === "build")
-        .map((container) => {
-            return { buildDir: (container.image as { buildDir: string }).buildDir, exportName: container.exportName };
-        });
+    const targets = discoverContainerInfo(cwd, "lunora").containers.flatMap((container) =>
+        container.image?.kind === "build" ? [{ buildDir: container.image.buildDir, exportName: container.exportName }] : [],
+    );
 
     if (targets.length === 0) {
         return undefined;

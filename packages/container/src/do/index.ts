@@ -14,7 +14,7 @@ import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { CONTAINER_EXEC_PATH, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
-import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
+import type { ContainerDefinition, ContainerReadinessCheck, ContainerRuntimeInstanceType, ContainerSnapshot } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
 import { reportContainerLifecycle } from "./report-lifecycle";
 
@@ -52,6 +52,36 @@ const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
  * falling back to the declared env and secrets. Cleared by `destroy()`.
  */
 const ENV_OVERRIDE_KEY = "__lunoraEnvOverride";
+
+/**
+ * Durable-storage key holding the image and instance size a `durable_object`
+ * container was last explicitly started with. Persisted for the same reason as
+ * {@link ENV_OVERRIDE_KEY}: the implicit restart a `fetch`/`exec` triggers after
+ * a sleep must boot the image the instance chose, not the definition default.
+ * Cleared by `destroy()`.
+ */
+const START_SELECTION_KEY = "__lunoraStartSelection";
+
+/** Prefix of the Cloudflare-managed images, which start without a named-image entry. */
+const MANAGED_IMAGE_PREFIX = "cloudflare/";
+
+/** The image + size a `durable_object` container starts with. */
+interface StartSelection {
+    image?: string;
+    instanceType?: ContainerRuntimeInstanceType;
+}
+
+/**
+ * The `start()` options `LunoraContainer` accepts on top of the base's: the
+ * `durable_object`-policy image, size and snapshot to restore.
+ */
+type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & StartSelection & { snapshot?: ContainerSnapshot };
+
+/** The `ctx.container` members the `durable_object` policy adds, absent from the pinned workers-types. */
+interface DurableObjectScheduledContainer {
+    readonly images?: Readonly<Record<string, string>>;
+    snapshotContainer: (options: { name?: string }) => Promise<ContainerSnapshot>;
+}
 
 /** Whether two env maps hold the same variables with the same values. */
 const sameEnv = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
@@ -121,6 +151,14 @@ const TARGET_PORT_HEADER = "cf-container-target-port";
  */
 class LunoraContainer<Env = unknown> extends Container<Env> {
     /**
+     * The resolved image reference and instance size for the start about to
+     * happen. `@cloudflare/containers` (as patched here) reads both off the
+     * instance when it builds `ctx.container.start()`'s options.
+     */
+    declare protected image?: string;
+    declare protected instance?: ContainerRuntimeInstanceType;
+
+    /**
      * Data-residency jurisdiction the app's DOs are pinned to (codegen passes the
      * schema's `.jurisdiction("…")`). Used to pin the best-effort lifecycle report
      * to the same region as the root shard. `undefined` ⇒ un-pinned.
@@ -147,6 +185,15 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private lunoraEnvOverrideLoaded = false;
     /** Memoised Secrets Store resolution: the resolved `name → value` map, fetched once. */
     private lunoraSecretsStoreResolved?: Promise<Record<string, string>>;
+
+    /** Whether the definition uses the `durable_object` scheduling policy. */
+    private readonly lunoraDurableObjectScheduled: boolean;
+    /** The definition's default image name and instance size (`durable_object` policy only). */
+    private readonly lunoraDefaultSelection: StartSelection;
+    /** The persisted explicit start selection, once loaded. See {@link START_SELECTION_KEY}. */
+    private lunoraStartSelection?: StartSelection;
+    /** Whether the selection field reflects storage. */
+    private lunoraStartSelectionLoaded = false;
 
     /**
      * Count of runs observed to have ENDED, bumped by the `onStop` hook. Read
@@ -211,6 +258,31 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraReadyOn = definition.readyOn ? [...definition.readyOn] : [];
         this.lunoraHardTimeoutSeconds = definition.hardTimeout === undefined ? undefined : parseDurationSeconds(definition.hardTimeout);
         this.lunoraSecretsStore = definition.secretsStore;
+        this.lunoraDurableObjectScheduled = definition.schedulingPolicy === "durable_object";
+        this.lunoraDefaultSelection =
+            definition.schedulingPolicy === "durable_object" ? { image: definition.image, instanceType: definition.instanceType } : {};
+    }
+
+    /**
+     * Save the running container's filesystem (`durable_object` policy only).
+     * The handle is plain data: store it and pass it to `start({ snapshot })` to
+     * restore it here or in another instance. Memory and processes are not
+     * captured — a restored container runs its entrypoint again.
+     */
+    public async lunoraSnapshot(options: { name?: string } = {}): Promise<ContainerSnapshot> {
+        if (!this.lunoraDurableObjectScheduled) {
+            throw new LunoraError("BAD_REQUEST", `container "${this.lunoraName}": snapshots need schedulingPolicy "durable_object"`);
+        }
+
+        const { container } = this.ctx;
+
+        if (container?.running !== true || typeof container.snapshotContainer !== "function") {
+            throw new LunoraError("BAD_REQUEST", `container "${this.lunoraName}": snapshot() needs a running container — start it first`);
+        }
+
+        const { id, name, size } = await container.snapshotContainer({ ...(options.name === undefined ? {} : { name: options.name }) });
+
+        return { id, size, ...(name === undefined ? {} : { name }) };
     }
 
     /**
@@ -287,6 +359,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // first call, and a container that exits inside it used to leave the
         // snapshot claiming the run was still up. See {@link beginStart}.
         await this.applyStartEnv();
+        await this.applyStartSelection();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -312,19 +385,23 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * return early on a live container, reporting a start whose env never took
      * effect. `stop()` it first, or `destroy()` it to drop the override.
      */
-    public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
-        const [options] = args;
+    public override async start(options?: LunoraStartOptions, waitOptions?: Parameters<Container<Env>["start"]>[1]): Promise<void> {
+        const { image, instanceType, snapshot, ...baseOptions } = options ?? {};
 
         if (options?.envVars !== undefined) {
             await this.persistEnvOverride({ ...options.envVars });
         }
 
+        await this.selectStart({ image, instanceType }, snapshot);
         await this.applyStartEnv();
+        await this.applyStartSelection();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
 
-        await super.start(...args);
+        // The patched base forwards `containerSnapshot` to `ctx.container.start()`,
+        // where it replaces the image for this one start.
+        await super.start({ ...baseOptions, ...(snapshot === undefined ? {} : { containerSnapshot: snapshot }) }, waitOptions);
 
         await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
     }
@@ -335,8 +412,9 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async destroy(): Promise<void> {
         await super.destroy();
-        await this.ctx.storage.delete(ENV_OVERRIDE_KEY);
+        await this.ctx.storage.delete([ENV_OVERRIDE_KEY, START_SELECTION_KEY]);
         this.lunoraEnvOverride = undefined;
+        this.lunoraStartSelection = undefined;
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -714,6 +792,103 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         const override = await this.readEnvOverride();
 
         this.envVars = override === undefined ? { ...this.lunoraDeclaredEnv, ...(await this.resolveSecretsStoreEnv()) } : { ...override };
+    }
+
+    /**
+     * Validate and persist an explicit start's image/size choice
+     * (`durable_object` policy only). Like the env override, a choice that
+     * differs from what a running or starting container has is refused rather
+     * than silently joined, and a snapshot restore — which only takes effect
+     * on a fresh start — is refused on a busy one.
+     */
+    private async selectStart(selection: StartSelection, snapshot: ContainerSnapshot | undefined): Promise<void> {
+        const chose = selection.image !== undefined || selection.instanceType !== undefined;
+
+        if (!chose && snapshot === undefined) {
+            return;
+        }
+
+        if (!this.lunoraDurableObjectScheduled) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": start({ image | instanceType | snapshot }) needs schedulingPolicy "durable_object" — a default-policy container's image and size are set in lunora/containers.ts`,
+            );
+        }
+
+        if (selection.image !== undefined && snapshot !== undefined) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": start() takes an image or a snapshot, not both — the snapshot is the filesystem`,
+            );
+        }
+
+        const busy = this.ctx.container?.running === true || (this as unknown as { startInFlight?: unknown }).startInFlight !== undefined;
+
+        if (busy) {
+            const current = await this.readStartSelection();
+
+            if (snapshot !== undefined || selection.image !== current?.image || selection.instanceType !== current?.instanceType) {
+                throw new LunoraError(
+                    "CONFLICT",
+                    `container "${this.lunoraName}": start({ image | instanceType | snapshot }) on an instance that is already running — stop() it first, then start again.`,
+                );
+            }
+        }
+
+        if (chose) {
+            await this.ctx.storage.put(START_SELECTION_KEY, selection);
+            this.lunoraStartSelection = selection;
+        }
+    }
+
+    /** The persisted explicit start selection, read from storage once per instance lifetime. */
+    private async readStartSelection(): Promise<StartSelection | undefined> {
+        if (!this.lunoraStartSelectionLoaded) {
+            this.lunoraStartSelection = await this.ctx.storage.get<StartSelection>(START_SELECTION_KEY);
+            this.lunoraStartSelectionLoaded = true;
+        }
+
+        return this.lunoraStartSelection;
+    }
+
+    /**
+     * Resolve the image reference and instance size for the start about to
+     * happen (`durable_object` policy only): the persisted explicit choice, else
+     * the definition default. A named image resolves through
+     * `ctx.container.images`; a `cloudflare/…` managed image passes through.
+     * A start with neither an image nor a snapshot would be rejected by the
+     * runtime, so it fails here with the fix instead.
+     */
+    private async applyStartSelection(): Promise<void> {
+        if (!this.lunoraDurableObjectScheduled) {
+            return;
+        }
+
+        const selection = { ...this.lunoraDefaultSelection, ...(await this.readStartSelection()) };
+
+        this.instance = selection.instanceType;
+        this.image = selection.image === undefined ? undefined : this.resolveImage(selection.image);
+    }
+
+    /** Map an image name to the digest-pinned reference `ctx.container.start()` takes. */
+    private resolveImage(name: string): string {
+        if (name.startsWith(MANAGED_IMAGE_PREFIX)) {
+            return name;
+        }
+
+        const images = (this.ctx.container as Partial<DurableObjectScheduledContainer> | undefined)?.images ?? {};
+        const reference = images[name];
+
+        if (reference === undefined) {
+            const known = Object.keys(images);
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": no image named "${name}" — ${known.length === 0 ? "the container declares no images" : `declared images: ${known.join(", ")}`}`,
+            );
+        }
+
+        return reference;
     }
 
     /**

@@ -149,6 +149,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },
+        containerRuntimeScheduling: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is no image to pick at start and no filesystem to snapshot",
+        },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",

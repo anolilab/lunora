@@ -30,7 +30,8 @@
  * gate-bearing keys are:
  *
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
- * `containerEgressPolicy`, `containers`, `cronTriggers`, `crossShardFanout`,
+ * `containerEgressPolicy`, `containerRuntimeScheduling`, `containers`,
+ * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
  * `scheduler`, `secrets`, `vectorStore`, `workerLoaders`, `workflowRollback`,
@@ -79,7 +80,8 @@
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
- * (`agents`, `commitOrderedTables`, `containerEgressPolicy`, `cronTriggers`,
+ * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
+ * `containerRuntimeScheduling`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
  * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
@@ -194,6 +196,22 @@ export interface PlatformCapabilities {
          * build-time diagnostic rather than a container that fails on first use.
          */
         containerEgressPolicy?: Capability;
+
+        /**
+         * The `durable_object` container scheduling policy —
+         * `defineContainer({ schedulingPolicy: "durable_object" })`: each
+         * instance picks its image and size at `start()`, and can save and
+         * restore its filesystem (`snapshot()` / `start({ snapshot })`).
+         *
+         * One key for both halves because snapshots only exist under this
+         * policy — there is no app declaration for a snapshot that codegen
+         * could gate apart from the policy. Rated apart from `containers`
+         * because a host can run a container from one configured image and
+         * still have no way to start a chosen image or restore a filesystem.
+         * Gate-bearing: codegen sets the `containerRuntimeScheduling`
+         * `PlatformSignals` flag off `ContainerIR.schedulingPolicy`.
+         */
+        containerRuntimeScheduling?: Capability;
 
         /**
          * Container execution (Cloudflare Containers / Fargate), including

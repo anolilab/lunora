@@ -567,9 +567,19 @@ export interface ContainerIR {
     /**
      * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
      * registry reference (`registry`), or a Railpack source directory (`build`)
-     * that the deploy step builds and pushes before wrangler runs.
+     * that the deploy step builds and pushes before wrangler runs. Absent under
+     * the `durable_object` scheduling policy — see {@link ContainerIR.images}.
      */
-    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+    image?:
+        { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+
+    /**
+     * Named images a `durable_object`-scheduled container can start from
+     * (wrangler `containers[].images`), normalized like {@link ContainerIR.image}.
+     * Set only under that policy, where {@link ContainerIR.image} is absent: the
+     * definition's `image` then names a default among these at runtime.
+     */
+    images?: Record<string, { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { kind: "registry"; reference: string }>;
     /** Static `instanceType`, when declared. */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
     /** Static `maxInstances`, when declared. */
@@ -578,6 +588,13 @@ export interface ContainerIR {
     name?: string;
     /** Static rolling-deploy tuning, when declared as literals. */
     rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
+
+    /**
+     * `"durable_object"` when the container picks its image and instance size
+     * per start (wrangler `scheduling_policy`); `undefined` for the default
+     * policy. Also the `containerRuntimeScheduling` platform signal.
+     */
+    schedulingPolicy?: "durable_object";
 
     /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means

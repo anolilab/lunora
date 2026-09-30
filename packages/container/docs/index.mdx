@@ -177,6 +177,58 @@ named instances you own.
     call for stateless work until then; for batch work, drive instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
 </Callout>
 
+## Per-instance images and snapshots
+
+With the default scheduling policy, one image and one instance size in
+`wrangler.jsonc` serve every instance, and Cloudflare rolls changes out on
+deploy. `schedulingPolicy: "durable_object"` (Cloudflare public beta) moves
+that choice into each instance's `start()` instead. It suits sandboxes and
+agent environments, where each instance may need a different image or size.
+
+```ts
+// lunora/containers.ts
+export const agentComputer = defineContainer({
+    schedulingPolicy: "durable_object",
+    images: {
+        base: "./containers/base", // built and uploaded by wrangler deploy
+        gpu: { registry: "registry.cloudflare.com/<account>/gpu@sha256:<digest>" },
+    },
+    image: "base", // default for a start that names none, including the implicit one a fetch triggers
+    instanceType: "lite",
+    defaultPort: 8080,
+});
+```
+
+```ts
+const computer = ctx.containers.agentComputer.get(taskId);
+
+await computer.start({ image: "gpu", instanceType: "standard-2" });
+const saved = await computer.snapshot({ name: "after-setup" }); // plain data, store it anywhere
+
+await computer.stop();
+await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); // restore the filesystem
+```
+
+- `image` is a key of `images` or a Cloudflare-managed image such as
+  `"cloudflare/debian-trixie"`. The choice (and `instanceType`) is persisted
+  like `envVars`, so the restart after a sleep boots the same image. A start
+  that changes it on a running instance is rejected with `CONFLICT`.
+- A named `{ registry }` image must be digest-pinned in the Cloudflare registry.
+  Push Docker Hub or ECR images there first.
+- `snapshot()` saves the writable filesystem, not memory or processes. A
+  restored container runs its entrypoint again. A snapshot is tied to the image
+  it came from and expires 30 days after its last restore. `start({ snapshot })`
+  applies to that one start.
+- The policy takes no `maxInstances` or `rollout`: running instances count
+  against the account limit, and each keeps its startup image across deploys.
+  The policy is immutable. Switching means a new container application, which
+  replaces every instance.
+
+<Callout type="warn">
+    Only Cloudflare supports this. Codegen refuses `schedulingPolicy: "durable_object"` with a `platform_unsupported_feature` diagnostic on the Node and celld
+    targets.
+</Callout>
+
 ## Running a command: `exec`
 
 `fetch` covers containers that serve an HTTP API. When the container is a
@@ -497,28 +549,30 @@ in the Studio **Advisors** table and at codegen time:
 
 ## Configuration
 
-| Field            | Purpose                                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------------------- |
-| `image`          | Local Dockerfile path/directory, `{ registry }` for a pre-built image, or `{ build }` (Railpack). **Required.** |
-| `defaultPort`    | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.                             |
-| `requiredPorts`  | Every port start-up must wait for (multi-port); route a request to one with `.port(n)`.                         |
-| `instanceType`   | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.                                |
-| `maxInstances`   | Cap on concurrently running instances (and the default `.any()` pool size).                                     |
-| `sleepAfter`     | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.                      |
-| `hardTimeout`    | Hard cap on total lifetime from start, ignoring activity. Same grammar as `sleepAfter`.                         |
-| `readyOn`        | Application-level readiness probes that gate request proxying until the app reports ready.                      |
-| `pingEndpoint`   | HTTP path the platform polls to decide an instance is healthy. Defaults to upstream's `"ping"`.                 |
-| `env`            | Static environment variables passed to the container on every start (runtime). For secrets use `secrets`.       |
-| `secrets`        | Names of Worker secrets forwarded into the container env at start.                                              |
-| `buildArgs`      | Build-time args for a built image (wrangler `image_vars`, like `--build-arg`); ignored for `{ registry }`.      |
-| `entrypoint`     | Override the image's `ENTRYPOINT`/`CMD` for every start.                                                        |
-| `enableInternet` | Whether the container may open outbound connections. Default `true`; egress is billed.                          |
-| `allowedHosts`   | Egress allow-list (globs): hosts reachable even with `enableInternet: false`.                                   |
-| `deniedHosts`    | Egress deny-list (globs): overrides everything, including `allowedHosts`.                                       |
-| `interceptHttps` | Extend the egress lists to HTTPS too (image must trust the Cloudflare CA). Default `false`.                     |
-| `labels`         | Key-value metadata attached to every instance for metrics/observability.                                        |
-| `name`           | Override the wrangler `containers[].name` identifier.                                                           |
-| `rollout`        | Rolling-deploy tuning: `{ stepPercentage, gracePeriodSeconds }`.                                                |
+| Field              | Purpose                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `image`            | Local Dockerfile path/directory, `{ registry }` for a pre-built image, or `{ build }` (Railpack). **Required.**       |
+| `defaultPort`      | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.                                   |
+| `requiredPorts`    | Every port start-up must wait for (multi-port); route a request to one with `.port(n)`.                               |
+| `instanceType`     | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.                                      |
+| `maxInstances`     | Cap on concurrently running instances (and the default `.any()` pool size).                                           |
+| `sleepAfter`       | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.                            |
+| `hardTimeout`      | Hard cap on total lifetime from start, ignoring activity. Same grammar as `sleepAfter`.                               |
+| `readyOn`          | Application-level readiness probes that gate request proxying until the app reports ready.                            |
+| `pingEndpoint`     | HTTP path the platform polls to decide an instance is healthy. Defaults to upstream's `"ping"`.                       |
+| `env`              | Static environment variables passed to the container on every start (runtime). For secrets use `secrets`.             |
+| `secrets`          | Names of Worker secrets forwarded into the container env at start.                                                    |
+| `buildArgs`        | Build-time args for a built image (wrangler `image_vars`, like `--build-arg`); ignored for `{ registry }`.            |
+| `entrypoint`       | Override the image's `ENTRYPOINT`/`CMD` for every start.                                                              |
+| `enableInternet`   | Whether the container may open outbound connections. Default `true`; egress is billed.                                |
+| `allowedHosts`     | Egress allow-list (globs): hosts reachable even with `enableInternet: false`.                                         |
+| `deniedHosts`      | Egress deny-list (globs): overrides everything, including `allowedHosts`.                                             |
+| `interceptHttps`   | Extend the egress lists to HTTPS too (image must trust the Cloudflare CA). Default `false`.                           |
+| `labels`           | Key-value metadata attached to every instance for metrics/observability.                                              |
+| `name`             | Override the wrangler `containers[].name` identifier.                                                                 |
+| `rollout`          | Rolling-deploy tuning: `{ stepPercentage, gracePeriodSeconds }`.                                                      |
+| `schedulingPolicy` | `"durable_object"` picks image and size per `start()`; see [per-instance images](#per-instance-images-and-snapshots). |
+| `images`           | Named images under `schedulingPolicy: "durable_object"`; `image` then names the default among them.                   |
 
 ### Secrets and environment
 

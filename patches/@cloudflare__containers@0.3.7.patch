@@ -1,5 +1,5 @@
 diff --git a/dist/lib/container.js b/dist/lib/container.js
-index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a48af2493 100644
+index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..33d5bd400a54866e7a6a4dcbeb69e967c24550a8 100644
 --- a/dist/lib/container.js
 +++ b/dist/lib/container.js
 @@ -9,13 +9,15 @@ const NO_CONTAINER_INSTANCE_ERROR = 'there is no container instance that can be
@@ -19,7 +19,25 @@ index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a
  const PING_TIMEOUT_MS = 5000;
  const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
  const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
-@@ -1482,11 +1484,6 @@ export class Container extends DurableObject {
+@@ -1340,6 +1342,17 @@ export class Container extends DurableObject {
+                 startConfig.entrypoint = entrypoint;
+             if (labels && Object.keys(labels).length > 0)
+                 startConfig.labels = labels;
++            // durable_object scheduling policy: the start picks the image (or a
++            // snapshot to restore, which excludes an image) and the instance size.
++            const containerSnapshot = options?.containerSnapshot;
++            const image = options?.image ?? this.image;
++            const instance = options?.instance ?? this.instance;
++            if (containerSnapshot)
++                startConfig.containerSnapshot = containerSnapshot;
++            else if (image)
++                startConfig.image = image;
++            if (instance)
++                startConfig.instance = instance;
+             this.renewActivityTimeout();
+             const handleError = async () => {
+                 const err = await this.monitor?.catch(err => err);
+@@ -1482,11 +1495,6 @@ export class Container extends DurableObject {
              }
              this.monitoredPromise = undefined;
              this.monitor = undefined;
@@ -31,7 +49,7 @@ index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a
          });
      }
      deleteSchedules(name) {
-@@ -1510,18 +1507,11 @@ export class Container extends DurableObject {
+@@ -1510,18 +1518,11 @@ export class Container extends DurableObject {
              }
              return;
          }
@@ -51,7 +69,7 @@ index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a
          const now = Date.now() / 1000;
          // Process each due schedule
          for (const row of result) {
-@@ -1567,29 +1557,18 @@ export class Container extends DurableObject {
+@@ -1567,29 +1568,18 @@ export class Container extends DurableObject {
              await this.onActivityExpired();
              // renewActivityTimeout makes sure we don't spam calls here
              this.renewActivityTimeout();
@@ -88,7 +106,7 @@ index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a
      // synchronises container state with the container source of truth to process events
      async syncPendingStoppedEvents() {
          const state = await this.state.getState();
-@@ -1622,12 +1601,13 @@ export class Container extends DurableObject {
+@@ -1622,12 +1612,13 @@ export class Container extends DurableObject {
       * Schedule the next alarm based on upcoming tasks
       */
      async scheduleNextAlarm(ms = 1000) {

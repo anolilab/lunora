@@ -98,6 +98,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
         },
         containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
+        containerRuntimeScheduling: {
+            level: "native",
+            note: "Cloudflare Containers' durable_object scheduling policy and container snapshots (both public beta): LunoraContainer resolves the named image through ctx.container.images and forwards image / instance / containerSnapshot to ctx.container.start() through the patched @cloudflare/containers base",
+        },
         analytics: { level: "native", note: "Analytics Engine" },
         edgeRequestMetadata: {
             level: "native",

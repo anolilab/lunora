@@ -282,6 +282,7 @@ interface PlatformCapabilities {
         browser?: Capability;
         commitOrderedTables?: Capability;
         containerEgressPolicy?: Capability;
+        containerRuntimeScheduling?: Capability;
         containers?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;

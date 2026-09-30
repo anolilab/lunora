@@ -2515,6 +2515,47 @@ export const schema = defineSchema({
             expect(report.warnings).toEqual([]);
         });
 
+        it("accepts a durable_object entry with named images and no image or max_instances", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        {
+                            class_name: "TranscoderContainer",
+                            images: { base: { dockerfile: "./container/Dockerfile" }, pinned: { image: "registry.cloudflare.com/a/r@sha256:x" } },
+                            scheduling_policy: "durable_object",
+                        },
+                    ],
+                }),
+            );
+
+            expect(report.errors).toEqual([]);
+            expect(report.warnings).toEqual([]);
+        });
+
+        it("rejects default-policy fields and ambiguous named images on a durable_object entry", () => {
+            expect.assertions(3);
+
+            const errors = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./Dockerfile",
+                            images: { both: { dockerfile: "./Dockerfile", image: "registry.cloudflare.com/a/r@sha256:x" } },
+                            max_instances: 2,
+                            scheduling_policy: "durable_object",
+                        },
+                    ],
+                }),
+            ).errors.join(" ");
+
+            expect(errors).toContain('sets "image", which the durable_object scheduling policy does not take');
+            expect(errors).toContain('sets "max_instances"');
+            expect(errors).toContain('images["both"] must set exactly one of "dockerfile" or "image"');
+        });
+
         it("requires a matching durable_objects binding", () => {
             expect.assertions(1);
 

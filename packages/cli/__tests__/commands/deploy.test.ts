@@ -545,6 +545,27 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect(errors.join(" ")).toContain("Dockerfile");
         });
 
+        it("blocks deploy when a durable_object container's named-image Dockerfile is missing", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const agentComputer = defineContainer({ schedulingPolicy: "durable_object", images: { base: "./container" } });
+`,
+                "utf8",
+            );
+
+            const { spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => true, logger, spawner });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(errors.join(" ")).toContain('`images["base"]` path');
+        });
+
         it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {
             expect.assertions(3);
 

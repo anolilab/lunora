@@ -843,6 +843,35 @@ describe("reconcileWranglerBindings", () => {
             expect(entry.rollout_active_grace_period).toBe(300);
         });
 
+        it("writes a durable_object container as its policy and named images, without the default-policy fields", () => {
+            expect.assertions(1);
+
+            const agentComputer = {
+                ...TRANSCODER,
+                buildArgs: { NODE_ENV: "production" },
+                image: undefined,
+                images: {
+                    base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" as const },
+                    pinned: { kind: "registry" as const, reference: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                },
+                maxInstances: undefined,
+                schedulingPolicy: "durable_object" as const,
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [agentComputer] }));
+
+            expect(readConfig().containers).toEqual([
+                {
+                    class_name: "TranscoderContainer",
+                    images: {
+                        base: { build_context: "./container", build_vars: { NODE_ENV: "production" }, dockerfile: "./container/Dockerfile" },
+                        pinned: { image: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                    },
+                    scheduling_policy: "durable_object",
+                },
+            ]);
+        });
+
         it("writes a custom instance type with wrangler field names", () => {
             expect.assertions(1);
 

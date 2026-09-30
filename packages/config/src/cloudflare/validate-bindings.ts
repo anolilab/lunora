@@ -75,6 +75,29 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
     }
 };
 
+/**
+ * Validate a `durable_object`-scheduled entry: it takes named `images` (each
+ * with exactly one of `dockerfile` / `image`) instead of an application-wide
+ * `image`, and rejects the default-policy fields Cloudflare does not accept.
+ */
+const validateDurableObjectScheduledEntry = (entry: WranglerContainerEntry, label: string, errors: string[]): void => {
+    for (const field of ["image", "instance_type", "max_instances"] as const) {
+        if (entry[field] !== undefined) {
+            errors.push(
+                `${label} sets "${field}", which the durable_object scheduling policy does not take — the Durable Object picks image and size at start`,
+            );
+        }
+    }
+
+    for (const [name, image] of Object.entries(entry.images ?? {})) {
+        const sources = [image?.dockerfile, image?.image].filter((source) => typeof source === "string" && source.length > 0);
+
+        if (sources.length !== 1) {
+            errors.push(`${label} images["${name}"] must set exactly one of "dockerfile" or "image"`);
+        }
+    }
+};
+
 /** Shared lookups + sinks for one `containers[]` entry validation pass. */
 interface ContainerEntryChecks {
     boundClasses: ReadonlySet<string | undefined>;
@@ -100,7 +123,15 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
         return;
     }
 
-    if (typeof entry.image !== "string" || entry.image.length === 0) {
+    const durableObjectScheduled = entry.scheduling_policy === "durable_object";
+
+    if (entry.scheduling_policy !== undefined && entry.scheduling_policy !== "default" && !durableObjectScheduled) {
+        errors.push(`${label} ("${entry.class_name}") has unknown scheduling_policy "${entry.scheduling_policy}" — expected "default" or "durable_object"`);
+    }
+
+    if (durableObjectScheduled) {
+        validateDurableObjectScheduledEntry(entry, `${label} ("${entry.class_name}")`, errors);
+    } else if (typeof entry.image !== "string" || entry.image.length === 0) {
         errors.push(`${label} ("${entry.class_name}") must have an "image" — a Dockerfile path or a registry reference`);
     }
 
@@ -122,7 +153,9 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 
     validateInstanceType(entry, `${label} ("${entry.class_name}")`, errors);
 
-    if (entry.max_instances === undefined) {
+    // The `durable_object` policy has no max_instances to set: its instances count
+    // against the account limit instead.
+    if (entry.max_instances === undefined && !durableObjectScheduled) {
         warnings.push(`${label} ("${entry.class_name}") declares no max_instances — set a cap so a traffic spike can't fan out unbounded container spend`);
     }
 };

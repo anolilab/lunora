@@ -57,6 +57,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "celld does not implement outbound interception: a container with an allowedHosts / deniedHosts / interceptHttps policy refuses to start (`interceptAllOutboundHttp()` is not implemented in celld). Egress is instead fenced per node — a container reaches the Internet and nothing of the node's own",
         },
+        containerRuntimeScheduling: {
+            level: "unsupported",
+            note: "celld refuses container snapshots, and the durable_object scheduling policy (a start that picks its image from ctx.container.images) has not been verified against celld — rated unsupported until it is",
+        },
         containers: {
             level: "native",
             note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",

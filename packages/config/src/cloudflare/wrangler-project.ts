@@ -47,6 +47,18 @@ interface WranglerProjectValidationResult {
  */
 const iterableEntries = <T>(value: ReadonlyArray<T> | undefined): ReadonlyArray<T> => (Array.isArray(value) ? (value as ReadonlyArray<T>) : []);
 
+/** A `durable_object` entry's missing named-image Dockerfiles — its local sources, in place of `image`. */
+const namedImageErrors = (entry: WranglerContainerEntry | null | undefined, configDirectory: string, wranglerPath: string): string[] =>
+    Object.entries(entry?.images ?? {}).flatMap(([name, named]) => {
+        const dockerfile = named?.dockerfile;
+
+        if (typeof dockerfile !== "string" || existsSync(dockerfile.startsWith("/") ? dockerfile : join(configDirectory, dockerfile))) {
+            return [];
+        }
+
+        return [`containers images["${name}"] dockerfile "${dockerfile}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile`];
+    });
+
 /**
  * FS-aware existence check for local-path container images: every `./`, `../`,
  * `/`, or `Dockerfile`-bearing image must resolve to an existing file (wrangler
@@ -61,16 +73,16 @@ const collectContainerImageErrors = (
 
     for (const entry of iterableEntries(containers)) {
         const image = entry?.image;
+        const isLocalPath =
+            typeof image === "string" && (image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"));
 
-        if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
-            continue;
-        }
-
-        if (!existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
+        if (isLocalPath && !existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
             errors.push(
                 `containers image "${image}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile or point image at a registry reference`,
             );
         }
+
+        errors.push(...namedImageErrors(entry, configDirectory, wranglerPath));
     }
 
     return errors;

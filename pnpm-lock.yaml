@@ -1071,7 +1071,7 @@ overrides:
 packageExtensionsChecksum: sha256-i/twAuZHxxo21TBiaalQLtndEGQ80RgNpNG/bM5mBFw=
 
 patchedDependencies:
-  '@cloudflare/containers@0.3.7': 3ba8f2fb03ba0aacc344c152676b880643f538de06c958f178f0f453d3b2b957
+  '@cloudflare/containers@0.3.7': 0ba7bb92b4c939b2d83e1e8e645e50f6067ab46c8231dd8fd83b1a3947ad3efc
   '@cloudflare/workers-types@5.20260811.1': dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30
   gray-matter@4.0.3: 6867093d18e007f9f610b1c4c6871b64734503b546ffcd3bc7a3675dd11f2188
   recast@0.23.11: 1afc7b5721808dfc4a9f0d5129cac96093c3d92cd182e7ed5e1df4087f2e68c0
@@ -3219,7 +3219,7 @@ importers:
     devDependencies:
       '@cloudflare/containers':
         specifier: catalog:cloudflare
-        version: 0.3.7(patch_hash=3ba8f2fb03ba0aacc344c152676b880643f538de06c958f178f0f453d3b2b957)
+        version: 0.3.7(patch_hash=0ba7bb92b4c939b2d83e1e8e645e50f6067ab46c8231dd8fd83b1a3947ad3efc)
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
         version: 1.1.4(@cloudflare/workers-types@5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30))(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
@@ -27053,7 +27053,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@cloudflare/containers@0.3.7(patch_hash=3ba8f2fb03ba0aacc344c152676b880643f538de06c958f178f0f453d3b2b957)': {}
+  '@cloudflare/containers@0.3.7(patch_hash=0ba7bb92b4c939b2d83e1e8e645e50f6067ab46c8231dd8fd83b1a3947ad3efc)': {}
 
   '@cloudflare/flagship@0.5.0(@openfeature/server-sdk@1.23.0(@openfeature/core@1.12.0))(@openfeature/web-sdk@1.10.0(@openfeature/core@1.12.0))':
     dependencies:

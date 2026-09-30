@@ -287,14 +287,14 @@ const wranglerInstanceType = (instanceType: NonNullable<InferredContainer["insta
     return custom;
 };
 
-/** The wrangler `containers[].image` for an inferred container. */
-const imageRefFor = (container: InferredContainer): string => {
-    if (container.image.kind === "dockerfile") {
-        return container.image.dockerfilePath;
+/** The wrangler `containers[].image` for an inferred default-policy container. */
+const imageRefFor = (container: InferredContainer, image: NonNullable<InferredContainer["image"]>): string => {
+    if (image.kind === "dockerfile") {
+        return image.dockerfilePath;
     }
 
-    if (container.image.kind === "registry") {
-        return container.image.reference;
+    if (image.kind === "registry") {
+        return image.reference;
     }
 
     // A Railpack `{ build }` source: `lunora deploy` builds + pushes this local
@@ -303,19 +303,53 @@ const imageRefFor = (container: InferredContainer): string => {
     return containerBuildTag(container.exportName);
 };
 
+/**
+ * Render a `durable_object`-scheduled container's `containers[]` entry: the
+ * policy plus its named images (wrangler `dockerfile` / `build_context` /
+ * `build_vars`, or a registry `image`). The instance size is chosen at start,
+ * and the policy takes no `max_instances` or rollout, so none are written.
+ */
+const durableObjectContainerEntryFor = (container: InferredContainer): Record<string, unknown> => {
+    const images: Record<string, Record<string, unknown>> = {};
+
+    for (const [name, image] of Object.entries(container.images ?? {})) {
+        images[name] =
+            image.kind === "registry"
+                ? { image: image.reference }
+                : {
+                      build_context: image.buildContext,
+                      dockerfile: image.dockerfilePath,
+                      ...(container.buildArgs === undefined ? {} : { build_vars: container.buildArgs }),
+                  };
+    }
+
+    return {
+        class_name: container.className,
+        scheduling_policy: "durable_object",
+        ...(Object.keys(images).length > 0 ? { images } : {}),
+        ...(container.name === undefined ? {} : { name: container.name }),
+    };
+};
+
 /** Render one wrangler `containers[]` entry from an inferred container. Pure. */
 const containerEntryFor = (container: InferredContainer): Record<string, unknown> => {
+    const { image } = container;
+
+    if (container.schedulingPolicy === "durable_object" || image === undefined) {
+        return durableObjectContainerEntryFor(container);
+    }
+
     const entry: Record<string, unknown> = {
         class_name: container.className,
-        image: imageRefFor(container),
+        image: imageRefFor(container, image),
     };
 
-    if (container.image.kind === "dockerfile") {
-        entry.image_build_context = container.image.buildContext;
+    if (image.kind === "dockerfile") {
+        entry.image_build_context = image.buildContext;
     }
 
     // Build args (image_vars) only make sense for an image lunora builds.
-    if (container.buildArgs !== undefined && container.image.kind !== "registry") {
+    if (container.buildArgs !== undefined && image.kind !== "registry") {
         entry.image_vars = container.buildArgs;
     }
 

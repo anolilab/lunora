@@ -282,6 +282,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         cronTriggers: crons.length > 0,
         crossShardFanout: schema.tables.some((table) => isShardByTable(table)),
         containerEgressPolicy: codeSignals.containerEgressPolicy,
+        // Read off the container IR: the policy is deploy configuration codegen
+        // already lifts statically, so no separate AST signal is needed.
+        containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,

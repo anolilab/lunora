@@ -7,9 +7,27 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { ContainerConfig, ContainerDefinition, ContainerImageSource, NormalizedContainerImage } from "./types";
+import type {
+    ContainerConfig,
+    ContainerDefinition,
+    ContainerImageSource,
+    ContainerNamedImageSource,
+    DefaultScheduledContainerConfig,
+    DurableObjectScheduledContainerConfig,
+    NormalizedContainerImage,
+} from "./types";
 
 const NAMED_INSTANCE_TYPES = new Set(["basic", "lite", "standard-1", "standard-2", "standard-3", "standard-4"]);
+
+/** The named sizes `ctx.container.start({ instance })` accepts — `basic` is wrangler-only. */
+const RUNTIME_INSTANCE_TYPES = new Set(["lite", "standard-1", "standard-2", "standard-3", "standard-4"]);
+
+/** Prefix of the Cloudflare-managed images a `durable_object` container can start without declaring them. */
+const MANAGED_IMAGE_PREFIX = "cloudflare/";
+
+/** Cloudflare's caps on `containers[].images`: entry count and name length. */
+const MAX_NAMED_IMAGES = 100;
+const MAX_IMAGE_NAME_LENGTH = 128;
 
 const ENV_NAME_PATTERN = /^[A-Z_]\w*$/i;
 
@@ -133,7 +151,7 @@ const containerBuildTag = (exportName: string): string => `lunora-${exportName.r
  * ```
  */
 /** Validate the `image` source — a local path, a registry ref, or a Railpack build dir. */
-const assertValidImage = (image: ContainerConfig["image"]): void => {
+const assertValidImage = (image: ContainerImageSource): void => {
     if (typeof image === "string") {
         if (image.length === 0) {
             throw new TypeError("defineContainer: `image` must be a non-empty path or a { registry } reference");
@@ -323,15 +341,83 @@ const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
     assertValidReadyOnChecks(config);
 };
 
-/**
- * `defineContainer` is part of the experimental `@lunora/container` API and may change without a major version bump.
- */
-const defineContainer = (config: ContainerConfig): ContainerDefinition => {
-    assertValidImage(config.image);
+/** Whether a registry reference is digest-pinned in the Cloudflare registry — the only kind a named image accepts. */
+const isCloudflareRegistryDigest = (reference: unknown): boolean =>
+    typeof reference === "string" && reference.startsWith("registry.cloudflare.com/") && reference.includes("@sha256:");
 
-    if (config.defaultPort !== undefined) {
-        assertValidPort(config.defaultPort, "defaultPort");
+/** Validate one `images` entry: its name length, and a local path or a Cloudflare registry digest. */
+const assertValidNamedImage = (name: string, source: ContainerNamedImageSource): void => {
+    if (name.length === 0 || name.length > MAX_IMAGE_NAME_LENGTH) {
+        throw new TypeError(`defineContainer: image name "${name}" must be 1–${String(MAX_IMAGE_NAME_LENGTH)} characters`);
     }
+
+    if (typeof source === "string") {
+        assertValidImage(source);
+
+        return;
+    }
+
+    if (!isCloudflareRegistryDigest(source.registry)) {
+        throw new TypeError(
+            `defineContainer: \`images["${name}"].registry\` must be a digest-pinned (@sha256) reference under registry.cloudflare.com — push other registries' images there first`,
+        );
+    }
+};
+
+/**
+ * Validate a `durable_object` container's named images, default image and
+ * default instance size. Cloudflare only accepts digest-pinned references in
+ * its own registry for a named image, so anything else is caught here rather
+ * than at `wrangler deploy`.
+ */
+const assertValidDurableObjectScheduling = (config: DurableObjectScheduledContainerConfig): void => {
+    // Default-policy fields a JS caller (or a cast) could still pass. Wrangler
+    // rejects `max_instances` under this policy, and a rollout has nothing to roll.
+    for (const field of ["maxInstances", "rollout"] as const) {
+        if ((config as { [key in typeof field]?: unknown })[field] !== undefined) {
+            throw new TypeError(`defineContainer: \`${field}\` is not supported with schedulingPolicy "durable_object"`);
+        }
+    }
+
+    const images = Object.entries(config.images ?? {});
+
+    if (images.length > MAX_NAMED_IMAGES) {
+        throw new TypeError(`defineContainer: \`images\` holds at most ${String(MAX_NAMED_IMAGES)} entries (got ${String(images.length)})`);
+    }
+
+    for (const [name, source] of images) {
+        assertValidNamedImage(name, source);
+    }
+
+    if (config.image !== undefined && !Object.hasOwn(config.images ?? {}, config.image) && !config.image.startsWith(MANAGED_IMAGE_PREFIX)) {
+        throw new TypeError(
+            `defineContainer: \`image\` "${config.image}" must name an entry of \`images\` or a Cloudflare-managed "${MANAGED_IMAGE_PREFIX}…" image`,
+        );
+    }
+
+    const { instanceType } = config;
+
+    if (typeof instanceType === "string" && !RUNTIME_INSTANCE_TYPES.has(instanceType)) {
+        throw new TypeError(
+            `defineContainer: \`instanceType\` "${instanceType}" is not a runtime size — use one of ${[...RUNTIME_INSTANCE_TYPES].join(", ")}, or a full { vcpu, memoryMib, diskMb } object`,
+        );
+    }
+
+    if (
+        typeof instanceType === "object" &&
+        [instanceType.vcpu, instanceType.memoryMib, instanceType.diskMb].some((value) => typeof value !== "number" || value <= 0)
+    ) {
+        throw new TypeError('defineContainer: a custom `instanceType` under schedulingPolicy "durable_object" needs positive vcpu, memoryMib and diskMb');
+    }
+};
+
+/** Validate a `default`-policy container's image, instance size, cap and rollout — the fields wrangler reads. */
+const assertValidDefaultScheduling = (config: DefaultScheduledContainerConfig): void => {
+    if ((config as { images?: unknown }).images !== undefined) {
+        throw new TypeError('defineContainer: `images` needs schedulingPolicy "durable_object"');
+    }
+
+    assertValidImage(config.image);
 
     const stepPercentage = config.rollout?.stepPercentage;
 
@@ -358,6 +444,29 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         throw new TypeError(
             `defineContainer: unknown \`instanceType\` "${config.instanceType}" — use one of ${[...NAMED_INSTANCE_TYPES].join(", ")}, or a custom { vcpu, memoryMib, diskMb } object`,
         );
+    }
+};
+
+/**
+ * `defineContainer` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ */
+const defineContainer: {
+    (config: DefaultScheduledContainerConfig): DefaultScheduledContainerConfig & { readonly isLunoraContainer: true };
+    (config: DurableObjectScheduledContainerConfig): DurableObjectScheduledContainerConfig & { readonly isLunoraContainer: true };
+} = <Config extends ContainerConfig>(config: Config): Config & { readonly isLunoraContainer: true } => {
+    // Typed callers cannot reach the last arm; a JS caller (or a cast) can.
+    const policy: unknown = config.schedulingPolicy;
+
+    if (config.schedulingPolicy === "durable_object") {
+        assertValidDurableObjectScheduling(config);
+    } else if (policy === undefined || policy === "default") {
+        assertValidDefaultScheduling(config);
+    } else {
+        throw new TypeError(`defineContainer: unknown \`schedulingPolicy\` ${JSON.stringify(policy)} — use "default" or "durable_object"`);
+    }
+
+    if (config.defaultPort !== undefined) {
+        assertValidPort(config.defaultPort, "defaultPort");
     }
 
     assertValidDuration(config.sleepAfter, "sleepAfter");

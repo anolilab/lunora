@@ -153,6 +153,53 @@ describe("discover/containers", () => {
         expect(container?.sleepAfter).toBeUndefined();
     });
 
+    it("lifts a durable_object container's policy and named images, without an application image", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const agentComputer = defineContainer({
+                schedulingPolicy: "durable_object",
+                image: "base",
+                images: { base: "./container", pinned: { registry: "registry.cloudflare.com/acct/repo@sha256:abc" } },
+                instanceType: "standard-2",
+            });
+        `);
+
+        expect(discoverContainers(newProject(), workdir)).toEqual([
+            {
+                bindingName: "CONTAINER_AGENT_COMPUTER",
+                className: "AgentComputerContainer",
+                exportName: "agentComputer",
+                images: {
+                    base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" },
+                    pinned: { kind: "registry", reference: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                },
+                instanceType: "standard-2",
+                schedulingPolicy: "durable_object",
+            },
+        ]);
+    });
+
+    it("rejects default-policy fields on a durable_object container, and images without the policy", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", maxInstances: 3 });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`maxInstances` is not supported with schedulingPolicy "durable_object"/u);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ image: "./app", images: { base: "./x" } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`images` needs schedulingPolicy "durable_object"/u);
+    });
+
     it("lifts a Railpack { build } image source", () => {
         expect.assertions(1);
 

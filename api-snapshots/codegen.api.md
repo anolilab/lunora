@@ -127,7 +127,7 @@ interface ContainerIR {
     className: string;
     enableInternet?: boolean;
     exportName: string;
-    image: {
+    image?: {
         buildContext: string;
         dockerfilePath: string;
         kind: "dockerfile";
@@ -138,6 +138,14 @@ interface ContainerIR {
         kind: "registry";
         reference: string;
     };
+    images?: Record<string, {
+        buildContext: string;
+        dockerfilePath: string;
+        kind: "dockerfile";
+    } | {
+        kind: "registry";
+        reference: string;
+    }>;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
@@ -149,6 +157,7 @@ interface ContainerIR {
         gracePeriodSeconds?: number;
         stepPercentage?: number;
     };
+    schedulingPolicy?: "durable_object";
     sleepAfter?: number | string;
 }
 ```

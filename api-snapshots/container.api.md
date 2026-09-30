@@ -45,10 +45,16 @@ interface ContainerBindingSpec {
 }
 ```
 
-### `ContainerConfig` (interface)
+### `ContainerConfig` (type)
 
 ```ts
-interface ContainerConfig {
+type ContainerConfig = DefaultScheduledContainerConfig | DurableObjectScheduledContainerConfig;
+```
+
+### `ContainerConfigBase` (interface)
+
+```ts
+interface ContainerConfigBase {
     allowedHosts?: ReadonlyArray<string>;
     buildArgs?: Readonly<Record<string, string>>;
     defaultPort?: number;
@@ -57,28 +63,24 @@ interface ContainerConfig {
     entrypoint?: ReadonlyArray<string>;
     env?: Readonly<Record<string, string>>;
     hardTimeout?: number | string;
-    image: ContainerImageSource;
-    instanceType?: ContainerInstanceType;
     interceptHttps?: boolean;
     labels?: Readonly<Record<string, string>>;
-    maxInstances?: number;
     name?: string;
     pingEndpoint?: string;
     readyOn?: ReadonlyArray<ContainerReadinessCheck>;
     requiredPorts?: ReadonlyArray<number>;
-    rollout?: ContainerRollout;
     secrets?: ReadonlyArray<string>;
     secretsStore?: Readonly<Record<string, string>>;
     sleepAfter?: number | string;
 }
 ```
 
-### `ContainerDefinition` (interface)
+### `ContainerDefinition` (type)
 
 ```ts
-interface ContainerDefinition extends ContainerConfig {
+type ContainerDefinition = ContainerConfig & {
     readonly isLunoraContainer: true;
-}
+};
 ```
 
 ### `ContainerEgressControls` (interface)
@@ -141,6 +143,9 @@ interface ContainerInstanceHandle extends ContainerHandle {
     egress: ContainerEgressControls;
     getState: () => Promise<ContainerInstanceState>;
     renewActivityTimeout: () => Promise<void>;
+    snapshot: (options?: {
+        name?: string;
+    }) => Promise<ContainerSnapshot>;
     start: (options?: ContainerStartOptions) => Promise<void>;
     stop: (signal?: number | string) => Promise<void>;
 }
@@ -161,6 +166,12 @@ interface ContainerInstanceState {
 
 ```ts
 type ContainerInstanceType = CustomContainerInstanceType | NamedContainerInstanceType;
+```
+
+### `ContainerNamedImageSource` (type)
+
+```ts
+type ContainerNamedImageSource = RegistryImageSource | string;
 ```
 
 ### `ContainerNamespaceLike` (interface)
@@ -192,6 +203,22 @@ interface ContainerRollout {
 }
 ```
 
+### `ContainerRuntimeInstanceType` (type)
+
+```ts
+type ContainerRuntimeInstanceType = Exclude<NamedContainerInstanceType, "basic"> | Required<CustomContainerInstanceType>;
+```
+
+### `ContainerSnapshot` (interface)
+
+```ts
+interface ContainerSnapshot {
+    id: string;
+    name?: string;
+    size: number;
+}
+```
+
 ### `ContainerStartOptions` (interface)
 
 ```ts
@@ -199,7 +226,10 @@ interface ContainerStartOptions {
     enableInternet?: boolean;
     entrypoint?: string[];
     envVars?: Record<string, string>;
+    image?: string;
+    instanceType?: ContainerRuntimeInstanceType;
     labels?: Record<string, string>;
+    snapshot?: ContainerSnapshot;
 }
 ```
 
@@ -221,10 +251,33 @@ interface CustomContainerInstanceType {
 }
 ```
 
+### `DefaultScheduledContainerConfig` (interface)
+
+```ts
+interface DefaultScheduledContainerConfig extends ContainerConfigBase {
+    image: ContainerImageSource;
+    instanceType?: ContainerInstanceType;
+    maxInstances?: number;
+    rollout?: ContainerRollout;
+    schedulingPolicy?: "default";
+}
+```
+
 ### `DurableObjectJurisdiction` (type)
 
 ```ts
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+```
+
+### `DurableObjectScheduledContainerConfig` (interface)
+
+```ts
+interface DurableObjectScheduledContainerConfig extends ContainerConfigBase {
+    image?: string;
+    images?: Readonly<Record<string, ContainerNamedImageSource>>;
+    instanceType?: ContainerRuntimeInstanceType;
+    schedulingPolicy: "durable_object";
+}
 ```
 
 ### `InstanceRetryOptions` (interface)
@@ -312,7 +365,14 @@ const createContainerTestContext: (handlers: Record<string, ContainerTestHandler
 ### `defineContainer` (const)
 
 ```ts
-const defineContainer: (config: ContainerConfig) => ContainerDefinition;
+const defineContainer: {
+    (config: DefaultScheduledContainerConfig): DefaultScheduledContainerConfig & {
+        readonly isLunoraContainer: true;
+    };
+    (config: DurableObjectScheduledContainerConfig): DurableObjectScheduledContainerConfig & {
+        readonly isLunoraContainer: true;
+    };
+};
 ```
 
 ### `isContainerDefinition` (const)
@@ -412,12 +472,17 @@ class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOpti
 
 ```ts
 class LunoraContainer<Env = unknown> extends Container<Env> {
+    protected image?: string;
+    protected instance?: ContainerRuntimeInstanceType;
     constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string, jurisdiction?: DurableObjectJurisdiction);
+    lunoraSnapshot(options?: {
+        name?: string;
+    }): Promise<ContainerSnapshot>;
     override fetch(request: Request): Promise<Response>;
     override containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response>;
     lunoraExec(request: Request): Promise<Response>;
     override startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void>;
-    override start(...args: Parameters<Container<Env>["start"]>): Promise<void>;
+    override start(options?: LunoraStartOptions, waitOptions?: Parameters<Container<Env>["start"]>[1]): Promise<void>;
     override destroy(): Promise<void>;
     override onActivityExpired(): Promise<void>;
     override onError(error: unknown): unknown;
@@ -724,6 +789,9 @@ interface ContainerStubLike {
     fetch: (input: Request) => Promise<Response>;
     getState?: () => Promise<ContainerInstanceState>;
     lunoraExec?: (request: Request) => Promise<Response>;
+    lunoraSnapshot?: (options?: {
+        name?: string;
+    }) => Promise<ContainerSnapshot>;
     removeAllowedHost?: (hostname: string) => Promise<void>;
     removeDeniedHost?: (hostname: string) => Promise<void>;
     renewActivityTimeout?: () => Promise<void>;
@@ -738,6 +806,14 @@ interface ContainerStubLike {
 
 ```ts
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
+```
+
+### `LunoraStartOptions` (type)
+
+```ts
+type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & StartSelection & {
+    snapshot?: ContainerSnapshot;
+};
 ```
 
 ### `OutboundByHostOverrideInput` (type)
@@ -831,6 +907,15 @@ interface StartAndWaitForPortsOptions {
     startOptions?: ContainerStartConfigOptions;
     ports?: number | number[];
     cancellationOptions?: CancellationOptions;
+}
+```
+
+### `StartSelection` (interface)
+
+```ts
+interface StartSelection {
+    image?: string;
+    instanceType?: ContainerRuntimeInstanceType;
 }
 ```
 

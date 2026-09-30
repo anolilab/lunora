@@ -23,8 +23,11 @@ interface TailConsumer {
 interface WranglerContainerEntry {
     class_name?: string;
     image?: string;
+    /** Named images under the `durable_object` scheduling policy. */
+    images?: Record<string, { build_context?: string; build_vars?: Record<string, string>; dockerfile?: string; image?: string } | null | undefined>;
     instance_type?: string | { disk_mb?: number; memory_mib?: number; vcpu?: number };
     max_instances?: number;
+    scheduling_policy?: string;
 }
 
 /**
