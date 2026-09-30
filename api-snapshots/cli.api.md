@@ -55,6 +55,7 @@ const COMMANDS: readonly [
     "build",
     "deploy",
     "containers",
+    "ai",
     "prepare",
     "link",
     "deployments",

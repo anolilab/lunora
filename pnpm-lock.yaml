@@ -2436,6 +2436,12 @@ importers:
 
   packages/ai:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: catalog:ai
+        version: 4.0.49(zod@4.5.4)
+      '@ai-sdk/openai':
+        specifier: catalog:ai
+        version: 4.0.60(zod@4.5.4)
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
@@ -2446,12 +2452,6 @@ importers:
         specifier: catalog:ai
         version: 4.0.0(@ai-sdk/anthropic@4.0.49(zod@4.5.4))(@ai-sdk/openai@4.0.60(zod@4.5.4))(@ai-sdk/provider@4.0.10)(ai@7.0.93(zod@4.5.4))
     devDependencies:
-      '@ai-sdk/anthropic':
-        specifier: catalog:ai
-        version: 4.0.49(zod@4.5.4)
-      '@ai-sdk/openai':
-        specifier: catalog:ai
-        version: 4.0.60(zod@4.5.4)
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core

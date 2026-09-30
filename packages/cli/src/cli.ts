@@ -10,6 +10,7 @@ import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
+import { aiCommand } from "./commands/ai";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
@@ -58,6 +59,7 @@ const COMMANDS = [
     "build",
     "deploy",
     "containers",
+    "ai",
     "prepare",
     "link",
     "deployments",
@@ -150,6 +152,7 @@ const CLI_COMMANDS = [
     buildCommand,
     deployCommand,
     containersCommand,
+    aiCommand,
     prepareCommand,
     linkCommand,
     deploymentsCommand,

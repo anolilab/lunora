@@ -53,26 +53,75 @@ entry point — the `ai_unbounded_generation_public` advisor lint flags the ones
 that are not. See the `ai` registry item (`lunora add ai`) for the full
 auth + rate-limit + bounds shape.
 
-`ctx.ai.model(id)` resolves a Workers AI model from the binding. Pass the
-resolved model to the AI SDK functions re-exported from `@lunora/ai`
+`ctx.ai.model(id)` resolves a model from the binding — a Workers AI id, or any
+provider's model through AI Gateway (next section). Pass the resolved model to the AI SDK functions re-exported from `@lunora/ai`
 (`generateText`, `streamText`, `generateObject`, `streamObject`, `embed`,
 `embedMany`, `tool`).
 
 ## Any provider, same call
 
-A string id resolves Workers AI; an AI SDK model object passes straight through.
+Switch provider by changing the model string — nothing else:
+
+```ts
+const model = ctx.ai.model("anthropic/claude-sonnet-5"); // or "openai/gpt-5", "google/gemini-2.5-pro", …
+```
+
+A `"<provider>/<model>"` id is routed through [Cloudflare AI
+Gateway](https://developers.cloudflare.com/ai-gateway/) over the same `AI`
+binding, so the app holds **no provider API key**. Which way the provider is
+paid depends on the provider, and is set up once in the Cloudflare dashboard:
+
+- **[Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)**
+  — for the unified-catalog providers (OpenAI, Anthropic, Google, xAI, Groq,
+  DeepSeek). Their calls take the binding's run path, where Cloudflare holds
+  the provider credentials and bills against prepaid credits; a key stored on
+  the gateway is not used for them.
+- **[Keys stored on the gateway](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)**
+  — for the other OpenAI-compatible providers (Mistral, Perplexity, Cerebras,
+  OpenRouter, Fireworks, …), which only exist on the gateway path. The key lives
+  in the gateway's Secrets Store, not in the app.
+
+Calls go to the gateway named by `LUNORA_AI_GATEWAY_ID`, or to the account's
+auto-created `default` gateway when it is unset. `lunora ai gateway` creates a
+gateway for the app and writes that var for you. Each call carries its function
+path and trace id as gateway metadata, so the gateway's logs attribute spend to
+the function that made it.
+
+A `dynamic/<route>` id calls an AI Gateway [dynamic
+route](https://developers.cloudflare.com/ai-gateway/features/dynamic-routing/) —
+the place to configure fallback models, per-model budgets and spend limits
+without a code change.
+
+`@cf/…` ids stay on Workers AI, exactly as before.
+
+### Your own proxy (celld, or no Cloudflare)
+
+Set `LUNORA_AI_PROXY_URL` to any OpenAI-compatible endpoint (LiteLLM,
+OpenRouter, a self-hosted proxy) and `<provider>/<model>` slugs go there instead
+of AI Gateway. The slug is sent unchanged as the request's `model`, and
+`LUNORA_AI_PROXY_TOKEN` (a secret) is sent as the bearer token. No `AI` binding is
+needed, so this is how `ctx.ai` works on celld. `@cf/…` ids and `ctx.ai.run`
+still need the binding.
+
+```jsonc
+{ "vars": { "LUNORA_AI_PROXY_URL": "https://ai-proxy.internal/v1" } }
+```
+
+### Bring your own provider
+
+An AI SDK model object passes straight through, for a provider or feature the
+gateway catalog does not cover:
 
 ```ts
 import { streamText } from "@lunora/ai";
-import { openai } from "@ai-sdk/openai"; // optional, bring-your-own
+import { createOpenAI } from "@ai-sdk/openai";
 
-const result = streamText({ model: openai("gpt-5"), messages });
+const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+const result = streamText({ model: ctx.ai.model(openai("gpt-5")), messages });
 ```
 
-Install the provider you want (`@ai-sdk/openai`, `@ai-sdk/anthropic`, …)
-alongside `@lunora/ai`; route through a [Cloudflare AI
-Gateway](https://developers.cloudflare.com/ai-gateway/) by passing `gateway` to
-`createAi`.
+Wrap it in `ctx.ai.model(...)` as above so its usage is recorded like any other
+call (see [Usage and spend per function](#usage-and-spend-per-function)).
 
 ## Structured output
 
@@ -681,6 +730,24 @@ because a table trying to cover every model is a table that is wrong about most
 of them; anything it does not cover returns `undefined` rather than a guess, and
 an unpriced model yields no attribute rather than a `0` that would quietly sum
 into a total. Pass your own `prices` for anything you are invoicing against.
+
+## Usage and spend per function
+
+Every model resolved through `ctx.ai.model(...)` is instrumented: each call gets
+an `ai.generate` (or `ai.stream`) span, and its usage is counted into the
+function's durable metrics. The counters are grouped by the model id you asked
+for (`anthropic/claude-sonnet-5`, not the provider's internal id) and carry the
+same cost-source rule as above:
+
+| Counter                      | Value                     | Attributes                                         |
+| ---------------------------- | ------------------------- | -------------------------------------------------- |
+| `gen_ai.usage.input_tokens`  | input tokens of one call  | `gen_ai.request.model`                             |
+| `gen_ai.usage.output_tokens` | output tokens of one call | `gen_ai.request.model`                             |
+| `gen_ai.usage.cost`          | USD cost of one call      | `gen_ai.request.model`, `lunora.usage.cost.source` |
+
+Studio's **AI usage** page reads them: total spend and tokens, a breakdown by
+function and by model, and each recent call linked to its trace. A stream's span
+stays open until the stream finishes, so its duration is the whole generation.
 
 ## Outside an action
 

@@ -52,9 +52,14 @@ const fakeBinding = (): AiBindingLike & { runCalls: [string, Record<string, unkn
 };
 
 describe("createAi", () => {
-    it("throws when neither a binding nor a provider is supplied", () => {
-        expect.assertions(1);
-        expect(() => createAi({})).toThrow(/requires a `binding`/);
+    it("builds a facade whose calls throw a directed error when nothing backs it", async () => {
+        expect.assertions(3);
+
+        const ai = createAi({});
+
+        expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/needs the `AI` binding/);
+        expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/needs the `AI` binding/);
+        await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run needs the `AI` binding/);
     });
 
     describe("model resolution (provider-agnostic seam)", () => {
@@ -246,7 +251,7 @@ describe("createAi", () => {
 
             const ai = createAi({ provider: fakeProvider() });
 
-            await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run requires the `binding`/);
+            await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run needs the `AI` binding/);
         });
 
         it("routes raw ai.run() through the env-resolved gateway when the caller sets none", async () => {

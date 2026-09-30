@@ -59,6 +59,9 @@ interface WranglerQueueConsumer {
 }
 
 interface WranglerConfig {
+    // Workers AI binding (`env.AI`). Self-describing { binding }; parsed from
+    // untrusted JSONC, so it may be `null`.
+    ai?: { binding?: unknown } | null;
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;

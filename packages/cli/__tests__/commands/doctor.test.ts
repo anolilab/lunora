@@ -683,6 +683,99 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("ai", () => {
+        /** A wrangler config: {@link CLEAN_WRANGLER} plus the given top-level keys. */
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const seedAiUsage = (dir: string): void => {
+            mkdirSync(join(dir, "lunora"), { recursive: true });
+            writeFileSync(join(dir, "lunora", "chat.ts"), `import { createAi } from "@lunora/ai";\n\nexport const ai = createAi;\n`, "utf8");
+        };
+
+        const codes = (result: Awaited<ReturnType<typeof runDoctor>>): string[] => result.findings.map((finding) => finding.code);
+
+        it("warns when ctx.ai is used without an `ai` binding, and notes the default gateway", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.find((finding) => finding.code === "ai-binding-missing")?.level).toBe("warn");
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.level).toBe("info");
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.fix).toContain("lunora ai gateway");
+        });
+
+        it("is quiet once the binding and gateway id are configured", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ ai: { binding: "AI" }, vars: { LUNORA_AI_GATEWAY_ID: "demo" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("is quiet when a self-hosted proxy replaces the binding and gateway", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ vars: { LUNORA_AI_PROXY_URL: "https://ai-proxy.internal/v1" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("reads an unreadable .dev.vars as unset instead of aborting", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedAiUsage(workdir);
+            // A directory where the file should be makes readFileSync throw EISDIR.
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result)).toContain("ai-binding-missing");
+        });
+
+        it("warns that ctx.ai ignores a gateway token, even with a gateway id", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ ai: { binding: "AI" }, vars: { LUNORA_AI_GATEWAY_ID: "demo", LUNORA_AI_GATEWAY_TOKEN: "t" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-token-unused")?.level).toBe("warn");
+        });
+
+        it("reads the proxy and gateway vars from .dev.vars and env blocks too", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ env: { staging: { vars: { LUNORA_AI_GATEWAY_ID: "demo" } } } }));
+            seedAiUsage(workdir);
+            writeFileSync(join(workdir, ".dev.vars"), `${["LUNORA_AI_PROXY_URL", "https://ai-proxy.internal/v1"].join("=")}\n`, "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("reports nothing AI-related for a project that does not use ctx.ai", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The
