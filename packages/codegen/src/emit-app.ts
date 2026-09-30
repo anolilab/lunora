@@ -229,6 +229,9 @@ const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
  * needs is driven entirely by the enabled capabilities, so it is kept next to
  * the other per-capability builders rather than inline in {@link buildImportLines}.
  */
+/** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
+const hasShardedTables = (options: EmitAppOptions): boolean => options.tables.some((table) => typeof table.shardMode === "object");
+
 const buildRuntimeImports = (options: EmitAppOptions): string[] => {
     const { hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, useUmbrella } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
@@ -251,6 +254,7 @@ const buildRuntimeImports = (options: EmitAppOptions): string[] => {
 
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
+        ...(hasShardedTables(options) ? ["createDynamicShardRegistry", "createQueryCoordinator"] : []),
         "createWorker",
         ...(options.jurisdiction ? ["declareAppJurisdiction"] : []),
         "resolveLogArchiveFromEnv",
@@ -416,6 +420,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private readonly routeMap: Record<string, Route> = {};`,
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
     ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
+    ...(hasShardedTables(options) ? [`    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;`] : []),
     `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
     ...(options.hasSourcedTables ? [`    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;`] : []),
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
@@ -591,6 +596,16 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 
         return this;
     }`,
+    ...(hasShardedTables(options)
+        ? [
+              `    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). Each shard registers itself for the \`.shardBy()\` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a \`.shardBy()\` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }`,
+          ]
+        : []),
     ...(options.hasSourcedTables
         ? [
               `    /** Resolve the SQL client a \`.source(...)\` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with \`@lunora/hyperdrive\`'s \`createHyperdrive\` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
@@ -740,6 +755,11 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                 : {}),`,
               ]
             : []),
+        ...(hasShardedTables(options)
+            ? [
+                  `            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),`,
+              ]
+            : []),
         ...(options.hasSourcedTables ? [`            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),`] : []),
         ...(options.hasStorage
             ? [
@@ -771,7 +791,12 @@ const shardingLiteral = (shardMode: TableIR["shardMode"]): string =>
         ? `{ mode: { kind: ${JSON.stringify(shardMode)} } }`
         : `{ mode: { field: ${JSON.stringify(shardMode.field)}, kind: "shardBy" } }`;
 
-const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+/**
+ * The worker's view of the schema's tables: the literal table map behind
+ * `listSchemaTables` / `resolveTableSharding`, and — for a schema with
+ * `.shardBy()` tables — the coordinator over the declared shard registry.
+ */
+const buildTableShardingLines = (options: EmitAppOptions): string[] => [
     // Export's answer to "every table". Shard discovery unions each named table's
     // live shard keys, so an export that names none discovers none — which is how
     // `lunora export` with no `--tables`, and the scheduled backup with
@@ -791,6 +816,21 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
         options.resolveTableSharding = (table) => tableSharding.get(table);`,
           ]
         : []),
+    // Without a registry the worker's default one refuses every `.shardBy()`
+    // table, since only the shards themselves know which keys hold rows.
+    ...(hasShardedTables(options)
+        ? [
+              `        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry }) });
+        }`,
+          ]
+        : []),
+];
+
+const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+    ...buildTableShardingLines(options),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {

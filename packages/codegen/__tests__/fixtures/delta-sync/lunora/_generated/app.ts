@@ -4,7 +4,7 @@
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
 import { LUNORA_CRONS } from "./crons.js";
@@ -51,6 +51,7 @@ class AppBuilder<Env extends object> {
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
     private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;
 
@@ -154,6 +155,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }
+
     /** Resolve the SQL client a `.source(...)` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with `@lunora/hyperdrive`'s `createHyperdrive` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
     public sourceClient(factory: (env: Env, binding: string) => ReturnType<NonNullable<ShardConfig["sourceClient"]>>): this {
         this.sourceClientFactory = factory as NonNullable<ShardConfig["sourceClient"]>;
@@ -208,6 +216,7 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
+            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),
             ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),
         });
 
@@ -270,6 +279,12 @@ class AppBuilder<Env extends object> {
 
         options.listSchemaTables = () => [...tableSharding.keys()];
         options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });
+        }
 
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);

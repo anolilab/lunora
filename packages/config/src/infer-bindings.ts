@@ -569,6 +569,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         const composedClasses: DurableObjectClass[] = [
             ...COMPOSED_ENTRY_DURABLE_OBJECTS,
             ...(existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "scheduler.ts")) ? (["SchedulerDO"] as const) : []),
+            // Same for `ShardRegistryDO`, off the `shardRegistry` module codegen
+            // writes for a schema with `.shardBy()` tables.
+            ...(existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts")) ? (["ShardRegistryDO"] as const) : []),
         ];
 
         durableObjects = composedClasses.map((className) => {

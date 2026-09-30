@@ -73,6 +73,28 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         expect(output).toContain("options.resolveTableSharding = (table) => tableSharding.get(table);");
     });
 
+    it("wires a .shardRegistry() declaration into both the shard and the worker's coordinator", () => {
+        expect.assertions(4);
+
+        const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
+
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {");
+        expect(output).toContain(
+            "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
+        );
+        expect(output).toContain("options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });");
+        expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
+    });
+
+    it("offers no .shardRegistry() to a schema without .shardBy() tables", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, tables: [{ name: "users", shardMode: "root" }] });
+
+        expect(output).not.toContain("shardRegistry");
+        expect(output).not.toContain("createDynamicShardRegistry");
+    });
+
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
         expect.assertions(2);
 

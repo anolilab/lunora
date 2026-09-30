@@ -6,7 +6,7 @@ import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, face
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
 import notifyConfig from "../notify.js";
@@ -68,6 +68,7 @@ class AppBuilder<Env extends object> {
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
     private storageDeclaration?: StorageDeclaration<Env>;
 
@@ -171,6 +172,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }
+
     /** Wire R2 storage — backs `ctx.storage` (incl. multi-bucket) and the studio file browser, from one declaration. */
     public storage(declaration: StorageDeclaration<Env>): this {
         this.storageDeclaration = declaration;
@@ -225,6 +233,7 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
+            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),
             ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin) } : {}),
         });
 
@@ -394,6 +403,12 @@ class AppBuilder<Env extends object> {
 
         options.listSchemaTables = () => [...tableSharding.keys()];
         options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });
+        }
 
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);

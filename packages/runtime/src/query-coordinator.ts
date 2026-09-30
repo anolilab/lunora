@@ -72,7 +72,7 @@ const createDefaultShardRegistry = (resolveSharding: ((table: string) => { mode:
 
             if (resolveSharding(table)?.mode.kind === "shardBy") {
                 throw new LunoraError(
-                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and no shard registry is configured — pass \`queryCoordinator: createQueryCoordinator({ registry })\``,
+                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and no shard registry is configured — declare \`.shardRegistry((env) => env.SHARD_REGISTRY)\` on the app builder (or pass \`queryCoordinator\` to \`createWorker\`)`,
                     { code: "BAD_REQUEST", status: 400 },
                 );
             }

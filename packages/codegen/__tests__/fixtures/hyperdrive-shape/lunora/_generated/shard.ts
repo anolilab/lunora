@@ -65,6 +65,9 @@ const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "7f0b460c7787e276", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"boards\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner\": {\n          \"fields\": [\n            \"ownerId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"global:hyperdrive\"\n    },\n    \"notes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_board\": {\n          \"fields\": [\n            \"boardId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
+/** The `.shardBy()` tables this shard registers with the shard registry when it writes them. */
+const SHARDED_TABLES: ReadonlySet<string> = new Set(["notes"]);
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -81,6 +84,8 @@ export interface ShardDOConfig {
     /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
     hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
+    shardRegistry?: (env: Record<string, unknown>) => unknown;
 }
 
 const schedulerStub = {
@@ -636,6 +641,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
+        }
+
+        protected override shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+            const namespace = config.shardRegistry?.((this.env ?? {}) as Record<string, unknown>);
+
+            return namespace === undefined ? undefined : { namespace, shardedTables: SHARDED_TABLES };
         }
 
         protected override async runShardInit(): Promise<void> {
