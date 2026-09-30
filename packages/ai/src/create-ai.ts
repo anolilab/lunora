@@ -48,6 +48,51 @@ const workersAiUnavailable = (): never => bindingRequired("this model id");
 
 workersAiUnavailable.textEmbeddingModel = (): never => bindingRequired("this embedding model id");
 
+/** A proxy host a bearer token may reach over plain HTTP: this machine only. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+interface ProxyProvider {
+    chat: (modelId: string) => LanguageModel;
+    embedding: (modelId: string) => EmbeddingModel;
+}
+
+/**
+ * The self-hosted OpenAI-compatible proxy named by {@link AI_PROXY_URL_ENV}, which
+ * takes `"<provider>/<model>"` slugs instead of AI Gateway (the slug is forwarded
+ * unchanged as the request's model), or `undefined` when none is configured.
+ *
+ * A token is never sent in cleartext: with {@link AI_PROXY_TOKEN_ENV} set, a
+ * non-HTTPS URL off loopback yields a provider whose every call throws — lazily,
+ * so an action that never touches `ctx.ai` is unaffected.
+ */
+const resolveProxy = (env: Record<string, unknown> | undefined): ProxyProvider | undefined => {
+    const proxyURL = readEnv(env, AI_PROXY_URL_ENV);
+
+    if (proxyURL === undefined) {
+        return undefined;
+    }
+
+    const token = readEnv(env, AI_PROXY_TOKEN_ENV);
+    const url = URL.canParse(proxyURL) ? new URL(proxyURL) : undefined;
+    let refusal: string | undefined;
+
+    if (url === undefined) {
+        refusal = `${AI_PROXY_URL_ENV} is not a valid URL`;
+    } else if (token !== undefined && url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)) {
+        refusal = `${AI_PROXY_URL_ENV} (${url.origin}) is not HTTPS, so ${AI_PROXY_TOKEN_ENV} would travel in cleartext — use an https:// URL`;
+    }
+
+    if (refusal !== undefined) {
+        const refuse = (): never => {
+            throw new LunoraError("INTERNAL", `@lunora/ai: ${refusal}`);
+        };
+
+        return { chat: refuse, embedding: refuse };
+    }
+
+    return createOpenAI({ apiKey: token ?? "", baseURL: proxyURL, name: "lunora-proxy" });
+};
+
 /**
  * Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
  * tags, which sit under the built-in correlation fields: the more specific the
@@ -132,11 +177,7 @@ const resolveGatewayOption = (
 const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultEmbeddingModel, defaultModel, env, gateway, metadata, provider, telemetry } = options;
 
-    const proxyURL = readEnv(env, AI_PROXY_URL_ENV);
-    // A self-hosted OpenAI-compatible proxy takes the `"<provider>/<model>"` slugs
-    // instead of AI Gateway; the slug is forwarded unchanged as the request's model.
-    const proxy: { chat: (modelId: string) => LanguageModel; embedding: (modelId: string) => EmbeddingModel } | undefined =
-        proxyURL === undefined ? undefined : createOpenAI({ apiKey: readEnv(env, AI_PROXY_TOKEN_ENV) ?? "", baseURL: proxyURL, name: "lunora-proxy" });
+    const proxy = resolveProxy(env);
 
     // A caller-supplied provider wins; otherwise construct one from the binding,
     // and with neither every Workers AI call throws a directed error. An explicit

@@ -39,7 +39,11 @@ const configuredVariables = (parsed: WranglerConfig, cwd: string): Set<string> =
     const devVariablesPath = join(cwd, DEV_VARS_FILE);
 
     if (existsSync(devVariablesPath)) {
-        add(Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map((entry) => [entry.key, entry.value])));
+        try {
+            add(Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map((entry) => [entry.key, entry.value])));
+        } catch {
+            // Unreadable `.dev.vars`: read as unset here, like `checkDevVariables` does.
+        }
     }
 
     return names;

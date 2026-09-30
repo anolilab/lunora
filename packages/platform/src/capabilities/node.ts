@@ -123,7 +123,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         agents: {
             level: "unsupported",
-            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. The loop's inference has no home either — ai is unsupported on this target",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. That missing mount is the whole gap: inference is not, since a model factory or AI SDK model object needs no binding and `ai` is emulated here through LUNORA_AI_PROXY_URL",
         },
         objectStorageBackups: {
             level: "emulated",

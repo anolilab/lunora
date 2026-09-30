@@ -134,6 +134,17 @@ describe("self-hosted proxy", () => {
         }
     });
 
+    it("refuses to send a proxy token over plain HTTP off loopback", () => {
+        expect.assertions(2);
+
+        const token = { [AI_PROXY_TOKEN_ENV]: "secret" };
+        const remote = createAi({ env: { ...token, [AI_PROXY_URL_ENV]: "http://ai-proxy.test/v1" } });
+        const loopback = createAi({ env: { ...token, [AI_PROXY_URL_ENV]: "http://127.0.0.1:4000/v1" } });
+
+        expect(() => remote.model("openai/gpt-5")).toThrow(/not HTTPS/);
+        expect(() => loopback.model("openai/gpt-5")).not.toThrow();
+    });
+
     it("rejects a Workers AI id when only a proxy is configured", () => {
         expect.assertions(1);
 

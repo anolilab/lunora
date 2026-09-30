@@ -729,6 +729,19 @@ describe("runDoctor", () => {
             expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
         });
 
+        it("reads an unreadable .dev.vars as unset instead of aborting", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedAiUsage(workdir);
+            // A directory where the file should be makes readFileSync throw EISDIR.
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result)).toContain("ai-binding-missing");
+        });
+
         it("warns that ctx.ai ignores a gateway token, even with a gateway id", async () => {
             expect.assertions(1);
 

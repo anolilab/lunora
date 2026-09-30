@@ -250,6 +250,22 @@ const resolveProject = (options: AiCommandOptions): AiCommandResult | GatewayPro
 
 const onOff = (value: boolean): string => (value ? "on" : "off");
 
+/** Log what a `--dry-run` would do, including a prerequisite the real run would stop on. */
+const reportDryRun = (logger: Logger, data: AiGatewayData): AiCommandResult => {
+    logger.info(`ai gateway (dry run): would create or reuse AI Gateway "${data.gatewayId}" (log collection ${onOff(data.collectLogs)}).`);
+    logger.info(
+        data.varsWritten.length === 0
+            ? `ai gateway (dry run): ${data.wranglerPath} vars are already up to date.`
+            : `ai gateway (dry run): would write ${data.varsWritten.join(", ")} into ${data.wranglerPath} vars.`,
+    );
+
+    if (data.accountId === undefined) {
+        logger.warn("ai gateway (dry run): no CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc) — a real run will stop there.");
+    }
+
+    return { code: 0, data };
+};
+
 const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult> => {
     const { logger } = options;
     const project = resolveProject(options);
@@ -271,14 +287,7 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     const written = writeVariables(text, parsed.vars, variables);
 
     if (options.dryRun === true) {
-        logger.info(`ai gateway (dry run): would create or reuse AI Gateway "${gatewayId}" (log collection ${onOff(collectLogs)}).`);
-        logger.info(
-            written.changed.length === 0
-                ? `ai gateway (dry run): ${wranglerPath} vars are already up to date.`
-                : `ai gateway (dry run): would write ${written.changed.join(", ")} into ${wranglerPath} vars.`,
-        );
-
-        return { code: 0, data: { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath } };
+        return reportDryRun(logger, { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath });
     }
 
     const token = nonEmpty(environment.CLOUDFLARE_API_TOKEN);

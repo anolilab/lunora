@@ -138,12 +138,15 @@ describe("lunora ai gateway", () => {
     });
 
     it("--dry-run neither calls Cloudflare nor edits the file", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const { calls, fetch } = fakeFetch(404);
-        const result = await runAiCommand({ cwd: workdir, dryRun: true, environment: {}, fetch, logger: recordingLogger().logger, subcommand: "gateway" });
+        const { lines, logger } = recordingLogger();
+        const result = await runAiCommand({ cwd: workdir, dryRun: true, environment: {}, fetch, logger, subcommand: "gateway" });
 
         expect(result.code).toBe(0);
+        // The account id a real run needs is missing, so the plan says so up front.
+        expect(lines.some((line) => line.startsWith("warn: ") && line.includes("CLOUDFLARE_ACCOUNT_ID"))).toBe(true);
         expect(calls).toHaveLength(0);
         expect(result.data?.varsWritten).toStrictEqual(["LUNORA_AI_GATEWAY_ID"]);
         expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(WRANGLER);
