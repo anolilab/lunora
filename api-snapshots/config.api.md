@@ -1720,53 +1720,14 @@ interface ExportGap {
 
 ```ts
 interface ManifestConfigShape extends WranglerConfigShape {
-    ai?: {
-        binding?: string;
-    };
-    analytics_engine_datasets?: ReadonlyArray<{
-        binding?: string;
-        dataset?: string;
-    }>;
-    assets?: {
-        binding?: string;
-        directory?: string;
-    };
-    browser?: {
-        binding?: string;
-    };
     containers?: ReadonlyArray<{
         class_name?: string;
         image?: string;
         max_instances?: number;
     }>;
-    hyperdrive?: ReadonlyArray<{
-        binding?: string;
-        id?: string;
-    }>;
-    images?: {
-        binding?: string;
-    };
     pipelines?: ReadonlyArray<{
         binding?: string;
         pipeline?: string;
-    }>;
-    queues?: {
-        consumers?: ReadonlyArray<{
-            queue?: string;
-        }>;
-        producers?: ReadonlyArray<{
-            binding?: string;
-            queue?: string;
-        }>;
-    };
-    vectorize?: ReadonlyArray<{
-        binding?: string;
-        index_name?: string;
-    }>;
-    workflows?: ReadonlyArray<{
-        binding?: string;
-        class_name?: string;
-        name?: string;
     }>;
 }
 ```
@@ -2013,7 +1974,7 @@ interface WranglerConfig {
         outbound?: unknown;
     } | null | undefined>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
     };
     env?: Record<string, WranglerConfig>;
     exports?: Record<string, {
@@ -2114,6 +2075,23 @@ interface WranglerConfig {
 
 ```ts
 interface WranglerConfigShape {
+    ai?: {
+        binding?: string;
+    };
+    analytics_engine_datasets?: ReadonlyArray<{
+        binding?: string;
+        dataset?: string;
+    }>;
+    assets?: {
+        binding?: string;
+        directory?: string;
+        html_handling?: string;
+        not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
+    };
+    browser?: {
+        binding?: string;
+    };
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     d1_databases?: ReadonlyArray<{
@@ -2122,7 +2100,14 @@ interface WranglerConfigShape {
         database_name?: string;
     }>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+    };
+    hyperdrive?: ReadonlyArray<{
+        binding?: string;
+        id?: string;
+    }>;
+    images?: {
+        binding?: string;
     };
     kv_namespaces?: ReadonlyArray<{
         binding?: string;
@@ -2132,12 +2117,11 @@ interface WranglerConfigShape {
     migrations?: ReadonlyArray<{
         new_classes?: ReadonlyArray<string>;
         new_sqlite_classes?: ReadonlyArray<string>;
+        tag?: string;
     }>;
     name?: string;
     queues?: {
-        consumers?: ReadonlyArray<{
-            queue?: string;
-        }>;
+        consumers?: ReadonlyArray<WranglerQueueConsumer>;
         producers?: ReadonlyArray<{
             binding?: string;
             queue?: string;
@@ -2147,10 +2131,24 @@ interface WranglerConfigShape {
         binding?: string;
         bucket_name?: string;
     }>;
+    tail_consumers?: ReadonlyArray<{
+        service?: string;
+    }>;
     triggers?: {
         crons?: ReadonlyArray<string>;
     };
     vars?: Readonly<Record<string, unknown>>;
+    vectorize?: ReadonlyArray<{
+        binding?: string;
+        index_name?: string;
+    }>;
+    workers_dev?: boolean;
+    workflows?: ReadonlyArray<{
+        binding?: string;
+        class_name?: string;
+        name?: string;
+        script_name?: string;
+    }>;
 }
 ```
 
@@ -2819,6 +2817,7 @@ interface WranglerQueueConsumer {
     dead_letter_queue?: string;
     max_batch_size?: number;
     max_batch_timeout?: number;
+    max_concurrency?: number;
     max_retries?: number;
     queue?: string;
     retry_delay?: number;

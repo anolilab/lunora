@@ -206,6 +206,29 @@ separate CLI invocation that races it:
 lunora migrate up --url https://my-worker.example.workers.dev
 ```
 
+### Generating an Alchemy program from `wrangler.jsonc`
+
+If you have no IaC program yet, `wranglerToAlchemy` from `@lunora/config/cloudflare`
+turns the config into an [Alchemy 2](https://alchemy.run) stack — the same Alchemy
+Lunora Cloud provisions with (`lunora cloud eject` writes one for you):
+
+```ts
+import type { WranglerConfigShape } from "@lunora/config/cloudflare";
+import { readWranglerJsonc, wranglerToAlchemy } from "@lunora/config/cloudflare";
+import { writeFileSync } from "node:fs";
+
+const { source, unsupported } = wranglerToAlchemy(readWranglerJsonc<WranglerConfigShape>("wrangler.jsonc").parsed ?? {});
+
+writeFileSync("alchemy.run.ts", source); // then: npx alchemy deploy alchemy.run.ts --stage production
+```
+
+The program declares every resource by the name in your config and pipes the stack
+through `AdoptPolicy.adopt(true)` (the in-program `alchemy deploy --adopt`), so
+resources wrangler already created are adopted, never re-created. KV is adopted by
+title, which wrangler does not record — the emitted source marks where to set it.
+State defaults to `localState()` (`.alchemy/`). `unsupported` names the sections
+it could not carry (service bindings, Hyperdrive, …).
+
 ### Handing the requirements to your IaC program
 
 The duplication that bites here is the binding list: `wrangler.jsonc` declares
