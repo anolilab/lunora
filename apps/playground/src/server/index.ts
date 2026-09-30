@@ -16,13 +16,13 @@ import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
+// The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
+// below points at it, and cross-shard export / CDC sync fan out to what it lists.
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
 // WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
 export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
 export { SchedulerDO } from "./scheduler-do.js";
-// The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
-// below points at it, and cross-shard export / CDC sync fan out to what it lists.
-export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
 
 interface Env extends Record<string, unknown> {
     AUTH_SECRET?: string;

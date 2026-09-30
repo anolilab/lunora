@@ -11054,8 +11054,11 @@ abstract class ShardDO {
         }
 
         // Past the response: the write is durable and nothing below depends on
-        // the registry having heard about it.
-        await this.deferPastResponse(this.registerWrittenShard(changed));
+        // the registry having heard about it. Checked here first so a shard with
+        // no registry pays nothing on the write path.
+        if (this.shardRegistry() !== undefined) {
+            await this.deferPastResponse(this.registerWrittenShard(changed));
+        }
 
         this.writeGeneration += 1;
 
