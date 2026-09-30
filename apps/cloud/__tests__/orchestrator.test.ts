@@ -4,14 +4,15 @@ import type { DeployProgress } from "../src/deploy/orchestrator";
 import { destroyDeployment, runDeployment } from "../src/deploy/orchestrator";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
-import type { Provisioner, TenantDeploymentSpec } from "../src/provision";
+import type { DestroyRef, Provisioner } from "../src/provision";
+import type { TenantDeploymentSpec } from "../src/provision-contract";
 
 const spec: TenantDeploymentSpec = {
     alias: "org__project",
-    bindings: { d1: { binding: "DB" } },
     bundle: new ArrayBuffer(8),
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
+    manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     scriptName: "org__project",
     secrets: {},
     tags: ["org:org", "project:project", "env:production"],
@@ -62,7 +63,8 @@ describe(runDeployment, () => {
 
 describe(destroyDeployment, () => {
     it("calls the provisioner's destroy through the scheduler", async () => {
-        const destroyed: { dispatchNamespace: string; scriptName: string }[] = [];
+        const destroyed: DestroyRef[] = [];
+        const target: DestroyRef = { alias: "org__project", deleteResources: false, dispatchNamespace: "lunora-preview", scriptName: "org__project" };
         const provisioner: Provisioner = {
             deploy: () => Promise.reject(new Error("unused")),
             destroy: (reference) => {
@@ -72,8 +74,8 @@ describe(destroyDeployment, () => {
             },
         };
 
-        await destroyDeployment({ dispatchNamespace: "lunora-preview", scriptName: "org__project" }, { provisioner, scheduler: ampleScheduler() });
+        await destroyDeployment(target, { provisioner, scheduler: ampleScheduler() });
 
-        expect(destroyed).toStrictEqual([{ dispatchNamespace: "lunora-preview", scriptName: "org__project" }]);
+        expect(destroyed).toStrictEqual([target]);
     });
 });

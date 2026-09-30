@@ -1,90 +1,55 @@
 /**
- * Tenant queue fan-out. A Workers-for-Platforms namespaced
- * Worker can hold queue *producer* bindings but cannot be a queue *consumer*, so
- * tenant apps (e.g. `@lunora/mail`'s queue-backed sends) have nothing to drain
- * their queue. The platform runs one account-level consumer (the control-plane
- * Worker's `queue()` handler) bound to a shared queue; each message is tagged
- * with the producing tenant's script id, and the consumer groups by tenant and
- * forwards each sub-batch to that tenant's `POST /_lunora/queue` endpoint through
- * the dispatcher. This module is the pure core; the I/O is injected.
+ * Tenant queue routing. A Workers-for-Platforms namespaced Worker can hold
+ * queue producer bindings but cannot be a queue consumer, so the contract marks
+ * `queue_consumer` as `routed`: the control plane consumes on the tenant's behalf.
  *
- * Wire envelope: every message body is `{ script, body }` — `script` is the
- * dispatch-namespace script id, `body` the tenant's actual payload.
+ * Each tenant `queue_producer` binding gets its own per-project queue, named
+ * `tenantResourceName(alias, binding)` (alias, dash, binding), and the provision
+ * box attaches the control-plane Worker as that queue's consumer. A delivered
+ * batch therefore comes from exactly one project, and `batch.queue` names it:
+ * the route is the queue name, which the platform chose, never a field in the
+ * message body, which the tenant wrote (a body-carried address would let one
+ * tenant enqueue into another's consumer).
+ *
+ * This module is the pure part — queue name → the live deployment to forward to.
  */
+import { tenantResourceName } from "../provision-contract";
 
-/** A raw message off the shared queue (its `body` is the `{ script, body }` envelope). */
-export interface QueueMessage {
-    body: unknown;
-    id: string;
+/** A live deployment that can receive a forwarded batch. */
+export interface QueueRouteCandidate {
+    alias: string;
+    /** When it went live; the newest live release of an alias wins. */
+    liveAt?: number;
+    scriptName: string;
 }
-
-/** A per-tenant sub-batch ready to forward (payloads unwrapped from the envelope). */
-export interface TenantQueueGroup {
-    messages: { body: unknown; id: string }[];
-    script: string;
-}
-
-const envelopeScript = (body: unknown): string | undefined => {
-    if (typeof body !== "object" || body === null) {
-        return undefined;
-    }
-
-    const { script } = body as { script?: unknown };
-
-    return typeof script === "string" && script !== "" ? script : undefined;
-};
 
 /**
- * Group messages by their tenant script. Messages whose body isn't a valid
- * `{ script, body }` envelope are returned as `unrouted` (the caller acks them —
- * retrying an unaddressable message would loop forever).
+ * The live deployment whose project owns `queue`, or `undefined` when none does.
+ *
+ * Matches the alias-plus-dash prefix `tenantResourceName` produces (an empty binding
+ * yields exactly that prefix, so the sanitizing rule is not restated here), and
+ * prefers the longest alias so `app-b-jobs` routes to `app-b`, not `app`.
+ *
+ * ponytail: prefix matching cannot tell alias `app` + binding `B_JOBS` from alias
+ * `app-b` + binding `JOBS` (both `app-b-jobs`); the longest alias wins. Record the
+ * queue name on the deployment row at provision time if that collision matters.
  */
-export const groupByTenant = (messages: ReadonlyArray<QueueMessage>): { groups: TenantQueueGroup[]; unrouted: string[] } => {
-    const byScript = new Map<string, TenantQueueGroup>();
-    const unrouted: string[] = [];
+export const routeQueue = <T extends QueueRouteCandidate>(queue: string, live: ReadonlyArray<T>): T | undefined => {
+    let best: T | undefined;
+    let bestPrefix = 0;
 
-    for (const message of messages) {
-        const script = envelopeScript(message.body);
+    for (const candidate of live) {
+        const prefix = tenantResourceName(candidate.alias, { binding: "", type: "queue_producer" });
 
-        if (script === undefined) {
-            unrouted.push(message.id);
+        if (!queue.startsWith(prefix) || queue.length === prefix.length) {
             continue;
         }
 
-        const group = byScript.get(script) ?? { messages: [], script };
-
-        group.messages.push({ body: (message.body as { body?: unknown }).body, id: message.id });
-        byScript.set(script, group);
+        if (prefix.length > bestPrefix || (prefix.length === bestPrefix && (candidate.liveAt ?? 0) > (best?.liveAt ?? 0))) {
+            best = candidate;
+            bestPrefix = prefix.length;
+        }
     }
 
-    return { groups: [...byScript.values()], unrouted };
-};
-
-/**
- * Forward each tenant group through the injected `dispatch`, collecting the
- * message ids to retry. A group whose dispatch throws retries its whole batch
- * (transient delivery failure); per-message retries come from the tenant's
- * own `{ retry: [...] }` response.
- */
-export const fanOutQueue = async (options: {
-    dispatch: (group: TenantQueueGroup) => Promise<ReadonlyArray<string>>;
-    groups: ReadonlyArray<TenantQueueGroup>;
-}): Promise<{ retry: Set<string> }> => {
-    const retry = new Set<string>();
-
-    await Promise.all(
-        options.groups.map(async (group) => {
-            try {
-                for (const id of await options.dispatch(group)) {
-                    retry.add(id);
-                }
-            } catch {
-                for (const message of group.messages) {
-                    retry.add(message.id);
-                }
-            }
-        }),
-    );
-
-    return { retry };
+    return best;
 };

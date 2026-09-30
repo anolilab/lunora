@@ -1,83 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { QueueMessage, TenantQueueGroup } from "../src/fanout/queue";
-import { fanOutQueue, groupByTenant } from "../src/fanout/queue";
+import { routeQueue } from "../src/fanout/queue";
+import { tenantResourceName } from "../src/provision-contract";
 
-const message = (id: string, body: unknown): QueueMessage => {
-    return { body, id };
-};
+describe(routeQueue, () => {
+    it("routes a per-project queue to its alias's live release", () => {
+        const queue = tenantResourceName("shop", { binding: "EMAILS", type: "queue_producer" });
 
-describe(groupByTenant, () => {
-    it("groups by script and unwraps the payload", () => {
-        const { groups, unrouted } = groupByTenant([
-            message("m1", { body: { to: "a@x.com" }, script: "app-a" }),
-            message("m2", { body: { to: "b@x.com" }, script: "app-b" }),
-            message("m3", { body: { to: "c@x.com" }, script: "app-a" }),
-        ]);
-
-        expect(unrouted).toStrictEqual([]);
-        expect(groups).toHaveLength(2);
-
-        const a = groups.find((group) => group.script === "app-a");
-
-        expect(a?.messages).toStrictEqual([
-            { body: { to: "a@x.com" }, id: "m1" },
-            { body: { to: "c@x.com" }, id: "m3" },
-        ]);
+        expect(
+            routeQueue(queue, [
+                { alias: "blog", scriptName: "blog-v1" },
+                { alias: "shop", scriptName: "shop-v3" },
+            ])?.scriptName,
+        ).toBe("shop-v3");
     });
 
-    it("routes messages without a valid envelope to unrouted", () => {
-        const { groups, unrouted } = groupByTenant([
-            message("m1", { body: {} }), // no script
-            message("m2", "not-an-object"),
-            message("m3", { body: {}, script: "" }), // empty script
-        ]);
+    it("prefers the longest alias, then the newest live release", () => {
+        const live = [
+            { alias: "app", liveAt: 1, scriptName: "app-v1" },
+            { alias: "app-b", liveAt: 1, scriptName: "app-b-v1" },
+            { alias: "app-b", liveAt: 2, scriptName: "app-b-v2" },
+        ];
 
-        expect(groups).toStrictEqual([]);
-        expect(unrouted.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m2", "m3"]);
-    });
-});
-
-const groups: TenantQueueGroup[] = [
-    {
-        messages: [
-            { body: 1, id: "m1" },
-            { body: 2, id: "m2" },
-        ],
-        script: "app-a",
-    },
-    { messages: [{ body: 3, id: "m3" }], script: "app-b" },
-];
-
-describe(fanOutQueue, () => {
-    it("forwards every group and collects no retries on success", async () => {
-        const dispatch = vi.fn<(group: TenantQueueGroup) => Promise<string[]>>().mockResolvedValue([]);
-        const { retry } = await fanOutQueue({ dispatch, groups });
-
-        expect(dispatch).toHaveBeenCalledTimes(2);
-        expect([...retry]).toStrictEqual([]);
+        expect(routeQueue("app-b-jobs", live)?.scriptName).toBe("app-b-v2");
+        expect(routeQueue("app-jobs", live)?.scriptName).toBe("app-v1");
     });
 
-    it("collects the tenant's per-message retry ids", async () => {
-        const dispatch = vi
-            .fn<(group: TenantQueueGroup) => Promise<string[]>>()
-            .mockImplementation((group: TenantQueueGroup) => Promise.resolve(group.script === "app-a" ? ["m2"] : []));
-        const { retry } = await fanOutQueue({ dispatch, groups });
-
-        expect([...retry]).toStrictEqual(["m2"]);
+    it("matches sanitized aliases the way tenantResourceName names them", () => {
+        expect(routeQueue("org--project-jobs", [{ alias: "org__Project", scriptName: "s" }])?.scriptName).toBe("s");
     });
 
-    it("retries a whole group when its dispatch throws (delivery failure)", async () => {
-        const dispatch = vi.fn<(group: TenantQueueGroup) => Promise<string[]>>().mockImplementation((group: TenantQueueGroup) => {
-            if (group.script === "app-a") {
-                throw new Error("tenant unreachable");
-            }
-
-            return Promise.resolve([]);
-        });
-
-        const { retry } = await fanOutQueue({ dispatch, groups });
-
-        expect([...retry].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["m1", "m2"]);
+    it("answers undefined for a queue no live project owns", () => {
+        expect(routeQueue("lunora-tenant-queue", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
+        expect(routeQueue("shop-", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
     });
 });

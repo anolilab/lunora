@@ -9,12 +9,11 @@ import { proxyAdminRequest, stripTrailingSlashes } from "../admin/proxy";
 import { captureServerEvent } from "../analytics/capture";
 import { currentAuth } from "../auth";
 import type { UsageMeter as UsageKind } from "../billing/spend";
-import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
-import { createCloudflareProvisioner } from "../provision";
+import { createAlchemyProvisioner, provisionBoxFrom } from "../provision";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
 import { resolveTelemetryConfig } from "../telemetry/ingest-key";
@@ -789,8 +788,14 @@ export const createDeployRouter = (): HttpRouterLike => {
 
         const cell = environment.LUNORA_CELL ?? "default";
         const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
-        const cloudflareApi = createHttpCloudflareApi({ accountId: environment.CLOUDFLARE_ACCOUNT_ID ?? "", apiToken: environment.CLOUDFLARE_API_TOKEN ?? "" });
-        const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
+        const provisioner = createAlchemyProvisioner({
+            box: provisionBoxFrom(environment),
+            onLog: (line) => {
+                // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
+                console.log("[provision]", line);
+            },
+            urlForScript: (scriptName) => `https://${scriptName}.${appDomain}`,
+        });
 
         // Fire-and-forget, on the execution context so it outlives the response
         // rather than being cancelled with it. Keyed on the ORGANIZATION: a

@@ -140,6 +140,8 @@ export interface CloudflareBindings {
     readonly AI?: unknown;
     /** Durable Object namespace for the `buildBox` container. */
     readonly CONTAINER_BUILD_BOX?: unknown;
+    /** Durable Object namespace for the `provisionBox` container. */
+    readonly CONTAINER_PROVISION_BOX?: unknown;
 }
 
 /** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
@@ -233,6 +235,7 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage" | "env">
     readonly payments: LunoraPayment;
     readonly containers: {
         readonly buildBox: ContainerAccessor;
+        readonly provisionBox: ContainerAccessor;
     };
     /** Validated, typed environment declared by `defineEnv` in `lunora/env.ts` — parsed & coercion-aware config values (`ctx.env.STRIPE_KEY`); a missing or invalid value throws at read time. */
     readonly env: LunoraEnv;

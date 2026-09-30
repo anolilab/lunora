@@ -1,87 +1,112 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CloudflareApi, PutScriptInput } from "../src/cloudflare/api";
-import type { TenantDeploymentSpec } from "../src/provision";
-import { createCloudflareProvisioner } from "../src/provision";
+import { sha256HexBytes } from "../src/deploy/keys";
+import type { AlchemyProvisionerOptions } from "../src/provision";
+import { createAlchemyProvisioner } from "../src/provision";
+import type { ProvisionJob, TenantDeploymentSpec } from "../src/provision-contract";
 
 const spec: TenantDeploymentSpec = {
     alias: "org__project",
-    bindings: { d1: { binding: "DB" }, durableObjects: [{ binding: "SHARD", className: "ShardDO" }], r2: { binding: "FILES" } },
     bundle: new TextEncoder().encode("export default {}").buffer,
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
+    manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     scriptName: "org__project-v1",
-    secrets: { LUNORA_ADMIN_TOKEN: "s3cret" },
+    secrets: { LUNORA_ADMIN_TOKEN: "t" },
     tags: ["org:org", "project:project", "env:production"],
 };
 
-const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInput[]; secrets: string[] } => {
-    const puts: PutScriptInput[] = [];
-    const secrets: string[] = [];
-    const deletes: string[] = [];
+/** A fake provision box: records each instance name + job, answers these chunks (split wherever the test says). */
+const fakeBox = (chunks: ReadonlyArray<string>, status = 200): { box: AlchemyProvisionerOptions["box"]; calls: { job: ProvisionJob; name: string }[] } => {
+    const calls: { job: ProvisionJob; name: string }[] = [];
+    const encoder = new TextEncoder();
 
     return {
-        api: {
-            createCustomHostname: vi.fn<CloudflareApi["createCustomHostname"]>(async () => {
-                return { id: "ch-1" };
-            }),
-            createD1Database: vi.fn<CloudflareApi["createD1Database"]>(async () => {
-                return { uuid: "d1-uuid-123" };
-            }),
-            createR2Bucket: vi.fn<CloudflareApi["createR2Bucket"]>(async () => undefined),
-            deleteD1Database: vi.fn<CloudflareApi["deleteD1Database"]>(async () => undefined),
-            exportD1Database: vi.fn<CloudflareApi["exportD1Database"]>(async () => {
-                return { signedUrl: "https://example.invalid/dump.sql" };
-            }),
-            deleteDispatchScript: vi.fn<CloudflareApi["deleteDispatchScript"]>(async ({ scriptName }) => {
-                deletes.push(scriptName);
-            }),
-            deleteR2Bucket: vi.fn<CloudflareApi["deleteR2Bucket"]>(async () => undefined),
-            findD1DatabaseByName: vi.fn<CloudflareApi["findD1DatabaseByName"]>(async () => null),
-            putDispatchScript: vi.fn<CloudflareApi["putDispatchScript"]>(async (input) => {
-                puts.push(input);
-            }),
-            putSecret: vi.fn<CloudflareApi["putSecret"]>(async ({ name }) => {
-                secrets.push(name);
-            }),
+        box: {
+            get: (name) => {
+                return {
+                    fetch: async (_path, init) => {
+                        calls.push({ job: JSON.parse(init?.body as string) as ProvisionJob, name });
+
+                        return new Response(
+                            new ReadableStream<Uint8Array>({
+                                start(controller) {
+                                    for (const chunk of chunks) {
+                                        controller.enqueue(encoder.encode(chunk));
+                                    }
+
+                                    controller.close();
+                                },
+                            }),
+                            { status },
+                        );
+                    },
+                };
+            },
         },
-        deletes,
-        puts,
-        secrets,
+        calls,
     };
 };
 
-describe(createCloudflareProvisioner, () => {
-    it("provisions D1 + R2, uploads the script with bindings + DO migration, applies secrets", async () => {
-        const { api, puts, secrets } = fakeApi();
-        const provisioner = createCloudflareProvisioner({ api, urlForScript: (script) => `https://${script}.lunora.app` });
+const urlForScript = (script: string): string => `https://${script}.lunora.app`;
 
-        const result = await provisioner.deploy(spec);
-
-        // The uploaded script is the versioned id; D1/R2 are named from the stable alias.
-        expect(result).toMatchObject({ scriptName: "org__project-v1", url: "https://org__project-v1.lunora.app" });
-        expect(result.bundleHash).toMatch(/^[0-9a-f]{64}$/u);
-        expect(api.findD1DatabaseByName).toHaveBeenCalledWith("org__project-db");
-        expect(api.createD1Database).toHaveBeenCalledWith("org__project-db");
-        expect(api.createR2Bucket).toHaveBeenCalledWith("org__project-files");
-
-        const put = puts[0];
-
-        expect(put.bindings).toStrictEqual([
-            { id: "d1-uuid-123", name: "DB", type: "d1" },
-            { bucket_name: "org__project-files", name: "FILES", type: "r2_bucket" },
-            { class_name: "ShardDO", name: "SHARD", type: "durable_object_namespace" },
+describe(createAlchemyProvisioner, () => {
+    it("posts the deploy job to the project's box, forwards logs, and resolves the result", async () => {
+        // The result line arrives split across two reads, with no trailing newline.
+        const { box, calls } = fakeBox([
+            '{"type":"log","line":"creating d1"}\n{"type":"log","line":"up',
+            'loading"}\n{"type":"res',
+            'ult","url":"https://x.workers.dev"}',
         ]);
-        expect(put.newSqliteClasses).toStrictEqual(["ShardDO"]);
-        expect(secrets).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+        const onLog = vi.fn<(line: string) => void>();
+
+        const result = await createAlchemyProvisioner({ box, onLog, urlForScript }).deploy(spec);
+
+        expect(result).toStrictEqual({
+            bundleHash: await sha256HexBytes(spec.bundle),
+            scriptName: "org__project-v1",
+            url: "https://org__project-v1.lunora.app",
+        });
+        expect(onLog.mock.calls).toStrictEqual([["creating d1"], ["uploading"]]);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.name).toBe("org__project");
+
+        const job = calls[0]?.job;
+
+        expect(job?.action).toBe("deploy");
+        expect(job?.action === "deploy" && atob(job.spec.bundle)).toBe("export default {}");
     });
 
-    it("destroys by deleting the dispatch script", async () => {
-        const { api, deletes } = fakeApi();
-        const provisioner = createCloudflareProvisioner({ api, urlForScript: (script) => script });
+    it("throws the box's error message", async () => {
+        const { box } = fakeBox(['{"type":"log","line":"x"}\n{"type":"error","message":"d1 quota exceeded"}\n']);
 
-        await provisioner.destroy({ dispatchNamespace: "lunora-preview", scriptName: "org__project-pr-x" });
+        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toThrow("d1 quota exceeded");
+    });
 
-        expect(deletes).toStrictEqual(["org__project-pr-x"]);
+    it("throws when the stream ends without a result", async () => {
+        const { box } = fakeBox(['{"type":"log","line":"x"}\n']);
+
+        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toThrow(/without a result/u);
+    });
+
+    it("surfaces a 409 as a retryable busy error", async () => {
+        const { box } = fakeBox([], 409);
+
+        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    });
+
+    it("sends the destroy job, carrying deleteResources as deleteProjectResources", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+
+        await createAlchemyProvisioner({ box, urlForScript }).destroy({
+            alias: "app",
+            deleteResources: true,
+            dispatchNamespace: "lunora-preview",
+            scriptName: "app-v2",
+        });
+
+        expect(calls).toStrictEqual([
+            { job: { action: "destroy", alias: "app", deleteProjectResources: true, dispatchNamespace: "lunora-preview", scriptName: "app-v2" }, name: "app" },
+        ]);
     });
 });

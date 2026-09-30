@@ -3,10 +3,14 @@ import { defineContainer } from "@lunora/container";
 /**
  * Control-plane containers (GAPS.md A3).
  *
- * One so far: the build box that turns a tenant's repo tarball into the Worker
- * module the deploy path uploads. Its image lives in `containers/build/` —
- * see that directory's README for the contract it serves and why it serves a
- * build route alongside the exec one.
+ * Two, deliberately separate because they sit on opposite sides of a trust
+ * line:
+ * - the build box turns a tenant's repo tarball into the Worker module the
+ *   deploy path uploads. It runs untrusted code and holds no credentials.
+ * - the provision box runs Alchemy 2 to converge a tenant's Cloudflare
+ *   resources. It holds the cell's Cloudflare API token and runs only our code.
+ *
+ * Each image's directory README documents the HTTP contract it serves.
  */
 
 /**
@@ -43,5 +47,41 @@ export const buildBox = defineContainer({
     // A ceiling, not a target: it bounds what one cell can spend on builds if
     // the queue is flooded. The per-tick drain cap is the real throttle.
     maxInstances: 5,
+    sleepAfter: "2m",
+});
+
+/**
+ * The provision box: Alchemy 2 converging tenant Workers and their per-project
+ * resources into this cell's account (`src/provision.ts` drives it).
+ *
+ * Not in the Worker because Alchemy wants a Node process with a filesystem for
+ * its state and the full SDK surface; not in the build box because that one
+ * runs tenant code, and the cell's API token must never share a machine with it.
+ *
+ * Small and short-lived: the work is API calls, not compute, and deploys arrive
+ * in bursts. The control plane routes one project to one instance (`.get(alias)`),
+ * so `maxInstances` bounds how many projects provision at once per cell.
+ */
+export const provisionBox = defineContainer({
+    // ponytail: only the Cloudflare API until the box README lists what Alchemy
+    // itself needs (state backend, registry); widen here, never with enableInternet.
+    allowedHosts: ["api.cloudflare.com"],
+    defaultPort: 8080,
+    enableInternet: false,
+    image: "./containers/provision",
+    instanceType: "basic",
+    maxInstances: 3,
+
+    /**
+     * Forwarded from the Worker's env into the container's at start. The
+     * account id is a plain `var` and the token a `wrangler secret`; `secrets`
+     * reads either off the Worker env, and a missing one fails the start
+     * rather than booting a box that cannot authenticate.
+     *
+     * `LUNORA_CONTROL_PLANE_SCRIPT` names this Worker so the box can attach it
+     * as the consumer of each per-project queue it creates (see
+     * `src/fanout/queue.ts`); wrangler suffixes the env name, so it is per cell.
+     */
+    secrets: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", "LUNORA_CONTROL_PLANE_SCRIPT"],
     sleepAfter: "2m",
 });
