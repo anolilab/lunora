@@ -66,10 +66,10 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
  * reference objects, whichever the project declares.
  *
  * Each `lunora/workflows.ts` export becomes a `workflows.<name>` reference
- * carrying its `WORKFLOW_*` binding and — via the definition's phantom
+ * carrying its class name (its `ctx.exports` key) and — via the definition's phantom
  * `__params` — its `params` type, so a `cronJobs()` registration that targets it
  * infers the args. Each `lunora/agents.ts` export becomes an `agents.<name>`
- * reference carrying its `AGENT_*` binding (an agent compiles onto a Cloudflare
+ * reference carrying its export key (an agent compiles onto a Cloudflare
  * Workflow, so it IS a workflow reference structurally) typed with the flat
  * `AgentRunInput`, so `crons.daily("sweep", …, agents.support, { input,
  * threadKey })` starts a fresh agent run per fire.
@@ -108,7 +108,7 @@ type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params
 export interface WorkflowReference<Params = Record<string, unknown>> {
     readonly isLunoraWorkflow: true;
     readonly __params?: Params;
-    readonly binding: string;
+    readonly className: string;
     readonly name: string;
 }
 `;
@@ -121,7 +121,7 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
         const objectMembers = sorted
             .map(
                 (workflow) =>
-                    `    ${renderObjectKey(workflow.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
+                    `    ${renderObjectKey(workflow.exportName)}: { isLunoraWorkflow: true, className: ${JSON.stringify(workflow.className)}, name: ${JSON.stringify(workflow.exportName)} },`,
             )
             .join("\n");
 
@@ -144,7 +144,7 @@ ${objectMembers}
         const objectMembers = sorted
             .map(
                 (agent) =>
-                    `    ${renderObjectKey(agent.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.bindingName)}, name: ${JSON.stringify(agent.name)} },`,
+                    `    ${renderObjectKey(agent.exportName)}: { isLunoraWorkflow: true, className: ${JSON.stringify(agent.className)}, name: ${JSON.stringify(agent.name)} },`,
             )
             .join("\n");
 

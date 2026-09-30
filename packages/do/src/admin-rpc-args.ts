@@ -399,7 +399,7 @@ interface WorkflowInstanceHandle {
 }
 
 /**
- * Minimal structural shape of a Cloudflare Workflows binding (the `env.WORKFLOW_*`
+ * Minimal structural shape of a Cloudflare Workflows binding (a `ctx.exports.<Class>`
  * object), mirrored from `@lunora/workflow`'s `WorkflowBindingLike`. Only `create`
  * and `get` — the members the studio's start/observe ops call — are modelled.
  */

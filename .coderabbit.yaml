@@ -73,6 +73,10 @@
         - "!**/*.test.js"
         - "!**/*.spec.ts"
         - "!**/*.spec.js"
+        # Codegen output (`lunora/_generated/**` in examples, apps and fixtures):
+        # rewritten by `lunora codegen` on every schema change, so reviewing it
+        # is noise and a regeneration alone could blow the 100-file cap.
+        - "!**/_generated/**"
         - "!**/node_modules/**"
         - "!**/dist/**"
         - "!**/build/**"

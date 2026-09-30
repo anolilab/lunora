@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defineAgent, defineAgentTool, isAgentDefinition } from "../src/define-agent";
-import { agentBindingName, agentClassName, agentDefaultName } from "../src/naming";
+import { agentClassName, agentDefaultName } from "../src/naming";
 import { defineSkill } from "../src/skill";
 
 const MODEL_PATTERN = /model/u;
@@ -55,11 +55,9 @@ describe(defineAgent, () => {
         expect(defineAgent({ approvalTimeout: "2 hours", model: "m" }).approvalTimeout).toBe("2 hours");
     });
 
-    it("derives class, binding and workflow names from the export name", () => {
+    it("derives the class (export key) and workflow names from the export name", () => {
         expect(agentClassName("support")).toBe("SupportAgentWorkflow");
         expect(agentClassName("supportBot")).toBe("SupportBotAgentWorkflow");
-        expect(agentBindingName("support")).toBe("AGENT_SUPPORT");
-        expect(agentBindingName("supportBot")).toBe("AGENT_SUPPORT_BOT");
         expect(agentDefaultName("supportBot")).toBe("agent-support-bot");
     });
 

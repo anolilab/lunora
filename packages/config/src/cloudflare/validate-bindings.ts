@@ -4,6 +4,7 @@
  */
 
 import type { SchemaInfo } from "../schema-info";
+import { isPlainObject, settingLeaf, WORKFLOW_SETTINGS } from "./workflow-settings";
 import type { WranglerConfig, WranglerContainerEntry } from "./wrangler-config";
 
 /**
@@ -359,42 +360,24 @@ const validateRequiredFieldEntries = (value: unknown, labelPrefix: string, rule:
 const WORKFLOWS_RULE: RequiredFieldsRule = {
     arrayMessage: "workflows must be an array of { name, binding, class_name } entries",
     fields: [
-        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)` },
+        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. MY_WORKFLOW)` },
         { field: "class_name", message: (label) => `${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class` },
         { field: "name", message: (label) => `${label} must have a non-empty "name" naming the deployed workflow` },
     ],
     objectMessage: (label) => `${label} must be a { name, binding, class_name } object`,
 };
 
-/** The deploy-setting leaves a workflow binding and a workflow export share, in wrangler's spelling. */
-const WORKFLOW_SETTING_LEAVES = [
-    ["schedules"],
-    ["limits", "steps"],
-    ["default_retention", "success_retention"],
-    ["default_retention", "error_retention"],
-] as const;
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** Read a leaf path (one of {@link WORKFLOW_SETTING_LEAVES}) out of an untrusted parsed entry. */
-const settingLeaf = (entry: unknown, path: ReadonlyArray<string>): unknown => {
-    let node = entry;
-
-    for (const key of path) {
-        node = isPlainObject(node) ? node[key] : undefined;
-    }
-
-    return node;
-};
-
-/** `schedules` is a list of cron strings; an export may also give a single string. */
+/**
+ * `schedules` is a non-empty list of cron strings (the rule `defineWorkflow`
+ * and codegen apply too); an export may also give a single string.
+ */
 const schedulesProblem = (schedules: unknown, allowSingle: boolean): string | undefined => {
     const valid =
         schedules === undefined ||
         (allowSingle && isNonEmptyString(schedules)) ||
-        (Array.isArray(schedules) && (schedules as unknown[]).every((schedule) => isNonEmptyString(schedule)));
+        (Array.isArray(schedules) && schedules.length > 0 && (schedules as unknown[]).every((schedule) => isNonEmptyString(schedule)));
 
-    return valid ? undefined : "schedules must be an array of cron expression strings";
+    return valid ? undefined : "schedules must be a non-empty array of cron expression strings";
 };
 
 const limitsProblem = (limits: unknown): string | undefined => {
@@ -444,14 +427,16 @@ const validateWorkflowSettingShapes = (entry: Record<string, unknown>, label: st
 
 /** The setting leaves a binding and an export of one workflow both set, to different values. */
 const conflictingSettings = (binding: Record<string, unknown>, entry: Record<string, unknown>): string[] =>
-    WORKFLOW_SETTING_LEAVES.filter((path) => {
-        const fromBinding = settingLeaf(binding, path);
-        const fromExport = settingLeaf(entry, path);
-        // An export may spell a single schedule as a bare string.
-        const normalizedExport = typeof fromExport === "string" && path[0] === "schedules" ? [fromExport] : fromExport;
+    WORKFLOW_SETTINGS.map(({ path }) => path)
+        .filter((path) => {
+            const fromBinding = settingLeaf(binding, path);
+            const fromExport = settingLeaf(entry, path);
+            // An export may spell a single schedule as a bare string.
+            const normalizedExport = typeof fromExport === "string" && path[0] === "schedules" ? [fromExport] : fromExport;
 
-        return fromBinding !== undefined && fromExport !== undefined && JSON.stringify(fromBinding) !== JSON.stringify(normalizedExport);
-    }).map((path) => path.join("."));
+            return fromBinding !== undefined && fromExport !== undefined && JSON.stringify(fromBinding) !== JSON.stringify(normalizedExport);
+        })
+        .map((path) => path.join("."));
 
 /**
  * Cross-check one workflow export against the `workflows[]` bindings with the
@@ -503,9 +488,10 @@ const validateExportAgainstBindings = (
  * needs a `name`, and must agree with any `workflows[]` binding of the same
  * name ({@link validateExportAgainstBindings}).
  *
- * Lunora itself still reconciles `workflows[]` bindings (its `ctx.workflows`
- * resolves them off `env`), so an export only appears here when written by
- * hand — which is exactly when a conflicting setting slips in.
+ * Lunora writes its own workflows as exports; a `workflows[]` binding of the
+ * same name only appears when written by hand (a test-only binding for
+ * `introspectWorkflow`, say) — which is exactly when a conflicting setting
+ * slips in.
  */
 const validateWorkflowSettings = (wrangler: WranglerConfig, errors: string[]): void => {
     const bindings = Array.isArray(wrangler.workflows) ? asBindingEntries(wrangler.workflows) : [];
@@ -912,7 +898,6 @@ export {
     REQUIRED_FIELD_BINDING_RULES,
     SECRETS_STORE_RULE,
     SELF_DESCRIBING_BINDING_RULES,
-    settingLeaf,
     stringEntries,
     validateContainers,
     validateD1Databases,

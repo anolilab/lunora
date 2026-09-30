@@ -1,17 +1,13 @@
 import { LunoraError } from "@lunora/errors";
 
-import { capErrorBody } from "../../../shared/cap-error-body";
 import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import createCrawlClient from "./crawl-client";
 import type {
     Browser,
     BrowserLaunchLike,
     BrowserLike,
-    BrowserRestApiOptions,
     BrowserSession,
-    CrawlJob,
-    CrawlOptions,
-    CrawlResultOptions,
     LunoraBrowserOptions,
     NavigateOptions,
     PageLike,
@@ -21,9 +17,6 @@ import type {
     RouteLike,
     ScreenshotOptions,
 } from "./types";
-
-/** Account-scoped Cloudflare REST base; the crawl endpoint hangs off `/{accountId}/browser-run/crawl`. */
-const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4/accounts";
 
 /** Browser Run refuses a session whose guardrails list more hostnames than this (400 at acquire). */
 const MAX_GUARDRAIL_DOMAINS = 50;
@@ -272,10 +265,32 @@ const guardNestedUrls = async (value: unknown, guard: (url: string) => Promise<s
 };
 
 /**
+ * Map `allowedHosts` onto Browser Run session guardrails, refusing what the two
+ * cannot agree on: more hosts than guardrails accept, and a `*` — guardrails
+ * read it as a wildcard, while `allowedHosts` matches exactly, so forwarding one
+ * would open the raw session far past what the Lunora-side guard allows.
+ */
+const toGuardrails = (allowedHosts: ReadonlyArray<string>): { allowedDomains: string[] } => {
+    if (allowedHosts.length > MAX_GUARDRAIL_DOMAINS) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/browser: allowedHosts has ${String(allowedHosts.length)} entries, but Browser Run session guardrails accept at most ${String(MAX_GUARDRAIL_DOMAINS)}`,
+        );
+    }
+
+    const wildcard = allowedHosts.find((host) => host.includes("*"));
+
+    if (wildcard !== undefined) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: allowedHosts entry "${wildcard}" contains "*" — entries match exactly; list each host`);
+    }
+
+    return { allowedDomains: allowedHosts.map((host) => normalizeHost(host)) };
+};
+
+/**
  * `createBrowser` is part of the experimental `@lunora/browser` API and may change without a major version bump.
  * @experimental
  */
-
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
 export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // Defensive runtime guard: `binding` is required by the type, but JS callers
@@ -308,6 +323,13 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         return function_;
     };
 
+    // The allowlist doubles as Browser Run session guardrails, so Cloudflare
+    // enforces it on every request the session makes — including inside the raw
+    // `launch()` escape hatch, where no `page.route` guard runs. Checked once,
+    // here, since it is static config. An empty list is forwarded as-is: Browser
+    // Run reads it as "block every request", which is what `allowedHosts: []`
+    // means here too.
+    const guardrails = options.allowedHosts === undefined ? undefined : toGuardrails(options.allowedHosts);
     const allowPrivateTargets = options.allowPrivateTargets ?? false;
     // A configured `allowedHosts` is the STRONGER guard — an exact-origin
     // allowlist closes rebinding outright — and it may deliberately name an
@@ -383,24 +405,8 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         // raw `launch()` escape hatch, where no `page.route` guard runs. An empty
         // list is forwarded as-is: Browser Run reads it as "block every request",
         // which is what `allowedHosts: []` means here too.
-        if (options.allowedHosts !== undefined) {
-            if (options.allowedHosts.length > MAX_GUARDRAIL_DOMAINS) {
-                throw new LunoraError(
-                    "BAD_REQUEST",
-                    `@lunora/browser: allowedHosts has ${String(options.allowedHosts.length)} entries, but Browser Run session guardrails accept at most ${String(MAX_GUARDRAIL_DOMAINS)}`,
-                );
-            }
-
-            // `allowedHosts` matches exactly, but guardrails read `*` as a
-            // wildcard — forwarding one would open the raw session far past
-            // what the Lunora-side guard allows.
-            const wildcard = options.allowedHosts.find((host) => host.includes("*"));
-
-            if (wildcard !== undefined) {
-                throw new LunoraError("BAD_REQUEST", `@lunora/browser: allowedHosts entry "${wildcard}" contains "*" — entries match exactly; list each host`);
-            }
-
-            launchOptions["guardrails"] = { allowedDomains: options.allowedHosts.map((host) => normalizeHost(host)) };
+        if (guardrails !== undefined) {
+            launchOptions["guardrails"] = guardrails;
         }
 
         const browser = await getLaunch()(options.binding, Object.keys(launchOptions).length === 0 ? undefined : launchOptions);
@@ -629,83 +635,9 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         return options.binding.quickAction(action, { ...(guardedOptions as QuickActionOptions), url: target });
     };
 
-    const requireRestApi = (): BrowserRestApiOptions => {
-        if (!options.restApi) {
-            throw new LunoraError(
-                "INTERNAL",
-                "@lunora/browser: crawling needs the Browser Run REST API — pass createBrowser({ …, restApi: { accountId, apiToken } }); /crawl has no binding method",
-            );
-        }
-
-        return options.restApi;
-    };
-
-    /**
-     * Call the account's `/browser-run/crawl` endpoint and unwrap Cloudflare's
-     * `{ success, result }` envelope. The upstream body is capped in the message
-     * (the code is client-visible) and kept whole on `cause`.
-     */
-    const crawlRequest = async (api: BrowserRestApiOptions, path: string, init: RequestInit): Promise<unknown> => {
-        const response = await fetch(`${CLOUDFLARE_API_BASE}/${encodeURIComponent(api.accountId)}/browser-run/crawl${path}`, {
-            ...init,
-            headers: { Authorization: `Bearer ${api.apiToken}`, "Content-Type": "application/json" },
-        });
-        const text = await response.text();
-        let body: { result?: unknown; success?: unknown } | undefined;
-
-        try {
-            body = JSON.parse(text) as { result?: unknown; success?: unknown };
-        } catch {
-            // A gateway error page is not JSON; `response.ok` still decides below.
-        }
-
-        if (!response.ok || body?.success === false) {
-            throw new LunoraError("BROWSER_RUN_ERROR", `@lunora/browser: Browser Run API returned ${String(response.status)}: ${capErrorBody(text)}`, {
-                cause: text,
-                status: response.ok ? 502 : response.status,
-            });
-        }
-
-        return body?.result;
-    };
-
-    const crawl = async (url: string, crawlOptions: CrawlOptions = {}): Promise<string> => {
-        const api = requireRestApi();
-
-        if (options.allowedHosts !== undefined && (crawlOptions.options?.includeExternalLinks === true || crawlOptions.options?.includeSubdomains === true)) {
-            throw new LunoraError(
-                "FORBIDDEN",
-                "@lunora/browser: includeExternalLinks / includeSubdomains would crawl hosts outside the configured allowedHosts allowlist",
-            );
-        }
-
-        const target = await assertTargetAllowed(url, defaultDohTimeout());
-        const jobId = await crawlRequest(api, "", { body: JSON.stringify({ ...crawlOptions, url: target }), method: "POST" });
-
-        if (typeof jobId !== "string") {
-            throw new LunoraError("BROWSER_RUN_ERROR", "@lunora/browser: Browser Run accepted the crawl but returned no job id");
-        }
-
-        return jobId;
-    };
-
-    const crawlResult = async (jobId: string, resultOptions: CrawlResultOptions = {}): Promise<CrawlJob> => {
-        const query = new URLSearchParams();
-
-        for (const [key, value] of Object.entries(resultOptions)) {
-            if (value !== undefined) {
-                query.set(key, String(value));
-            }
-        }
-
-        const suffix = query.size === 0 ? "" : `?${query.toString()}`;
-
-        return (await crawlRequest(requireRestApi(), `/${encodeURIComponent(jobId)}${suffix}`, { method: "GET" })) as CrawlJob;
-    };
-
-    const cancelCrawl = async (jobId: string): Promise<void> => {
-        await crawlRequest(requireRestApi(), `/${encodeURIComponent(jobId)}`, { method: "DELETE" });
-    };
+    const { cancelCrawl, crawl, crawlResult } = createCrawlClient(options.restApi, options.allowedHosts !== undefined, async (url) =>
+        assertTargetAllowed(url, defaultDohTimeout()),
+    );
 
     return {
         cancelCrawl,

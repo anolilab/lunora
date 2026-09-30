@@ -877,7 +877,7 @@ interface ScheduledFunctionDoc {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * The workflow/agent export key (its generated class name) a fresh durable instance is started from
      * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
      * instead of {@link ScheduledFunctionDoc.functionPath}.
      */
@@ -1492,7 +1492,7 @@ interface ScheduledJob {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding name a fresh durable instance is started
+     * The workflow/agent export key a fresh durable instance is started
      * from on fire (the {@link ScheduledJob.args} become its `params`). Set
      * instead of {@link ScheduledJob.functionPath}.
      */
@@ -1501,15 +1501,15 @@ interface ScheduledJob {
 
 /**
  * A schedulable durable-workflow reference — the generated `workflows.<name>` /
- * `agents.<name>` object, which carries its `WORKFLOW_*`/`AGENT_*` binding and
+ * `agents.<name>` object, which carries its export key (the generated class name) and
  * stable name. Structural mirror of `@lunora/scheduler`'s `WorkflowReference` so
  * `ctx.scheduler` can target a workflow/agent without a dependency on
  * `@lunora/scheduler` / `@lunora/workflow`. A scheduled workflow target starts a
  * fresh instance on fire (the args become its `params`).
  */
 interface SchedulableWorkflowReference {
-    /** The `WORKFLOW_*`/`AGENT_*` binding name (present on a generated ref). */
-    readonly binding?: string;
+    /** The workflow/agent export key — its generated class name (present on a generated ref). */
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     /** The workflow/agent export/stable name (present on a generated ref). */
     readonly name?: string;

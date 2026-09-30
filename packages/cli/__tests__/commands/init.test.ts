@@ -355,7 +355,7 @@ describe("lunora init", () => {
             expect(pkg.devDependencies["@lunora/vite"]).toBe("1.0.0-alpha.99");
             // Third-party deps keep their template ranges verbatim.
             expect(pkg.dependencies["react-dom"]).toBe("^19.0.0");
-            expect(pkg.devDependencies.wrangler).toBe("^4.74.0");
+            expect(pkg.devDependencies.wrangler).toBe("^4.143.1");
         });
 
         it("pins a STABLE published version exactly when the channel tag resolves to it (1.0 promotion)", async () => {

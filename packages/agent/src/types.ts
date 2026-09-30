@@ -87,6 +87,8 @@ export interface AgentToolContext {
 
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes the declared agents (see `agent.asTool`). */
+    exports?: unknown;
 
     /**
      * Read the thread's synced state — dispatches the public owner-gated
@@ -748,7 +750,7 @@ export interface AgentConfig {
      * Optional override for the deployed workflow name (`wrangler.jsonc`
      * `workflows[].name`). Defaults to `agent-<kebab-cased export name>`. Does
      * NOT change the binding name, which is always derived from the export
-     * name (`support` → `AGENT_SUPPORT`).
+     * name (`support` → `SupportAgentWorkflow`).
      */
     name?: string;
 
@@ -952,7 +954,7 @@ export interface AgentAsToolOptions {
 
     /**
      * The child agent's export name — selects its `AGENT_<NAME>` Workflow
-     * binding (e.g. `"researcher"` → `AGENT_RESEARCHER`). The model-facing tool
+     * export key (e.g. `"researcher"` → `ResearcherAgentWorkflow`). The model-facing tool
      * name is the KEY assigned in the parent's `tools` map, not this.
      */
     name: string;
@@ -1353,11 +1355,12 @@ export type AgentTokenSink = (event: AgentLiveEvent) => void;
 export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text: string) => void) => Promise<AgentGenerateResult>;
 
 /**
- * Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`.
+ * Spec entry codegen emits per agent: `{ className: "SupportAgentWorkflow", exportName: "support" }`.
  * @experimental
  */
 export interface AgentBindingSpec {
-    binding: string;
+    /** The agent's export key — its generated class name, e.g. `SupportAgentWorkflow`. */
+    className: string;
     exportName: string;
 
     /**

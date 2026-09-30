@@ -206,7 +206,7 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `
 ### Manual wiring (without codegen)
 
 1. Author `lunora/workflows.ts` as above.
-2. Re-export the generated class from your worker entry — wrangler requires every `workflows[].class_name` to be exported:
+2. Re-export the generated class from your worker entry — wrangler requires every workflow export to be a class the worker exports:
 
     ```ts
     import LunoraWorkflow from "@lunora/workflow/do";
@@ -219,17 +219,17 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `
     }
     ```
 
-3. Add the binding to `wrangler.jsonc`:
+3. Declare it in `wrangler.jsonc`'s `exports` (Wrangler 4.142.0+):
 
     ```jsonc
     {
-        "workflows": [{ "name": "order-pipeline", "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow" }],
+        "exports": { "OrderPipelineWorkflow": { "type": "workflow", "name": "order-pipeline" } },
     }
     ```
 
-4. Build `ctx.workflows` from the binding: `createWorkflows({ bindings: { orderPipeline: env.WORKFLOW_ORDER_PIPELINE } })`.
+4. Build `ctx.workflows` from the invoking context's exports: `createWorkflows({ bindings: { orderPipeline: ctx.exports.OrderPipelineWorkflow } })`.
 
-The `workflowClassName` / `workflowBindingName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
+The `workflowClassName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
 
 ### Observing instances (REST client)
 

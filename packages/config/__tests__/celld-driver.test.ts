@@ -76,6 +76,18 @@ describe(toolchainExecArgs, () => {
 });
 
 describe(projectCelldConfig, () => {
+    it("turns an exports workflow into a workflows[] binding named after the class", () => {
+        expect.assertions(2);
+
+        const { config, dropped } = projectCelldConfig({
+            exports: { OrderPipelineWorkflow: { name: "order-pipeline", schedules: ["0 * * * *"], type: "workflow" } },
+            name: "app",
+        });
+
+        expect(config["workflows"]).toStrictEqual([{ binding: "OrderPipelineWorkflow", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }]);
+        expect(dropped).toStrictEqual([]);
+    });
+
     it("keeps what celld accepts and names everything it drops", () => {
         expect.assertions(2);
 

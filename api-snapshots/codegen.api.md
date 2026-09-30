@@ -19,7 +19,6 @@ const AGENTS_FILENAME = "agents.ts";
 
 ```ts
 interface AgentIR {
-    bindingName: string;
     className: string;
     exportName: string;
     name: string;
@@ -118,48 +117,34 @@ interface CodegenResult {
 }
 ```
 
-### `ContainerIR` (interface)
+### `ContainerIR` (type)
 
 ```ts
-interface ContainerIR {
-    bindingName: string;
-    buildArgs?: Record<string, string>;
-    className: string;
-    enableInternet?: boolean;
-    exportName: string;
-    image?: {
-        buildContext: string;
-        dockerfilePath: string;
-        kind: "dockerfile";
-    } | {
-        buildDir: string;
-        kind: "build";
-    } | {
-        kind: "registry";
-        reference: string;
-    };
-    images?: Record<string, {
-        buildContext: string;
-        dockerfilePath: string;
-        kind: "dockerfile";
-    } | {
-        kind: "registry";
-        reference: string;
-    }>;
-    instanceType?: string | {
-        diskMb?: number;
-        memoryMib?: number;
-        vcpu?: number;
-    };
-    maxInstances?: number;
-    name?: string;
-    rollout?: {
-        gracePeriodSeconds?: number;
-        stepPercentage?: number;
-    };
-    schedulingPolicy?: "durable_object";
-    sleepAfter?: number | string;
-}
+type ContainerIR = DefaultScheduledContainerIR | DurableObjectScheduledContainerIR;
+```
+
+### `ContainerImageIR` (type)
+
+```ts
+type ContainerImageIR = {
+    buildContext: string;
+    dockerfilePath: string;
+    kind: "dockerfile";
+} | {
+    buildDir: string;
+    kind: "build";
+} | {
+    kind: "registry";
+    reference: string;
+};
+```
+
+### `ContainerNamedImageIR` (type)
+
+```ts
+type ContainerNamedImageIR = Exclude<ContainerImageIR, {
+    kind: "build";
+}>;
 ```
 
 ### `ContextPropertyCallIR` (interface)
@@ -183,7 +168,7 @@ interface CronJobIR {
     functionPath?: string;
     name: string;
     workflow?: {
-        binding: string;
+        className: string;
         exportName: string;
     };
 }
@@ -193,6 +178,20 @@ interface CronJobIR {
 
 ```ts
 const DEFAULT_TARGET = "cloudflare";
+```
+
+### `DefaultScheduledContainerIR` (interface)
+
+```ts
+interface DefaultScheduledContainerIR extends ContainerIRBase {
+    image: ContainerImageIR;
+    maxInstances?: number;
+    rollout?: {
+        gracePeriodSeconds?: number;
+        stepPercentage?: number;
+    };
+    schedulingPolicy?: never;
+}
 ```
 
 ### `DriftChange` (interface)
@@ -220,12 +219,21 @@ type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 type DriftScope = "schema" | "table";
 ```
 
+### `DurableObjectScheduledContainerIR` (interface)
+
+```ts
+interface DurableObjectScheduledContainerIR extends ContainerIRBase {
+    images?: Record<string, ContainerNamedImageIR>;
+    schedulingPolicy: "durable_object";
+}
+```
+
 ### `EmitAppOptions` (interface)
 
 ```ts
 interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{
-        bindingName: string;
+        className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
@@ -1012,7 +1020,6 @@ const WORKFLOWS_FILENAME = "workflows.ts";
 
 ```ts
 interface WorkflowIR {
-    bindingName: string;
     className: string;
     defaultRetention?: {
         errorRetention?: string;
@@ -1844,6 +1851,25 @@ interface ConfigCallIR {
     line: number;
     presentKeys: string[];
     trueKeys: string[];
+}
+```
+
+### `ContainerIRBase` (interface)
+
+```ts
+interface ContainerIRBase {
+    bindingName: string;
+    buildArgs?: Record<string, string>;
+    className: string;
+    enableInternet?: boolean;
+    exportName: string;
+    instanceType?: string | {
+        diskMb?: number;
+        memoryMib?: number;
+        vcpu?: number;
+    };
+    name?: string;
+    sleepAfter?: number | string;
 }
 ```
 

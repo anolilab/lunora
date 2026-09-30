@@ -468,7 +468,6 @@ export const ERROR_CATALOG = {
     DUPLICATE_CRON_NAME: { status: 500, title: "Duplicate cron job name" },
 
     /** More codegen build-time diagnostics — see the cron-family comment above; same reasoning applies. */
-    DUPLICATE_AGENT_BINDING: { status: 500, title: "Duplicate agent binding" },
     DUPLICATE_AGENT_CLASS: { status: 500, title: "Duplicate agent generated class name" },
     DUPLICATE_AGENT_NAME: { status: 500, title: "Duplicate agent name" },
     DUPLICATE_MIGRATION_ID: { status: 500, title: "Duplicate migration id" },

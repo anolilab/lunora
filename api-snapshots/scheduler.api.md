@@ -473,7 +473,7 @@ interface WeeklySchedule extends DailySchedule {
 ```ts
 interface WorkflowReference<Params = Record<string, unknown>> {
     readonly __params?: Params;
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }

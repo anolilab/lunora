@@ -185,9 +185,8 @@ const emitServer = ({
     // `env.<BINDING>` and service-binding access become typed at the seam every
     // handler reaches `env` through. Codegen can only see the bindings it
     // discovers from source (the `CONTAINER_*` Durable Object namespaces a
-    // `defineContainer` declares, the `WORKFLOW_*` namespaces a `defineWorkflow`
-    // declares, and the conventional `AI` binding when the project uses Workers
-    // AI) — the rest of wrangler's bindings (R2/KV/D1/service/queue/etc.) are
+    // `defineContainer` declares, and the conventional `AI` binding when the
+    // project uses Workers AI; workflows live on `ctx.exports`, not `env`) — the rest of wrangler's bindings (R2/KV/D1/service/queue/etc.) are
     // user-named and reconciled by the config layer, so the interface keeps an
     // open `[binding: string]: unknown` index signature: a known binding is
     // narrowed, an unknown one is still reachable (cast at the use site). This is
@@ -200,20 +199,10 @@ const emitServer = ({
 
             return `    /** Durable Object namespace for the \`${container.exportName}\` container. */\n    readonly ${container.bindingName}?: unknown;`;
         }),
-        ...workflows.map((workflow) => {
-            assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${workflow.exportName}\` workflow. */\n    readonly ${workflow.bindingName}?: unknown;`;
-        }),
         ...queues.map((queue) => {
             assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
 
             return `    /** Queue producer binding for the \`${queue.exportName}\` queue. */\n    readonly ${queue.bindingName}?: unknown;`;
-        }),
-        ...agents.map((agent) => {
-            assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${agent.exportName}\` agent. */\n    readonly ${agent.bindingName}?: unknown;`;
         }),
     ].join("\n");
     const envBlock = `

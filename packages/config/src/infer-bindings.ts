@@ -140,15 +140,15 @@ const PAYMENT_PROVIDER_SECRETS = "STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Str
  * provision — wrangler rejects a `containers[].class_name` (and its Durable
  * Object binding) that the worker doesn't export.
  */
-interface InferredContainer extends ContainerIR {
+type InferredContainer = ContainerIR & {
     exported: boolean;
-}
+};
 
 /**
  * A `defineWorkflow` declaration plus whether its generated
  * `WorkflowEntrypoint` class is exported by the worker entry. Only exported
- * workflows are safe to provision — wrangler rejects a `workflows[].class_name`
- * the worker doesn't export. Workflows are NOT Durable Objects, so this never
+ * workflows are safe to provision — wrangler rejects an `exports.<Class>`
+ * workflow the worker doesn't export. Workflows are NOT Durable Objects, so this never
  * implies a `durable_objects` binding or migration.
  */
 interface InferredWorkflow extends WorkflowIR {
@@ -160,7 +160,7 @@ interface InferredWorkflow extends WorkflowIR {
  * `WorkflowEntrypoint` class (e.g. `SupportAgentWorkflow`) is exported by the
  * worker entry. An agent compiles onto a Cloudflare Workflow, so — exactly like
  * {@link InferredWorkflow} — only exported agents are safe to provision
- * (wrangler rejects a `workflows[].class_name` the worker doesn't export), and
+ * (wrangler rejects an `exports.<Class>` workflow the worker doesn't export), and
  * an agent is NOT a Durable Object (no `durable_objects` binding or migration).
  */
 interface InferredAgent extends AgentIR {
@@ -176,7 +176,7 @@ interface InferredAgent extends AgentIR {
 type InferredQueue = QueueIR;
 
 interface InferredBindings {
-    /** Agents declared in `lunora/agents.ts` (exported or not — see {@link InferredAgent.exported}); reconciled into `workflows[]`. */
+    /** Agents declared in `lunora/agents.ts` (exported or not — see {@link InferredAgent.exported}); reconciled into wrangler `exports`. */
     agents: InferredAgent[];
     /** Containers declared in `lunora/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
@@ -451,12 +451,12 @@ const describeDeclaredExports = (
     ),
     ...workflows.map((workflow) =>
         workflow.exported
-            ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
+            ? `exports.${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
             : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/workflows"\``,
     ),
     ...agents.map((agent) =>
         agent.exported
-            ? `${agent.bindingName}/${agent.className} (agent "${agent.exportName}" declared and exported)`
+            ? `exports.${agent.className} (agent "${agent.exportName}" declared and exported)`
             : `hint: agent "${agent.exportName}" is declared but ${agent.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/agents"\``,
     ),
 ];
@@ -585,7 +585,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
-    // exported agent WorkflowEntrypoint class is safe to reconcile into `workflows[]`.
+    // exported agent WorkflowEntrypoint class is safe to reconcile into `exports`.
     const agents = detectClassExports(entry, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.

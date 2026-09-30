@@ -42,13 +42,13 @@ const fakeBinding = (): WorkflowBindingLike => {
 };
 
 describe("createWorkflowContext", () => {
-    it("resolves declared workflows from env by their binding name", async () => {
+    it("resolves declared workflows by their export key off env (a non-Cloudflare host)", async () => {
         expect.assertions(2);
 
         const binding = fakeBinding();
-        const env = { WORKFLOW_ORDER_PIPELINE: binding };
+        const env = { OrderPipelineWorkflow: binding };
 
-        const workflows = createWorkflowContext(env, [{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" }]);
+        const workflows = createWorkflowContext(env, [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
 
         const created = await workflows.get("orderPipeline").create({ params: { orderId: "o1" } });
 
@@ -56,10 +56,36 @@ describe("createWorkflowContext", () => {
         expect(binding.create).toHaveBeenCalledWith({ params: { orderId: "o1" } });
     });
 
-    it("skips specs whose binding is missing from env, erroring lazily on use", () => {
+    it("resolves off the invoking context's ctx.exports, where Cloudflare exposes exported workflows", async () => {
         expect.assertions(1);
 
-        const workflows = createWorkflowContext({}, [{ binding: "WORKFLOW_ETL", exportName: "etl" }]);
+        const exported = fakeBinding();
+        const workflows = createWorkflowContext({}, [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" }], { OrderPipelineWorkflow: exported });
+
+        await workflows.get("orderPipeline").create({ params: {} });
+
+        expect(exported.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("prefers an explicit env binding over a ctx.exports stub under the same class name (celld, Node)", async () => {
+        expect.assertions(2);
+
+        const bound = fakeBinding();
+        const stub = fakeBinding();
+        const workflows = createWorkflowContext({ OrderPipelineWorkflow: bound }, [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" }], {
+            OrderPipelineWorkflow: stub,
+        });
+
+        await workflows.get("orderPipeline").create({ params: {} });
+
+        expect(bound.create).toHaveBeenCalledTimes(1);
+        expect(stub.create).not.toHaveBeenCalled();
+    });
+
+    it("skips specs whose workflow is missing from exports and env, erroring lazily on use", () => {
+        expect.assertions(1);
+
+        const workflows = createWorkflowContext({}, [{ className: "EtlWorkflow", exportName: "etl" }]);
 
         expect(() => workflows.get("etl")).toThrow(/no workflows are declared/);
     });
@@ -67,9 +93,9 @@ describe("createWorkflowContext", () => {
     it("ignores env values that are not Workflow bindings", () => {
         expect.assertions(1);
 
-        const env = { WORKFLOW_ETL: { create: 123 } };
+        const env = { EtlWorkflow: { create: 123 } };
 
-        const workflows = createWorkflowContext(env, [{ binding: "WORKFLOW_ETL", exportName: "etl" }]);
+        const workflows = createWorkflowContext(env, [{ className: "EtlWorkflow", exportName: "etl" }]);
 
         expect(() => workflows.get("etl")).toThrow(/no workflows are declared/);
     });

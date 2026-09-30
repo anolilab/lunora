@@ -63,7 +63,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "wrangler workflows[].schedules — Cloudflare creates an instance on each cron tick, no scheduled() handler involved",
         },
-        workflows: { level: "native", note: "Cloudflare Workflows" },
+        workflows: {
+            level: "native",
+            note: "Cloudflare Workflows declared in wrangler `exports` (no workflows[] binding) and reached through `ctx.exports.<Class>` from the shard DO, the Worker and every WorkflowEntrypoint; needs Wrangler >= 4.142 / @cloudflare/vite-plugin >= 1.61 locally",
+        },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
             level: "native",
@@ -75,7 +78,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         agents: {
             level: "emulated",
-            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow under an AGENT_* binding (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
+            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow declared in wrangler `exports` and reached through `ctx.exports` (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
         },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {

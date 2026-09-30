@@ -52,14 +52,12 @@ describe("discover/workflows", () => {
 
         expect(discoverWorkflows(newProject(), workdir)).toEqual([
             {
-                bindingName: "WORKFLOW_ETL",
                 className: "EtlWorkflow",
                 exportName: "etl",
                 name: "nightly-etl",
                 steps: [],
             },
             {
-                bindingName: "WORKFLOW_ORDER_PIPELINE",
                 className: "OrderPipelineWorkflow",
                 exportName: "orderPipeline",
                 name: "order-pipeline",
@@ -347,8 +345,8 @@ describe("emit (workflows)", () => {
         const shard = emitShard({ schema: EMPTY_SCHEMA, workflows: discover() });
 
         expect(shard).toContain('import { createWorkflowContext } from "@lunora/workflow";');
-        expect(shard).toContain('{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" },');
-        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);");
+        expect(shard).toContain('{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" },');
+        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);");
         expect(shard).toContain("workflows,");
     });
 
@@ -371,16 +369,16 @@ describe("emit (workflows)", () => {
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow name "shared"/u);
     });
 
-    it("rejects two workflow exports that collapse to the same binding name", () => {
+    it("rejects two workflow exports that collapse to the same generated class", () => {
         expect.assertions(1);
 
         writeWorkflows(`
             import { defineWorkflow } from "@lunora/workflow";
 
             export const myFlow = defineWorkflow({ name: "one", handler: async () => undefined });
-            export const myFLOW = defineWorkflow({ name: "two", handler: async () => undefined });
+            export const MyFlow = defineWorkflow({ name: "two", handler: async () => undefined });
         `);
 
-        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow binding "WORKFLOW_MY_FLOW"/u);
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow class "MyFlowWorkflow"/u);
     });
 });

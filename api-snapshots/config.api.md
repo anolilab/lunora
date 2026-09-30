@@ -186,7 +186,7 @@ interface ClaimDevServerStateResult {
 }
 ```
 
-### `ContainerIR` (interface)
+### `ContainerIR` (type)
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
 
@@ -645,12 +645,12 @@ interface InferredBindings {
 }
 ```
 
-### `InferredContainer` (interface)
+### `InferredContainer` (type)
 
 ```ts
-interface InferredContainer extends ContainerIR {
+type InferredContainer = ContainerIR & {
     exported: boolean;
-}
+};
 ```
 
 ### `InferredWorkflow` (interface)
@@ -1744,6 +1744,10 @@ interface ManifestConfigShape extends WranglerConfigShape {
         image?: string;
         max_instances?: number;
     }>;
+    exports?: Record<string, {
+        name?: string;
+        type?: string;
+    } | null | undefined>;
     hyperdrive?: ReadonlyArray<{
         binding?: string;
         id?: string;

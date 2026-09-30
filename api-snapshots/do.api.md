@@ -526,6 +526,7 @@ interface ShardDOState {
     abort?: (reason?: string) => void;
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
         jurisdiction?: string;

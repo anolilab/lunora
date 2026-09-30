@@ -26,6 +26,6 @@
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
-        "wrangler": "^4.100.0"
+        "wrangler": "^4.143.1"
     }
 }

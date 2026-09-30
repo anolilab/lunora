@@ -105,7 +105,7 @@ const unexportedDeclarationWarnings = (
                 `${kind} "${declaration.exportName}" is declared but ${declaration.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/${module}"\` so its binding can be provisioned.`,
         );
 
-/** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
+/** Workflow/agent `exports.<Class>` (or legacy `workflows[]`) entries the emitted bundle no longer exports. */
 const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
     const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
 
@@ -113,18 +113,20 @@ const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerSh
         return [];
     }
 
+    const exportedClasses = Object.entries(parsed.exports ?? {}).flatMap(([className, entry]) => (entry?.type === "workflow" ? [className] : []));
     // `flatMap` with an in-body guard rather than `filter().map()`: a filter
-    // predicate does not narrow the element type for the map that follows, so the
-    // template literal would still see `string | undefined`.
-    return (parsed.workflows ?? []).flatMap((entry) => {
-        const className = entry.class_name;
+    // predicate does not narrow the element type for the map that follows.
+    // A binding with `script_name` targets another Worker's workflow, not ours.
+    const boundClasses = (parsed.workflows ?? []).flatMap((entry) =>
+        entry.class_name === undefined || entry.script_name !== undefined ? [] : [entry.class_name],
+    );
 
-        return className === undefined || declaredClasses.has(className)
-            ? []
-            : [
-                  `wrangler.jsonc declares workflows[] entry "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
-              ];
-    });
+    return [...new Set([...exportedClasses, ...boundClasses])]
+        .filter((className) => !declaredClasses.has(className))
+        .map(
+            (className) =>
+                `wrangler.jsonc declares workflow "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class the worker does not export). Remove it if it is not hand-wired.`,
+        );
 };
 
 /** Queue consumer/producer entries no `defineQueue` export declares. */

@@ -8,7 +8,7 @@ import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReferen
 const NAMESPACE_PATTERN = /namespace/;
 const DELAY_MS_PATTERN = /delayMs/;
 const SCHEDULER_DO_PATTERN = /SchedulerDO/;
-const MISSING_BINDING_PATTERN = /missing its `binding`/;
+const MISSING_BINDING_PATTERN = /missing its `className`/;
 
 interface CapturedCall {
     body: Record<string, unknown>;
@@ -59,8 +59,8 @@ const fakeNamespace = (responses: Record<string, unknown> = DEFAULT_RESPONSES): 
 const fnRef: FunctionReference<"mutation"> = { __lunoraRef: "messages.send" };
 
 // The generated `agents.<name>` / `workflows.<name>` schedule target: a
-// WorkflowReference carrying the `AGENT_*`/`WORKFLOW_*` binding + stable name.
-const agentRef: WorkflowReference = { binding: "AGENT_SUPPORT", isLunoraWorkflow: true, name: "support" };
+// WorkflowReference carrying the generated class name + stable name.
+const agentRef: WorkflowReference = { className: "SupportAgentWorkflow", isLunoraWorkflow: true, name: "support" };
 
 describe("createScheduler", () => {
     it("requires a namespace", () => {
@@ -154,7 +154,7 @@ describe("createScheduler", () => {
             args: { prompt: "summarize" },
             instanceName: "default",
             scheduledFor: at.getTime(),
-            workflow: "AGENT_SUPPORT",
+            workflow: "SupportAgentWorkflow",
         });
         expect(calls[0]?.body).not.toHaveProperty("functionPath");
     });
@@ -167,11 +167,11 @@ describe("createScheduler", () => {
 
         await scheduler.runAfter(5000, agentRef, { prompt: "digest" });
 
-        expect(calls[0]?.body.workflow).toBe("AGENT_SUPPORT");
+        expect(calls[0]?.body.workflow).toBe("SupportAgentWorkflow");
         expect(calls[0]?.body).not.toHaveProperty("functionPath");
     });
 
-    it("runAt() rejects a workflow target with no binding", async () => {
+    it("runAt() rejects a workflow target with no className", async () => {
         expect.assertions(2);
 
         const { calls, namespace } = fakeNamespace();

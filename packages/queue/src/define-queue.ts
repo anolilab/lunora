@@ -10,7 +10,7 @@ import type { QueueConfig, QueueDefinition } from "./types";
 /**
  * The wrangler producer binding name for a queue export: `emailQueue` →
  * `QUEUE_EMAIL_QUEUE`, `email` → `QUEUE_EMAIL`. The `QUEUE_` prefix namespaces
- * these away from `SHARD`/`SESSION`/`SCHEDULER`/`WORKFLOW_*`/`CONTAINER_*` so a
+ * these away from `SHARD`/`SESSION`/`SCHEDULER`/`CONTAINER_*` so a
  * queue export can never collide with the built-in bindings.
  */
 const queueBindingName = (exportName: string): string => `QUEUE_${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "_").toUpperCase()}`;

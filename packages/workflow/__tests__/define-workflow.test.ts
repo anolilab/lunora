@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName } from "../src/define-workflow";
+import { defineWorkflow, isWorkflowDefinition, workflowClassName, workflowDefaultName } from "../src/define-workflow";
 
 describe("defineWorkflow", () => {
     it("brands a valid definition", () => {
@@ -83,14 +83,6 @@ describe("naming helpers", () => {
 
         expect(workflowClassName("orderPipeline")).toBe("OrderPipelineWorkflow");
         expect(workflowClassName("etl")).toBe("EtlWorkflow");
-    });
-
-    it("derives the SCREAMING_SNAKE binding name", () => {
-        expect.assertions(3);
-
-        expect(workflowBindingName("orderPipeline")).toBe("WORKFLOW_ORDER_PIPELINE");
-        expect(workflowBindingName("etl")).toBe("WORKFLOW_ETL");
-        expect(workflowBindingName("syncWithStripe")).toBe("WORKFLOW_SYNC_WITH_STRIPE");
     });
 
     it("derives the kebab default name", () => {

@@ -134,6 +134,33 @@ describe("createWorker — code-defined cron jobs", () => {
         expect(created).toHaveLength(1);
     });
 
+    it("starts the workflow off the Worker's ctx.exports, where Cloudflare exposes exported workflows", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const created: unknown[] = [];
+        const context = {
+            ...fakeContext,
+            exports: {
+                DigestWorkflow: {
+                    create: async (options?: unknown) => {
+                        created.push(options);
+
+                        return { id: "wf-1" };
+                    },
+                },
+            },
+        };
+        const worker = createWorker({
+            cronJobs: { [CRON]: [{ args: { region: "eu" }, name: "nightly digest", workflow: "DigestWorkflow" }] },
+            shardDO: shard.namespace,
+        });
+
+        await worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, context);
+
+        expect(created).toStrictEqual([{ params: { region: "eu" } }]);
+    });
+
     it("fails the cron invocation when a workflow-targeting job's binding is missing", async () => {
         expect.assertions(1);
 

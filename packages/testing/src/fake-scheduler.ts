@@ -220,7 +220,7 @@ const createFakeScheduler = (
             return target.__lunoraRef;
         }
 
-        return target.name ?? target.binding ?? "";
+        return target.name ?? target.className ?? "";
     };
 
     const scheduler: Scheduler = {

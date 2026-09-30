@@ -121,7 +121,7 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
                     // its `params`); a function target dispatches `namespace:fn` to
                     // the shard. The two are mutually exclusive in the emitted entry.
                     const targetField = job.workflow
-                        ? `workflow: ${JSON.stringify(job.workflow.binding)}`
+                        ? `workflow: ${JSON.stringify(job.workflow.className)}`
                         : `functionPath: ${JSON.stringify(job.functionPath)}`;
 
                     return `        { name: ${JSON.stringify(job.name)}, ${targetField}, args: ${JSON.stringify(job.args)} },`;
@@ -137,7 +137,7 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     return `${GENERATED_HEADER}/**
  * One scheduled cron invocation. Exactly one target is set: \`functionPath\` is
  * the \`namespace:fn\` dispatch ref (matches \`__lunoraRef\`), invoked on the
- * shard; \`workflow\` is a \`WORKFLOW_*\` binding name whose durable workflow is
+ * shard; \`workflow\` is a workflow class name (its \`ctx.exports\` key) whose durable workflow is
  * started fresh per fire. \`args\` are forwarded verbatim (a workflow's become
  * its \`params\`).
  */

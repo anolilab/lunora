@@ -971,13 +971,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const appContent = emitApp({
         // Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
-        // top-level `email()` handler to each agent's `AGENT_*` Workflow binding so
+        // top-level `email()` handler to each agent's exported workflow so
         // received mail starts a durable run. Empty for email-free (and agent-free)
         // projects, so the emitted app.ts stays byte-identical.
         emailAgents: agents
             .filter((agent) => agent.onEmail === true)
             .map((agent) => {
-                return { bindingName: agent.bindingName, exportName: agent.exportName };
+                return { className: agent.className, exportName: agent.exportName };
             }),
         hasAccess: dependencies.has("@lunora/cloudflare-access"),
         hasAi: featureUsage.ai,

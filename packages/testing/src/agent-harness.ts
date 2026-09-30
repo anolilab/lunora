@@ -48,7 +48,7 @@ interface AgentHarnessOptions {
 
     /**
      * The agent's `lunora/agents.ts` export name — used for thread attribution
-     * and to derive the child-agent `AGENT_*` bindings a sub-agent tool targets.
+     * and to derive the child-agent export keys a sub-agent tool targets.
      * Default `"agent"`.
      */
     exportName?: string;

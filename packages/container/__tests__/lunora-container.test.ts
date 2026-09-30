@@ -739,7 +739,7 @@ describe("lunoraContainer durable_object scheduling", () => {
     });
 
     it("stores nothing from a rejected start — neither an unknown image nor the env override", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const { context, instance } = scheduled();
 
@@ -748,8 +748,7 @@ describe("lunoraContainer durable_object scheduling", () => {
 
         await expect(instance.start({ envVars: {}, image: "tpyo" })).rejects.toThrow(/no image named "tpyo"/u);
 
-        await expect(storage.get("__lunoraEnvOverride")).resolves.toBeUndefined();
-        await expect(storage.get("__lunoraStartSelection")).resolves.toBeUndefined();
+        await expect(storage.get("__lunoraStartOverride")).resolves.toBeUndefined();
     });
 
     it("keeps a stored image when a later start only changes the size, and accepts a repeat of the running choice", async () => {
