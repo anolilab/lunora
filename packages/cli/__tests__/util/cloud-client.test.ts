@@ -202,6 +202,8 @@ describe(resolveDeployConfigPath, () => {
     });
 
     it("follows .wrangler/deploy/config.json to the built config", () => {
+        expect.assertions(1);
+
         mkdirSync(join(directory, ".wrangler", "deploy"), { recursive: true });
         mkdirSync(join(directory, "dist", "server"), { recursive: true });
         writeFileSync(join(directory, "dist", "server", "wrangler.json"), "{}");
@@ -211,6 +213,8 @@ describe(resolveDeployConfigPath, () => {
     });
 
     it("answers undefined without a redirect, or when it points at nothing", () => {
+        expect.assertions(2);
+
         expect(resolveDeployConfigPath(directory)).toBeUndefined();
 
         mkdirSync(join(directory, ".wrangler", "deploy"), { recursive: true });

@@ -117,7 +117,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(async ({
     if (options.local === true && options.durable === true) {
         logger.error("logs: --local and --durable are different sources — pass one, not both");
 
-        return Promise.resolve({ code: 1 });
+        return { code: 1 };
     }
 
     if (options.local === true) {
