@@ -675,6 +675,22 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
 
+### `lunora cloud`
+
+Deploy, roll back or eject on the managed Lunora Cloud. Every subcommand
+authenticates with an org deploy key read from `LUNORA_DEPLOY_KEY` — never a
+flag or a file — against the control plane at `--url` or `LUNORA_CLOUD_URL`:
+
+```bash
+LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js
+lunora cloud rollback dep_456 --org org_789 --yes   # stable URL back to a retained release
+lunora cloud eject dep_456 --out ./eject            # your data + a BYO wrangler.jsonc
+```
+
+`deploy` exits non-zero unless the deployment reaches `live`; `rollback` shifts
+live traffic, so it requires `--yes`. The full reference is in the
+[Lunora Cloud CLI](/docs/cloud/cli) guide.
+
 ### `lunora prepare`
 
 Literally the same pipeline as `lunora deploy`, stopped before anything ships —
