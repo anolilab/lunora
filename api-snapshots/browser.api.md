@@ -109,6 +109,4 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `createBrowser` (const)
 
-```ts
-const createBrowser: (options: LunoraBrowserOptions) => Browser;
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
