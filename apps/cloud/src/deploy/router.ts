@@ -795,7 +795,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             backend: {
                 releaseTarget: async ({ deploymentId, key, organizationId }) => {
                     const row = await context.runQuery<StoredAdminToken & { alias: string; kind: DeployKind; liveDeploymentId?: string; projectId: string }>(
-                        api.deployments.releaseTarget,
+                        internal.deployments.releaseTarget,
                         { deployKey: key, id: deploymentId, organizationId },
                     );
                     // Unsealed here, at the edge, exactly as the studio proxy does.
@@ -852,7 +852,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                     return Object.fromEntries(entries);
                 },
                 rollbackDeployment: ({ deploymentId, key, organizationId }) =>
-                    context.runMutation<{ scriptName: string; version?: number }>(api.deployments.rollback, {
+                    context.runMutation<{ scriptName: string; version?: number }>(internal.deployments.rollback, {
                         deployKey: key,
                         id: deploymentId,
                         organizationId,

@@ -421,12 +421,14 @@ export const activate = mutation
  * Record a completed rollback (GAPS.md A1). The deploy edge calls this only
  * AFTER it has re-provisioned the target's stored bundle onto the alias's
  * Worker (`src/deploy/release.ts`) — calling it alone would claim a release the
- * Worker is not running, which is why the studio goes through `POST /v1/rollback`
- * rather than this mutation. The target must be a `superseded` (or still-`live`)
- * release; it becomes `live` and the release it replaced is `superseded`.
+ * Worker is not running, so it is an `internalMutation`: only the deploy edge's
+ * rollback routes (`POST /v1/deployments/rollback`, `POST /v1/rollback`) reach it,
+ * after the re-provision. The caller is still authorized here (deploy key or
+ * owner/admin session) — an internal function is only as scoped as its caller.
+ * The target must be a `superseded` (or still-`live`) release; it becomes `live`
+ * and the release it replaced is `superseded`.
  */
-export const rollback = mutation
-    .use(rateLimit("machine"))
+export const rollback = internalMutation
     .input({
         deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
@@ -478,9 +480,10 @@ export const rollback = mutation
  * identity, and the release currently live on that Worker. Authorized like
  * {@link rollback}: the deploy key against the deployment's own project, or an
  * owner/admin session. Only `live`/`superseded` deployments are releases a
- * Worker can be put back on.
+ * Worker can be put back on. An `internalQuery` because it hands out admin-token
+ * material: only the deploy edge may read it, never RPC.
  */
-export const releaseTarget = query
+export const releaseTarget = internalQuery
     .input({ deployKey: v.optional(boundedString(LIMITS.token)), id: v.id("deployments"), organizationId: v.id("organizations") })
     .query(
         async ({
