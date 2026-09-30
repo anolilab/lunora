@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import type { ManifestConfigShape } from "@lunora/config/cloudflare";
 import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
-import { dirname, resolve } from "@visulima/path";
+import { dirname, relative, resolve } from "@visulima/path";
 
 import type { DeployEvent, DeployToCloudOptions, WranglerAssets } from "../../util/cloud-client";
 import { collectAssets, deployToCloud, fetchEjectPackage, rollbackDeployment } from "../../util/cloud-client";
@@ -280,7 +280,8 @@ const runRollback = async (options: CloudCommandOptions, deps: CloudCommandDeps,
 /**
  * `lunora cloud eject <deployment-id>` — the no-lock-in exit hatch (GAPS.md D2).
  *
- * Writes `export.ndjson`, a BYO `wrangler.jsonc` and a restore README into
+ * Writes `export.ndjson`, a BYO `wrangler.jsonc` and an Alchemy 2 program (both
+ * derived from the project's own wrangler config) and a restore README into
  * `./eject` (or `--out`). Read-only against the platform: the managed deployment
  * keeps serving afterwards, which is the point — ejecting is something you should
  * be able to do at any time, including just to check that you can.
@@ -299,13 +300,29 @@ const runEjectCommand = async (
         return { code: 1 };
     }
 
-    const outputDirectory = join(options.cwd, options.ejectOut ?? "eject");
+    // Before the network call: without the project's config there is nothing
+    // to derive the ejected config from, and a template would silently drop
+    // every binding it does not know about.
+    const wrangler = deps.readWrangler(options.cwd);
+
+    if (!wrangler) {
+        logger.error(
+            `cloud eject: no readable wrangler config in ${options.cwd} — run eject from the project directory; the ejected config is derived from it`,
+        );
+
+        return { code: 1 };
+    }
+
+    const ejectOut = options.ejectOut ?? "eject";
+    const outputDirectory = join(options.cwd, ejectOut);
 
     let result;
 
     try {
         result = await runEject({
             fetchPackage: () => deps.ejectFn({ apiUrl: auth.apiUrl, deployKey: auth.deployKey, deploymentId }),
+            outputDirectory: ejectOut,
+            project: { config: wrangler.config, configDirectory: relative(outputDirectory, dirname(wrangler.path)) },
             writeFile: (name, content) => deps.writeEjectFile(outputDirectory, name, content),
         });
     } catch (error) {
@@ -316,6 +333,10 @@ const runEjectCommand = async (
 
     for (const file of result.files) {
         logger.info(`  ${join(outputDirectory, file)}`);
+    }
+
+    if (result.unsupported.length > 0) {
+        logger.warn(`cloud eject: alchemy.run.ts does not carry: ${result.unsupported.join(", ")} (listed in the README)`);
     }
 
     logger.success(`cloud eject: wrote ${String(result.files.length)} files — your deployment keeps serving.`);
