@@ -366,6 +366,15 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 );
             }
 
+            // `allowedHosts` matches exactly, but guardrails read `*` as a
+            // wildcard — forwarding one would open the raw session far past
+            // what the Lunora-side guard allows.
+            const wildcard = options.allowedHosts.find((host) => host.includes("*"));
+
+            if (wildcard !== undefined) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/browser: allowedHosts entry "${wildcard}" contains "*" — entries match exactly; list each host`);
+            }
+
             launchOptions["guardrails"] = { allowedDomains: options.allowedHosts.map((host) => normalizeHost(host)) };
         }
 

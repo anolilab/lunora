@@ -97,7 +97,7 @@ interface ExecRequestBody {
 /** The native `ctx.container.exec()` surface the exec entry drives — structurally workers-types' `Container["exec"]`. */
 type NativeContainerExec = (
     cmd: string[],
-    options: { cwd?: string; env?: Record<string, string>; signal?: AbortSignal; stderr: "pipe"; stdout: "pipe" },
+    options: { cwd?: string; env?: Record<string, string>; stderr: "pipe"; stdout: "pipe" },
 ) => Promise<{ exitCode: Promise<number>; kill: (signal?: number) => void; stderr: ReadableStream | null; stdout: ReadableStream | null }>;
 
 /** Whether two env maps hold the same variables with the same values. */
@@ -416,14 +416,21 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      */
     public override async start(options?: LunoraStartOptions, waitOptions?: Parameters<Container<Env>["start"]>[1]): Promise<void> {
         const { image, instanceType, snapshot, ...baseOptions } = options ?? {};
+        // Validated in full before anything is stored, so a rejected start leaves
+        // neither its env override nor its image choice behind for later restarts.
+        const selection = await this.validateStartSelection({ image, instanceType }, snapshot);
 
         if (options?.envVars !== undefined) {
             await this.persistEnvOverride({ ...options.envVars });
         }
 
-        await this.selectStart({ image, instanceType }, snapshot);
+        if (selection !== undefined) {
+            await this.ctx.storage.put(START_SELECTION_KEY, selection);
+            this.lunoraStartSelection = selection;
+        }
+
         await this.applyStartEnv();
-        await this.applyStartSelection();
+        await this.applyStartSelection(snapshot !== undefined);
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -550,37 +557,89 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             return new Response(`container "${this.lunoraName}": exec requires a non-empty \`command\``, { status: 400 });
         }
 
-        const limit = body.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
-        const deadline = abortDeadline(undefined, body.timeoutMs, () => new DOMException(`exec timed out after ${String(body.timeoutMs)}ms`, "TimeoutError"));
+        // Counted in flight like a proxied request, so `sleepAfter` cannot stop
+        // the container under a long-running command.
+        const activity = this as unknown as { decrementInflight: () => void; inflightRequests: number };
+
+        activity.inflightRequests += 1;
+        this.renewActivityTimeout();
 
         try {
-            const process = await exec([body.command, ...(body.args ?? [])], {
-                ...(body.cwd === undefined ? {} : { cwd: body.cwd }),
-                ...(body.env === undefined ? {} : { env: body.env }),
-                ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
-                stderr: "pipe",
-                stdout: "pipe",
-            });
-            const [stdout, stderr] = await Promise.all([
-                readCapped(process.stdout, limit, deadline.signal),
-                readCapped(process.stderr, limit, deadline.signal),
-            ]);
+            return await this.collectNativeExec(exec, body);
+        } finally {
+            activity.decrementInflight();
+        }
+    }
 
-            if (stdout.overflowed || stderr.overflowed) {
+    /**
+     * Start the process and read both streams under the output cap. Native
+     * exec processes do not inherit the container's startup env (only `PATH`),
+     * so the start env is passed explicitly, with the per-call `env` over it —
+     * what the contract promises. Neither an `AbortSignal` nor `kill()` may
+     * reach a process that has already exited (the runtime raises an uncaught
+     * error), so the timeout and the overflow both go through one guarded kill
+     * instead, and the first overflow stops both readers at once.
+     */
+    private async collectNativeExec(exec: NativeContainerExec, body: ExecRequestBody): Promise<Response> {
+        const limit = body.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
+        const process = await exec([body.command, ...(body.args ?? [])], {
+            ...(body.cwd === undefined ? {} : { cwd: body.cwd }),
+            env: { ...this.envVars, ...body.env },
+            stderr: "pipe",
+            stdout: "pipe",
+        });
+        const readers = new AbortController();
+        let exited = false;
+        // An object, not two `let`s: the flags are set from the timer and the
+        // readers, which control-flow narrowing cannot see.
+        const outcome = { overflowed: false, timedOut: false };
+        const exitCode = process.exitCode.finally(() => {
+            exited = true;
+        });
+        const stop = (): void => {
+            readers.abort();
+
+            if (!exited) {
+                exited = true;
                 process.kill();
+            }
+        };
+        const timer =
+            body.timeoutMs === undefined
+                ? undefined
+                : setTimeout(() => {
+                      outcome.timedOut = true;
+                      stop();
+                  }, body.timeoutMs);
+        const read = async (stream: ReadableStream | null): Promise<string> => {
+            const result = await readCapped(stream, limit, readers.signal);
 
+            if (result.overflowed) {
+                outcome.overflowed = true;
+                stop();
+            }
+
+            return result.text;
+        };
+
+        try {
+            const [stdout, stderr] = await Promise.allSettled([read(process.stdout), read(process.stderr)]);
+
+            if (outcome.overflowed) {
                 return new Response(`container "${this.lunoraName}": exec output exceeded ${String(limit)} bytes; the process was killed`, { status: 413 });
             }
 
-            return Response.json({ code: await process.exitCode, stderr: stderr.text, stdout: stdout.text });
-        } catch (error) {
-            if (deadline.signal?.aborted === true) {
+            if (outcome.timedOut) {
                 return new Response(`container "${this.lunoraName}": exec timed out after ${String(body.timeoutMs)}ms`, { status: 504 });
             }
 
-            throw error;
+            if (stdout.status === "rejected" || stderr.status === "rejected") {
+                throw stdout.status === "rejected" ? stdout.reason : (stderr as PromiseRejectedResult).reason;
+            }
+
+            return Response.json({ code: await exitCode, stderr: stderr.value, stdout: stdout.value });
         } finally {
-            deadline.dispose();
+            clearTimeout(timer);
         }
     }
 
@@ -879,17 +938,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
-     * Validate and persist an explicit start's image/size choice
-     * (`durable_object` policy only). Like the env override, a choice that
-     * differs from what a running or starting container has is refused rather
-     * than silently joined, and a snapshot restore — which only takes effect
-     * on a fresh start — is refused on a busy one.
+     * Validate an explicit start's image/size choice (`durable_object` policy
+     * only) and return the selection to persist — merged over the stored one, so
+     * `start({ instanceType })` alone keeps a previously chosen image — or
+     * `undefined` when the start chose nothing. Like the env override, a choice
+     * that differs from what a running or starting container has is refused
+     * rather than silently joined, and a snapshot restore — which only takes
+     * effect on a fresh start — is refused on a busy one. Stores nothing.
      */
-    private async selectStart(selection: StartSelection, snapshot: ContainerSnapshot | undefined): Promise<void> {
-        const chose = selection.image !== undefined || selection.instanceType !== undefined;
+    private async validateStartSelection(chosen: StartSelection, snapshot: ContainerSnapshot | undefined): Promise<StartSelection | undefined> {
+        const chose = chosen.image !== undefined || chosen.instanceType !== undefined;
 
         if (!chose && snapshot === undefined) {
-            return;
+            return undefined;
         }
 
         if (!this.lunoraDurableObjectScheduled) {
@@ -899,19 +960,31 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             );
         }
 
-        if (selection.image !== undefined && snapshot !== undefined) {
+        if (chosen.image !== undefined && snapshot !== undefined) {
             throw new LunoraError(
                 "BAD_REQUEST",
                 `container "${this.lunoraName}": start() takes an image or a snapshot, not both — the snapshot is the filesystem`,
             );
         }
 
+        if (chosen.image !== undefined) {
+            // Throws for an unknown name now, rather than on every later restart.
+            this.resolveImage(chosen.image);
+        }
+
+        const stored = await this.readStartSelection();
+        const selection: StartSelection = {
+            ...stored,
+            ...(chosen.image === undefined ? {} : { image: chosen.image }),
+            ...(chosen.instanceType === undefined ? {} : { instanceType: chosen.instanceType }),
+        };
         const busy = this.ctx.container?.running === true || (this as unknown as { startInFlight?: unknown }).startInFlight !== undefined;
 
         if (busy) {
-            const current = await this.readStartSelection();
+            const running = { ...this.lunoraDefaultSelection, ...stored };
+            const next = { ...this.lunoraDefaultSelection, ...selection };
 
-            if (snapshot !== undefined || selection.image !== current?.image || selection.instanceType !== current?.instanceType) {
+            if (snapshot !== undefined || next.image !== running.image || JSON.stringify(next.instanceType) !== JSON.stringify(running.instanceType)) {
                 throw new LunoraError(
                     "CONFLICT",
                     `container "${this.lunoraName}": start({ image | instanceType | snapshot }) on an instance that is already running — stop() it first, then start again.`,
@@ -919,10 +992,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             }
         }
 
-        if (chose) {
-            await this.ctx.storage.put(START_SELECTION_KEY, selection);
-            this.lunoraStartSelection = selection;
-        }
+        return chose ? selection : undefined;
     }
 
     /** The persisted explicit start selection, read from storage once per instance lifetime. */
@@ -943,12 +1013,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * A start with neither an image nor a snapshot would be rejected by the
      * runtime, so it fails here with the fix instead.
      */
-    private async applyStartSelection(): Promise<void> {
+    private async applyStartSelection(restoringSnapshot = false): Promise<void> {
         if (!this.lunoraDurableObjectScheduled) {
             return;
         }
 
         const selection = { ...this.lunoraDefaultSelection, ...(await this.readStartSelection()) };
+
+        if (selection.image === undefined && !restoringSnapshot) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": no image to start — pass start({ image }) or start({ snapshot }), or set a default \`image\` in lunora/containers.ts`,
+            );
+        }
 
         this.instance = selection.instanceType;
         this.image = selection.image === undefined ? undefined : this.resolveImage(selection.image);

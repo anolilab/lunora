@@ -346,6 +346,21 @@ describe("createAi", () => {
             await expect(ai.run("@cf/nope", {}, { rejectIfBusy: true })).rejects.toBe(failure);
         });
 
+        it("does not mistake a 3040 elsewhere in a message for the capacity code", async () => {
+            expect.assertions(1);
+
+            const failure = new Error("5006: input invalid at line 3040: unexpected token");
+            const ai = createAi({
+                binding: {
+                    run: async () => {
+                        throw failure;
+                    },
+                },
+            });
+
+            await expect(ai.run("@cf/nope", {})).rejects.toBe(failure);
+        });
+
         it("leaves run options untouched when no gateway is configured", async () => {
             expect.assertions(1);
 

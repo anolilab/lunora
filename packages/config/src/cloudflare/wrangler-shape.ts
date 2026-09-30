@@ -22,6 +22,8 @@ interface MigrationEntry {
 
 interface ContainerEntry {
     class_name?: string;
+    images?: Record<string, unknown>;
+    scheduling_policy?: string;
 }
 
 interface WorkflowEntry {

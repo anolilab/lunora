@@ -135,6 +135,16 @@ describe("guardrails", () => {
         await expect(browser.launch(async () => "ok")).rejects.toThrow(/at most 50/u);
         expect(calls).toHaveLength(0);
     });
+
+    it("refuses a wildcard entry, which guardrails would widen past the exact-match allowlist", async () => {
+        expect.assertions(2);
+
+        const { calls, launch } = captureLaunch();
+        const browser = createBrowser({ allowedHosts: ["example.com", "*"], binding: plainBinding, launch });
+
+        await expect(browser.launch(async () => "ok")).rejects.toThrow(/contains "\*"/u);
+        expect(calls).toHaveLength(0);
+    });
 });
 
 describe("crawl", () => {

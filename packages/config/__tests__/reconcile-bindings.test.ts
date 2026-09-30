@@ -871,6 +871,34 @@ describe("reconcileWranglerBindings", () => {
             expect(entry.rollout_active_grace_period).toBe(300);
         });
 
+        it("retunes a durable_object entry's images and warns on a scheduling policy switch instead of rewriting it", () => {
+            expect.assertions(3);
+
+            const agentComputer = {
+                ...TRANSCODER,
+                image: undefined,
+                images: { base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" as const } },
+                maxInstances: undefined,
+                schedulingPolicy: "durable_object" as const,
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [agentComputer] }));
+
+            const withGpu = {
+                ...agentComputer,
+                images: { ...agentComputer.images, gpu: { kind: "registry" as const, reference: "registry.cloudflare.com/a/gpu@sha256:b" } },
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [withGpu] }));
+
+            expect(readConfig().containers[0].images.gpu).toEqual({ image: "registry.cloudflare.com/a/gpu@sha256:b" });
+
+            const switched = reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            expect(switched.warnings.some((line) => line.includes("scheduling_policy") && line.includes("immutable"))).toBe(true);
+            expect(readConfig().containers[0].scheduling_policy).toBe("durable_object");
+        });
+
         it("writes a durable_object container as its policy and named images, without the default-policy fields", () => {
             expect.assertions(1);
 

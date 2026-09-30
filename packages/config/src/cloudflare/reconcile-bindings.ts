@@ -386,14 +386,42 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
     const existing = parsed.containers ?? [];
     const existingClasses = new Set(existing.map((entry) => entry.class_name));
     const missing = containers.filter((container) => !existingClasses.has(container.className));
+    // Append first, retune second, as for workflows: the append rewrites the
+    // array from `parsed`, and never moves an existing entry's index.
+    let nextText = missing.length === 0 ? text : applyModify(text, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
+    const updated: string[] = [];
+    const warnings: string[] = [];
 
-    if (missing.length === 0) {
-        return { added: [], text };
+    for (const [index, entry] of existing.entries()) {
+        const container = containers.find((candidate) => candidate.className === entry.class_name);
+
+        if (container === undefined) {
+            continue;
+        }
+
+        const declared = container.schedulingPolicy ?? "default";
+
+        // The policy is immutable on Cloudflare — switching means a new container
+        // application — so it is flagged, never rewritten in place.
+        if ((entry.scheduling_policy ?? "default") !== declared) {
+            warnings.push(
+                `containers/${container.className} has scheduling_policy "${entry.scheduling_policy ?? "default"}" in wrangler.jsonc but defineContainer "${container.exportName}" declares "${declared}" — the policy is immutable, so replace the entry (and its container application) by hand.`,
+            );
+
+            continue;
+        }
+
+        // Named images are the part of a `durable_object` entry the app keeps
+        // editing, and a missing one fails `start({ image })` at runtime.
+        const images = declared === "durable_object" ? durableObjectContainerEntryFor(container).images : undefined;
+
+        if (images !== undefined && JSON.stringify(entry.images) !== JSON.stringify(images)) {
+            nextText = applyModify(nextText, ["containers", index, "images"], images);
+            updated.push(`containers/${container.className}.images`);
+        }
     }
 
-    const nextText = applyModify(text, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
-
-    return { added: missing.map((container) => `containers/${container.className}`), text: nextText };
+    return { added: missing.map((container) => `containers/${container.className}`), text: nextText, updated, warnings };
 };
 
 /**

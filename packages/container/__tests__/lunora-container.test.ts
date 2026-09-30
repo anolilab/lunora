@@ -291,7 +291,19 @@ describe("lunoraContainer native exec", () => {
         expect(proxied).toStrictEqual([]);
     });
 
-    it("kills the process and answers 413 when output overruns maxOutputBytes", async () => {
+    it("kills a still-running process and answers 413 when output overruns maxOutputBytes", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: streamOf(""), stdout: streamOf("0123456789") };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "yes", maxOutputBytes: 4 })))).resolves.toBe(413);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("never kills a process that already exited, even when its output overran the cap", async () => {
         expect.assertions(2);
 
         const kill = vi.fn<() => void>();
@@ -299,8 +311,59 @@ describe("lunoraContainer native exec", () => {
             return { exitCode: Promise.resolve(0), kill, stderr: streamOf(""), stdout: streamOf("0123456789") };
         });
 
-        await expect(statusOf(instance.lunoraExec(execRequest({ command: "yes", maxOutputBytes: 4 })))).resolves.toBe(413);
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "cat", maxOutputBytes: 4 })))).resolves.toBe(413);
+        expect(kill).not.toHaveBeenCalled();
+    });
+
+    it("kills the process and answers 504 when timeoutMs elapses", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: new ReadableStream(), stdout: new ReadableStream() };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "sleep", timeoutMs: 5 })))).resolves.toBe(504);
         expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes the container's start env under the per-call env, since exec processes do not inherit it", async () => {
+        expect.assertions(1);
+
+        const exec = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+            return { exitCode: Promise.resolve(0), kill: () => {}, stderr: streamOf(""), stdout: streamOf("") };
+        });
+        const context = fakeDurableObjectContext({ container: { exec, running: false } });
+        const instance = new LunoraContainer(
+            context as never,
+            { DATABASE_URL: "postgres://x" },
+            defineContainer({ defaultPort: 8080, env: { LOG_LEVEL: "info" }, image: "./app", secrets: ["DATABASE_URL"] }),
+            "runner",
+        );
+
+        vi.spyOn(
+            Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { startAndWaitForPorts: () => Promise<void> },
+            "startAndWaitForPorts",
+        ).mockResolvedValue(undefined);
+        await instance.lunoraExec(execRequest({ command: "psql", env: { LOG_LEVEL: "debug" } }));
+
+        expect(exec.mock.calls[0]![1]).toMatchObject({ env: { DATABASE_URL: "postgres://x", LOG_LEVEL: "debug" } });
+    });
+
+    it("counts a native exec in flight, so sleepAfter cannot stop the container under it", async () => {
+        expect.assertions(2);
+
+        let inflightDuringExec = -1;
+        const { instance } = nativeInstance(async () => {
+            inflightDuringExec = (instance as unknown as { inflightRequests: number }).inflightRequests;
+
+            return { exitCode: Promise.resolve(0), kill: () => {}, stderr: streamOf(""), stdout: streamOf("") };
+        });
+
+        await instance.lunoraExec(execRequest({ command: "true" }));
+
+        expect(inflightDuringExec).toBe(1);
+        expect((instance as unknown as { inflightRequests: number }).inflightRequests).toBe(0);
     });
 
     it("falls back to the container's own route when the runtime has no native exec", async () => {
@@ -660,6 +723,36 @@ describe("lunoraContainer durable_object scheduling", () => {
 
         await expect(instance.start({ image: "gpu" })).rejects.toMatchObject({ code: "CONFLICT" });
         await expect(instance.start({ snapshot: { id: "snap-1", size: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("stores nothing from a rejected start — neither an unknown image nor the env override", async () => {
+        expect.assertions(3);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        const { storage } = context as { storage: { get: (key: string) => Promise<unknown> } };
+
+        await expect(instance.start({ envVars: {}, image: "tpyo" })).rejects.toThrow(/no image named "tpyo"/u);
+
+        await expect(storage.get("__lunoraEnvOverride")).resolves.toBeUndefined();
+        await expect(storage.get("__lunoraStartSelection")).resolves.toBeUndefined();
+    });
+
+    it("keeps a stored image when a later start only changes the size, and accepts a repeat of the running choice", async () => {
+        expect.assertions(2);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ image: "gpu" });
+        await instance.start({ instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 } });
+
+        expect(instance.image).toBe(images.gpu);
+
+        (context as { container: { running: boolean } }).container.running = true;
+
+        await expect(instance.start({ image: "gpu", instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 } })).resolves.toBeUndefined();
     });
 
     it("snapshots a running container and refuses when it is stopped", async () => {

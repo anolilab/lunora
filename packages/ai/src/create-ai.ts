@@ -65,7 +65,8 @@ workersAiUnavailable.textEmbeddingModel = (): never => bindingRequired("this emb
  */
 const CAPACITY_EXCEEDED_CODE = 3040;
 
-const CAPACITY_EXCEEDED_MESSAGE = /\b3040\s*:/u;
+/** The code leads the message (after an optional error name), so "line 3040: …" elsewhere never matches. */
+const CAPACITY_EXCEEDED_MESSAGE = /^(?:[A-Z]\w*:\s*)?3040\s*:/iu;
 
 const isCapacityExceeded = (error: unknown): boolean =>
     (error as { code?: unknown } | null)?.code === CAPACITY_EXCEEDED_CODE || (error instanceof Error && CAPACITY_EXCEEDED_MESSAGE.test(error.message));

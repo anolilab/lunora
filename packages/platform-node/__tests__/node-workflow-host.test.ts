@@ -320,6 +320,24 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         await expect(store.load(instance.id)).resolves.toBeUndefined();
     });
 
+    it("delete frees a caller-supplied id, so a later create with it starts a new run", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const first = await host.bindings.trivial.create({ id: "order-1" });
+
+        await first.delete();
+
+        const second = await host.bindings.trivial.create({ id: "order-1" });
+
+        expect(second.id).not.toBe(first.id);
+        await expect(second.status()).resolves.toMatchObject({ status: "complete" });
+    });
+
     it("deleteBatch reports one entry per input position: duplicates deleted once, unknown ids as errors", async () => {
         expect.hasAssertions();
 
