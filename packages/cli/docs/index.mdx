@@ -364,9 +364,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
 | `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                |
 | `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                        |
-| `ai-binding-missing`             | warn  | The project uses `ctx.ai` but wrangler.jsonc declares no `ai` binding.              |
-| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` in vars; slugs route through the `default` AI Gateway.    |
-| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set in vars without a gateway id, so it is unused.     |
+| `ai-binding-missing`             | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                 |
+| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.   |
+| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.       |
 | `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                              |
 | `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                               |
 | `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                |
@@ -1215,9 +1215,11 @@ Caching and rate limiting are left off.
 The gateway does not pay for third-party models on its own. Before the first
 `<provider>/<model>` call, set one of these up in the dashboard:
 
-- **Unified Billing**: load credits on the account
+- **Unified Billing** for OpenAI, Anthropic, Google, xAI, Groq and DeepSeek: load
+  credits on the account
   ([docs](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)).
-- **BYOK**: store the provider's API key on the gateway
+- **A key stored on the gateway** for other OpenAI-compatible providers (Mistral,
+  Perplexity, OpenRouter, …)
   ([docs](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)).
 
 ### `lunora logs`

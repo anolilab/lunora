@@ -1980,6 +1980,9 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerConfig {
+    ai?: {
+        binding?: unknown;
+    } | null;
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;
@@ -2215,6 +2218,12 @@ interface WranglerWorkflowEntry {
     name?: string;
     script_name?: string;
 }
+```
+
+### `applyModify` (const)
+
+```ts
+const applyModify: (text: string, path: ReadonlyArray<number | string>, value: unknown) => string;
 ```
 
 ### `assertWranglerSatisfiesSchema` (const)

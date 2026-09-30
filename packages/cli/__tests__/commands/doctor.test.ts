@@ -729,14 +729,27 @@ describe("runDoctor", () => {
             expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
         });
 
-        it("warns that a gateway token without a gateway id is unused", async () => {
+        it("warns that ctx.ai ignores a gateway token, even with a gateway id", async () => {
             expect.assertions(1);
 
-            seed(workdir, wranglerWith({ vars: { LUNORA_AI_GATEWAY_TOKEN: "t" } }));
+            seed(workdir, wranglerWith({ ai: { binding: "AI" }, vars: { LUNORA_AI_GATEWAY_ID: "demo", LUNORA_AI_GATEWAY_TOKEN: "t" } }));
+            seedAiUsage(workdir);
 
             const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
             expect(result.findings.find((finding) => finding.code === "ai-gateway-token-unused")?.level).toBe("warn");
+        });
+
+        it("reads the proxy and gateway vars from .dev.vars and env blocks too", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ env: { staging: { vars: { LUNORA_AI_GATEWAY_ID: "demo" } } } }));
+            seedAiUsage(workdir);
+            writeFileSync(join(workdir, ".dev.vars"), `${["LUNORA_AI_PROXY_URL", "https://ai-proxy.internal/v1"].join("=")}\n`, "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
         });
 
         it("reports nothing AI-related for a project that does not use ctx.ai", async () => {

@@ -17,8 +17,7 @@
  */
 import { writeFileSync } from "node:fs";
 
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
-import { applyEdits, modify } from "jsonc-parser";
+import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { capErrorBody } from "../../../../../shared/cap-error-body";
 import type { CommandHandler } from "../../util/command";
@@ -26,12 +25,7 @@ import { defineHandler } from "../../util/command";
 import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { AiOptions } from "./index";
-
-/** Worker env var naming the gateway (read by `@lunora/ai`'s gateway resolution). */
-const GATEWAY_ID_VAR = "LUNORA_AI_GATEWAY_ID";
-
-/** Worker env var naming the account that owns the gateway (read by `@lunora/ai`). */
-const GATEWAY_ACCOUNT_ID_VAR = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
+import { AI_GATEWAY_ACCOUNT_ID_VAR, AI_GATEWAY_ID_VAR } from "./variables";
 
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
 
@@ -138,9 +132,8 @@ const describeFailure = (response: GatewayResponse): string => {
 
 /**
  * Rewrite the top-level wrangler `vars` so they carry `entries`, returning the
- * new text and the keys that actually changed. Uses `jsonc-parser`'s `modify`
- * (the edit idiom every wrangler reconciler uses) so comments and formatting
- * survive.
+ * new text and the keys that actually changed. Uses the wrangler reconcilers'
+ * shared `applyModify` so comments and formatting survive.
  */
 const writeVariables = (text: string, current: Record<string, unknown> | undefined, entries: Record<string, string>): { changed: string[]; text: string } => {
     let next = text;
@@ -151,9 +144,7 @@ const writeVariables = (text: string, current: Record<string, unknown> | undefin
             continue;
         }
 
-        const edits = modify(next, ["vars", key], value, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
-
-        next = applyEdits(next, edits);
+        next = applyModify(next, ["vars", key], value);
         changed.push(key);
     }
 
@@ -163,19 +154,20 @@ const writeVariables = (text: string, current: Record<string, unknown> | undefin
 const printNextSteps = (logger: Logger, gatewayId: string): void => {
     logger.info(`next: \`<provider>/<model>\` slugs (e.g. "anthropic/claude-sonnet-5") now route through gateway "${gatewayId}". Before the first call,`);
     logger.info(`  configure how the provider is paid for in the Cloudflare dashboard (AI > AI Gateway > ${gatewayId}):`);
-    logger.info(`  - Unified Billing: load credits — ${DOCS.unifiedBilling}`);
-    logger.info(`  - or BYOK: store the provider's API key on the gateway — ${DOCS.byok}`);
+    logger.info(`  - Unified Billing (OpenAI, Anthropic, Google, xAI, Groq, DeepSeek): load credits — ${DOCS.unifiedBilling}`);
+    logger.info(`  - a key stored on the gateway (Mistral, Perplexity, OpenRouter, …): ${DOCS.byok}`);
     logger.info("  Then redeploy (`lunora deploy`) so the Worker picks up the new vars.");
 };
 
-/** Create the gateway, or reuse it when the id is already taken on the account. */
+/** Create the gateway, or reuse it when the id is already taken on the account. A failure is logged and returned as the command result. */
 const ensureGateway = async (
+    logger: Logger,
     fetchImpl: typeof globalThis.fetch,
     accountId: string,
     token: string,
     gatewayId: string,
     collectLogs: boolean,
-): Promise<{ action: "created" | "existing"; collectLogs: boolean } | { code: number; error: string }> => {
+): Promise<AiCommandResult | { action: "created" | "existing"; collectLogs: boolean }> => {
     const base = `${API_BASE}/${encodeURIComponent(accountId)}/ai-gateway/gateways`;
     const existing = await callGatewayApi(fetchImpl, `${base}/${encodeURIComponent(gatewayId)}`, token);
 
@@ -189,7 +181,7 @@ const ensureGateway = async (
     // the create call: the API reference does not pin the status an unknown id
     // answers with, and a create failure carries the more useful error anyway.
     if (existing.status === 401 || existing.status === 403) {
-        return { code: exitCodeForStatus(existing.status), error: `could not read AI Gateway "${gatewayId}" (${describeFailure(existing)})` };
+        return fail(logger, exitCodeForStatus(existing.status), `ai gateway: could not read AI Gateway "${gatewayId}" (${describeFailure(existing)})`);
     }
 
     // The create endpoint requires these six fields; caching and rate limiting
@@ -207,7 +199,7 @@ const ensureGateway = async (
     });
 
     if (!created.ok) {
-        return { code: exitCodeForStatus(created.status), error: `could not create AI Gateway "${gatewayId}" (${describeFailure(created)})` };
+        return fail(logger, exitCodeForStatus(created.status), `ai gateway: could not create AI Gateway "${gatewayId}" (${describeFailure(created)})`);
     }
 
     return { action: "created", collectLogs };
@@ -221,44 +213,39 @@ interface GatewayProject {
     wranglerPath: string;
 }
 
-/** Locate + parse the wrangler config and resolve the gateway id (`--id`, else the worker `name`). */
-const resolveProject = (options: AiCommandOptions): GatewayProject | { code: number; message: string } => {
+/**
+ * Locate + parse the wrangler config and resolve the gateway id (`--id`, else
+ * the worker `name`). A failure is logged and returned as the command result.
+ */
+const resolveProject = (options: AiCommandOptions): AiCommandResult | GatewayProject => {
+    const { logger } = options;
     const wranglerPath = findWranglerFile(options.cwd);
 
     if (wranglerPath === undefined) {
-        return { code: EXIT_CODE.NOT_FOUND, message: "ai gateway: no wrangler.jsonc found — run `lunora init` (or `lunora dev`) first." };
+        return fail(logger, EXIT_CODE.NOT_FOUND, "ai gateway: no wrangler.jsonc found — run `lunora init` (or `lunora dev`) first.");
     }
 
     const { parsed, text } = readWranglerJsonc<WranglerAiShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { code: EXIT_CODE.USAGE, message: `ai gateway: could not parse ${wranglerPath} as JSONC.` };
+        return fail(logger, EXIT_CODE.USAGE, `ai gateway: could not parse ${wranglerPath} as JSONC.`);
     }
 
     const gatewayId = nonEmpty(options.id) ?? nonEmpty(parsed.name);
 
     if (gatewayId === undefined) {
-        return { code: EXIT_CODE.USAGE, message: "ai gateway: no gateway id — pass --id <id>, or set `name` in wrangler.jsonc." };
+        return fail(logger, EXIT_CODE.USAGE, "ai gateway: no gateway id — pass --id <id>, or set `name` in wrangler.jsonc.");
     }
 
     if (gatewayId.length > MAX_GATEWAY_ID_LENGTH) {
-        return {
-            code: EXIT_CODE.USAGE,
-            message: `ai gateway: gateway id "${gatewayId}" is longer than ${String(MAX_GATEWAY_ID_LENGTH)} characters — pass a shorter --id.`,
-        };
+        return fail(
+            logger,
+            EXIT_CODE.USAGE,
+            `ai gateway: gateway id "${gatewayId}" is longer than ${String(MAX_GATEWAY_ID_LENGTH)} characters — pass a shorter --id.`,
+        );
     }
 
     return { gatewayId, parsed, text, wranglerPath };
-};
-
-/** Name every missing credential, or `undefined` when both are present. */
-const describeMissingCredentials = (token: string | undefined, accountId: string | undefined): string | undefined => {
-    const missing = [
-        token === undefined ? "CLOUDFLARE_API_TOKEN (an API token with AI Gateway Write)" : undefined,
-        accountId === undefined ? "CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc)" : undefined,
-    ].filter((entry): entry is string => entry !== undefined);
-
-    return missing.length === 0 ? undefined : missing.join(" and ");
 };
 
 const onOff = (value: boolean): string => (value ? "on" : "off");
@@ -267,15 +254,20 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     const { logger } = options;
     const project = resolveProject(options);
 
-    if ("message" in project) {
-        return fail(logger, project.code, project.message);
+    if ("code" in project) {
+        return project;
     }
 
     const { gatewayId, parsed, text, wranglerPath } = project;
     const environment = options.environment ?? process.env;
     const collectLogs = options.logs !== false;
     const accountId = nonEmpty(environment.CLOUDFLARE_ACCOUNT_ID) ?? nonEmpty(parsed.account_id);
-    const variables: Record<string, string> = { [GATEWAY_ID_VAR]: gatewayId, ...(accountId === undefined ? {} : { [GATEWAY_ACCOUNT_ID_VAR]: accountId }) };
+    // The account id is only read by bring-your-own providers (`resolveAiGateway`'s
+    // `baseURL`); the binding path needs the gateway id alone.
+    const variables: Record<string, string> = {
+        [AI_GATEWAY_ID_VAR]: gatewayId,
+        ...(accountId === undefined ? {} : { [AI_GATEWAY_ACCOUNT_ID_VAR]: accountId }),
+    };
     const written = writeVariables(text, parsed.vars, variables);
 
     if (options.dryRun === true) {
@@ -290,16 +282,20 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     }
 
     const token = nonEmpty(environment.CLOUDFLARE_API_TOKEN);
-    const missing = describeMissingCredentials(token, accountId);
 
-    if (missing !== undefined || token === undefined || accountId === undefined) {
-        return fail(logger, EXIT_CODE.AUTH, `ai gateway: missing ${missing ?? "credentials"}.`);
+    if (token === undefined || accountId === undefined) {
+        const missing = [
+            token === undefined ? "CLOUDFLARE_API_TOKEN (an API token with AI Gateway Write)" : undefined,
+            accountId === undefined ? "CLOUDFLARE_ACCOUNT_ID (or `account_id` in wrangler.jsonc)" : undefined,
+        ].filter((entry) => entry !== undefined);
+
+        return fail(logger, EXIT_CODE.AUTH, `ai gateway: missing ${missing.join(" and ")}.`);
     }
 
-    const outcome = await ensureGateway(options.fetch ?? globalThis.fetch.bind(globalThis), accountId, token, gatewayId, collectLogs);
+    const outcome = await ensureGateway(logger, options.fetch ?? globalThis.fetch.bind(globalThis), accountId, token, gatewayId, collectLogs);
 
-    if ("error" in outcome) {
-        return fail(logger, outcome.code, `ai gateway: ${outcome.error}`);
+    if ("code" in outcome) {
+        return outcome;
     }
 
     if (outcome.action === "created") {
