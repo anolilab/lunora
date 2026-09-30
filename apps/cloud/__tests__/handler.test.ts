@@ -7,6 +7,7 @@ import { TokenBucket } from "../src/deploy/token-bucket";
 import type { Provisioner } from "../src/provision";
 import type { BindingRequirement, TenantDeploymentSpec } from "../src/provision-contract";
 import readJson from "../src/read-json";
+import memoryReleaseStore from "./_helpers/memory-release-store";
 
 const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", type: "production" };
 
@@ -14,7 +15,7 @@ const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", typ
 const BUNDLE = btoa("export default {}");
 
 const okProvisioner: Provisioner = {
-    deploy: () => Promise.resolve({ bundleHash: "h1", scriptName: "s", url: "https://proj.lunora.app" }),
+    deploy: () => Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" }),
     destroy: () => Promise.resolve(),
 };
 
@@ -31,6 +32,7 @@ const deps = (backend: DeployBackend, provisioner: Provisioner): DeployHandlerDe
         cell: "cell-1",
         dispatchNamespace: (kind) => `lunora-${kind}`,
         provisioner,
+        releases: memoryReleaseStore().store,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
     };
 };
@@ -48,6 +50,8 @@ const readLines = async (response: Response): Promise<Record<string, unknown>[]>
 const backendWith = (overrides: Partial<DeployBackend>): DeployBackend => {
     return {
         createDeployment: () => Promise.resolve({ deploymentId: "dep_1" }),
+        releaseTarget: () => Promise.reject(new Error("no release target in this test")),
+        rollbackDeployment: () => Promise.reject(new Error("no rollback in this test")),
         updateStatus: () => Promise.resolve(),
         verifyKey: () => Promise.resolve(target),
         ...overrides,
@@ -101,7 +105,7 @@ describe(handleDeployRequest, () => {
             deploy: (spec) => {
                 uploaded = spec.bundle;
 
-                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+                return Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" });
             },
             destroy: () => Promise.resolve(),
         };
@@ -261,7 +265,7 @@ const capture = (): { provisioner: Provisioner; specs: TenantDeploymentSpec[] } 
             deploy: (spec: TenantDeploymentSpec) => {
                 specs.push(spec);
 
-                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+                return Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" });
             },
             destroy: () => Promise.resolve(),
         },
@@ -365,7 +369,6 @@ describe("deploy manifest validation", () => {
                 compatibilityDate: "2026-09-01",
                 compatibilityFlags: ["nodejs_compat"],
             },
-            scriptName: "s",
             tags: ["org:org_1", "project:proj_1", "env:production"],
         });
         expect(specs[0]).not.toHaveProperty("bindings");

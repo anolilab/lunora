@@ -247,7 +247,7 @@ export const markDelivered = mutation
  *
  * A plain exported helper rather than a mutation of its own, because every caller
  * is already inside a mutation that has just written the failure it is reporting:
- * `builds.fail`, `deployments.updateStatus`, and the rollout guard. Firing in the
+ * `builds.fail` and `deployments.updateStatus`. Firing in the
  * same transaction is what makes "the build is marked failed" and "somebody was
  * told" one outcome instead of two that can disagree.
  *

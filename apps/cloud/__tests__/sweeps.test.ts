@@ -6,37 +6,60 @@ import type { ControlPlaneDatabase } from "../src/store";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 describe(teardownPorts, () => {
-    it("lists only destroyed-and-not-torn-down rows, mapped to lunora-{kind} targets", async () => {
+    const noop = { deleteRelease: () => Promise.resolve(), destroy: () => Promise.resolve() };
+
+    it("destroys the Worker of an alias with no deployment left, once, and skips torn-down rows", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "d1", alias: "a", kind: "preview", scriptName: "a-v1", status: "destroyed" }, // pending, alias fully destroyed
-                { _id: "d2", alias: "b", kind: "production", scriptName: "b-v2", status: "destroyed", teardownAt: 123 }, // already torn down
+                { _id: "d1", alias: "a", kind: "preview", scriptName: "a", status: "destroyed" },
+                { _id: "d3", alias: "a", kind: "preview", scriptName: "a", status: "destroyed" },
+                { _id: "d2", alias: "b", kind: "production", scriptName: "b", status: "destroyed", teardownAt: 123 },
             ],
         });
 
-        const ports = teardownPorts(database, () => Promise.resolve(), 1000);
-        const pending = await ports.listPending();
+        const pending = await teardownPorts(database, noop, 1000).listPending();
 
-        // Only "a" is fully destroyed with no live sibling → deleteResources true.
-        expect(pending).toStrictEqual([{ alias: "a", deleteResources: true, dispatchNamespace: "lunora-preview", id: "d1", scriptName: "a-v1" }]);
+        // One destroy job per dead alias; the other row only drops its stored bundle.
+        expect(pending).toStrictEqual([
+            { alias: "a", destroyWorker: true, dispatchNamespace: "lunora-preview", id: "d1" },
+            { alias: "a", destroyWorker: false, dispatchNamespace: "lunora-preview", id: "d3" },
+        ]);
     });
 
-    it("keeps per-project resources when the alias still has a non-destroyed deployment (version prune)", async () => {
+    it("prunes stored bundles beyond retention but never the Worker the live release runs on", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "v1", alias: "app", kind: "production", scriptName: "app-v1", status: "destroyed" }, // pruned old version
-                { _id: "v2", alias: "app", kind: "production", scriptName: "app-v2", status: "live" }, // active — shares the DB
+                { _id: "v1", alias: "app", kind: "production", scriptName: "app", status: "destroyed" }, // pruned
+                { _id: "v2", alias: "app", kind: "production", scriptName: "app", status: "failed" }, // never a rollback target
+                { _id: "v3", alias: "app", kind: "production", scriptName: "app", status: "superseded" }, // retained
+                { _id: "v4", alias: "app", kind: "production", scriptName: "app", status: "live" },
             ],
         });
 
-        const pending = await teardownPorts(database, () => Promise.resolve(), 1000).listPending();
+        const pending = await teardownPorts(database, noop, 1000).listPending();
 
-        expect(pending).toStrictEqual([{ alias: "app", deleteResources: false, dispatchNamespace: "lunora-production", id: "v1", scriptName: "app-v1" }]);
+        expect(pending).toStrictEqual([
+            { alias: "app", destroyWorker: false, dispatchNamespace: "lunora-production", id: "v1" },
+            { alias: "app", destroyWorker: false, dispatchNamespace: "lunora-production", id: "v2" },
+        ]);
+    });
+
+    it("keeps the Worker of an alias whose only other deployment failed", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "v1", alias: "app", kind: "production", scriptName: "app", status: "destroyed" },
+                { _id: "v2", alias: "app", kind: "production", scriptName: "app", status: "failed" },
+            ],
+        });
+
+        const pending = await teardownPorts(database, noop, 1000).listPending();
+
+        expect(pending.map((row) => row.destroyWorker)).toStrictEqual([false, false]);
     });
 
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), () => Promise.resolve(), 5000);
+        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000);
 
         await ports.markTornDown("dep_1");
 
@@ -46,7 +69,7 @@ describe(teardownPorts, () => {
     it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
-        const ports = teardownPorts(database, () => Promise.resolve(), 1000);
+        const ports = teardownPorts(database, noop, 1000);
 
         await ports.releaseAlias("app");
 
@@ -55,7 +78,7 @@ describe(teardownPorts, () => {
 
     it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), () => Promise.resolve(), 1000);
+        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000);
 
         await ports.releaseAlias("ghost");
 
@@ -73,12 +96,17 @@ describe(usageRollbackPorts, () => {
             // `name` matters: the port reads the checkpoint `where: { name: cellName }`,
             // so a row without it is a different cell. The old fake returned it anyway.
             cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }],
-            deployments: [{ _id: "dep_a", organizationId: "org_a", scriptName: "a-v1" }],
+            deployments: [
+                { _id: "dep_old", organizationId: "org_a", scriptName: "a", status: "superseded" },
+                { _id: "dep_a", organizationId: "org_a", scriptName: "a", status: "live" },
+                { _id: "dep_new", organizationId: "org_a", scriptName: "a", status: "failed" },
+            ],
         });
 
         const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 500 });
 
-        expect(ports.resolveScript("a-v1")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
+        // Every release shares the alias's script; its usage lands on the live one.
+        expect(ports.resolveScript("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
         expect(ports.resolveScript("missing")).toBeUndefined();
         await expect(ports.getCheckpoint()).resolves.toBe(999);
     });

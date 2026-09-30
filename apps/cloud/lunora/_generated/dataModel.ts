@@ -64,7 +64,6 @@ export interface Doc_projects {
     _creationTime: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
-    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -552,7 +551,7 @@ export interface IndexNamesByTable {
     organizations: "by_slug";
     members: "by_user" | "by_org_user";
     projects: "by_org_slug" | "by_github_repo";
-    deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind" | "by_alias";
+    deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind";
     aliasOwnership: "by_project" | "by_alias";
     metricPoints: "by_org_name_at" | "by_org_at";
     deployKeys: "by_org" | "by_hash";
@@ -751,7 +750,6 @@ export interface Insert_projects {
     _creationTime?: number;
     activeDeploymentId?: string;
     activeScriptName?: string;
-    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     createdAt: number;
     framework?: string;
     githubRepo?: string;

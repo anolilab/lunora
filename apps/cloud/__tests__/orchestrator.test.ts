@@ -13,7 +13,6 @@ const spec: TenantDeploymentSpec = {
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
-    scriptName: "org__project",
     secrets: {},
     tags: ["org:org", "project:project", "env:production"],
 };
@@ -24,7 +23,7 @@ describe(runDeployment, () => {
     it("emits queued → provisioning → live and returns the result on success", async () => {
         const progress: DeployProgress[] = [];
         const provisioner: Provisioner = {
-            deploy: () => Promise.resolve({ bundleHash: "abc123", scriptName: "org__project", url: "https://project.lunora.app" }),
+            deploy: () => Promise.resolve({ bundleHash: "abc123", url: "https://project.lunora.app" }),
             destroy: () => Promise.resolve(),
         };
 
@@ -37,7 +36,7 @@ describe(runDeployment, () => {
         });
 
         expect(progress.map((p) => p.phase)).toStrictEqual(["queued", "provisioning", "live"]);
-        expect(outcome).toStrictEqual({ result: { bundleHash: "abc123", scriptName: "org__project", url: "https://project.lunora.app" }, status: "live" });
+        expect(outcome).toStrictEqual({ result: { bundleHash: "abc123", url: "https://project.lunora.app" }, status: "live" });
         expect(progress.at(-1)).toMatchObject({ bundleHash: "abc123", url: "https://project.lunora.app" });
     });
 
@@ -57,14 +56,26 @@ describe(runDeployment, () => {
         });
 
         expect(progress.map((p) => p.phase)).toStrictEqual(["queued", "provisioning", "failed"]);
-        expect(outcome).toStrictEqual({ error: "dispatch upload rejected", status: "failed" });
+        // The box never reached the Worker, so there is nothing live to revert.
+        expect(outcome).toStrictEqual({ error: "dispatch upload rejected", provisioned: false, status: "failed" });
+    });
+
+    it("reports a failed health check as provisioned — the release is already on the Worker", async () => {
+        const provisioner: Provisioner = {
+            deploy: () => Promise.resolve({ bundleHash: "abc123", url: "https://project.lunora.app" }),
+            destroy: () => Promise.resolve(),
+        };
+
+        const outcome = await runDeployment(spec, { provisioner, scheduler: ampleScheduler(), verify: () => Promise.resolve(false) });
+
+        expect(outcome).toStrictEqual({ error: "health check failed", provisioned: true, status: "failed" });
     });
 });
 
 describe(destroyDeployment, () => {
     it("calls the provisioner's destroy through the scheduler", async () => {
         const destroyed: DestroyRef[] = [];
-        const target: DestroyRef = { alias: "org__project", deleteResources: false, dispatchNamespace: "lunora-preview", scriptName: "org__project" };
+        const target: DestroyRef = { alias: "org__project", dispatchNamespace: "lunora-preview" };
         const provisioner: Provisioner = {
             deploy: () => Promise.reject(new Error("unused")),
             destroy: (reference) => {

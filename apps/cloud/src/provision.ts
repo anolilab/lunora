@@ -20,24 +20,20 @@ import { BINDING_SUPPORT, tenantResourceName } from "./provision-contract";
 
 export interface ProvisionResult {
     bundleHash: string;
-    scriptName: string;
     url: string;
 }
 
-/** A release to tear down (preview TTL cleanup, version prune, project deletion). */
+/** A project to tear down (preview TTL cleanup, project deletion): its Worker, then its resources. */
 export interface DestroyRef {
-    /** The project label; keys the project stack whose resources {@link deleteResources} removes. */
+    /** The project label — names both the Worker and the project stack. */
     alias: string;
-    /** Also destroy the project stack (D1, R2, KV, queues …) — only when this is the alias's last deployment. */
-    deleteResources: boolean;
     dispatchNamespace: string;
-    scriptName: string;
 }
 
 export interface Provisioner {
-    /** Converge a tenant deployment (create/update). Safe to retry. */
+    /** Converge the project's stable Worker onto a release (deploy or rollback). Safe to retry. */
     deploy: (spec: TenantDeploymentSpec) => Promise<ProvisionResult>;
-    /** Tear a release down, and its project's resources when {@link DestroyRef.deleteResources}. */
+    /** Destroy the project's Worker and its resources (D1, R2, KV, queues …) with their data. */
     destroy: (reference: DestroyRef) => Promise<void>;
 }
 
@@ -46,8 +42,8 @@ export interface AlchemyProvisionerOptions {
     box: { get: (name: string) => Pick<ContainerHandle, "fetch"> };
     /** Receives each `log` line the box emits, in order. */
     onLog?: (line: string) => Promise<void> | void;
-    /** Maps a script id to its public URL (routed via the dispatcher). */
-    urlForScript: (scriptName: string) => string;
+    /** Maps an alias (the script name) to its public URL (routed via the dispatcher). */
+    urlForScript: (alias: string) => string;
 }
 
 /** The provision box accessor off a Worker env that carries its `CONTAINER_PROVISION_BOX` binding. */
@@ -55,7 +51,6 @@ export const provisionBoxFrom = (env: Record<string, unknown>): ContainerAccesso
     createContainerContext(env, [{ binding: containerBindingName("provisionBox"), exportName: "provisionBox", maxInstances: provisionBox.maxInstances }])
         .provisionBox;
 
-/** Base64 for the job body — chunked, since spreading a whole bundle into `fromCharCode` overflows the stack. */
 /** The manifest with every provisioned binding's resource name attached — the box never derives names itself. */
 const withResourceNames = (spec: TenantDeploymentSpec): Extract<ProvisionJob, { action: "deploy" }>["spec"]["manifest"] => {
     return {
@@ -66,6 +61,7 @@ const withResourceNames = (spec: TenantDeploymentSpec): Extract<ProvisionJob, { 
     };
 };
 
+/** Base64 for the job body — chunked, since spreading a whole bundle into `fromCharCode` overflows the stack. */
 const toBase64 = (data: ArrayBuffer): string => {
     const bytes = new Uint8Array(data);
     let binary = "";
@@ -153,18 +149,12 @@ export const createAlchemyProvisioner = (options: AlchemyProvisionerOptions): Pr
 
             // The dispatcher's URL, not the box's: tenants are reached through the
             // dispatcher, so a box-reported `workers.dev` URL is not the public one.
-            return { bundleHash, scriptName: spec.scriptName, url: options.urlForScript(spec.scriptName) };
+            return { bundleHash, url: options.urlForScript(spec.alias) };
         },
         destroy: async (reference) => {
             await runJob(
                 options.box.get(reference.alias),
-                {
-                    action: "destroy",
-                    alias: reference.alias,
-                    deleteProjectResources: reference.deleteResources,
-                    dispatchNamespace: reference.dispatchNamespace,
-                    scriptName: reference.scriptName,
-                },
+                { action: "destroy", alias: reference.alias, dispatchNamespace: reference.dispatchNamespace },
                 options.onLog,
             );
         },

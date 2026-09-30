@@ -24,18 +24,15 @@ import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken, sealAdminToken } from "./admin-token";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
+import type { DeployKind, ReleaseDeps } from "./release";
+import { rollbackRelease } from "./release";
+import { createReleaseStore } from "./release-store";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
-import {
-    handleCellRegisterRoute,
-    handlePreviewAuthRoute,
-    handleTenantCustomDomainRoute,
-    handleTenantPlanRoute,
-    handleTenantRouteRoute,
-} from "./routes/tenant-admin";
+import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -637,7 +634,7 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
     }
 
     if (!target) {
-        return jsonError(404, "deployment not found");
+        return jsonError(404, "no live deployment with that id");
     }
 
     // Decrypt the sealed admin token at the edge, exactly as the studio proxy does.
@@ -779,23 +776,115 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    const handleDeployRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
-        const context = environment.__lunoraCtx;
-
-        if (!context) {
-            return Promise.resolve(jsonError(500, "lunora context unavailable"));
+    /**
+     * Everything re-provisioning a release needs, wired to this request's
+     * control-plane context — shared by the deploy route (its automatic revert)
+     * and both rollback routes. `undefined` when the cell has no `RELEASES`
+     * bucket: without stored releases there is nothing to roll back to, so a
+     * deploy is refused rather than shipped unrecoverable.
+     */
+    const releaseDeps = (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv): ReleaseDeps | undefined => {
+        if (!environment.RELEASES) {
+            return undefined;
         }
 
         const cell = environment.LUNORA_CELL ?? "default";
         const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
-        const provisioner = createAlchemyProvisioner({
-            box: provisionBoxFrom(environment),
-            onLog: (line) => {
-                // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
-                console.log("[provision]", line);
+
+        return {
+            backend: {
+                releaseTarget: async ({ deploymentId, key, organizationId }) => {
+                    const row = await context.runQuery<StoredAdminToken & { alias: string; kind: DeployKind; liveDeploymentId?: string; projectId: string }>(
+                        api.deployments.releaseTarget,
+                        { deployKey: key, id: deploymentId, organizationId },
+                    );
+                    // Unsealed here, at the edge, exactly as the studio proxy does.
+                    const adminToken = await resolveAdminToken(row, environment.SECRET_ENCRYPTION_KEY);
+
+                    if (!adminToken) {
+                        throw new LunoraError("CONFLICT", "this deployment has no usable admin token");
+                    }
+
+                    return {
+                        adminToken,
+                        alias: row.alias,
+                        kind: row.kind,
+                        ...(row.liveDeploymentId === undefined ? {} : { liveDeploymentId: row.liveDeploymentId }),
+                        organizationId,
+                        projectId: row.projectId,
+                    };
+                },
+                // Decrypt the project's stored secrets at the edge and hand them to the
+                // deploy spec. No-op when the master key isn't configured.
+                resolveSecrets: async ({ key, kind, organizationId, projectId }) => {
+                    const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, {
+                        deployKey: key,
+                        environment: kind,
+                        organizationId,
+                        projectId,
+                    });
+
+                    // Read the rows FIRST, then decide. Returning `{}` on a missing master
+                    // key meant a control plane whose key was removed, rotated badly, or
+                    // never set in one cell shipped tenant Workers with none of their
+                    // secrets — silently, reported as a successful release, surfacing
+                    // several layers away as the tenant app 500-ing on a missing env var.
+                    // With no secrets configured there is nothing to drop and the deploy
+                    // is genuinely fine, so only the contradiction fails.
+                    if (!environment.SECRET_ENCRYPTION_KEY) {
+                        if (rows.length > 0) {
+                            throw new LunoraError(
+                                "INTERNAL",
+                                `this project has ${String(rows.length)} stored secret(s) but the control plane has no SECRET_ENCRYPTION_KEY to decrypt them — deploying would ship a Worker with none of them`,
+                            );
+                        }
+
+                        return {};
+                    }
+
+                    const entries = await Promise.all(
+                        rows.map(async (row): Promise<[string, string]> => [
+                            row.name,
+                            await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
+                        ]),
+                    );
+
+                    return Object.fromEntries(entries);
+                },
+                rollbackDeployment: ({ deploymentId, key, organizationId }) =>
+                    context.runMutation<{ scriptName: string; version?: number }>(api.deployments.rollback, {
+                        deployKey: key,
+                        id: deploymentId,
+                        organizationId,
+                    }),
             },
-            urlForScript: (scriptName) => `https://${scriptName}.${appDomain}`,
-        });
+            cell,
+            dispatchNamespace: (kind) => `lunora-${kind}`,
+            provisioner: createAlchemyProvisioner({
+                box: provisionBoxFrom(environment),
+                onLog: (line) => {
+                    // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
+                    console.log("[provision]", line);
+                },
+                urlForScript: (alias) => `https://${alias}.${appDomain}`,
+            }),
+            releases: createReleaseStore(environment.RELEASES),
+            // Provision (once per org) the scoped ingest key + hand the tenant its
+            // OTLP endpoint/token/tail-consumer (src/telemetry/ingest-key).
+            resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
+            scheduler,
+        };
+    };
+
+    const handleDeployRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+        const context = requireContext(environment);
+        const release = releaseDeps(context, environment);
+
+        if (!release) {
+            return jsonError(500, "the RELEASES bucket is not configured; a deploy without a stored release could never be rolled back");
+        }
+
+        const cell = environment.LUNORA_CELL ?? "default";
 
         // Fire-and-forget, on the execution context so it outlives the response
         // rather than being cancelled with it. Keyed on the ORGANIZATION: a
@@ -807,8 +896,9 @@ export const createDeployRouter = (): HttpRouterLike => {
         };
 
         const backend: DeployBackend = {
-            // Health-checked blue/green release: swap the stable-URL pointer
-            // and supersede the previous live deployment (GAPS.md A1).
+            ...release.backend,
+            // Record the health-checked release live and supersede the previous
+            // live release of its alias (GAPS.md A1).
             activateDeployment: async ({ deploymentId, key }) => {
                 await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
             },
@@ -817,7 +907,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                 // ciphertext + IV (plaintext only in dev without a master key).
                 const sealed = await sealAdminToken(adminToken, environment.SECRET_ENCRYPTION_KEY);
 
-                return context.runMutation<{ deploymentId: string; scriptName: string; version: number }>(api.deployments.create, {
+                return context.runMutation<{ deploymentId: string; previousDeploymentId?: string; version: number }>(api.deployments.create, {
                     ...sealed,
                     branch,
                     ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
@@ -832,47 +922,11 @@ export const createDeployRouter = (): HttpRouterLike => {
                 await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
             },
             verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
-            // Decrypt the project's stored secrets at the edge and hand them to the
-            // deploy spec. No-op when the master key isn't configured.
-            resolveSecrets: async ({ key, kind, organizationId, projectId }) => {
-                const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, {
-                    deployKey: key,
-                    environment: kind,
-                    organizationId,
-                    projectId,
-                });
-
-                // Read the rows FIRST, then decide. Returning `{}` on a missing master
-                // key meant a control plane whose key was removed, rotated badly, or
-                // never set in one cell shipped tenant Workers with none of their
-                // secrets — silently, reported as a successful release, surfacing
-                // several layers away as the tenant app 500-ing on a missing env var.
-                // With no secrets configured there is nothing to drop and the deploy
-                // is genuinely fine, so only the contradiction fails.
-                if (!environment.SECRET_ENCRYPTION_KEY) {
-                    if (rows.length > 0) {
-                        throw new LunoraError(
-                            "INTERNAL",
-                            `this project has ${String(rows.length)} stored secret(s) but the control plane has no SECRET_ENCRYPTION_KEY to decrypt them — deploying would ship a Worker with none of them`,
-                        );
-                    }
-
-                    return {};
-                }
-                const entries = await Promise.all(
-                    rows.map(async (row): Promise<[string, string]> => [
-                        row.name,
-                        await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
-                    ]),
-                );
-
-                return Object.fromEntries(entries);
-            },
         };
 
-        // Probe the freshly uploaded script before the pointer swap (GAPS.md
-        // A1): any response below 500 counts as healthy (the app may 404 its
-        // root route); a network error or 5xx fails the release.
+        // Probe the project's Worker once the release is on it (GAPS.md A1): any
+        // response below 500 counts as healthy (the app may 404 its root route);
+        // a network error or 5xx fails the release and reverts to the previous one.
         const healthCheck = async (url: string): Promise<boolean> => {
             try {
                 const response = await fetch(url, { method: "GET" });
@@ -883,30 +937,20 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
         };
 
-        return handleDeployRequest(request, {
-            analytics,
-            backend,
-            cell,
-            dispatchNamespace: (kind) => `lunora-${kind}`,
-            healthCheck,
-            provisioner,
-            // Provision (once per org) the scoped ingest key + hand the tenant its
-            // OTLP endpoint/token/tail-consumer (src/telemetry/ingest-key).
-            resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
-            scheduler,
-        });
+        return handleDeployRequest(request, { ...release, analytics, backend, healthCheck });
     };
 
-    // POST /v1/deployments/rollback — swap the stable URL back to a retained
-    // release (GAPS.md A1). Deploy-key bearer authorized; body carries the
-    // target deployment + org.
-    const handleRollbackRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    /**
+     * Roll a project back to a retained release: re-provision its stored bundle
+     * onto the alias's Worker, then record it live (GAPS.md A1). `key` is the
+     * deploy key, or `undefined` for the studio, whose member session authorizes.
+     */
+    const rollback = async (request: Request, environment: RouterEnv, key: string | undefined): Promise<Response> => {
         const context = requireContext(environment);
+        const release = releaseDeps(context, environment);
 
-        const key = strictBearer(request);
-
-        if (!key) {
-            return jsonError(401, "missing bearer deploy key");
+        if (!release) {
+            return jsonError(500, "the RELEASES bucket is not configured");
         }
 
         let body: { deploymentId?: string; organizationId?: string };
@@ -922,17 +966,23 @@ export const createDeployRouter = (): HttpRouterLike => {
         }
 
         try {
-            const result = await context.runMutation<{ scriptName: string; version?: number }>(api.deployments.rollback, {
-                deployKey: key,
-                id: body.deploymentId,
-                organizationId: body.organizationId,
-            });
+            const result = await rollbackRelease({ deploymentId: body.deploymentId, key, organizationId: body.organizationId }, release);
 
             return Response.json({ ok: true, ...result });
         } catch (error) {
             return rejected(error, "rollback failed");
         }
     };
+
+    // POST /v1/deployments/rollback — the CLI's rollback, deploy-key authorized.
+    const handleRollbackRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+        const key = strictBearer(request);
+
+        return key ? rollback(request, environment, key) : jsonError(401, "missing bearer deploy key");
+    };
+
+    // POST /v1/rollback — the studio's rollback, under the caller's member session.
+    const handleSessionRollbackRoute = (request: Request, environment: RouterEnv): Promise<Response> => rollback(request, environment, undefined);
 
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can
@@ -950,7 +1000,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             path: "/v1/deployments/rollback",
             spec: {
                 auth: "deployKey",
-                mcp: { description: "Roll a project's stable URL back to a retained deployment (needs deploymentId + organizationId)." },
+                mcp: { description: "Roll a project back to a retained release by re-provisioning its stored bundle (needs deploymentId + organizationId)." },
             },
         },
         { handler: handleLogsIngestRoute, method: "POST", path: "/v1/logs/ingest", spec: { auth: "deployKey" } },
@@ -962,6 +1012,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
+        { handler: handleSessionRollbackRoute, method: "POST", path: "/v1/rollback", spec: { auth: "session" } },
         { handler: handleEjectRoute, method: "POST", path: "/v1/eject", spec: { auth: "deployKey" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
@@ -976,7 +1027,6 @@ export const createDeployRouter = (): HttpRouterLike => {
         // adminToken — the dispatcher/platform trust boundary (LUNORA_ADMIN_TOKEN).
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
         { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
-        { handler: handleTenantRouteRoute, method: "GET", path: "/v1/tenants/route", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
     ];

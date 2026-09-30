@@ -29,7 +29,6 @@ const deployJob = (bindings: BindingRequirement[], overrides: Partial<DeployJob[
             cell: "cell-1",
             dispatchNamespace: "lunora-production",
             manifest: { bindings: bindings.map((requirement) => withName(requirement)) },
-            scriptName: "acme-v3",
             secrets: {},
             tags: ["org:o1", "project:p1", "env:production"],
             ...overrides,
@@ -45,7 +44,7 @@ const refuse = (job: ProvisionJob, message: RegExp) => {
 };
 
 describe("provision plan: deploy", () => {
-    it("orders the project stack before the release, both on the namespace stage", () => {
+    it("orders the project stack before the Worker, both on the namespace stage", () => {
         expect.assertions(2);
 
         const result = plan(deployJob([]));
@@ -53,14 +52,28 @@ describe("provision plan: deploy", () => {
         expect(result.stage).toBe("lunora-production");
         expect(result.steps).toStrictEqual([
             { kind: "project", op: "deploy", stackName: "lunora-project-acme" },
-            { kind: "release", op: "deploy", stackName: "lunora-release-acme-v3" },
+            { kind: "worker", op: "deploy", stackName: "lunora-worker-acme" },
         ]);
     });
 
-    it("creates d1/kv/r2 in the project stack and binds them into the release by reference", () => {
+    it("names the Worker by the alias, so every release converges the same script and keeps its Durable Object data", () => {
         expect.assertions(2);
 
-        const { project, release } = plan(
+        const first = plan(deployJob([{ binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" }]));
+        const second = plan(
+            deployJob([{ binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" }], {
+                bundle: Buffer.from("export default { v: 2 }").toString("base64"),
+            }),
+        );
+
+        expect(first.worker?.workerName).toBe("acme");
+        expect(second.worker).toMatchObject({ stackName: first.worker?.stackName, workerName: first.worker?.workerName });
+    });
+
+    it("creates d1/kv/r2 in the project stack and binds them into the Worker by reference", () => {
+        expect.assertions(2);
+
+        const { project, worker } = plan(
             deployJob([
                 { binding: "DB", type: "d1" },
                 { binding: "CACHE", type: "kv" },
@@ -73,7 +86,7 @@ describe("provision plan: deploy", () => {
             { id: "kv-acme--cache", kind: "kv", name: "acme--cache" },
             { id: "r2-acme--files", kind: "r2", name: "acme--files" },
         ]);
-        expect(release?.bindings).toStrictEqual([
+        expect(worker?.bindings).toStrictEqual([
             { binding: "DB", id: "d1-acme--db", kind: "ref", resource: "d1" },
             { binding: "CACHE", id: "kv-acme--cache", kind: "ref", resource: "kv" },
             { binding: "FILES", id: "r2-acme--files", kind: "ref", resource: "r2" },
@@ -83,7 +96,7 @@ describe("provision plan: deploy", () => {
     it("gives each producer its own queue and consumes it from the control plane only when the app consumes it", () => {
         expect.assertions(2);
 
-        const { project, release } = plan(
+        const { project, worker } = plan(
             deployJob([
                 { binding: "JOBS", resource: "jobs", type: "queue_producer" },
                 { binding: "EVENTS", resource: "events", type: "queue_producer" },
@@ -93,7 +106,7 @@ describe("provision plan: deploy", () => {
 
         expect(project?.consumers).toStrictEqual([{ id: "queue-acme--jobs-consumer", queueId: "queue-acme--jobs", scriptName: "lunora-cloud-production" }]);
         // The consumer entry itself binds nothing.
-        expect(release?.bindings.map((binding) => binding.binding)).toStrictEqual(["JOBS", "EVENTS"]);
+        expect(worker?.bindings.map((binding) => binding.binding)).toStrictEqual(["JOBS", "EVENTS"]);
     });
 
     it("refuses a routed queue when the control-plane script is not configured", () => {
@@ -107,10 +120,10 @@ describe("provision plan: deploy", () => {
         expect(() => planJob(job, { controlPlaneScript: undefined })).toThrow(/LUNORA_CONTROL_PLANE_SCRIPT/u);
     });
 
-    it("binds account capabilities, Durable Objects and the renamed dataset directly on the release", () => {
+    it("binds account capabilities, Durable Objects and the renamed dataset directly on the Worker", () => {
         expect.assertions(2);
 
-        const { project, release } = plan(
+        const { project, worker } = plan(
             deployJob([
                 { binding: "AI", type: "ai" },
                 { binding: "BROWSER", type: "browser" },
@@ -121,7 +134,7 @@ describe("provision plan: deploy", () => {
         );
 
         expect(project?.resources).toStrictEqual([]);
-        expect(release?.bindings).toStrictEqual([
+        expect(worker?.bindings).toStrictEqual([
             { binding: "AI", kind: "ai" },
             { binding: "BROWSER", kind: "browser" },
             { binding: "IMAGES", kind: "images" },
@@ -133,30 +146,30 @@ describe("provision plan: deploy", () => {
     it("applies the platform compatibility defaults, and the manifest's own when given", () => {
         expect.assertions(2);
 
-        expect(plan(deployJob([])).release?.compatibility).toStrictEqual({ date: DEFAULT_COMPATIBILITY_DATE, flags: ["nodejs_compat"] });
+        expect(plan(deployJob([])).worker?.compatibility).toStrictEqual({ date: DEFAULT_COMPATIBILITY_DATE, flags: ["nodejs_compat"] });
 
         const job = deployJob([]);
 
         job.spec.manifest.compatibilityDate = "2025-01-01";
         job.spec.manifest.compatibilityFlags = ["nodejs_als"];
 
-        expect(plan(job).release?.compatibility).toStrictEqual({ date: "2025-01-01", flags: ["nodejs_als"] });
+        expect(plan(job).worker?.compatibility).toStrictEqual({ date: "2025-01-01", flags: ["nodejs_als"] });
     });
 
     it("carries vars as values, secrets by name only, tags, tail consumers and the namespace", () => {
         expect.assertions(1);
 
-        const { release } = plan(
+        const { worker } = plan(
             deployJob([], { secrets: { API_KEY: "s3cret-value" }, tailConsumers: ["lunora-tail"], vars: { LUNORA_OTLP_ENDPOINT: "https://otlp" } }),
         );
 
-        expect({ ...release, vars: { ...release?.vars } }).toMatchObject({
+        expect({ ...worker, vars: { ...worker?.vars } }).toMatchObject({
             namespace: "lunora-production",
             secretNames: ["API_KEY"],
             tags: ["org:o1", "project:p1", "env:production"],
             tailConsumers: ["lunora-tail"],
             vars: { LUNORA_OTLP_ENDPOINT: "https://otlp" },
-            workerName: "acme-v3",
+            workerName: "acme",
         });
     });
 
@@ -171,7 +184,7 @@ describe("provision plan: deploy", () => {
 
         const assets = { config: { not_found_handling: "single-page-application" as const }, files: [{ content: "aGk=", path: "/index.html" }] };
 
-        expect(plan(deployJob([{ binding: "ASSETS", type: "assets" }], { assets })).release?.assets).toStrictEqual({
+        expect(plan(deployJob([{ binding: "ASSETS", type: "assets" }], { assets })).worker?.assets).toStrictEqual({
             config: { htmlHandling: undefined, notFoundHandling: "single-page-application", runWorkerFirst: undefined },
         });
 
@@ -237,10 +250,10 @@ describe("provision plan: refusals", () => {
     it("keeps __proto__ an ordinary own key when it is a valid identifier", () => {
         expect.assertions(2);
 
-        const { release } = plan(deployJob([], { vars: JSON.parse('{"__proto__":"x"}') as Record<string, string> }));
+        const { worker } = plan(deployJob([], { vars: JSON.parse('{"__proto__":"x"}') as Record<string, string> }));
 
-        expect(Object.getPrototypeOf(release?.vars)).toBeNull();
-        expect(Object.keys(release?.vars ?? {})).toStrictEqual(["__proto__"]);
+        expect(Object.getPrototypeOf(worker?.vars)).toBeNull();
+        expect(Object.keys(worker?.vars ?? {})).toStrictEqual(["__proto__"]);
     });
 
     it("refuses a name declared twice across bindings, vars and secrets", () => {
@@ -307,26 +320,16 @@ describe("provision plan: refusals", () => {
 });
 
 describe("provision plan: destroy", () => {
-    it("removes only the release by default, leaving project data", () => {
+    it("removes the Worker, then the project stack — destroy is only sent for a project that is gone", () => {
         expect.assertions(1);
 
-        expect(
-            plan({ action: "destroy", alias: ALIAS, deleteProjectResources: false, dispatchNamespace: "lunora-production", scriptName: "acme-v3" }),
-        ).toStrictEqual({
+        expect(plan({ action: "destroy", alias: ALIAS, dispatchNamespace: "lunora-production" })).toStrictEqual({
             stage: "lunora-production",
-            steps: [{ kind: "release", op: "destroy", stackName: "lunora-release-acme-v3" }],
+            steps: [
+                { kind: "worker", op: "destroy", stackName: "lunora-worker-acme" },
+                { kind: "project", op: "destroy", stackName: "lunora-project-acme" },
+            ],
         });
-    });
-
-    it("removes the release, then the project stack, when the project is deleted", () => {
-        expect.assertions(1);
-
-        expect(
-            plan({ action: "destroy", alias: ALIAS, deleteProjectResources: true, dispatchNamespace: "lunora-production", scriptName: "acme-v3" }).steps,
-        ).toStrictEqual([
-            { kind: "release", op: "destroy", stackName: "lunora-release-acme-v3" },
-            { kind: "project", op: "destroy", stackName: "lunora-project-acme" },
-        ]);
     });
 });
 

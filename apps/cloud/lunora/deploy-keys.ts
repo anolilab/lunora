@@ -287,17 +287,19 @@ const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
 /**
  * The org's platform-managed ingest key ciphertext, for the deploy path to
  * re-inject into a tenant's `otlpSink`. Deploy-key authorized (the caller is a
- * live deploy holding the org's deploy key). Returns the envelope only — never
+ * live deploy holding the org's deploy key), or an owner/admin session for the
+ * studio's rollback — the same roles that may roll back. Returns the envelope only — never
  * plaintext — or `null` when the org has no ingest key yet. The cipher is inert
  * without the master key, so exposing it to the deploy edge is safe.
  */
 export const ingestKeyCipher = internalQuery
     .input({
-        deployKey: boundedString(LIMITS.token),
+        // Absent for the studio's rollback, which runs under an owner/admin session.
+        deployKey: v.optional(boundedString(LIMITS.token)),
         organizationId: v.id("organizations"),
     })
     .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
-        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
+        await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, "org-wide") : assertMember(context, organizationId, ["owner", "admin"]));
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
 

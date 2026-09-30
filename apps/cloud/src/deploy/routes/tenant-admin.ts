@@ -113,33 +113,6 @@ export const handlePreviewAuthRoute = async (request: Request, environment: Rout
 };
 
 /**
- * `GET /v1/tenants/route?alias=&lt;label>` — resolve a stable subdomain alias to
- * the project's active versioned script (the blue/green pointer, GAPS.md A1).
- * Bearer-gated with `LUNORA_ADMIN_TOKEN`, same trust model as the plan lookup.
- */
-export const handleTenantRouteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = requireContext(environment);
-
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
-
-    const alias = new URL(request.url).searchParams.get("alias");
-
-    if (!alias) {
-        return jsonError(400, "alias is required");
-    }
-
-    const result = await context.runQuery<null | { candidateScriptName?: string; percent?: number; scriptName: string }>(api.deployments.routeForAlias, {
-        alias,
-    });
-
-    return Response.json(result ?? { scriptName: null });
-};
-
-/**
  * `GET /v1/tenants/custom-domain?host=&lt;hostname>` — resolve a verified custom
  * hostname to a redirect or the owning project's active script, for the
  * dispatcher (GAPS.md B1). Bearer-gated with `LUNORA_ADMIN_TOKEN`.

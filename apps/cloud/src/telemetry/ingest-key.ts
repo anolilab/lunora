@@ -48,7 +48,7 @@ export interface TelemetryConfig {
 export const resolveTelemetryConfig = async (
     context: IngestKeyContext,
     env: IngestKeyEnv,
-    input: { key: string; organizationId: string },
+    input: { key?: string; organizationId: string },
 ): Promise<TelemetryConfig | undefined> => {
     const endpoint = env.LUNORA_OTLP_ENDPOINT;
     const encryptionKey = env.SECRET_ENCRYPTION_KEY;
@@ -66,6 +66,11 @@ export const resolveTelemetryConfig = async (
 
     if (existing) {
         cipher = existing;
+    } else if (input.key === undefined) {
+        // A session caller (the studio's rollback) cannot mint the org's ingest
+        // key — minting is bound to a deploy key. An org with no key has never
+        // deployed with telemetry, so there is nothing to re-inject.
+        return undefined;
     } else {
         // Mint an `ingest`-capability key (telemetry-only — can't deploy), store it
         // encrypted, and use the mutation's returned effective cipher.

@@ -34,7 +34,7 @@ export interface BuildRunnerPorts {
     /**
      * Build → deploy handoff (GAPS.md ring-2): feed the built bundle into the
      * release path (`POST /v1/deploy` with the project's deploy key — the
-     * health-gated blue/green pipeline takes it from there). A release failure
+     * health-checked release path takes it from there). A release failure
      * fails the *deploy*, never the completed build. Omit for build-only runs.
      */
     release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<{ deploymentId: string; url?: string }>;

@@ -23,8 +23,8 @@ export type MetricTarget = "error_rate" | "latency_p95" | "llm_cost";
 
 /**
  * Event targets — something that happened once, with no quantity to compare.
- * `deploy` covers the release path's bad outcomes: a build failed, a deployment
- * failed, or the rollout guard aborted a canary.
+ * `deploy` covers the release path's bad outcomes: a build failed or a
+ * deployment failed.
  *
  * Separate from {@link CountTarget} because a count target fires when a running
  * total crosses a line and therefore needs a threshold; a failed release has no
@@ -123,7 +123,7 @@ export interface DeployAlertSource {
     /** What went wrong, in the operator's words — a build error, a status, an abort reason. */
     detail: string;
     /** Which part of the release path produced it. */
-    kind: "build" | "deployment" | "rollout";
+    kind: "build" | "deployment";
     /** The project the release belongs to. */
     project: string;
     /** What identifies the failing thing — a branch, a commit, a script name. */
@@ -134,7 +134,6 @@ export interface DeployAlertSource {
 const DEPLOY_KIND_LABEL: Record<DeployAlertSource["kind"], string> = {
     build: "Build failed",
     deployment: "Deployment failed",
-    rollout: "Rollout aborted",
 };
 
 /**
@@ -164,11 +163,8 @@ export interface DeployRule {
  * notification and insert a `firing` alert row via the caller's `insertAlert`.
  *
  * Deliberately here, next to {@link fireCrossedRules}, and with the same injected
- * `insertAlert`. Both callers — `lunora/alerts.ts` over the typed `ctx.db` and
- * `src/telemetry/deploy-alerts.ts` over the structural `ControlPlaneDatabase` —
- * hold different database handles and neither can borrow the other's, but the
- * part that differs is one method call. The row shape is not; a third hand-written
- * copy of these eleven fields is a third place to be wrong when a column is added.
+ * `insertAlert`, so the row shape is written once however the caller holds the
+ * database.
  *
  * Returns nothing to deliver, unlike the count path: a `deploy` alert is raised
  * from inside mutations that have no `fetch`, so the drain sweep sends it.

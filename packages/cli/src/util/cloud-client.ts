@@ -83,7 +83,7 @@ const stripTrailingSlashes = (value: string): string => {
     return result;
 };
 
-/** `POST /v1/deployments/rollback` — swap the project's stable URL to a retained release. */
+/** `POST /v1/deployments/rollback` — re-provision a retained release onto the project's Worker. */
 const rollbackDeployment = async (options: RollbackOptions): Promise<{ scriptName: string; version?: number }> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
 

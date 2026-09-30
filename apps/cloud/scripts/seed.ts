@@ -351,7 +351,7 @@ const ensureDeployment = async (
         return found._id;
     }
 
-    const created = await rpc<{ deploymentId: string; scriptName: string; version: number }>(cookie, "deployments:create", {
+    const created = await rpc<{ deploymentId: string; version: number }>(cookie, "deployments:create", {
         // A representative spread of Cloudflare resource kinds, so the deployment's
         // binding graph has something to draw. These mirror what a real wrangler
         // config for an app like this one would declare.

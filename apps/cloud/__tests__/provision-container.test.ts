@@ -33,7 +33,6 @@ const deployJob = (dispatchNamespace = "lunora-production") => {
             cell: "cell-1",
             dispatchNamespace,
             manifest: { bindings: [{ binding: "DB", resourceName: "acme-db", type: "d1" }] },
-            scriptName: "acme-v1",
             secrets: { API_KEY: "s3cret-value" },
             tags: ["org:o1"],
         },
@@ -90,24 +89,24 @@ describe("provision box", { timeout: 20_000 }, () => {
         expect(response.status).toBe(200);
     });
 
-    it("deploys the project stack, then the release, and ends with exactly one result", async () => {
+    it("deploys the project stack, then the Worker, and ends with exactly one result", async () => {
         expect.assertions(6);
 
         const response = await post(deployJob());
         const stream = await events(response);
-        const [project, release] = reports(stream);
+        const [project, worker] = reports(stream);
 
         expect(response.headers.get("content-type")).toBe("application/x-ndjson");
         expect(project).toMatchObject({
             args: ["deploy", expect.stringMatching(/program\.mjs$/u), "--stage", "lunora-production", "--yes", "--no-input"],
             stack: "project",
         });
-        // Secrets reach only the release step; the bundle is on disk for Alchemy to upload.
-        expect([project?.hasSecrets, release?.hasSecrets]).toStrictEqual([false, true]);
-        expect(release?.bundle).toBe("export default { fetch() {} }");
+        // Secrets reach only the worker step; the bundle is on disk for Alchemy to upload.
+        expect([project?.hasSecrets, worker?.hasSecrets]).toStrictEqual([false, true]);
+        expect(worker?.bundle).toBe("export default { fetch() {} }");
         expect(stream.filter((event) => event.type !== "log")).toStrictEqual([{ type: "result" }]);
         // The workspace is removed once the job ends.
-        expect(existsSync(String(release?.cwd))).toBe(false);
+        expect(existsSync(String(worker?.cwd))).toBe(false);
     });
 
     it("never lets a secret value or the API token out in a log line", async () => {
@@ -119,15 +118,13 @@ describe("provision box", { timeout: 20_000 }, () => {
         expect(text).toContain("echoing [redacted]");
     });
 
-    it("destroys the release, then the project, when project resources go too", async () => {
+    it("destroys the Worker, then the project", async () => {
         expect.assertions(2);
 
-        const stream = await events(
-            await post({ action: "destroy", alias: "acme", deleteProjectResources: true, dispatchNamespace: "lunora-production", scriptName: "acme-v1" }),
-        );
+        const stream = await events(await post({ action: "destroy", alias: "acme", dispatchNamespace: "lunora-production" }));
 
         expect(reports(stream).map((report) => [(report.args as string[])[0], report.stack])).toStrictEqual([
-            ["destroy", "release"],
+            ["destroy", "worker"],
             ["destroy", "project"],
         ]);
         expect(stream.at(-1)).toStrictEqual({ type: "result" });
@@ -139,7 +136,7 @@ describe("provision box", { timeout: 20_000 }, () => {
         const stream = await events(await post(deployJob("lunora-fail")));
 
         expect(stream.filter((event) => event.type !== "log")).toStrictEqual([
-            { message: "alchemy deploy of lunora-release-acme-v1 failed with exit code 3", type: "error" },
+            { message: "alchemy deploy of lunora-worker-acme failed with exit code 3", type: "error" },
         ]);
     });
 

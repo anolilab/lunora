@@ -3,7 +3,6 @@
 
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "@lunora/server/drizzle";
 import type { AnySQLiteColumn } from "@lunora/server/drizzle";
-import type { Id } from "./dataModel.js";
 
 export const cells = sqliteTable("cells", {
     _id: text("_id").primaryKey(),
@@ -54,7 +53,6 @@ export const projects = sqliteTable("projects", {
     _creationTime: integer("_creationTime").notNull(),
     activeDeploymentId: text("activeDeploymentId"),
     activeScriptName: text("activeScriptName"),
-    rollout: text("rollout", { mode: "json" }).$type<{ deploymentId: Id<"deployments">; percent: number; scriptName: string }>(),
     createdAt: real("createdAt").notNull(),
     framework: text("framework"),
     githubRepo: text("githubRepo"),
@@ -105,7 +103,6 @@ export const deployments = sqliteTable("deployments", {
     by_project: index("by_project").on(t.projectId),
     by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
-    by_alias: index("by_alias").on(t.alias),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {

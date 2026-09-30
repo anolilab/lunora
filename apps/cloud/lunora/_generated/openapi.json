@@ -2580,6 +2580,76 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#deployments:releaseTarget": {
+      "post": {
+        "description": "Invoke the `query` `deployments:releaseTarget` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "deployments:releaseTarget",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "deployKey": {},
+                      "id": {
+                        "description": "Id<\"deployments\">",
+                        "type": "string",
+                        "x-lunora-table": "deployments"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "deployments:releaseTarget",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: deployments:releaseTarget",
+        "tags": [
+          "deployments"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#deployments:rollback": {
       "post": {
         "description": "Invoke the `mutation` `deployments:rollback` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -2648,63 +2718,6 @@
           "deployments"
         ],
         "x-lunora-function-kind": "mutation"
-      }
-    },
-    "/_lunora/rpc#deployments:routeForAlias": {
-      "post": {
-        "description": "Invoke the `query` `deployments:routeForAlias` over the Lunora RPC envelope (POST /_lunora/rpc).",
-        "operationId": "deployments:routeForAlias",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
-                    "properties": {
-                      "alias": {}
-                    },
-                    "required": [],
-                    "type": "object"
-                  },
-                  "functionPath": {
-                    "const": "deployments:routeForAlias",
-                    "type": "string"
-                  },
-                  "shardKey": {
-                    "description": "Optional shard key; omitted routes to the default shard.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "functionPath"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
-                }
-              }
-            },
-            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
-          },
-          "default": {
-            "$ref": "#/components/responses/LunoraError"
-          }
-        },
-        "summary": "query: deployments:routeForAlias",
-        "tags": [
-          "deployments"
-        ],
-        "x-lunora-function-kind": "query"
       }
     },
     "/_lunora/rpc#deployments:updateStatus": {

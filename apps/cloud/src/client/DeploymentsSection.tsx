@@ -10,7 +10,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
-import { useMutation, useQuery } from "@lunora/react";
+import { useQuery } from "@lunora/react";
 import { ClientOnly } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useState } from "react";
@@ -25,13 +25,10 @@ import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
-import { RolloutCard } from "./RolloutCard";
 import { StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
 interface DeploymentsSectionProps {
-    /** The deployment currently serving the stable URL — never a rollout candidate. */
-    activeDeploymentId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
@@ -40,8 +37,6 @@ interface DeploymentsSectionProps {
     previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
-    /** The staged rollout in progress, if any. */
-    rollout?: { percent: number; scriptName: string };
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -497,8 +492,30 @@ const resolveActive = (
     return { active, activeBuild, branch: active?.branch ?? activeBuild?.branch, isLatest };
 };
 
+/**
+ * Roll back through the control plane's `/v1/rollback` route rather than the
+ * `rollback` mutation: the release has to be re-provisioned onto the project's
+ * Worker first, and only the edge can do that. Resolves to an error message, or
+ * `null` on success.
+ */
+const requestRollback = async (deploymentId: string, organizationId: OrgId): Promise<null | string> => {
+    const response = await fetch("/v1/rollback", {
+        body: JSON.stringify({ deploymentId, organizationId }),
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+
+    if (response.ok) {
+        return null;
+    }
+
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+    return payload?.error ?? `rollback failed (${String(response.status)})`;
+};
+
 export const DeploymentsSection = ({
-    activeDeploymentId,
     gitProvider,
     githubRepo,
     onBack,
@@ -506,12 +523,11 @@ export const DeploymentsSection = ({
     previewProtected = false,
     projectId,
     projectName,
-    rollout,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
     const domains = useQuery(api.domains.list, { organizationId, projectId });
-    const rollback = useMutation(api.deployments.rollback);
+    const [rollbackError, setRollbackError] = useState<null | string>(null);
 
     // The deployment whose detail is shown — a clicked one, else the newest.
     const [activeId, setActiveId] = useState<Deployment["_id"] | null>(null);
@@ -561,23 +577,23 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
-            {/* Only a NON-active deployment can be a rollout candidate — `setRollout`
-                rejects the active release, and `active` here defaults to the newest
-                deployment, which right after a deploy IS the active one. Passing it
-                would offer percentage buttons that always error. */}
-            <RolloutCard
-                candidateId={active && active._id !== activeDeploymentId ? active._id : undefined}
-                organizationId={organizationId}
-                projectId={projectId}
-                rollout={rollout}
-            />
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />
+            {rollbackError ? (
+                <p className="text-sm text-destructive" role="alert">
+                    {rollbackError}
+                </p>
+            ) : null}
             <DeploymentsTable
                 activeId={active?._id}
                 deployments={deployments ?? EMPTY}
                 onRollback={(id) => {
-                    void rollback.mutate({ id, organizationId });
+                    setRollbackError(null);
+                    void requestRollback(id, organizationId)
+                        .then(setRollbackError)
+                        .catch((error_: unknown) => {
+                            setRollbackError(error_ instanceof Error ? error_.message : "rollback failed");
+                        });
                 }}
                 onSelect={setActiveId}
             />

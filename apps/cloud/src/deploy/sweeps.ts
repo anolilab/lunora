@@ -23,53 +23,56 @@ interface TeardownRow {
 }
 
 /**
- * Ports for {@link runTeardownSweep}: destroyed deployments whose script has not
- * been torn down (dispatch namespace derived as `lunora-{kind}`, mirroring the
- * deploy router), and the `teardownAt` stamp. `destroy` is supplied by the
- * caller (the composite Cloudflare teardown).
+ * Ports for {@link runTeardownSweep}: destroyed or failed deployments whose
+ * stored release has not been reclaimed (dispatch namespace derived as
+ * `lunora-{kind}`, mirroring the deploy router), and the `teardownAt` stamp.
+ * `destroy` and `deleteRelease` are supplied by the caller (the provision box
+ * and the `RELEASES` bucket).
  *
- * `deleteResources` is true only when the alias has no remaining non-destroyed
- * deployment — so the per-project D1/R2 are reclaimed on project/org deletion
- * but never on a routine version prune (which would delete the live version's
- * database). Reads the full deployments set once to evaluate that.
+ * `destroyWorker` is true only when the alias has no deployment left that is not
+ * `destroyed` — so the alias's Worker and D1/R2 are reclaimed on project/org
+ * deletion or preview expiry, but never on a routine prune (which would delete
+ * the live release's database). Reads the full deployments set once to evaluate
+ * that, and elects one pending row per dead alias so the destroy job runs once.
  */
-export const teardownPorts = (database: ControlPlaneDatabase, destroy: TeardownPorts["destroy"], now: number): TeardownPorts => {
+export const teardownPorts = (database: ControlPlaneDatabase, ports: Pick<TeardownPorts, "deleteRelease" | "destroy">, now: number): TeardownPorts => {
     return {
-        destroy,
+        ...ports,
         listPending: async () => {
             // Drained: teardown has to see every deployment, and a single page left
             // the tail of the fleet permanently un-torn-down — leaking the real
             // dispatch scripts, tenant D1 and R2 that this sweep exists to reclaim.
             const rows = await drainTable<TeardownRow>(database, "deployments");
 
-            // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
+            // Aliases that still have a deployment that is not destroyed.
             const aliveAliases = new Set<string>();
 
             // `!= null`, not `!== undefined`: `deployments` is `.global()`, so these rows
             // come from D1, which returns SQL NULL — never `undefined` — for an unset
-            // optional column. The three checks below all read optional columns, and all
-            // three invert if they test for `undefined`: the sweep silently selects
-            // nothing (leaking every dispatch script, tenant D1 and R2 bucket forever),
-            // and `deleteResources` flips to `true` for an alias-less row, which is the
-            // one case this function exists to prevent.
+            // optional column. The checks below all read optional columns, and all
+            // invert if they test for `undefined`: the sweep silently selects nothing
+            // (leaking every Worker, tenant D1 and R2 bucket forever), and
+            // `destroyWorker` flips to `true` for an alias-less row, which is the one
+            // case this function exists to prevent.
             for (const row of rows) {
                 if (row.status !== "destroyed" && row.alias != null) {
                     aliveAliases.add(row.alias);
                 }
             }
 
+            const elected = new Set<string>();
+
             return rows
-                .filter((row) => row.status === "destroyed" && row.teardownAt == null)
+                .filter((row) => (row.status === "destroyed" || row.status === "failed") && row.teardownAt == null)
                 .map((row) => {
                     const alias = row.alias ?? row.scriptName;
+                    const destroyWorker = row.status === "destroyed" && row.alias != null && !aliveAliases.has(alias) && !elected.has(alias);
 
-                    return {
-                        alias,
-                        deleteResources: row.alias == null ? false : !aliveAliases.has(alias),
-                        dispatchNamespace: `lunora-${row.kind}`,
-                        id: row._id,
-                        scriptName: row.scriptName,
-                    };
+                    if (destroyWorker) {
+                        elected.add(alias);
+                    }
+
+                    return { alias, destroyWorker, dispatchNamespace: `lunora-${row.kind}`, id: row._id };
                 });
         },
         markTornDown: async (id) => {
@@ -93,6 +96,7 @@ interface AttributionRow {
     _id: string;
     organizationId: string;
     scriptName: string;
+    status: string;
 }
 
 interface CellRow {
@@ -117,8 +121,12 @@ export const usageRollbackPorts = async (
     const deploymentRows = await drainTable<AttributionRow>(database, "deployments");
     const byScript = new Map<string, UsageAttribution>();
 
+    // Every release of an alias shares its one script, so the script's usage is
+    // attributed to the live release when there is one.
     for (const row of deploymentRows) {
-        byScript.set(row.scriptName, { deploymentId: row._id, organizationId: row.organizationId });
+        if (!byScript.has(row.scriptName) || row.status === "live") {
+            byScript.set(row.scriptName, { deploymentId: row._id, organizationId: row.organizationId });
+        }
     }
 
     const { page: cellPage } = await database.findMany("cells", { where: { name: options.cellName } });

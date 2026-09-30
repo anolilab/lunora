@@ -50,7 +50,7 @@ export interface AssetsUpload {
  *
  * - `provisioned` — a per-project resource the platform creates (and names, see
  *   {@link tenantResourceName}) on first deploy, reuses across releases, and
- *   deletes only when the project's last deployment is torn down.
+ *   deletes only when the project itself is torn down.
  * - `bound` — bound as-is with nothing to create (the class lives in the tenant
  *   bundle, or the binding is an account capability).
  * - `routed` — satisfied without a binding: queue consumers are drained by the
@@ -134,9 +134,18 @@ export const aliasOfResourceName = (name: string): string | undefined => {
     return ALIAS_PATTERN.test(alias) && separator + 2 < name.length ? alias : undefined;
 };
 
-/** A single managed-tier release to converge. */
+/**
+ * A single managed-tier release to converge onto the project's stable Worker.
+ *
+ * There is one dispatch-namespace script per project per namespace, and its
+ * name IS the alias. Every deploy (and every rollback) updates that script in
+ * place, because a Durable Object namespace belongs to the script that defines
+ * its class: a new script per release would start every release on an empty
+ * `ShardDO`. Workers for Platforms has no Worker Versions or gradual deployments
+ * for user Workers, so "many releases on one script" is not available either.
+ */
 export interface TenantDeploymentSpec {
-    /** The project's stable label (its public subdomain). Keys every per-project resource. */
+    /** The project's stable label: its public subdomain, its dispatch-namespace script name, and the key of every per-project resource. */
     alias: string;
     assets?: AssetsUpload;
     /** Prebuilt Worker module (the app's own build output — never built here). */
@@ -147,8 +156,6 @@ export interface TenantDeploymentSpec {
     dispatchNamespace: string;
     /** Validated: contains no `unsupported` type. */
     manifest: DeployManifest;
-    /** The versioned, immutable per-release script id. */
-    scriptName: string;
     /** Secrets for this release. Travel to the provision box as process env, never inside program source. */
     secrets: Record<string, string>;
     /** Lifecycle tags: `org:…`, `project:…`, `env:…`. */
@@ -159,22 +166,26 @@ export interface TenantDeploymentSpec {
 }
 
 /**
- * The job the control plane posts to the provision box at `POST /__lunora/provision`.
- *
- * Two Alchemy stacks per project, so releases are retained and pruned
- * independently while data outlives them:
- * - `lunora-project-{alias}` owns the `provisioned` resources.
- * - `lunora-release-{scriptName}` owns one release's Worker, referencing the
- *   project stack's resources. Destroying it never touches project data.
- */
-
-/**
  * A binding as the box receives it. Provisioned types carry the name the control
  * plane computed with {@link tenantResourceName}: the box is plain JavaScript and
  * never re-derives it, so the naming rule lives in exactly one place.
  */
 export type ProvisionBinding = BindingRequirement & { resourceName?: string };
 
+/**
+ * The job the control plane posts to the provision box at `POST /__lunora/provision`.
+ *
+ * Two Alchemy stacks per project, both keyed by the alias:
+ * - `lunora-project-{alias}` owns the `provisioned` resources.
+ * - `lunora-worker-{alias}` owns the project's one Worker (script name = alias),
+ *   bound to the project stack's resources. Every deploy converges it in place,
+ *   so its Durable Object storage outlives releases.
+ *
+ * Releases are not scripts: each one is a stored bundle the control plane keeps
+ * (`src/deploy/release-store.ts`), and a rollback is a `deploy` job carrying an
+ * older bundle. So `destroy` only ever means the project is gone — it removes the
+ * Worker, then the project stack and its data.
+ */
 export type ProvisionJob =
     | {
           action: "deploy";
@@ -183,7 +194,7 @@ export type ProvisionJob =
               manifest: Omit<DeployManifest, "bindings"> & { bindings: ProvisionBinding[] };
           };
       }
-    | { action: "destroy"; alias: string; deleteProjectResources: boolean; dispatchNamespace: string; scriptName: string };
+    | { action: "destroy"; alias: string; dispatchNamespace: string };
 
 /** One NDJSON line of the provision box's reply. Exactly one `result` or `error` ends the stream. */
 export type ProvisionEvent = { line: string; type: "log" } | { message: string; type: "error" } | { type: "result"; url?: string };

@@ -22,11 +22,11 @@
  * @typedef {{ id: string, kind: ProjectResourceKind, name: string }} ProjectResource
  * @typedef {{ id: string, queueId: string, scriptName: string }} QueueConsumer
  * @typedef {{ consumers: QueueConsumer[], resources: ProjectResource[], stackName: string }} ProjectStack
- * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" } | { binding: string, dataset: string, kind: "analytics_engine" }} ReleaseBinding
+ * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" } | { binding: string, dataset: string, kind: "analytics_engine" }} WorkerBinding
  * @typedef {{ htmlHandling?: string, notFoundHandling?: string, runWorkerFirst?: boolean | string[] }} AssetsConfig
- * @typedef {{ assets?: { config: AssetsConfig }, bindings: ReleaseBinding[], compatibility: { date: string, flags: string[] }, namespace: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} ReleaseStack
- * @typedef {{ kind: "project" | "release", op: "deploy" | "destroy", stackName: string }} Step
- * @typedef {{ project?: ProjectStack, release?: ReleaseStack, stage: string, steps: Step[] }} Plan
+ * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, namespace: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
+ * @typedef {{ kind: "project" | "worker", op: "deploy" | "destroy", stackName: string }} Step
+ * @typedef {{ project?: ProjectStack, stage: string, steps: Step[], worker?: WorkerStack }} Plan
  */
 
 /** Platform default, used when the manifest does not declare its own. */
@@ -40,7 +40,6 @@ class PlanError extends Error {}
 // Control-plane-issued identifiers. They name Alchemy stacks and the stage (which
 // must also satisfy Alchemy's `--stage` pattern) and Cloudflare scripts.
 const LABEL = /^[a-z0-9][a-z0-9_-]{0,62}$/u;
-const SCRIPT_NAME = /^[a-z0-9][a-z0-9_-]{0,127}$/u;
 // `env` property names: JavaScript identifiers, as the deploy handler enforces.
 const BINDING_NAME = /^[A-Za-z_]\w{0,63}$/u;
 const CLASS_NAME = /^[A-Za-z_$][\w$]{0,127}$/u;
@@ -69,10 +68,12 @@ const expect = (value, pattern, what) => {
 const projectStackName = (alias) => `lunora-project-${alias}`;
 
 /**
- * @param {string} scriptName The release's script name.
- * @returns {string} The Alchemy stack owning the release's Worker.
+ * The project's one Worker, named by its alias and converged in place by every
+ * deploy and rollback, so its Durable Object storage outlives releases.
+ * @param {string} alias The project alias — also the Worker's script name.
+ * @returns {string} The Alchemy stack owning the project's Worker.
  */
-const releaseStackName = (scriptName) => `lunora-release-${scriptName}`;
+const workerStackName = (alias) => `lunora-worker-${alias}`;
 
 /**
  * Resolve one asset's URL path to a path relative to the assets directory,
@@ -107,11 +108,11 @@ const resourceName = (requirement) => {
 };
 
 /**
- * What one binding contributes to the release, creating its project resource on the way.
+ * What one binding contributes to the Worker, creating its project resource on the way.
  * @param {JobBinding} requirement The manifest entry (never a `queue_consumer`).
  * @param {string} binding Its validated `env` name.
  * @param {{ assets: JobSpec["assets"], consumed: Set<string | undefined>, controlPlaneScript: string | undefined, project: ProjectStack, provision: (requirement: JobBinding, kind: ProjectResourceKind) => string }} context The deploy being planned.
- * @returns {ReleaseBinding | undefined} The release `env` entry, if the binding has one of its own.
+ * @returns {WorkerBinding | undefined} The Worker's `env` entry, if the binding has one of its own.
  */
 const planBinding = (requirement, binding, context) => {
     switch (requirement.type) {
@@ -122,7 +123,7 @@ const planBinding = (requirement, binding, context) => {
         }
         case "analytics_engine": {
             // A dataset is binding metadata only — it has no lifecycle, so it is
-            // declared on the release rather than owned by the project.
+            // declared on the Worker rather than owned by the project.
             return { binding, dataset: resourceName(requirement), kind: "analytics_engine" };
         }
         case "assets": {
@@ -176,11 +177,10 @@ const planBinding = (requirement, binding, context) => {
 /**
  * @param {JobSpec} spec The deploy job's spec.
  * @param {string | undefined} controlPlaneScript The Worker that consumes routed queues.
- * @returns {{ project: ProjectStack, release: ReleaseStack }} Both stacks' declarations.
+ * @returns {{ project: ProjectStack, worker: WorkerStack }} Both stacks' declarations.
  */
 const planDeploy = (spec, controlPlaneScript) => {
     const alias = expect(spec.alias, LABEL, "alias");
-    const scriptName = expect(spec.scriptName, SCRIPT_NAME, "script name");
 
     if (typeof spec.bundle !== "string" || spec.bundle === "") {
         throw new PlanError("the job carries no bundle");
@@ -269,7 +269,7 @@ const planDeploy = (spec, controlPlaneScript) => {
 
     return {
         project,
-        release: {
+        worker: {
             ...(spec.assets === undefined
                 ? {}
                 : {
@@ -288,11 +288,11 @@ const planDeploy = (spec, controlPlaneScript) => {
             },
             namespace: expect(spec.dispatchNamespace, LABEL, "dispatch namespace"),
             secretNames,
-            stackName: releaseStackName(scriptName),
+            stackName: workerStackName(alias),
             tags: [...spec.tags],
             tailConsumers: [...(spec.tailConsumers ?? [])],
             vars: plainVariables,
-            workerName: scriptName,
+            workerName: alias,
         },
     };
 };
@@ -300,9 +300,9 @@ const planDeploy = (spec, controlPlaneScript) => {
 /**
  * Plan a job: which stacks to deploy or destroy, in order, and what each declares.
  *
- * Deploy converges the project stack first (the release references its
- * resources), then the release. Destroy removes the release, then — only when
- * asked — the project and its data.
+ * Deploy converges the project stack first (the Worker references its
+ * resources), then the Worker. Destroy is only ever sent for a project that is
+ * gone: it removes the Worker, then the project stack and its data.
  * @param {ProvisionJob} job The validated-by-the-handler, still-untrusted job.
  * @param {{ controlPlaneScript: string | undefined }} options `controlPlaneScript` consumes the producer queues.
  * @returns {Plan} The plan `program.mjs` interprets.
@@ -310,31 +310,30 @@ const planDeploy = (spec, controlPlaneScript) => {
 const planJob = (job, options) => {
     if (job.action === "destroy") {
         const alias = expect(job.alias, LABEL, "alias");
-        const scriptName = expect(job.scriptName, SCRIPT_NAME, "script name");
-        /** @type {Step[]} */
-        const steps = [{ kind: "release", op: "destroy", stackName: releaseStackName(scriptName) }];
 
-        if (job.deleteProjectResources) {
-            steps.push({ kind: "project", op: "destroy", stackName: projectStackName(alias) });
-        }
-
-        return { stage: expect(job.dispatchNamespace, LABEL, "dispatch namespace"), steps };
+        return {
+            stage: expect(job.dispatchNamespace, LABEL, "dispatch namespace"),
+            steps: [
+                { kind: "worker", op: "destroy", stackName: workerStackName(alias) },
+                { kind: "project", op: "destroy", stackName: projectStackName(alias) },
+            ],
+        };
     }
 
     if (job.action !== "deploy") {
         throw new PlanError(`unknown action ${JSON.stringify(/** @type {{ action: unknown }} */ (job).action)}`);
     }
 
-    const { project, release } = planDeploy(job.spec, options.controlPlaneScript);
+    const { project, worker } = planDeploy(job.spec, options.controlPlaneScript);
 
     return {
         project,
-        release,
-        stage: release.namespace,
+        stage: worker.namespace,
         steps: [
             { kind: "project", op: "deploy", stackName: project.stackName },
-            { kind: "release", op: "deploy", stackName: release.stackName },
+            { kind: "worker", op: "deploy", stackName: worker.stackName },
         ],
+        worker,
     };
 };
 

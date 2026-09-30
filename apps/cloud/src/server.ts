@@ -25,7 +25,8 @@ import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
-import { runRolloutGuard } from "./deploy/rollout-guard";
+import type { ReleaseBucket } from "./deploy/release-store";
+import { createReleaseStore } from "./deploy/release-store";
 import { createDeployRouter } from "./deploy/router";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { runTeardownSweep } from "./deploy/teardown";
@@ -42,7 +43,6 @@ import type { ControlPlaneDatabase } from "./store";
 import { runAlertDrain } from "./telemetry/alert-drain";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
-import { createTrafficReader } from "./telemetry/traffic-read";
 import { runUptimeSweep } from "./uptime/sweep";
 
 /**
@@ -253,6 +253,8 @@ type Env = {
     LUNORA_CELL?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
+    /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
+    RELEASES?: ReleaseBucket;
     /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
     SECRET_ENCRYPTION_KEY?: string;
     SHARD: ShardNamespaceLike;
@@ -367,14 +369,15 @@ const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
     createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
 /**
- * Destroy the releases (+ the project stack, on a project's last deployment) of
- * deployments the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1) so
- * dispatch namespaces don't grow unboundedly. Each teardown is a destroy job on
- * the provision box. No-ops without the box binding; the `teardownAt` stamp
- * makes the sweep crash-safe idempotent.
+ * Reclaim what the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1): each
+ * pruned or failed release's stored bundle, and — once an alias has no
+ * deployment left — its Worker and project stack, through a destroy job on the
+ * provision box. No-ops without the box or the `RELEASES` bucket (deploys are
+ * refused without the bucket, so there is nothing to reclaim); the `teardownAt`
+ * stamp makes the sweep crash-safe idempotent.
  */
 const sweepTeardown = async (env: Env): Promise<void> => {
-    if (!env.DB || !env.CONTAINER_PROVISION_BOX) {
+    if (!env.DB || !env.CONTAINER_PROVISION_BOX || !env.RELEASES) {
         return;
     }
 
@@ -385,10 +388,10 @@ const sweepTeardown = async (env: Env): Promise<void> => {
             // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
             console.log("[teardown]", line);
         },
-        urlForScript: (scriptName) => scriptName,
+        urlForScript: (alias) => alias,
     });
 
-    await runTeardownSweep(teardownPorts(database, provisioner.destroy, Date.now()));
+    await runTeardownSweep(teardownPorts(database, { deleteRelease: createReleaseStore(env.RELEASES).delete, destroy: provisioner.destroy }, Date.now()));
 };
 
 /** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */
@@ -533,30 +536,6 @@ const sweepAlertDrain = async (env: Env): Promise<void> => {
 };
 
 /**
- * Abort staged rollouts whose candidate is failing worse than the release it is
- * replacing (GAPS.md A1 follow-on).
- *
- * Needs the AE account credentials, because the evidence is the dispatcher's own
- * metering stream — the one signal that exists for every tenant without the
- * tenant instrumenting anything. No credentials means no evidence, and the guard
- * does nothing rather than guessing.
- */
-const sweepRollouts = async (env: Env): Promise<void> => {
-    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
-        return;
-    }
-
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
-    const reader = createTrafficReader({
-        accountId: env.CLOUDFLARE_ACCOUNT_ID,
-        apiToken: env.CLOUDFLARE_API_TOKEN,
-        dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
-    });
-
-    await runRolloutGuard(database, { now: Date.now(), reader });
-};
-
-/**
  * Back the control plane up to R2 (GAPS.md D1).
  *
  * Needs the account credentials (the export goes through D1's REST API), the
@@ -606,8 +585,6 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
-    // Auto-abort a canary that is failing worse than the release it replaces.
-    { cron: EVERY_MINUTE, run: sweepRollouts },
 ];
 
 /** Tick one tenant's cron over the dispatcher, gated by its admin token. */
@@ -784,12 +761,10 @@ export default {
         //
         // These ran in a bare loop with no `catch`, so the FIRST sweep to throw took
         // out every sweep after it — and the tenant cron fan-out below, which is what
-        // fires customers' scheduled functions. Two every-minute sweeps each add a
-        // live throw source in front of it: the rollout guard deliberately propagates
-        // a failed Analytics Engine read (it must not abort releases on no evidence),
-        // and the alert drain issues up to a hundred outbound deliveries. An AE
-        // outage or one hung customer webhook would have stopped every tenant's crons
-        // for its duration.
+        // fires customers' scheduled functions. The every-minute sweeps each add a
+        // live throw source in front of it — the alert drain alone issues up to a
+        // hundred outbound deliveries — and one hung customer webhook would have
+        // stopped every tenant's crons for its duration.
         //
         // `allSettled` is what makes the "each is independent" claim true rather than
         // aspirational. A throwing sweep is logged and skipped; the next tick retries

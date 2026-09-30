@@ -117,10 +117,19 @@
     // with R2 SQL). The bucket is bound here; the `TELEMETRY_PIPELINE` producer is
     // provisioned per cell with `wrangler pipelines create` (its remote name can't
     // be minted from config) and the telemetry store no-ops until it is present.
+    //
+    // `RELEASES` holds every deployment's validated payload (bundle, manifest,
+    // assets) under its deployment id. A project has one Worker updated in place,
+    // so these stored releases are what a rollback re-provisions. Private: the
+    // bundles are tenant code.
     "r2_buckets": [
         {
             "binding": "TELEMETRY_BUCKET",
             "bucket_name": "lunora-cloud-telemetry",
+        },
+        {
+            "binding": "RELEASES",
+            "bucket_name": "lunora-cloud-releases",
         },
     ],
     // The producer half of that archive. `src/telemetry/store.ts` reads it as
@@ -259,7 +268,10 @@
                 { "binding": "ANALYTICS", "dataset": "ANALYTICS_STAGING" },
                 { "binding": "TELEMETRY", "dataset": "TELEMETRY_STAGING" },
             ],
-            "r2_buckets": [{ "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry-staging" }],
+            "r2_buckets": [
+                { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry-staging" },
+                { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases-staging" },
+            ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry-staging" }],
             "ai": { "binding": "AI" },
             "limits": { "cpu_ms": 60000 },
@@ -325,7 +337,10 @@
                 { "binding": "ANALYTICS", "dataset": "ANALYTICS" },
                 { "binding": "TELEMETRY", "dataset": "TELEMETRY" },
             ],
-            "r2_buckets": [{ "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry" }],
+            "r2_buckets": [
+                { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry" },
+                { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases" },
+            ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry" }],
             "ai": { "binding": "AI" },
             "limits": { "cpu_ms": 60000 },

@@ -12,7 +12,7 @@ const cloudCommand: Command = {
     examples: [
         ["LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js", "Deploy the prebuilt worker"],
         ["lunora cloud deploy --project prj_123 --bundle dist/index.js --kind preview --branch feat/x", "Deploy a preview"],
-        ["lunora cloud rollback dep_456 --org org_789 --yes", "Roll the stable URL back to a retained release"],
+        ["lunora cloud rollback dep_456 --org org_789 --yes", "Roll the project back to a retained release"],
         ["lunora cloud eject dep_456", "Package your data + a BYO wrangler.jsonc into ./eject"],
     ],
     group: "Deploy",
