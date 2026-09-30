@@ -114,7 +114,18 @@ const settingsFrom = (argument: ObjectLiteralExpression, exportName: string): Pi
     if (limits !== undefined) {
         const steps = assignedProperty(objectProperty(limits, exportName, "limits"), "steps");
 
-        settings.limits = steps === undefined ? {} : { steps: numberProperty(steps, exportName, "limits.steps") };
+        if (steps === undefined) {
+            settings.limits = {};
+        } else {
+            const value = numberProperty(steps, exportName, "limits.steps");
+
+            // The rule `defineWorkflow` and the wrangler validator apply too.
+            if (!Number.isInteger(value) || value <= 0) {
+                throw diagnosticAt(steps, `workflow "${exportName}": \`limits.steps\` must be a positive integer (got ${String(value)})`);
+            }
+
+            settings.limits = { steps: value };
+        }
     }
 
     const retention = assignedProperty(argument, "defaultRetention");

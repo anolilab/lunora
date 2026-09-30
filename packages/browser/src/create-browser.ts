@@ -248,9 +248,34 @@ const closeQuietly = async (browser: BrowserLike): Promise<void> => {
 };
 
 /**
+ * Rebuild a Quick Action options value with every nested `url` string passed
+ * through `guard` (which throws for a target the factory forbids). Walks plain
+ * objects and arrays; any other value is kept as-is.
+ */
+const guardNestedUrls = async (value: unknown, guard: (url: string) => Promise<string>): Promise<unknown> => {
+    if (Array.isArray(value)) {
+        return Promise.all(value.map(async (item: unknown) => guardNestedUrls(item, guard)));
+    }
+
+    if (typeof value !== "object" || value === null) {
+        return value;
+    }
+
+    const entries = await Promise.all(
+        Object.entries(value).map(async ([key, item]): Promise<[string, unknown]> => [
+            key,
+            key === "url" && typeof item === "string" ? await guard(item) : await guardNestedUrls(item, guard),
+        ]),
+    );
+
+    return Object.fromEntries(entries);
+};
+
+/**
  * `createBrowser` is part of the experimental `@lunora/browser` API and may change without a major version bump.
  * @experimental
  */
+
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
 export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // Defensive runtime guard: `binding` is required by the type, but JS callers
@@ -596,8 +621,12 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         }
 
         const target = await assertTargetAllowed(url, defaultDohTimeout());
+        // Nested URLs load too — `addScriptTag[].url`, `addStyleTag[].url`, and
+        // whatever Browser Run adds later — and a Quick Action has no session
+        // guardrails behind it, so each passes the same guard as the target.
+        const guardedOptions = await guardNestedUrls(quickOptions, async (nested) => assertTargetAllowed(nested, defaultDohTimeout()));
 
-        return options.binding.quickAction(action, { ...quickOptions, url: target });
+        return options.binding.quickAction(action, { ...(guardedOptions as QuickActionOptions), url: target });
     };
 
     const requireRestApi = (): BrowserRestApiOptions => {

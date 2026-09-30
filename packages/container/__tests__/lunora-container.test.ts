@@ -303,6 +303,19 @@ describe("lunoraContainer native exec", () => {
         expect(kill).toHaveBeenCalledTimes(1);
     });
 
+    it("counts stdout and stderr against one shared budget", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: streamOf("err"), stdout: streamOf("out") };
+        });
+
+        // Each stream alone fits the 5-byte cap; together (6 bytes) they do not.
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "noisy", maxOutputBytes: 5 })))).resolves.toBe(413);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
     it("never kills a process that already exited, even when its output overran the cap", async () => {
         expect.assertions(2);
 
@@ -753,6 +766,18 @@ describe("lunoraContainer durable_object scheduling", () => {
         (context as { container: { running: boolean } }).container.running = true;
 
         await expect(instance.start({ image: "gpu", instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 } })).resolves.toBeUndefined();
+    });
+
+    it("lets a running container with no image (restored from a snapshot) take the fetch/exec restart path", async () => {
+        expect.assertions(1);
+
+        const noDefault = defineContainer({ images: { base: "./container" }, schedulingPolicy: "durable_object" });
+        const context = fakeDurableObjectContext({ container: { images, monitor: async () => new Promise<never>(() => {}), running: true } });
+        const instance = new LunoraContainer(context as never, {}, noDefault, "sandbox") as unknown as SchedulingProbe;
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await expect(instance.startAndWaitForPorts()).resolves.toBeUndefined();
     });
 
     it("snapshots a running container and refuses when it is stopped", async () => {

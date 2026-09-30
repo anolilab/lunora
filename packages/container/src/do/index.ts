@@ -11,7 +11,6 @@ import { Container } from "@cloudflare/containers";
 import { LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../../shared/abort-deadline";
-import { readCapped } from "../../../../shared/read-capped";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { CONTAINER_EXEC_PATH, DEFAULT_EXEC_MAX_OUTPUT_BYTES, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
@@ -611,15 +610,48 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
                       outcome.timedOut = true;
                       stop();
                   }, body.timeoutMs);
+        // stdout and stderr share ONE budget — the cap is on the reply, which
+        // carries both — so the first chunk past it stops both and the process.
+        let used = 0;
         const read = async (stream: ReadableStream | null): Promise<string> => {
-            const result = await readCapped(stream, limit, readers.signal);
-
-            if (result.overflowed) {
-                outcome.overflowed = true;
-                stop();
+            if (stream === null) {
+                return "";
             }
 
-            return result.text;
+            const reader = (stream as ReadableStream<Uint8Array>).getReader();
+            const decoder = new TextDecoder();
+            const onAbort = (): void => {
+                reader.cancel().catch(() => undefined);
+            };
+            let text = "";
+
+            readers.signal.addEventListener("abort", onAbort);
+
+            try {
+                while (!readers.signal.aborted) {
+                    // eslint-disable-next-line no-await-in-loop -- chunks are read in order
+                    const { done, value } = await reader.read();
+
+                    if (done) {
+                        break;
+                    }
+
+                    used += value.byteLength;
+
+                    if (used > limit) {
+                        outcome.overflowed = true;
+                        stop();
+                        break;
+                    }
+
+                    text += decoder.decode(value, { stream: true });
+                }
+
+                return text + decoder.decode();
+            } finally {
+                readers.signal.removeEventListener("abort", onAbort);
+                reader.cancel().catch(() => undefined);
+            }
         };
 
         try {
@@ -637,7 +669,14 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
                 throw stdout.status === "rejected" ? stdout.reason : (stderr as PromiseRejectedResult).reason;
             }
 
-            return Response.json({ code: await exitCode, stderr: stderr.value, stdout: stdout.value });
+            const document = JSON.stringify({ code: await exitCode, stderr: stderr.value, stdout: stdout.value });
+
+            // JSON escaping can grow the text past the cap the client reads under.
+            if (new TextEncoder().encode(document).byteLength > limit) {
+                return new Response(`container "${this.lunoraName}": exec output exceeded ${String(limit)} bytes once encoded`, { status: 413 });
+            }
+
+            return new Response(document, { headers: { "content-type": "application/json" } });
         } finally {
             clearTimeout(timer);
         }
@@ -1010,8 +1049,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * happen (`durable_object` policy only): the persisted explicit choice, else
      * the definition default. A named image resolves through
      * `ctx.container.images`; a `cloudflare/…` managed image passes through.
-     * A start with neither an image nor a snapshot would be rejected by the
-     * runtime, so it fails here with the fix instead.
+     * A fresh boot with neither an image nor a snapshot would be rejected by
+     * the runtime, so it fails here with the fix instead.
      */
     private async applyStartSelection(restoringSnapshot = false): Promise<void> {
         if (!this.lunoraDurableObjectScheduled) {
@@ -1020,7 +1059,9 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         const selection = { ...this.lunoraDefaultSelection, ...(await this.readStartSelection()) };
 
-        if (selection.image === undefined && !restoringSnapshot) {
+        // A running container needs no image — e.g. one restored from a snapshot,
+        // whose `fetch` / `exec` reach this through `startAndWaitForPorts`.
+        if (selection.image === undefined && !restoringSnapshot && this.ctx.container?.running !== true) {
             throw new LunoraError(
                 "BAD_REQUEST",
                 `container "${this.lunoraName}": no image to start — pass start({ image }) or start({ snapshot }), or set a default \`image\` in lunora/containers.ts`,

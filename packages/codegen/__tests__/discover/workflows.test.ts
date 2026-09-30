@@ -269,6 +269,8 @@ describe("discover/workflows", () => {
         [`schedules: ["not a cron"]`, `schedule "not a cron" is not a valid cron expression`],
         [`schedules: []`, "`schedules` must be a non-empty inline array"],
         [`limits: { steps: max }`, "`limits.steps` must be a static number literal"],
+        [`limits: { steps: 0 }`, "`limits.steps` must be a positive integer (got 0)"],
+        [`limits: { steps: 1.5 }`, "`limits.steps` must be a positive integer (got 1.5)"],
         [`defaultRetention: retention`, "`defaultRetention` must be an inline object literal"],
     ])("rejects a non-static or invalid setting (%s)", (setting, message) => {
         expect.assertions(1);

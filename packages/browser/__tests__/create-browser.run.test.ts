@@ -20,6 +20,22 @@ const makeQuickBinding = () => {
 };
 
 describe("quickAction", () => {
+    it("guards URLs nested in the options (addScriptTag / addStyleTag), not only the target", async () => {
+        expect.assertions(3);
+
+        const { binding, quickAction } = makeQuickBinding();
+        const browser = createBrowser({ allowedHosts: ["example.com", "cdn.example.com"], binding, launch: async () => ({}) as never });
+
+        await browser.quickAction("screenshot", "https://example.com", { addScriptTag: [{ url: "https://cdn.example.com/a.js" }] });
+
+        expect(quickAction.mock.calls[0]![1]).toMatchObject({ addScriptTag: [{ url: "https://cdn.example.com/a.js" }], url: "https://example.com/" });
+
+        await expect(browser.quickAction("screenshot", "https://example.com", { addStyleTag: [{ url: "https://evil.test/x.css" }] })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        expect(quickAction).toHaveBeenCalledTimes(1);
+    });
+
     it("forwards the action and the validated url to the binding", async () => {
         expect.assertions(2);
 
