@@ -131,6 +131,13 @@
             "binding": "RELEASES",
             "bucket_name": "lunora-cloud-releases",
         },
+        {
+            // Tenant data snapshots (src/backup/tenant-sweep.ts, docs/RESTORE.md).
+            // Private: every object is a project's whole production dataset. Only
+            // the studio's authorized download route ever reads one out.
+            "binding": "TENANT_BACKUPS",
+            "bucket_name": "lunora-cloud-tenant-backups",
+        },
     ],
     // The producer half of that archive. `src/telemetry/store.ts` reads it as
     // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding costs
@@ -271,6 +278,7 @@
             "r2_buckets": [
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry-staging" },
                 { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases-staging" },
+                { "binding": "TENANT_BACKUPS", "bucket_name": "lunora-cloud-tenant-backups-staging" },
             ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry-staging" }],
             "ai": { "binding": "AI" },
@@ -340,6 +348,7 @@
             "r2_buckets": [
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry" },
                 { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases" },
+                { "binding": "TENANT_BACKUPS", "bucket_name": "lunora-cloud-tenant-backups" },
             ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry" }],
             "ai": { "binding": "AI" },

@@ -63,10 +63,15 @@ export default createConfig(
                         "ReadableStream",
                         // Baseline in workerd; the gzip tail of the OTLP ingest uses it.
                         "DecompressionStream",
+                        // Baseline in workerd; tenant backups gzip snapshots with it.
+                        "CompressionStream",
                         // Browser globals used by the hosted studio (src/client, src/routes).
                         "localStorage",
                         "sessionStorage",
                         "navigator",
+                        // The studio saves a downloaded tenant backup through an object URL.
+                        "URL.createObjectURL",
+                        "URL.revokeObjectURL",
                     ],
                 },
             ],

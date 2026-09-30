@@ -201,6 +201,19 @@ names only; at deploy time the handler fetches `listEncrypted` and decrypts the
 values into the tenant Worker's script secrets (alongside the platform-owned
 `LUNORA_ADMIN_TOKEN`). The plaintext never reaches a browser.
 
+### Tenant data backups (`src/backup/tenant-*.ts`, `lunora/tenant-backups.ts`)
+
+Every project's production data is snapshotted daily into the private
+`TENANT_BACKUPS` R2 bucket by the hourly sweep, through the tenant's own admin
+export (the one `lunora cloud eject` uses), as gzipped NDJSON under
+`tenant-backups/{org}/{alias}/{timestamp}.ndjson.gz`. Retention is
+`limits.backupRetention` in the plan catalog (free 3, pro 14, enterprise 30).
+Owners and admins can back up now, download, and restore from the project view;
+all three are audit-logged. A restore is **append-only** — it brings back rows
+deleted since the snapshot and does not revert or remove anything — and takes a
+snapshot of the current data first. What a snapshot covers, what it does not,
+and the manual recovery paths are in [`docs/RESTORE.md`](docs/RESTORE.md).
+
 ### Auth (`src/server.ts`, §3)
 
 The hosted studio runs on hardened better-auth (`@lunora/auth`): email/password
@@ -544,6 +557,7 @@ resource id or hostname belongs. Create the resources, then paste the ids in:
 # Per environment; drop the -staging suffix for production.
 wrangler d1 create lunora-cloud-staging
 wrangler r2 bucket create lunora-cloud-telemetry-staging
+wrangler r2 bucket create lunora-cloud-tenant-backups-staging
 wrangler pipelines create lunora-cloud-telemetry-staging
 ```
 

@@ -529,6 +529,40 @@ export default defineSchema({
         .global()
         .index("by_org", ["organizationId"]),
 
+    // Tenant data backups (docs/RESTORE.md): one row per snapshot of a project's
+    // production data taken into the private `TENANT_BACKUPS` bucket, and one per
+    // restore of such a snapshot. Written by the studio's backup/restore routes
+    // (through `lunora/tenant-backups.ts`) and by the scheduled sweep
+    // (`src/backup/tenant-sweep.ts`), which also enforces per-plan retention and
+    // deletes a deleted project's snapshots — so this table is deliberately NOT
+    // in the org purge's list: the rows are what lets the sweep find the objects.
+    tenantBackups: defineTable({
+        alias: v.string(),
+        // Compressed size of the stored snapshot.
+        bytes: v.optional(v.number()),
+        completedAt: v.optional(v.number()),
+        createdAt: v.number(),
+        // The deployment whose Worker the snapshot was read from / restored into.
+        deploymentId: v.id("deployments"),
+        // Bounded failure reason: the tenant's status + error message, never data.
+        error: v.optional(v.string()),
+        // R2 key of the snapshot (backup rows); the source snapshot's key (restore rows).
+        key: v.string(),
+        operation: v.union(v.literal("backup"), v.literal("restore")),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        // Restore rows: the snapshot restored, and what the append-only import did.
+        restoredFrom: v.optional(v.id("tenantBackups")),
+        restoreConflicts: v.optional(v.number()),
+        restoreInserted: v.optional(v.number()),
+        restoreRowErrors: v.optional(v.number()),
+        status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),
+        trigger: v.union(v.literal("scheduled"), v.literal("manual"), v.literal("pre-restore")),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_project", ["projectId"]),
+
     invitations: defineTable({
         createdAt: v.number(),
         email: v.string(),

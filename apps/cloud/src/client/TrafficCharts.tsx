@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { formatNumber, formatTime } from "./format";
+import { formatBytes, formatNumber, formatTime } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
 
 /**
@@ -139,24 +139,6 @@ export interface VolumePoint {
     requests: number;
     t: number;
 }
-
-/** Bytes rendered on the chart's right-hand axis label. */
-const formatBytes = (bytes: number): string => {
-    if (bytes < 1024) {
-        return `${String(Math.round(bytes))} B`;
-    }
-
-    const units = ["KB", "MB", "GB", "TB"];
-    let value = bytes / 1024;
-    let unit = 0;
-
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-
-    return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit] ?? "B"}`;
-};
 
 /** The polyline through `values`, each scaled to `max`, spread evenly across the 0–100 viewBox. */
 const linePoints = (values: ReadonlyArray<number>, max: number): string => {

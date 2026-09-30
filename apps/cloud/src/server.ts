@@ -18,6 +18,9 @@ import schema from "../lunora/schema.js";
 import { currentAuth, ensureAuth } from "./auth";
 import type { BackupBucket } from "./backup/sweep";
 import { runBackupSweep } from "./backup/sweep";
+import { runTenantBackupSweep } from "./backup/tenant-sweep";
+import type { TenantBackupBucket } from "./backup/tenant-transport";
+import { tenantSender } from "./backup/tenant-transport";
 import type { CreemCreditsClientLike } from "./billing/creem-credits";
 import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
@@ -258,6 +261,13 @@ type Env = {
     /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */
     SECRET_ENCRYPTION_KEY?: string;
     SHARD: ShardNamespaceLike;
+
+    /**
+     * Private R2 bucket of tenant data snapshots (docs/RESTORE.md). Absent → the
+     * tenant backup sweep no-ops and the studio's backup routes answer 500. Holds
+     * every project's production data, so it must never be public.
+     */
+    TENANT_BACKUPS?: TenantBackupBucket;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
     USAGE_ANALYTICS_DATASET?: string;
     /** `"development"` under `lunora dev` (set by vite.config.ts); read by the invite gate's bootstrap carve-out. */
@@ -559,6 +569,37 @@ const sweepBackup = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Snapshot tenants' production data to R2 and apply per-plan retention
+ * (docs/RESTORE.md). No-ops without the bucket. Reaches each tenant through the
+ * dispatch namespace when bound (the cron fan-out's path), else its public URL.
+ */
+const sweepTenantBackups = async (env: Env): Promise<void> => {
+    if (!env.DB || !env.TENANT_BACKUPS) {
+        return;
+    }
+
+    const result = await runTenantBackupSweep({
+        bucket: env.TENANT_BACKUPS,
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        log: (line) => {
+            // eslint-disable-next-line no-console -- the sweep's per-tenant failures are only visible here, in Workers Logs
+            console.warn(line);
+        },
+        now: Date.now(),
+        senderFor: async (deployment) => {
+            const adminToken = await resolveAdminToken(deployment, env.SECRET_ENCRYPTION_KEY);
+
+            return adminToken && deployment.url != null
+                ? tenantSender({ adminToken, scriptName: deployment.scriptName, url: deployment.url }, env.DISPATCHER)
+                : null;
+        },
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[tenant-backup]", JSON.stringify(result));
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -576,6 +617,10 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // Control-plane backup. Rides the existing 6-hourly trigger rather than
     // claiming a fourth cron (Cloudflare caps a Worker at three).
     { cron: EVERY_SIX_HOURS, run: sweepBackup },
+    // Tenant data snapshots. Hourly so a fleet is covered in bounded slices
+    // (`MAX_BACKUPS_PER_TICK`); each project is still snapshotted once a day,
+    // because the sweep only takes projects that are due.
+    { cron: EVERY_HOUR, run: sweepTenantBackups },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

@@ -294,6 +294,30 @@ export const auditLog = sqliteTable("auditLog", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const tenantBackups = sqliteTable("tenantBackups", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    alias: text("alias").notNull(),
+    bytes: real("bytes"),
+    completedAt: real("completedAt"),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id).notNull(),
+    error: text("error"),
+    key: text("key").notNull(),
+    operation: text("operation", { mode: "json" }).$type<"backup" | "restore">().notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    restoredFrom: text("restoredFrom").references((): AnySQLiteColumn => tenantBackups._id),
+    restoreConflicts: real("restoreConflicts"),
+    restoreInserted: real("restoreInserted"),
+    restoreRowErrors: real("restoreRowErrors"),
+    status: text("status", { mode: "json" }).$type<"running" | "succeeded" | "failed">().notNull(),
+    trigger: text("trigger", { mode: "json" }).$type<"scheduled" | "manual" | "pre-restore">().notNull(),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
 export const invitations = sqliteTable("invitations", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

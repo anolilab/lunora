@@ -19,6 +19,47 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Tenant data backups — 2026-09-30
+
+`src/backup/sweep.ts` only ever backed up the control plane's own D1. Tenant
+data — each project's `ShardDO` storage and its `.global()` D1 tables — had no
+platform backup, and restoring meant a hand-run `wrangler` procedure.
+
+- **Daily snapshots.** `src/backup/tenant-sweep.ts` rides the hourly tick and
+  snapshots every project whose live production deployment has no successful
+  snapshot in the last 24h (at most 20 per tick, one at a time, most overdue
+  first). It reads the tenant's own `POST /_lunora/admin/export` over the
+  dispatch namespace under the unsealed admin token — the export `lunora cloud
+eject` reads, now through one shared helper (`src/backup/tenant-transport.ts`)
+  — gzips it and writes `tenant-backups/{org}/{alias}/{timestamp}.ndjson.gz` to
+  the private `TENANT_BACKUPS` bucket. Each attempt is a `tenantBackups` row; a
+  failing tenant becomes a `failed` row with a bounded reason and is retried six
+  hours later, never aborting the tick.
+- **Retention is plan data**: `limits.backupRetention` in `LUNORA_CLOUD_PLANS`
+  — free 3, pro 14, enterprise 30 successful snapshots per project (manual and
+  pre-restore snapshots count). A deleted project's snapshots are deleted by the
+  same sweep, object first; `tenantBackups` is deliberately outside the org
+  purge list so the rows survive long enough to find the objects.
+- **Back up now / Download / Restore** in the studio's project view
+  (`BackupsSection`), owner/admin only, audit-logged, through
+  `POST /v1/backups`, `/v1/backups/download` (a streamed, authorized response —
+  the object is never public) and `/v1/backups/restore`. A running backup or
+  restore blocks another on the same project.
+- **Restore semantics — append, not rewind.** The runtime's import is
+  append-only: a row whose `_id` still exists is skipped. So a restore brings
+  back rows deleted since the snapshot and leaves rows edited or created since
+  as they are. It takes a snapshot of the current data first and restores
+  nothing if that fails; the snapshot is kept, downloadable, but restoring it
+  would not undo the restore (append again). The UI and `docs/RESTORE.md` say
+  this plainly.
+- **Also fixed:** `POST /v1/eject` called the export with `GET`, which the
+  runtime answers 405 — every eject failed. It now shares the backup path.
+
+Still open: snapshots are same-account (as D1 below); objects over 64 MiB
+compressed are refused (in-memory assembly — multipart upload is the upgrade);
+R2 objects, KV, Vectorize and auth tables outside the schema are not in the
+export; a true point-in-time rewind needs a replace-mode import in the runtime.
+
 ## Releases on one stable Worker — 2026-09-30
 
 Every release used to be a new dispatch-namespace script (`{alias}-v{n}`). A
@@ -569,7 +610,11 @@ enforcement + recovery engine above already reacts to whatever balance exists.
 
 ## D. Data & trust
 
-### D1. Control-plane + tenant backups, PITR, restore runbook (✅ same-account backup + runbook shipped; 🔨 cross-account copy)
+### D1. Control-plane + tenant backups, PITR, restore runbook (✅ same-account control-plane + tenant backups and restore shipped; 🔨 cross-account copy, point-in-time rewind)
+
+Tenant data now has daily snapshots, per-plan retention and a studio restore —
+see "Tenant data backups — 2026-09-30" above. The notes below are about the
+control plane's own D1.
 
 `src/backup/sweep.ts` takes a full SQL dump through D1's export API on the
 existing six-hourly tick and streams it into R2 at

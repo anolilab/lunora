@@ -7,6 +7,9 @@ import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
  * with no active subscription resolves to no entitlements, so we fall back to
  * the `free` plan's limits as the baseline.
  *
+ * `limits.backupRetention` is how many daily tenant data snapshots a project
+ * keeps (`src/backup/tenant-policy.ts`) — a retention setting, not a quota.
+ *
  * `priceIds` are placeholders here; Creem is product-based, so these map to
  * real Creem product ids configured per environment when the provider (Creem
  * via `@lunora/payment/creem`) is wired.
@@ -15,17 +18,17 @@ export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
     plans: {
         enterprise: {
             features: ["customDomains", "logStreams", "sso", "dedicatedCell"],
-            limits: { members: 1000, previewDeployments: 1000, projects: 1000 },
+            limits: { backupRetention: 30, members: 1000, previewDeployments: 1000, projects: 1000 },
             priceIds: ["price_enterprise"],
         },
         free: {
             features: [],
-            limits: { members: 1, previewDeployments: 1, projects: 1 },
+            limits: { backupRetention: 3, members: 1, previewDeployments: 1, projects: 1 },
             priceIds: ["price_free"],
         },
         pro: {
             features: ["customDomains", "logStreams"],
-            limits: { members: 10, previewDeployments: 50, projects: 20 },
+            limits: { backupRetention: 14, members: 10, previewDeployments: 50, projects: 20 },
             priceIds: ["price_pro_monthly", "price_pro_yearly"],
         },
     },

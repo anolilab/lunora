@@ -67,7 +67,14 @@ const purgedTables = (): string[] => {
  * instead, so the teardown path can still reach the live dispatch script, D1 and
  * R2. Hard-deleting the row would leak all three.
  */
-const HANDLED_ELSEWHERE = new Set(["deployments"]);
+const HANDLED_ELSEWHERE = new Set([
+    "deployments",
+    // Each row points at a snapshot object in R2, which a mutation cannot delete.
+    // The purge deletes the org's projects; the tenant backup sweep then deletes
+    // every snapshot whose project is gone, object first, then the row. Purging
+    // the rows here would orphan the objects — tenant data outliving an erasure.
+    "tenantBackups",
+]);
 
 describe("organizations.purgeDeleted", () => {
     it("purges every org-scoped table the schema declares", () => {
