@@ -11,8 +11,9 @@ import { Container } from "@cloudflare/containers";
 import { LunoraError } from "@lunora/errors";
 
 import { abortDeadline } from "../../../../shared/abort-deadline";
+import { readCapped } from "../../../../shared/read-capped";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
-import { CONTAINER_EXEC_PATH, pathMatchesAnyDecoding } from "../exec";
+import { CONTAINER_EXEC_PATH, DEFAULT_EXEC_MAX_OUTPUT_BYTES, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition, ContainerReadinessCheck, ContainerRuntimeInstanceType, ContainerSnapshot } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
@@ -82,6 +83,22 @@ interface DurableObjectScheduledContainer {
     readonly images?: Readonly<Record<string, string>>;
     snapshotContainer: (options: { name?: string }) => Promise<ContainerSnapshot>;
 }
+
+/** The `{ args, command, cwd, env, maxOutputBytes, timeoutMs }` body `execViaFetch` POSTs. */
+interface ExecRequestBody {
+    args?: string[];
+    command: string;
+    cwd?: string;
+    env?: Record<string, string>;
+    maxOutputBytes?: number;
+    timeoutMs?: number;
+}
+
+/** The native `ctx.container.exec()` surface the exec entry drives — structurally workers-types' `Container["exec"]`. */
+type NativeContainerExec = (
+    cmd: string[],
+    options: { cwd?: string; env?: Record<string, string>; signal?: AbortSignal; stderr: "pipe"; stdout: "pipe" },
+) => Promise<{ exitCode: Promise<number>; kill: (signal?: number) => void; stderr: ReadableStream | null; stdout: ReadableStream | null }>;
 
 /** Whether two env maps hold the same variables with the same values. */
 const sameEnv = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
@@ -341,7 +358,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         await this.awaitReadinessGate();
 
-        return super.containerFetch(request, port);
+        const nativeExec = (this.ctx.container as { exec?: NativeContainerExec } | undefined)?.exec;
+
+        // Without native exec (an older runtime, another host), the container's
+        // own app serves the route, as it always has.
+        if (typeof nativeExec !== "function") {
+            return super.containerFetch(request, port);
+        }
+
+        // The same start the proxied path makes, so a native exec boots the
+        // instance with its env, image and readiness gate exactly as a fetch would.
+        await this.startAndWaitForPorts(port);
+
+        return this.runNativeExec(nativeExec.bind(this.ctx.container), request);
     }
 
     /**
@@ -498,6 +527,61 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraStops += 1;
 
         await super.onStop(parameters);
+    }
+
+    /**
+     * Run an exec request through Cloudflare's native `ctx.container.exec()`,
+     * answering with the same `{ code, stdout, stderr }` document the HTTP
+     * contract uses — so the image no longer has to serve `/__lunora/exec`.
+     * The command runs unshelled, as the contract always specified. Output is
+     * read under the caller's `maxOutputBytes` cap here in the Durable Object
+     * too, and the process is killed on overflow or on `timeoutMs`.
+     */
+    private async runNativeExec(exec: NativeContainerExec, request: Request): Promise<Response> {
+        let body: ExecRequestBody;
+
+        try {
+            body = await request.json();
+        } catch {
+            return new Response(`container "${this.lunoraName}": exec body must be JSON`, { status: 400 });
+        }
+
+        if (typeof body.command !== "string" || body.command.length === 0) {
+            return new Response(`container "${this.lunoraName}": exec requires a non-empty \`command\``, { status: 400 });
+        }
+
+        const limit = body.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
+        const deadline = abortDeadline(undefined, body.timeoutMs, () => new DOMException(`exec timed out after ${String(body.timeoutMs)}ms`, "TimeoutError"));
+
+        try {
+            const process = await exec([body.command, ...(body.args ?? [])], {
+                ...(body.cwd === undefined ? {} : { cwd: body.cwd }),
+                ...(body.env === undefined ? {} : { env: body.env }),
+                ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
+                stderr: "pipe",
+                stdout: "pipe",
+            });
+            const [stdout, stderr] = await Promise.all([
+                readCapped(process.stdout, limit, deadline.signal),
+                readCapped(process.stderr, limit, deadline.signal),
+            ]);
+
+            if (stdout.overflowed || stderr.overflowed) {
+                process.kill();
+
+                return new Response(`container "${this.lunoraName}": exec output exceeded ${String(limit)} bytes; the process was killed`, { status: 413 });
+            }
+
+            return Response.json({ code: await process.exitCode, stderr: stderr.text, stdout: stdout.text });
+        } catch (error) {
+            if (deadline.signal?.aborted === true) {
+                return new Response(`container "${this.lunoraName}": exec timed out after ${String(body.timeoutMs)}ms`, { status: 504 });
+            }
+
+            throw error;
+        } finally {
+            deadline.dispose();
+        }
     }
 
     /** A 403 for a path under the reserved namespace, else `undefined`. */

@@ -229,6 +229,27 @@ await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); 
     targets.
 </Callout>
 
+### Sandbox SDK helpers
+
+A `LunoraContainer` is already the Durable Object that owns its container, which
+is the model [Sandbox SDK 1.0](https://developers.cloudflare.com/sandbox/) is
+built on. Its helpers take `ctx.container` directly, so a hand-authored subclass
+can use them next to the per-instance images and snapshots above. Examples are
+`Files` for streaming file I/O, `S3Mount` for mounting an R2 bucket, and
+`DirectoryBackup` for saving a directory to R2. `Files` needs the image to ship
+the SDK's `sandbox-shim`:
+
+```ts
+import { Files } from "@cloudflare/sandbox";
+import { LunoraContainer } from "@lunora/container/do";
+
+export class AgentComputerContainer extends LunoraContainer {
+    public async writeTask(script: string): Promise<void> {
+        await new Files(this.ctx.container!).writeFile("/tmp/task.sh", script);
+    }
+}
+```
+
 ## Running a command: `exec`
 
 `fetch` covers containers that serve an HTTP API. When the container is a
@@ -288,11 +309,18 @@ command _starts_ and then stalls would otherwise sit past the deadline.
 
 ### The container side of the contract
 
-There is no platform-level exec: a container is an HTTP server, so the runner
-inside it serves the route. Accept a POST at **`/__lunora/exec`** taking
+On Cloudflare the container needs **nothing**: the container Durable Object
+runs the command through the runtime's native `ctx.container.exec()`, unshelled,
+reads stdout and stderr under the same `maxOutputBytes` cap (killing the process
+if it overruns, or when `timeoutMs` fires), and answers the contract itself. The
+container still has to start the usual way, so exec needs a `defaultPort` (or a
+`.port(n)` handle), as before.
+
+Where the runtime has no native exec, the runner inside the container serves the
+route instead. Accept a POST at **`/__lunora/exec`** taking
 
 ```jsonc
-{ "command": "pnpm", "args": ["install"], "cwd": "/app", "env": { "CI": "1" }, "timeoutMs": 120000 }
+{ "command": "pnpm", "args": ["install"], "cwd": "/app", "env": { "CI": "1" }, "maxOutputBytes": 1000000, "timeoutMs": 120000 }
 ```
 
 and answer `{ "code": 0, "stdout": "…", "stderr": "…" }` as JSON. `cwd`, `env`

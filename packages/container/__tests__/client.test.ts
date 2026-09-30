@@ -355,7 +355,7 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
     it("forwards snapshot() to the DO's lunoraSnapshot RPC and returns its handle", async () => {
         expect.assertions(2);
 
-        const lunoraSnapshot = vi.fn(async (options?: { name?: string }) => {
+        const lunoraSnapshot = vi.fn<(options?: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
             return { id: "snap-1", name: options?.name, size: 9 };
         });
         const namespace: ContainerNamespaceLike = {

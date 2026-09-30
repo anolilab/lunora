@@ -237,6 +237,89 @@ describe("lunoraContainer reserved routes", () => {
     });
 });
 
+describe("lunoraContainer native exec", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** A stream that yields `text` once. */
+    const streamOf = (text: string): ReadableStream<Uint8Array> =>
+        new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(text));
+                controller.close();
+            },
+        });
+
+    const nativeInstance = (exec: (...args: unknown[]) => Promise<unknown>): { instance: LunoraContainer; proxied: unknown[]; started: unknown[] } => {
+        const context = fakeDurableObjectContext({ container: { exec, running: false } });
+        const instance = new LunoraContainer(context as never, {}, defineContainer({ defaultPort: 8080, image: "./app" }), "runner");
+        const base = Object.getPrototypeOf(Object.getPrototypeOf(instance)) as {
+            containerFetch: () => Promise<Response>;
+            startAndWaitForPorts: () => Promise<void>;
+        };
+        const proxied: unknown[] = [];
+        const started: unknown[] = [];
+
+        vi.spyOn(base, "containerFetch").mockImplementation(async (...args: unknown[]) => {
+            proxied.push(args);
+
+            return new Response("proxied");
+        });
+        vi.spyOn(base, "startAndWaitForPorts").mockImplementation(async (...args: unknown[]) => {
+            started.push(args[0]);
+        });
+
+        return { instance, proxied, started };
+    };
+
+    const execRequest = (body: Record<string, unknown>): Request =>
+        new Request("https://container/__lunora/exec", { body: JSON.stringify(body), headers: { "content-type": "application/json" }, method: "POST" });
+
+    it("runs the command through ctx.container.exec, unshelled, and answers the exec contract", async () => {
+        expect.assertions(4);
+
+        const exec = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+            return { exitCode: Promise.resolve(3), kill: () => {}, stderr: streamOf("warn"), stdout: streamOf("hello") };
+        });
+        const { instance, proxied, started } = nativeInstance(exec);
+        const response = await instance.lunoraExec(execRequest({ args: ["-la", "/tmp"], command: "ls", cwd: "/work", env: { A: "1" } }));
+
+        await expect(response.json()).resolves.toStrictEqual({ code: 3, stderr: "warn", stdout: "hello" });
+        expect(exec).toHaveBeenCalledWith(["ls", "-la", "/tmp"], { cwd: "/work", env: { A: "1" }, stderr: "pipe", stdout: "pipe" });
+        expect(started).toStrictEqual([8080]);
+        expect(proxied).toStrictEqual([]);
+    });
+
+    it("kills the process and answers 413 when output overruns maxOutputBytes", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: Promise.resolve(0), kill, stderr: streamOf(""), stdout: streamOf("0123456789") };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "yes", maxOutputBytes: 4 })))).resolves.toBe(413);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the container's own route when the runtime has no native exec", async () => {
+        expect.assertions(2);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, {}, defineContainer({ defaultPort: 8080, image: "./app" }), "runner");
+
+        vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { containerFetch: () => Promise<Response> }, "containerFetch").mockResolvedValue(
+            new Response("proxied"),
+        );
+
+        const response = await instance.lunoraExec(execRequest({ command: "ls" }));
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toBe("proxied");
+    });
+});
+
 describe("lunoraContainer secretsStore resolution", () => {
     it("resolves Secrets Store bindings and merges them into envVars before start", async () => {
         expect.assertions(1);
@@ -582,7 +665,7 @@ describe("lunoraContainer durable_object scheduling", () => {
     it("snapshots a running container and refuses when it is stopped", async () => {
         expect.assertions(3);
 
-        const snapshotContainer = vi.fn(async (options: { name?: string }) => {
+        const snapshotContainer = vi.fn<(options: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
             return { id: "snap-1", name: options.name, size: 7 };
         });
         const { instance } = scheduled({ monitor: async () => new Promise<never>(() => {}), running: true, snapshotContainer });
