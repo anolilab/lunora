@@ -5,21 +5,50 @@
  * HTTP client for that control-plane API: POST the prebuilt bundle + manifest
  * with the org deploy key and consume the NDJSON progress stream; roll back a
  * release. Pure over an injected `fetch`, so it is unit-testable, and it shares
- * the wire contract with the control plane's own `apps/cloud` client.
+ * the wire contract with the control plane's own `apps/cloud` client. Also walks
+ * the app's static assets into the upload body ({@link collectAssets}).
  */
+
+import { existsSync, readFileSync, statSync } from "node:fs";
+
+import type { BindingRequirement } from "@lunora/config/cloudflare";
+import { matcher, walkSync } from "@visulima/fs";
+import { join, relative } from "@visulima/path";
 
 type DeployEvent = Record<string, unknown>;
 
-/** The tenant binding manifest a deploy carries (from the app's `wrangler.jsonc`). */
-interface DeployManifestBindings {
-    d1?: { binding: string };
-    durableObjects?: { binding: string; className: string }[];
-    r2?: { binding: string };
+// The next three mirror `apps/cloud/src/provision-contract.ts` — the CLI cannot
+// import that private app. Change both together.
+
+/** What the deploy request carries about the Worker's needs. */
+interface DeployManifest {
+    /** Every binding the Worker reads off `env`, as `buildBindingManifest` lists them. */
+    bindings: BindingRequirement[];
+    /** `compatibility_date`; the platform default applies when absent. */
+    compatibilityDate?: string;
+    /** `compatibility_flags`; the platform default (`["nodejs_compat"]`) applies when absent. */
+    compatibilityFlags?: string[];
+}
+
+/** One static file, keyed by its URL path (`/index.html`), content base64-encoded. */
+interface AssetFile {
+    content: string;
+    path: string;
+}
+
+/** The static files behind an `assets` binding, plus the subset of wrangler's `assets` config that changes serving. */
+interface AssetsUpload {
+    config?: {
+        html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
+        not_found_handling?: "404-page" | "none" | "single-page-application";
+        run_worker_first?: boolean | string[];
+    };
+    files: AssetFile[];
 }
 
 interface DeployToCloudOptions {
     apiUrl: string;
-    bindings?: DeployManifestBindings;
+    assets?: AssetsUpload;
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output). */
     bundle: string;
@@ -27,6 +56,7 @@ interface DeployToCloudOptions {
     deployKey: string;
     fetch?: typeof globalThis.fetch;
     kind?: "dev" | "preview" | "production";
+    manifest: DeployManifest;
     projectId: string; // secret-scanner:allow -- domain field name
     scriptName: string;
 }
@@ -118,11 +148,12 @@ const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: Dep
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
         body: JSON.stringify({
-            ...(options.bindings ? { bindings: options.bindings } : {}),
+            ...(options.assets ? { assets: options.assets } : {}),
             branch: options.branch,
             bundle: options.bundle,
             ...(options.cronSpecs && options.cronSpecs.length > 0 ? { cronSpecs: options.cronSpecs } : {}),
             kind: options.kind,
+            manifest: options.manifest,
             projectId: options.projectId, // secret-scanner:allow -- domain field name
             scriptName: options.scriptName,
         }), // secret-scanner:allow -- domain field name
@@ -181,57 +212,122 @@ const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: Dep
     return { status };
 };
 
-/** The subset of a parsed `wrangler.jsonc` the manifest reads — all optional/defensive. */
-interface WranglerConfig {
-    d1_databases?: { binding?: unknown }[];
-    durable_objects?: { bindings?: { class_name?: unknown; name?: unknown }[] };
-    name?: unknown;
-    r2_buckets?: { binding?: unknown }[];
-    triggers?: { crons?: unknown[] };
-}
+/** Cloudflare's per-asset limit. */
+const MAX_ASSET_FILE_BYTES = 25 * 1024 * 1024;
 
-interface DeployManifest {
-    bindings: DeployManifestBindings;
-    cronSpecs: string[];
-}
+/** The whole upload rides in one JSON request body, so cap it well below what a Worker will buffer. */
+const MAX_ASSETS_TOTAL_BYTES = 50 * 1024 * 1024;
 
-const asString = (value: unknown): string | undefined => (typeof value === "string" && value.trim() !== "" ? value : undefined);
+const LINE_BREAK = /\r?\n/u;
+const TRAILING_SLASH = /\/$/u;
+const LEADING_SLASH = /^\//u;
+
+/** The wrangler `assets` keys that change how files are served — the only ones the upload carries. */
+const SERVING_CONFIG_KEYS = ["html_handling", "not_found_handling", "run_worker_first"] as const;
+
+/** Files wrangler reads as config rather than serving; never uploaded. */
+const RESERVED_ASSET_FILES = new Set([".assetsignore", "_headers", "_redirects"]);
+
+/** The wrangler `assets` section, as far as a deploy reads it. */
+interface WranglerAssets {
+    binding?: string;
+    directory?: string;
+    html_handling?: NonNullable<AssetsUpload["config"]>["html_handling"];
+    not_found_handling?: NonNullable<AssetsUpload["config"]>["not_found_handling"];
+    run_worker_first?: boolean | string[];
+}
 
 /**
- * Extract the deploy manifest (DO/D1/R2 bindings + cron expressions) from a
- * parsed `wrangler.jsonc`. Defensive — malformed entries are dropped. The server
- * floors bindings to ShardDO, so a partial manifest is safe.
+ * Compile `.assetsignore` into a predicate over `/`-separated relative paths.
+ *
+ * A subset of gitignore: one glob per line, `#` comments, a leading `/` anchors
+ * to the directory root, a pattern without `/` matches at any depth, and a match
+ * on a directory ignores everything under it. `!` re-includes are not supported.
  */
-const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest => {
-    const durableObjects = (wrangler.durable_objects?.bindings ?? [])
-        .map((entry) => {
-            return { binding: asString(entry.name), className: asString(entry.class_name) };
-        })
-        .filter((entry): entry is { binding: string; className: string } => entry.binding !== undefined && entry.className !== undefined);
+const readAssetsIgnore = (directory: string): ((path: string) => boolean) => {
+    const file = join(directory, ".assetsignore");
 
-    const d1Binding = asString(wrangler.d1_databases?.[0]?.binding);
-    const r2Binding = asString(wrangler.r2_buckets?.[0]?.binding);
-    const cronSpecs = (wrangler.triggers?.crons ?? []).map((cron) => asString(cron)).filter((cron): cron is string => cron !== undefined);
+    if (!existsSync(file)) {
+        return () => false;
+    }
 
-    return {
-        bindings: {
-            ...(d1Binding ? { d1: { binding: d1Binding } } : {}),
-            ...(r2Binding ? { r2: { binding: r2Binding } } : {}),
-            ...(durableObjects.length > 0 ? { durableObjects } : {}),
-        },
-        cronSpecs,
-    };
+    const patterns = readFileSync(file, "utf8")
+        .split(LINE_BREAK)
+        .map((line) => line.trim().replace(TRAILING_SLASH, ""))
+        .filter((line) => line !== "" && !line.startsWith("#"));
+    // gitignore anchors a pattern that has a `/` anywhere but the end; picomatch's
+    // `matchBase` only floats slash-free ones, so a leading `/` must go to a
+    // separate, non-floating matcher once stripped.
+    const anchored = patterns.filter((pattern) => pattern.includes("/")).map((pattern) => pattern.replace(LEADING_SLASH, ""));
+    const floating = patterns.filter((pattern) => !pattern.includes("/"));
+    const matchers = [
+        ...(anchored.length > 0 ? [matcher(anchored, { dot: true })] : []),
+        ...(floating.length > 0 ? [matcher(floating, { dot: true, matchBase: true })] : []),
+    ];
+    const isMatch = (path: string): boolean => matchers.some((match) => match(path));
+
+    // Test every ancestor too, so `dist` or `logs/` ignores the whole subtree.
+    return (path) => path.split("/").some((_, index, segments) => isMatch(segments.slice(0, index + 1).join("/")));
 };
 
-export { deployToCloud, fetchEjectPackage, parseWranglerManifest, rollbackDeployment };
+/**
+ * Walk the `assets.directory` (already resolved against the wrangler file) into
+ * the upload body. Throws with a user-facing message when the directory is
+ * missing or empty, or a size cap is exceeded — those are all "fix your build"
+ * errors the control plane would otherwise answer much later.
+ */
+const collectAssets = (directory: string, wranglerAssets: WranglerAssets): AssetsUpload => {
+    if (!existsSync(directory) || !statSync(directory).isDirectory()) {
+        throw new Error(`assets directory "${directory}" does not exist — build the app first`);
+    }
+
+    const ignored = readAssetsIgnore(directory);
+    const files: AssetFile[] = [];
+    let total = 0;
+
+    for (const entry of walkSync(directory, { followSymlinks: true, includeDirs: false })) {
+        const path = relative(directory, entry.path);
+
+        if (RESERVED_ASSET_FILES.has(path) || ignored(path)) {
+            continue;
+        }
+
+        const { size } = statSync(entry.path);
+
+        if (size > MAX_ASSET_FILE_BYTES) {
+            throw new Error(`asset "/${path}" is ${String(size)} bytes; Cloudflare caps a single asset at 25 MiB`);
+        }
+
+        total += size;
+
+        if (total > MAX_ASSETS_TOTAL_BYTES) {
+            throw new Error(`assets in "${directory}" exceed the 50 MiB upload cap`);
+        }
+
+        files.push({ content: readFileSync(entry.path).toString("base64"), path: `/${path}` });
+    }
+
+    if (files.length === 0) {
+        throw new Error(`assets directory "${directory}" is empty — build the app first`);
+    }
+
+    const config: NonNullable<AssetsUpload["config"]> = Object.fromEntries(
+        SERVING_CONFIG_KEYS.filter((key) => wranglerAssets[key] !== undefined).map((key) => [key, wranglerAssets[key]]),
+    );
+
+    return { ...(Object.keys(config).length > 0 ? { config } : {}), files };
+};
+
+export { collectAssets, deployToCloud, fetchEjectPackage, rollbackDeployment };
 export type {
+    AssetFile,
+    AssetsUpload,
     DeployEvent,
     DeployManifest,
-    DeployManifestBindings,
     DeployResult,
     DeployToCloudOptions,
     EjectOptions,
     EjectPackage,
     RollbackOptions,
-    WranglerConfig,
+    WranglerAssets,
 };

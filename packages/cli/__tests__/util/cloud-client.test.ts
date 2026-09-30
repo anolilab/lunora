@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeployEvent } from "../../src/util/cloud-client";
-import { deployToCloud, parseWranglerManifest, rollbackDeployment } from "../../src/util/cloud-client";
+import { collectAssets, deployToCloud, rollbackDeployment } from "../../src/util/cloud-client";
 
 /** The slice of `fetch` these tests actually drive — the real signature is wider. */
 type FetchStub = (url: string, init: RequestInit) => Promise<Response>;
@@ -23,12 +27,13 @@ describe(deployToCloud, () => {
         const result = await deployToCloud(
             {
                 apiUrl: "https://cloud/",
-                bindings: { durableObjects: [{ binding: "SHARD", className: "ShardDO" }] },
+                assets: { files: [{ content: "aGk=", path: "/index.html" }] },
                 bundle: "YnVuZGxl",
                 cronSpecs: ["0 0 * * *"],
                 deployKey: "dk_secret",
                 fetch: fetchImpl,
                 kind: "preview",
+                manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", type: "durable_object" }], compatibilityDate: "2026-01-01" },
                 projectId: "prj_1",
                 scriptName: "app",
             },
@@ -37,11 +42,12 @@ describe(deployToCloud, () => {
 
         expect(result).toStrictEqual({ status: "live" });
         expect(request?.headers.get("authorization")).toBe("Bearer dk_secret");
-        expect(request?.body).toMatchObject({
-            bindings: { durableObjects: [{ binding: "SHARD", className: "ShardDO" }] },
+        expect(request?.body).toStrictEqual({
+            assets: { files: [{ content: "aGk=", path: "/index.html" }] },
             bundle: "YnVuZGxl",
             cronSpecs: ["0 0 * * *"],
             kind: "preview",
+            manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", type: "durable_object" }], compatibilityDate: "2026-01-01" },
             projectId: "prj_1",
             scriptName: "app",
         });
@@ -54,7 +60,10 @@ describe(deployToCloud, () => {
         const fetchImpl = vi.fn<FetchStub>(async () => new Response("bad key", { status: 403 })) as unknown as typeof globalThis.fetch;
 
         await expect(
-            deployToCloud({ apiUrl: "https://cloud", bundle: "b", deployKey: "x", fetch: fetchImpl, projectId: "p", scriptName: "s" }, () => {}),
+            deployToCloud(
+                { apiUrl: "https://cloud", bundle: "b", deployKey: "x", fetch: fetchImpl, manifest: { bindings: [] }, projectId: "p", scriptName: "s" },
+                () => {},
+            ),
         ).rejects.toThrow(/deploy request failed \(403\): bad key/);
     });
 });
@@ -87,26 +96,96 @@ describe(rollbackDeployment, () => {
     });
 });
 
-describe(parseWranglerManifest, () => {
-    it("extracts DO classes, first D1/R2 binding, and crons; drops malformed entries", () => {
+describe(collectAssets, () => {
+    let directory: string;
+
+    const write = (path: string, content: string): void => {
+        mkdirSync(join(directory, path, ".."), { recursive: true });
+        writeFileSync(join(directory, path), content);
+    };
+
+    beforeEach(() => {
+        directory = mkdtempSync(join(tmpdir(), "lunora-cloud-assets-"));
+    });
+
+    afterEach(() => {
+        rmSync(directory, { force: true, recursive: true });
+    });
+
+    it("keys files by URL path, base64-encodes them, and carries only the serving config", () => {
         expect.assertions(1);
 
-        const manifest = parseWranglerManifest({
-            d1_databases: [{ binding: "DB" }],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }, { name: "NO_CLASS" }] },
-            r2_buckets: [{ binding: "FILES" }],
-            triggers: { crons: ["0 */6 * * *", 3] },
+        write("index.html", "<h1>hi</h1>");
+        write("assets/app.js", "console.log(1)");
+        write("_headers", "/*\n  x-a: b");
+
+        const upload = collectAssets(directory, {
+            binding: "ASSETS",
+            directory: "./public",
+            html_handling: "none",
+            not_found_handling: "single-page-application",
+            run_worker_first: ["/api/*"],
         });
 
-        expect(manifest).toStrictEqual({
-            bindings: { d1: { binding: "DB" }, durableObjects: [{ binding: "SHARD", className: "ShardDO" }], r2: { binding: "FILES" } },
-            cronSpecs: ["0 */6 * * *"],
+        expect({ ...upload, files: upload.files.toSorted((a, b) => a.path.localeCompare(b.path)) }).toStrictEqual({
+            config: { html_handling: "none", not_found_handling: "single-page-application", run_worker_first: ["/api/*"] },
+            files: [
+                { content: Buffer.from("console.log(1)").toString("base64"), path: "/assets/app.js" },
+                { content: Buffer.from("<h1>hi</h1>").toString("base64"), path: "/index.html" },
+            ],
         });
     });
 
-    it("returns an empty manifest for a minimal wrangler", () => {
+    it("omits config when wrangler sets none of the serving keys", () => {
         expect.assertions(1);
 
-        expect(parseWranglerManifest({})).toStrictEqual({ bindings: {}, cronSpecs: [] });
+        write("index.html", "x");
+
+        expect(collectAssets(directory, { directory: "public" })).toStrictEqual({ files: [{ content: "eA==", path: "/index.html" }] });
+    });
+
+    it("honours .assetsignore globs, directory entries, and comments", () => {
+        expect.assertions(1);
+
+        write(".assetsignore", "# build noise\n*.map\nprivate/\n/root-only.txt\n");
+        write("index.html", "x");
+        write("app.js.map", "x");
+        write("nested/deep.js.map", "x");
+        write("private/secret.txt", "x");
+        write("root-only.txt", "x");
+        write("nested/root-only.txt", "x");
+
+        expect(
+            collectAssets(directory, {})
+                .files.map((file) => file.path)
+                .toSorted((a, b) => a.localeCompare(b)),
+        ).toStrictEqual(["/index.html", "/nested/root-only.txt"]);
+    });
+
+    it("refuses a missing or empty directory with a build-first hint", () => {
+        expect.assertions(2);
+
+        expect(() => collectAssets(join(directory, "missing"), {})).toThrow(/does not exist — build the app first/);
+        expect(() => collectAssets(directory, {})).toThrow(/is empty — build the app first/);
+    });
+
+    it("refuses a single asset over 25 MiB", () => {
+        expect.assertions(1);
+
+        write("big.bin", "");
+        truncateSync(join(directory, "big.bin"), 25 * 1024 * 1024 + 1);
+
+        expect(() => collectAssets(directory, {})).toThrow(/"\/big\.bin".*25 MiB/);
+    });
+
+    it("refuses a total over 50 MiB", () => {
+        expect.assertions(1);
+
+        for (const name of ["a.bin", "b.bin", "c.bin"]) {
+            write(name, "");
+            truncateSync(join(directory, name), 20 * 1024 * 1024);
+        }
+
+        expect(() => collectAssets(directory, {})).toThrow(/exceed the 50 MiB upload cap/);
     });
 });

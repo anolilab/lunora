@@ -1,13 +1,19 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { buildBindingManifest } from "@lunora/config/cloudflare";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CloudCommandDeps } from "../../src/commands/cloud/handler";
 import { runCloudCommand } from "../../src/commands/cloud/handler";
 import type { Logger } from "../../src/util/logger";
 
-const capturingLogger = (): { errors: string[]; infos: string[]; logger: Logger; successes: string[] } => {
+const capturingLogger = (): { errors: string[]; infos: string[]; logger: Logger; successes: string[]; warnings: string[] } => {
     const errors: string[] = [];
     const infos: string[] = [];
     const successes: string[] = [];
+    const warnings: string[] = [];
 
     return {
         errors,
@@ -16,9 +22,10 @@ const capturingLogger = (): { errors: string[]; infos: string[]; logger: Logger;
             error: (message) => errors.push(message),
             info: (message) => infos.push(message),
             success: (message) => successes.push(message),
-            warn: () => {},
+            warn: (message) => warnings.push(message),
         },
         successes,
+        warnings,
     };
 };
 
@@ -30,7 +37,10 @@ const deps = (over: Partial<CloudCommandDeps> = {}): Partial<CloudCommandDeps> =
         env: { LUNORA_CLOUD_URL: "https://cloud", LUNORA_DEPLOY_KEY: "dk_secret" },
         readBundleBase64: () => "YnVuZGxl",
         readWrangler: () => {
-            return { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, name: "app", triggers: { crons: ["0 0 * * *"] } };
+            return {
+                config: { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] }, name: "app", triggers: { crons: ["0 0 * * *"] } },
+                path: "/x/wrangler.jsonc",
+            };
         },
         ejectFn: async () => {
             return { projectSlug: "acme", scriptName: "acme-v3", snapshot: '{"table":"users"}\n', url: "https://acme.lunora.app" };
@@ -112,17 +122,203 @@ describe("lunora cloud", () => {
         expect(deployFn).toHaveBeenCalledWith(
             expect.objectContaining({
                 apiUrl: "https://cloud",
-                bindings: { durableObjects: [{ binding: "SHARD", className: "ShardDO" }] },
                 branch: "feat/x",
                 bundle: "YnVuZGxl",
                 cronSpecs: ["0 0 * * *"],
                 deployKey: "dk_secret",
                 kind: "preview",
+                manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", sqlite: false, type: "durable_object" }] },
                 projectId: "prj_1",
                 scriptName: "app",
             }),
             expect.any(Function),
         );
+    });
+
+    it("deploys: every binding type in the manifest passes through, with the compatibility settings", async () => {
+        expect.assertions(3);
+
+        const config = {
+            ai: { binding: "AI" },
+            analytics_engine_datasets: [{ binding: "EVENTS", dataset: "events" }],
+            browser: { binding: "BROWSER" },
+            compatibility_date: "2026-01-01",
+            compatibility_flags: ["nodejs_compat"],
+            containers: [{ class_name: "Box" }],
+            d1_databases: [{ binding: "DB", database_name: "db" }],
+            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            hyperdrive: [{ binding: "PG", id: "hd_1" }],
+            images: { binding: "IMAGES" },
+            kv_namespaces: [{ binding: "CACHE" }],
+            name: "app",
+            pipelines: [{ binding: "PIPE", pipeline: "p" }],
+            queues: { consumers: [{ queue: "jobs" }], producers: [{ binding: "JOBS", queue: "jobs" }] },
+            r2_buckets: [{ binding: "FILES", bucket_name: "files" }],
+            vectorize: [{ binding: "SEARCH", index_name: "idx" }],
+            workflows: [{ binding: "FLOW", class_name: "Flow", name: "flow" }],
+        };
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+            return { status: "live" };
+        });
+        const { logger, warnings } = capturingLogger();
+
+        await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "b",
+            cwd: "/x",
+            deps: deps({
+                deployFn,
+                readWrangler: () => {
+                    return { config, path: "/x/wrangler.jsonc" };
+                },
+            }),
+            logger,
+            project: "prj_1",
+        });
+
+        const sent = deployFn.mock.calls[0]?.[0];
+
+        expect(sent?.manifest).toStrictEqual({
+            bindings: buildBindingManifest(config).bindings,
+            compatibilityDate: "2026-01-01",
+            compatibilityFlags: ["nodejs_compat"],
+        });
+        expect(new Set(sent?.manifest.bindings.map((binding) => binding.type))).toStrictEqual(
+            new Set([
+                "ai",
+                "analytics_engine",
+                "browser",
+                "container",
+                "d1",
+                "durable_object",
+                "hyperdrive",
+                "images",
+                "kv",
+                "pipeline",
+                "queue_consumer",
+                "queue_producer",
+                "r2",
+                "vectorize",
+                "workflow",
+            ]),
+        );
+        expect(warnings).toStrictEqual([]);
+    });
+
+    it("deploys: warns about unmodelled wrangler sections but still deploys", async () => {
+        expect.assertions(3);
+
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+            return { status: "live" };
+        });
+        const { logger, warnings } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "b",
+            cwd: "/x",
+            deps: deps({
+                deployFn,
+                readWrangler: () => {
+                    return { config: { mtls_certificates: [], name: "app" }, path: "/x/wrangler.jsonc" };
+                },
+            }),
+            logger,
+            project: "prj_1",
+        });
+
+        expect(result.code).toBe(0);
+        expect(deployFn).toHaveBeenCalledTimes(1);
+        expect(warnings[0]).toMatch(/does not model these wrangler sections: mtls_certificates/);
+    });
+
+    it("deploys: refuses without a readable wrangler config", async () => {
+        expect.assertions(2);
+
+        const { errors, logger } = capturingLogger();
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "b",
+            cwd: "/x",
+            deps: deps({ readWrangler: () => undefined }),
+            logger,
+            project: "prj_1",
+            scriptName: "app",
+        });
+
+        expect(result.code).toBe(1);
+        expect(errors[0]).toMatch(/no readable wrangler config/);
+    });
+
+    it("deploys: uploads static assets from the directory relative to the wrangler file", async () => {
+        expect.assertions(2);
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-cloud-deploy-"));
+
+        try {
+            mkdirSync(join(root, "app", "dist", "client"), { recursive: true });
+            writeFileSync(join(root, "app", "dist", "client", "index.html"), "hi");
+
+            const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+                return { status: "live" };
+            });
+            const { logger } = capturingLogger();
+
+            const result = await runCloudCommand({
+                argument: ["deploy"],
+                bundlePath: "b",
+                cwd: root,
+                deps: deps({
+                    deployFn,
+                    readWrangler: () => {
+                        return {
+                            config: { assets: { binding: "ASSETS", directory: "./dist/client", not_found_handling: "404-page" }, name: "app" },
+                            path: join(root, "app", "wrangler.jsonc"),
+                        };
+                    },
+                }),
+                logger,
+                project: "prj_1",
+            });
+
+            expect(result.code).toBe(0);
+            expect(deployFn.mock.calls[0]?.[0].assets).toStrictEqual({
+                config: { not_found_handling: "404-page" },
+                files: [{ content: "aGk=", path: "/index.html" }],
+            });
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("deploys: an assets binding whose directory is missing tells the user to build first", async () => {
+        expect.assertions(3);
+
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>();
+        const { errors, logger } = capturingLogger();
+        const root = mkdtempSync(join(tmpdir(), "lunora-cloud-deploy-"));
+
+        try {
+            const result = await runCloudCommand({
+                argument: ["deploy"],
+                bundlePath: "b",
+                cwd: root,
+                deps: deps({
+                    deployFn,
+                    readWrangler: () => {
+                        return { config: { assets: { binding: "ASSETS", directory: "dist" }, name: "app" }, path: join(root, "wrangler.jsonc") };
+                    },
+                }),
+                logger,
+                project: "prj_1",
+            });
+
+            expect(result.code).toBe(1);
+            expect(deployFn).not.toHaveBeenCalled();
+            expect(errors[0]).toMatch(/does not exist — build the app first/);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
     });
 
     it("deploys: non-live terminal status is a failure exit", async () => {

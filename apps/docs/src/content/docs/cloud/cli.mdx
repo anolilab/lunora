@@ -48,11 +48,26 @@ LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.
 | `--branch`  | Git branch to record against the deployment — what preview URLs are keyed on. |
 | `--url`     | Control-plane API URL, if not using `LUNORA_CLOUD_URL`.                       |
 
-It reads your wrangler config to send the **binding manifest** and any
-`triggers.crons` alongside the bundle, so the platform provisions what your
-Worker actually needs. Workers-for-Platforms drops cron triggers on namespaced
-workers, so the control plane fans those ticks out to your deployment itself —
-you do not configure that.
+It reads your wrangler config and sends the full **binding manifest** — the
+same document `lunora info --bindings` prints: every binding your Worker reads
+off `env` (KV, D1, R2, Durable Objects, queues, Workflows, AI, and the rest),
+plus `compatibility_date` and `compatibility_flags`. The platform provisions or
+binds what it supports and refuses the rest by name before anything is created,
+so an unsupported binding fails the deploy instead of surfacing as an undefined
+`env.X` later. A wrangler section the manifest does not model is reported as a
+warning; the deploy goes ahead without it.
+
+`triggers.crons` travel with it. Workers-for-Platforms drops cron triggers on
+namespaced workers, so the control plane fans those ticks out to your deployment
+itself — you do not configure that.
+
+When your wrangler config has an `assets` section, the files under
+`assets.directory` (resolved relative to the wrangler file) are uploaded too,
+along with its `html_handling`, `not_found_handling`, and `run_worker_first`
+settings. Build first: a missing or empty directory is an error. A
+`.assetsignore` in that directory excludes matching files (one glob per line; a
+leading `/` anchors to the directory, and `!` re-includes are not supported). A
+single file over 25 MiB, or more than 50 MiB in total, is refused.
 
 The command exits non-zero unless the deployment reaches `live`.
 
