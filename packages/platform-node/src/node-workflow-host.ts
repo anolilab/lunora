@@ -62,6 +62,7 @@
 
 import { LunoraError } from "@lunora/errors";
 import type {
+    WorkflowBatchDeleteResult,
     WorkflowBindingLike,
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
@@ -83,6 +84,9 @@ import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visuli
  * it — that status, not the absent `wakeAt`, is what keeps it out.
  */
 const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
+
+/** Cloudflare's per-call cap on `Workflow.deleteBatch`, enforced here so a batch that works locally does not fail on deploy. */
+const MAX_DELETE_BATCH = 100;
 
 /** Millisecond multipliers for every duration unit the parser recognises. */
 const DURATION_MS: Record<string, number> = {
@@ -214,6 +218,27 @@ const backoffMs = (base: number, backoff: "constant" | "exponential" | "linear" 
             return base;
         }
     }
+};
+
+/**
+ * The pause before attempt `attempt + 1`. A `retries.delay` function computes
+ * the whole wait from the failure, so `backoff` does not scale it — matching
+ * Cloudflare, which hands it the failed attempt's context and error.
+ */
+const retryWaitMs = async (
+    config: WorkflowStepConfigLike,
+    baseDelay: number,
+    attempt: number,
+    context: WorkflowStepContextLike,
+    error: unknown,
+): Promise<number> => {
+    const configuredDelay = config.retries?.delay;
+
+    if (typeof configuredDelay === "function") {
+        return toMs(await configuredDelay({ ctx: context, error: error instanceof Error ? error : new Error(String(error)) }));
+    }
+
+    return backoffMs(baseDelay, config.retries?.backoff, attempt);
 };
 
 /** One registered `rollback`, captured when its step settled. */
@@ -367,7 +392,8 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
             }
 
             const limit = Math.max(1, Math.trunc(declaredLimit));
-            const baseDelay = config.retries?.delay === undefined ? 0 : toMs(config.retries.delay);
+            const configuredDelay = config.retries?.delay;
+            const baseDelay = configuredDelay === undefined || typeof configuredDelay === "function" ? 0 : toMs(configuredDelay);
 
             // The last attempt's context, so a rollback reports the attempt the
             // step actually ran on rather than a freshly minted 1.
@@ -386,7 +412,8 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
                                 throw error;
                             }
 
-                            const wait = backoffMs(baseDelay, config.retries?.backoff, attempt);
+                            // eslint-disable-next-line no-await-in-loop -- see above
+                            const wait = await retryWaitMs(config, baseDelay, attempt, lastContext, error);
 
                             if (wait > 0) {
                                 // eslint-disable-next-line no-await-in-loop -- see above
@@ -571,8 +598,30 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
     const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store: guardedStore, workflows: visulimaWorkflows });
 
+    /**
+     * Drop a run and its stored state. Returns `false` when `id` names no run.
+     * Marked terminated first, like `terminate`, so an activation in flight
+     * cannot write the run back; unlike `terminate` it leaves no tombstone, so
+     * a deleted run reads back as `unknown`.
+     */
+    const deleteRun = async (id: string): Promise<boolean> => {
+        const current = await store.load(id);
+
+        if (current === undefined || current.definitionId === ALIAS_DEFINITION_ID) {
+            return false;
+        }
+
+        terminated.add(id);
+        await store.delete(id);
+
+        return true;
+    };
+
     const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
+            delete: async () => {
+                await deleteRun(id);
+            },
             id,
             pause: () =>
                 Promise.reject(
@@ -732,6 +781,34 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 }
 
                 return instances;
+            },
+            // Sequential for the same reason as `createBatch`: a duplicate id must
+            // find the first entry's delete, so it is reported deleted, not missing.
+            deleteBatch: async (instanceIds) => {
+                if (instanceIds.length > MAX_DELETE_BATCH) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: deleteBatch takes at most ${String(MAX_DELETE_BATCH)} instance ids, got ${String(instanceIds.length)}`,
+                    );
+                }
+
+                const result: WorkflowBatchDeleteResult = { deleted: [], errors: [] };
+                const deletedIds = new Set<string>();
+
+                for (const instanceId of instanceIds) {
+                    // eslint-disable-next-line no-await-in-loop -- see above
+                    const runId = await resolveAlias(instanceId);
+
+                    // eslint-disable-next-line no-await-in-loop -- see above
+                    if (deletedIds.has(runId) || (await deleteRun(runId))) {
+                        deletedIds.add(runId);
+                        result.deleted.push({ id: instanceId });
+                    } else {
+                        result.errors.push({ code: 404, id: instanceId, message: `workflow instance "${instanceId}" not found` });
+                    }
+                }
+
+                return result;
             },
             get: async (instanceId) => instanceFor(await resolveAlias(instanceId)),
         };

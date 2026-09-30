@@ -34,6 +34,7 @@ const fakeBinding = (): { binding: WorkflowBindingLike; sent: { id: string; payl
 
     const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
+            delete: async () => undefined,
             id,
             pause: async () => undefined,
             restart: async () => undefined,
@@ -52,6 +53,14 @@ const fakeBinding = (): { binding: WorkflowBindingLike; sent: { id: string; payl
         binding: {
             create: async () => instanceFor("inst-1"),
             createBatch: async () => [instanceFor("inst-1")],
+            deleteBatch: async (ids: ReadonlyArray<string>) => {
+                return {
+                    deleted: ids.map((id) => {
+                        return { id };
+                    }),
+                    errors: [],
+                };
+            },
             get: async (id: string) => instanceFor(id),
         },
         sent,

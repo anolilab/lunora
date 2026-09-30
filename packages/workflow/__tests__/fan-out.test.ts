@@ -37,6 +37,7 @@ const engineRejectsInstanceId = (id: unknown): boolean =>
 /** A fake instance handle — only the methods the fan-out path touches are real. */
 const makeInstance = (id: string): WorkflowInstanceLike => {
     return {
+        delete: vi.fn<() => Promise<void>>(),
         id,
         pause: vi.fn<() => Promise<void>>(),
         restart: vi.fn<() => Promise<void>>(),

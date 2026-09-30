@@ -94,6 +94,14 @@ await context.step.do("charge", { retries: { limit: 3, delay: "2 seconds", backo
     context.run(api.payments.charge, { orderId }, { dedupId: `charge:${orderId}` }),
 );
 
+// `delay` can also be a function of the failed attempt: return the next wait as a
+// duration. It replaces `backoff`, so it can honour a provider's Retry-After.
+await context.step.do(
+    "sync",
+    { retries: { limit: 5, delay: ({ ctx, error }) => (error.message.includes("rate limit") ? `${ctx.attempt * 30} seconds` : "10 seconds") } },
+    () => context.run(api.customers.sync, { orderId }, { dedupId: `sync:${orderId}` }),
+);
+
 // Durable delays — minutes to weeks, not held in memory.
 await context.step.sleep("cool-off", "1 minute");
 await context.step.sleepUntil("run-at", new Date("2026-07-01T00:00:00Z"));
@@ -444,6 +452,8 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
     </Callout>
 
 - `createBatch([...])`: start many in one batch.
+- `deleteBatch([...ids])`: delete up to 100 instances and their stored state. Returns
+  `{ deleted, errors }` with one entry per id; unknown ids come back as errors.
 - `get(id)`: a handle to an existing instance.
 
 - `sendEvent(instanceId, event, payload)`: deliver a
@@ -452,7 +462,7 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 
 `create`/`get` hand back the native Cloudflare instance, which exposes its own
 lifecycle: `status()` (returns `status` + `output`/`error`), `pause()`, `resume()`,
-`restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
+`restart()`, `terminate()`, `delete()` (stops the instance and frees its state), and the untyped `sendEvent({ type, payload })`.
 
 ### Listing instances and step timelines
 

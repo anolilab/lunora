@@ -185,12 +185,28 @@ interface WaitForEventOptions {
 }
 ```
 
+### `WorkflowBatchDeleteResult` (interface)
+
+```ts
+interface WorkflowBatchDeleteResult {
+    deleted: {
+        id: string;
+    }[];
+    errors: {
+        code: number;
+        id: string;
+        message: string;
+    }[];
+}
+```
+
 ### `WorkflowBindingLike` (interface)
 
 ```ts
 interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
 ```
@@ -257,6 +273,15 @@ interface WorkflowDefinition<Params = Record<string, unknown>, Output = unknown>
 }
 ```
 
+### `WorkflowDelayFunctionLike` (type)
+
+```ts
+type WorkflowDelayFunctionLike = (input: {
+    ctx: WorkflowStepContextLike;
+    error: Error;
+}) => number | string | Promise<number | string>;
+```
+
 ### `WorkflowEventDefinition` (interface)
 
 ```ts
@@ -284,6 +309,7 @@ interface WorkflowEventLike<Params = Record<string, unknown>> {
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
     sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
@@ -316,6 +342,7 @@ interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
 
 ```ts
 interface WorkflowInstanceLike {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
@@ -455,7 +482,7 @@ interface WorkflowStatusResult {
 interface WorkflowStepConfigLike {
     retries?: {
         backoff?: "constant" | "exponential" | "linear";
-        delay?: number | string;
+        delay?: number | string | WorkflowDelayFunctionLike;
         limit: number;
     };
     timeout?: number | string;

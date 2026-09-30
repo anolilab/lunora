@@ -192,7 +192,7 @@ export const checkout = mutation.input({ orderId: v.string() }).mutation(async (
 });
 ```
 
-A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
+A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `deleteBatch([...ids])` (up to 100), `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, `delete()`, and the untyped `sendEvent({ type, payload })`.
 
 ### Runtime requirements
 

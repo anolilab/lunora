@@ -1588,6 +1588,7 @@ interface WorkflowEventDefinition<Payload = unknown> {
 
 /** A live handle to a single workflow instance. Mirrors `@lunora/workflow`'s `WorkflowInstanceLike`. */
 interface WorkflowInstance {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
@@ -1606,6 +1607,8 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     /** Start many instances in one batched RPC. */
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
+    /** Delete up to 100 instances and their stored state; ids that do not exist come back as per-instance errors. */
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<{ deleted: { id: string }[]; errors: { code: number; id: string; message: string }[] }>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstance>;
     /** Deliver a declared event (`defineWorkflowEvent`) to one instance; the payload is validated before the send. */

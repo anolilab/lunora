@@ -302,6 +302,45 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         await expect(store.load("never-existed")).resolves.toBeUndefined();
     });
 
+    it("delete drops the run and its state, so it reads back as unknown", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const store = freshStore();
+        const host = createNodeWorkflowHost({ store, workflows: { trivial } });
+        const instance = await host.bindings.trivial.create({});
+
+        await instance.delete();
+
+        await expect(instance.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(store.load(instance.id)).resolves.toBeUndefined();
+    });
+
+    it("deleteBatch reports one entry per input position: duplicates deleted once, unknown ids as errors", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const aliased = await host.bindings.trivial.create({ id: "order-1" });
+        const plain = await host.bindings.trivial.create({});
+
+        const result = await host.bindings.trivial.deleteBatch(["order-1", plain.id, "order-1", "missing"]);
+
+        expect(result.deleted).toStrictEqual([{ id: "order-1" }, { id: plain.id }, { id: "order-1" }]);
+        expect(result.errors).toStrictEqual([{ code: 404, id: "missing", message: 'workflow instance "missing" not found' }]);
+        await expect(aliased.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(plain.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(host.bindings.trivial.deleteBatch(Array.from({ length: 101 }, (_, index) => String(index)))).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+    });
+
     it("honours a caller-supplied instance id: one run, findable by that id", async () => {
         expect.hasAssertions();
 
@@ -465,6 +504,45 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(status.output).toBe("charged");
         // `attempt` is the 1-based counter Cloudflare passes, not a fresh 1 each time.
         expect(attempts).toStrictEqual([1, 2, 3]);
+    });
+
+    it("waits the duration a retries.delay function returns, given the failed attempt and its error", async () => {
+        expect.hasAssertions();
+
+        const delayInputs: { attempt: number; message: string }[] = [];
+        const flaky = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do(
+                    "sync",
+                    {
+                        retries: {
+                            delay: ({ ctx: stepContext, error }) => {
+                                delayInputs.push({ attempt: stepContext.attempt, message: error.message });
+
+                                return "1 millisecond";
+                            },
+                            limit: 3,
+                        },
+                    },
+                    async (stepContext) => {
+                        if (stepContext.attempt < 3) {
+                            throw new Error(`rate limit ${String(stepContext.attempt)}`);
+                        }
+
+                        return "synced";
+                    },
+                ),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { flaky } });
+        const instance = await host.bindings.flaky.create({});
+        const status = await instance.status();
+
+        expect(status.output).toBe("synced");
+        expect(delayInputs).toStrictEqual([
+            { attempt: 1, message: "rate limit 1" },
+            { attempt: 2, message: "rate limit 2" },
+        ]);
     });
 
     it("gives up after the last attempt and errors the run", async () => {

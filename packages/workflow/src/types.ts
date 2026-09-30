@@ -33,8 +33,16 @@ export interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     retention?: { errorRetention?: string; successRetention?: string };
 }
 
+/** Result of `Workflow.deleteBatch`. Mirrors Cloudflare's `WorkflowBatchDeleteResult`: one entry per input position. */
+export interface WorkflowBatchDeleteResult {
+    deleted: { id: string }[];
+    errors: { code: number; id: string; message: string }[];
+}
+
 /** A live handle to a single workflow instance. Mirrors `WorkflowInstance`. */
 export interface WorkflowInstanceLike {
+    /** Delete the instance and its stored state, stopping it if it is running. */
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
@@ -53,6 +61,7 @@ export interface WorkflowInstanceLike {
 export interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
 
@@ -64,11 +73,19 @@ export interface WorkflowEventLike<Params = Record<string, unknown>> {
     readonly workflowName: string;
 }
 
+/**
+ * A retry delay computed from the failed attempt. Mirrors `WorkflowDelayFunction`:
+ * it receives the failed attempt's step context and error, and returns the wait
+ * before the next attempt as a duration.
+ */
+export type WorkflowDelayFunctionLike = (input: { ctx: WorkflowStepContextLike; error: Error }) => number | string | Promise<number | string>;
+
 /** Per-step durability config. Mirrors the `WorkflowStepConfig.retries` shape. */
 export interface WorkflowStepConfigLike {
     retries?: {
         backoff?: "constant" | "exponential" | "linear";
-        delay?: number | string;
+        /** A fixed base delay (scaled by `backoff`), or a function that computes each wait from the failure. */
+        delay?: number | string | WorkflowDelayFunctionLike;
         limit: number;
     };
     timeout?: number | string;
@@ -538,6 +555,8 @@ export interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     /** Start many instances in one batched RPC. */
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    /** Delete up to 100 instances and their stored state; ids that do not exist come back as per-instance errors. */
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstanceLike>;
 

@@ -5,6 +5,7 @@ import type { WorkflowBindingLike, WorkflowInstanceLike } from "../src/types";
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
     return {
+        delete: async () => undefined,
         id,
         pause: async () => undefined,
         restart: async () => undefined,
@@ -21,6 +22,14 @@ const fakeBinding = (): WorkflowBindingLike => {
     return {
         create: vi.fn<() => Promise<WorkflowInstanceLike>>(async () => fakeInstance("inst-1")),
         createBatch: vi.fn<() => Promise<WorkflowInstanceLike[]>>(async () => [fakeInstance("inst-1")]),
+        deleteBatch: async (ids: ReadonlyArray<string>) => {
+            return {
+                deleted: ids.map((id) => {
+                    return { id };
+                }),
+                errors: [],
+            };
+        },
         get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id: string) => fakeInstance(id)),
     };
 };

@@ -2887,6 +2887,16 @@ interface WorkflowEventDefinition<Payload = unknown> {
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<{
+        deleted: {
+            id: string;
+        }[];
+        errors: {
+            code: number;
+            id: string;
+            message: string;
+        }[];
+    }>;
     get: (id: string) => Promise<WorkflowInstance>;
     sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
@@ -2896,6 +2906,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
 
 ```ts
 interface WorkflowInstance {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;

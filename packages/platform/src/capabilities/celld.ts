@@ -193,7 +193,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
+            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). Instance `delete`, binding `deleteBatch` and function-valued `retries.delay` have not been verified against celld. The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
         },
     },
 };
