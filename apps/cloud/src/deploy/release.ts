@@ -161,8 +161,8 @@ export const reprovision = async (
     } = {},
 ): Promise<void> => {
     const { deploymentId, key } = input;
-    const target = await deps.backend.releaseTarget(input);
-    const release = await deps.releases.get(deploymentId);
+    // Independent reads; `releaseTarget` still authorizes before anything is provisioned.
+    const [target, release] = await Promise.all([deps.backend.releaseTarget(input), deps.releases.get(deploymentId)]);
 
     if (!release) {
         throw new LunoraError("CONFLICT", "this release's bundle is no longer retained; deploy it again instead of rolling back");

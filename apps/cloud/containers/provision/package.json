@@ -16,6 +16,10 @@
         "@effect/sql-d1": "4.0.0-rc.117",
         "@effect/sql-sqlite-do": "4.0.0-rc.117",
         "@effect/vitest": "4.0.0-rc.117",
-        "effect": "4.0.0-rc.117"
+        "@hono/node-server": "1.19.17",
+        "effect": "4.0.0-rc.117",
+        "hono": "4.13.12",
+        "lodash": "4.18.1",
+        "valibot": "1.5.0"
     }
 }

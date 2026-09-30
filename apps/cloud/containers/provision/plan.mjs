@@ -237,15 +237,15 @@ const planDeploy = (spec, controlPlaneScript) => {
 
     const context = {
         assets: spec.assets,
-        consumed: new Set(spec.manifest.bindings.filter((requirement) => requirement.type === "queue_consumer").map((requirement) => requirement.resource)),
+        consumed: new Set(spec.manifest.bindings.flatMap((requirement) => (requirement.type === "queue_consumer" ? [requirement.resource] : []))),
         controlPlaneScript,
         project,
         provision,
     };
     // Queue consumers are routed: the control plane consumes the producer queue.
-    const bindings = spec.manifest.bindings
-        .filter((requirement) => requirement.type !== "queue_consumer")
-        .flatMap((requirement) => planBinding(requirement, claim(requirement.binding), context) ?? []);
+    const bindings = spec.manifest.bindings.flatMap((requirement) =>
+        requirement.type === "queue_consumer" ? [] : (planBinding(requirement, claim(requirement.binding), context) ?? []),
+    );
 
     // Null prototype: a `__proto__` var stays an ordinary own key.
     const plainVariables = /** @type {Record<string, string>} */ (Object.create(null));

@@ -258,8 +258,16 @@ const readAssetsIgnore = (directory: string): ((path: string) => boolean) => {
     // gitignore anchors a pattern that has a `/` anywhere but the end; picomatch's
     // `matchBase` only floats slash-free ones, so a leading `/` must go to a
     // separate, non-floating matcher once stripped.
-    const anchored = patterns.filter((pattern) => pattern.includes("/")).map((pattern) => pattern.replace(LEADING_SLASH, ""));
-    const floating = patterns.filter((pattern) => !pattern.includes("/"));
+    const anchored: string[] = [];
+    const floating: string[] = [];
+
+    for (const pattern of patterns) {
+        if (pattern.includes("/")) {
+            anchored.push(pattern.replace(LEADING_SLASH, ""));
+        } else {
+            floating.push(pattern);
+        }
+    }
     const matchers = [
         ...(anchored.length > 0 ? [matcher(anchored, { dot: true })] : []),
         ...(floating.length > 0 ? [matcher(floating, { dot: true, matchBase: true })] : []),
@@ -335,7 +343,14 @@ const resolveDeployConfigPath = (cwd: string): string | undefined => {
         return undefined;
     }
 
-    const { configPath } = JSON.parse(readFileSync(redirect, "utf8")) as { configPath?: unknown };
+    let configPath: unknown;
+
+    try {
+        ({ configPath } = JSON.parse(readFileSync(redirect, "utf8")) as { configPath?: unknown });
+    } catch {
+        // A half-written or hand-edited redirect: fall back to the source config, as wrangler does.
+        return undefined;
+    }
 
     if (typeof configPath !== "string" || configPath === "") {
         return undefined;

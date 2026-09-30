@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 
 import { Stack } from "alchemy";
-import { AnalyticsEngine, D1, Images, KV, Providers, providers, Queues, R2, state, Workers } from "alchemy/Cloudflare";
+import { AnalyticsEngine, D1, Images, KV, providers, Queues, R2, state, Workers } from "alchemy/Cloudflare";
 import { State } from "alchemy/State/State";
 import { Effect, Option, Redacted } from "effect";
 /* eslint-enable import/no-unresolved */
@@ -36,7 +36,7 @@ if (step === undefined) {
  * thing that destroys the project stack is deleting the project, which is meant
  * to take its data with it.
  * @param {import("./plan.mjs").ProjectResource} resource The resource from the plan.
- * @returns {Effect.Effect<unknown, never, Providers>} The declaration.
+ * @returns {Effect.Effect<unknown, never, import("alchemy/Cloudflare").Providers>} The declaration.
  */
 const declareResource = (resource) => {
     switch (resource.kind) {
@@ -64,7 +64,7 @@ const declareResource = (resource) => {
  * @param {string} resourceType The type Alchemy persisted on the state row.
  * @param {string} id The row's logical id.
  * @param {import("alchemy/State/ResourceState").Props} props The row's persisted props.
- * @returns {Effect.Effect<unknown, never, Providers> | undefined} The declaration, or `undefined` for a type this program never creates.
+ * @returns {Effect.Effect<unknown, never, import("alchemy/Cloudflare").Providers> | undefined} The declaration, or `undefined` for a type this program never creates.
  */
 const redeclare = (resourceType, id, props) => {
     switch (resourceType) {
@@ -98,7 +98,7 @@ const redeclare = (resourceType, id, props) => {
  * and it holds data. So every resource already in this stack's state is declared again with
  * its persisted props; resources are only ever removed by destroying the stack.
  * @param {import("./plan.mjs").ProjectStack} project The project declarations.
- * @returns {Effect.Effect<void, unknown, Providers>} The stack body.
+ * @returns {Effect.Effect<void, unknown, import("alchemy/Cloudflare").Providers>} The stack body.
  */
 const projectStack = (project) =>
     Effect.gen(function* projectStackBody() {
@@ -205,7 +205,7 @@ const envBinding = (binding, projectStackName) => {
  * data — persist across releases.
  * @param {import("./plan.mjs").WorkerStack} worker The Worker declarations.
  * @param {string} projectStackName The stack whose state holds the project's resources.
- * @returns {Effect.Effect<void, unknown, Providers>} The stack body.
+ * @returns {Effect.Effect<void, unknown, import("alchemy/Cloudflare").Providers>} The stack body.
  */
 const workerStack = (worker, projectStackName) =>
     Effect.gen(function* workerStackBody() {
@@ -253,7 +253,7 @@ const workerStack = (worker, projectStackName) =>
 /**
  * The body of the stack this invocation addresses. A state-store or API failure
  * fails the run either way; `orDie` says so to the type `Stack` accepts.
- * @returns {Effect.Effect<void, never, Providers>} The stack body.
+ * @returns {Effect.Effect<void, never, import("alchemy/Cloudflare").Providers>} The stack body.
  */
 const body = () => {
     // Destroy plans from state alone; declarations are irrelevant to it.

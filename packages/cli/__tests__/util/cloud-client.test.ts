@@ -222,4 +222,13 @@ describe(resolveDeployConfigPath, () => {
 
         expect(resolveDeployConfigPath(directory)).toBeUndefined();
     });
+
+    it("falls back when the redirect is not valid JSON", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(directory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(directory, ".wrangler", "deploy", "config.json"), "{ half-written");
+
+        expect(resolveDeployConfigPath(directory)).toBeUndefined();
+    });
 });
