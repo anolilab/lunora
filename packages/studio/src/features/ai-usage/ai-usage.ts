@@ -1,5 +1,5 @@
 /**
- * Fold the `gen_ai.*` telemetry `ctx.ai.model(...)` emits into an AI-spend readout.
+ * Fold the `gen_ai.*` telemetry `ctx.ai.model(...)` and `defineRag` emit into an AI-spend readout.
  *
  * Same two-halves shape as the Evals page. The **durable** half is three counter
  * series in the per-minute metric history — `gen_ai.usage.input_tokens`,
@@ -24,8 +24,8 @@ const COST = "gen_ai.usage.cost";
 const MODEL_ATTRIBUTE = "gen_ai.request.model";
 const COST_SOURCE_ATTRIBUTE = "lunora.usage.cost.source";
 
-/** Span names `ctx.ai.model(...)` records a call under. */
-const AI_SPAN_NAMES = new Set(["ai.generate", "ai.stream"]);
+/** Span names a model call (`ctx.ai.model(...)`) or a RAG embed (`defineRag`) is recorded under. */
+const AI_SPAN_NAMES = new Set(["ai.embed", "ai.generate", "ai.stream"]);
 
 /** Width of one metric-history bucket — the trend's gap-fill step. */
 const BUCKET_MS = 60_000;
@@ -136,81 +136,76 @@ const costProvenance = (totals: Pick<UsageTotals, "estimatedCost" | "providerCos
     return totals.providerCost > 0 ? "provider" : "none";
 };
 
-/**
- * Per-slice accumulator. Calls are counted per metric and resolved at the end:
- * a call reports input tokens, output tokens, or both, so the call count is the
- * larger of the two series' bucket counts — never their sum, which would count
- * every call twice.
- */
-interface Accumulator {
-    estimatedCost: number;
-    inputCalls: number;
-    inputTokens: number;
-    outputCalls: number;
-    outputTokens: number;
-    providerCost: number;
+/** Two slices' totals added field by field. */
+const addTotals = (a: UsageTotals, b: UsageTotals): UsageTotals => {
+    return {
+        calls: a.calls + b.calls,
+        estimatedCost: a.estimatedCost + b.estimatedCost,
+        inputTokens: a.inputTokens + b.inputTokens,
+        outputTokens: a.outputTokens + b.outputTokens,
+        providerCost: a.providerCost + b.providerCost,
+    };
+};
+
+/** The totals of one `(function, model)` pair, the finest grain both halves share. */
+interface UsageSlice extends UsageTotals {
+    functionPath: string;
+    model: string;
 }
 
-const newAccumulator = (): Accumulator => {
-    return { estimatedCost: 0, inputCalls: 0, inputTokens: 0, outputCalls: 0, outputTokens: 0, providerCost: 0 };
-};
+/**
+ * One pair's totals from its series. A call counts into up to three series
+ * (input tokens, output tokens, cost — whichever it reported), so the pair's
+ * call count is the largest series' bucket count, never their sum. Cost series
+ * are split by source, but a call has only one source, so those counts add.
+ */
+const pairTotals = (series: ReadonlyArray<MetricHistorySeries>): UsageTotals => {
+    const totals = emptyTotals();
+    let inputCalls = 0;
+    let outputCalls = 0;
+    let costCalls = 0;
 
-const addSeries = (accumulator: Accumulator, series: MetricHistorySeries): void => {
-    const sum = sumOf(series.points, (point) => point.sum);
-    const count = sumOf(series.points, (point) => point.count);
+    for (const entry of series) {
+        const sum = sumOf(entry.points, (point) => point.sum);
+        const count = sumOf(entry.points, (point) => point.count);
 
-    if (series.name === INPUT_TOKENS) {
-        accumulator.inputTokens += sum;
-        accumulator.inputCalls += count;
-    } else if (series.name === OUTPUT_TOKENS) {
-        accumulator.outputTokens += sum;
-        accumulator.outputCalls += count;
-    } else if (costSourceOf(series.attributes) === "provider") {
-        accumulator.providerCost += sum;
-    } else {
-        accumulator.estimatedCost += sum;
+        if (entry.name === INPUT_TOKENS) {
+            totals.inputTokens += sum;
+            inputCalls += count;
+        } else if (entry.name === OUTPUT_TOKENS) {
+            totals.outputTokens += sum;
+            outputCalls += count;
+        } else {
+            costCalls += count;
+
+            if (costSourceOf(entry.attributes) === "provider") {
+                totals.providerCost += sum;
+            } else {
+                totals.estimatedCost += sum;
+            }
+        }
     }
-};
 
-const toTotals = (accumulator: Accumulator): UsageTotals => {
-    return {
-        calls: Math.max(accumulator.inputCalls, accumulator.outputCalls),
-        estimatedCost: accumulator.estimatedCost,
-        inputTokens: accumulator.inputTokens,
-        outputTokens: accumulator.outputTokens,
-        providerCost: accumulator.providerCost,
-    };
+    totals.calls = Math.max(inputCalls, outputCalls, costCalls);
+
+    return totals;
 };
 
 /** Most expensive first, then most tokens, then by key — a stable leaderboard. */
 const byWeight = (a: UsageRow, b: UsageRow): number =>
     totalCost(b) - totalCost(a) || b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens) || a.key.localeCompare(b.key);
 
-/** One contribution to a breakdown: the row it lands in, and how it adds itself there. */
-interface Contribution {
-    fold: (accumulator: Accumulator) => void;
-    key: string;
-}
+/** Group slices by `keyOf` into breakdown rows, heaviest first. */
+const groupRows = (slices: ReadonlyArray<UsageSlice>, keyOf: (slice: UsageSlice) => string): UsageRow[] => {
+    const rows = new Map<string, UsageRow>();
 
-const accumulateRows = (contributions: ReadonlyArray<Contribution>): UsageRow[] => {
-    const groups = new Map<string, Accumulator>();
+    for (const slice of slices) {
+        const key = keyOf(slice);
 
-    for (const { fold, key } of contributions) {
-        let accumulator = groups.get(key);
-
-        if (accumulator === undefined) {
-            accumulator = newAccumulator();
-            groups.set(key, accumulator);
-        }
-
-        fold(accumulator);
+        rows.set(key, { key, ...addTotals(rows.get(key) ?? emptyTotals(), slice) });
     }
 
-    return [...groups.entries()]
-        .map(([key, accumulator]) => {
-            return { key, ...toTotals(accumulator) };
-        })
-        .toSorted(byWeight);
+    return [...rows.values()].toSorted(byWeight);
 };
 
 /** The `gen_ai.usage.*` series in a metric-history payload. */
@@ -218,6 +213,24 @@ const aiSeriesOf = (history: MetricHistoryResult | undefined): MetricHistorySeri
     (history?.series ?? []).filter((series) => series.name === INPUT_TOKENS || series.name === OUTPUT_TOKENS || series.name === COST);
 
 const modelOfSeries = (series: MetricHistorySeries): string => stringAttribute(series.attributes, MODEL_ATTRIBUTE) ?? UNKNOWN_MODEL;
+
+/** The durable half as `(function, model)` slices. */
+const historySlices = (series: ReadonlyArray<MetricHistorySeries>): UsageSlice[] => {
+    const pairs = new Map<string, { functionPath: string; model: string; series: MetricHistorySeries[] }>();
+
+    for (const entry of series) {
+        const model = modelOfSeries(entry);
+        const key = JSON.stringify([entry.functionPath, model]);
+        const pair = pairs.get(key) ?? { functionPath: entry.functionPath, model, series: [] };
+
+        pair.series.push(entry);
+        pairs.set(key, pair);
+    }
+
+    return [...pairs.values()].map(({ functionPath, model, series: pairSeries }) => {
+        return { functionPath, model, ...pairTotals(pairSeries) };
+    });
+};
 
 /** Per-minute cost, split by source, with empty minutes between the first and last bucket filled as zero. */
 const buildTrend = (series: ReadonlyArray<MetricHistorySeries>): CostTrendPoint[] => {
@@ -297,39 +310,21 @@ const extractAiCalls = (traces: ReadonlyArray<TraceSummary>): AiCall[] => {
     return calls.toSorted((a, b) => b.startTs - a.startTs);
 };
 
-/** Fold one live call into an accumulator — the fallback when no durable history exists. */
-const addCall = (accumulator: Accumulator, call: AiCall): void => {
-    // Every span is one call, whether or not it reported usage.
-    accumulator.inputCalls += 1;
-    accumulator.inputTokens += call.inputTokens ?? 0;
-    accumulator.outputTokens += call.outputTokens ?? 0;
+/** The live half: every span is one call, whether or not it reported usage. */
+const liveSlices = (calls: ReadonlyArray<AiCall>): UsageSlice[] =>
+    calls.map((call) => {
+        const cost = call.cost ?? 0;
 
-    if (call.cost !== undefined) {
-        if (call.costSource === "provider") {
-            accumulator.providerCost += call.cost;
-        } else {
-            accumulator.estimatedCost += call.cost;
-        }
-    }
-};
-
-const seriesContribution = (series: MetricHistorySeries, key: string): Contribution => {
-    return {
-        fold: (accumulator) => {
-            addSeries(accumulator, series);
-        },
-        key,
-    };
-};
-
-const callContribution = (call: AiCall, key: string): Contribution => {
-    return {
-        fold: (accumulator) => {
-            addCall(accumulator, call);
-        },
-        key,
-    };
-};
+        return {
+            calls: 1,
+            estimatedCost: call.costSource === "provider" ? 0 : cost,
+            functionPath: call.functionPath,
+            inputTokens: call.inputTokens ?? 0,
+            model: call.model,
+            outputTokens: call.outputTokens ?? 0,
+            providerCost: call.costSource === "provider" ? cost : 0,
+        };
+    });
 
 /**
  * Build the whole readout. Totals and breakdowns prefer the durable history;
@@ -340,64 +335,30 @@ const callContribution = (call: AiCall, key: string): Contribution => {
 const buildAiUsage = (history: MetricHistoryResult | undefined, traces: ReadonlyArray<TraceSummary>): AiUsage => {
     const series = aiSeriesOf(history);
     const calls = extractAiCalls(traces);
+    const fromHistory = series.length > 0;
+    const slices = fromHistory ? historySlices(series) : liveSlices(calls);
+    let totals = emptyTotals();
+    let source: AiUsage["source"] = "none";
 
-    if (series.length > 0) {
-        const all = newAccumulator();
-
-        for (const entry of series) {
-            addSeries(all, entry);
-        }
-
-        return {
-            byFunction: accumulateRows(series.map((entry) => seriesContribution(entry, entry.functionPath))),
-            byModel: accumulateRows(series.map((entry) => seriesContribution(entry, modelOfSeries(entry)))),
-            calls,
-            source: "history",
-            totals: toTotals(all),
-            trend: buildTrend(series),
-        };
+    for (const slice of slices) {
+        totals = addTotals(totals, slice);
     }
 
-    if (calls.length > 0) {
-        const all = newAccumulator();
-
-        for (const call of calls) {
-            addCall(all, call);
-        }
-
-        return {
-            byFunction: accumulateRows(calls.map((call) => callContribution(call, call.functionPath))),
-            byModel: accumulateRows(calls.map((call) => callContribution(call, call.model))),
-            calls,
-            source: "live",
-            totals: toTotals(all),
-            trend: [],
-        };
+    if (fromHistory) {
+        source = "history";
+    } else if (calls.length > 0) {
+        source = "live";
     }
 
-    return { byFunction: [], byModel: [], calls: [], source: "none", totals: emptyTotals(), trend: [] };
+    return {
+        byFunction: groupRows(slices, (slice) => slice.functionPath),
+        byModel: groupRows(slices, (slice) => slice.model),
+        calls,
+        source,
+        totals,
+        trend: fromHistory ? buildTrend(series) : [],
+    };
 };
 
-const USD_CENTS = new Intl.NumberFormat("en-US", { currency: "USD", maximumFractionDigits: 2, minimumFractionDigits: 2, style: "currency" });
-const USD_FINE = new Intl.NumberFormat("en-US", { currency: "USD", maximumSignificantDigits: 3, style: "currency" });
-
-/**
- * USD for display. Per-call LLM spend is routinely a fraction of a cent, so
- * values under a dollar keep three significant digits (`$0.00042`) instead of
- * rounding to a misleading `$0.00`.
- */
-const formatUsd = (value: number): string => {
-    if (value === 0 || Math.abs(value) >= 1) {
-        return USD_CENTS.format(value);
-    }
-
-    return USD_FINE.format(value);
-};
-
-const TOKENS = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
-
-/** Token counts with thousands separators. */
-const formatTokens = (value: number): string => TOKENS.format(value);
-
-export { buildAiUsage, costProvenance, extractAiCalls, formatTokens, formatUsd, totalCost };
+export { buildAiUsage, costProvenance, extractAiCalls, totalCost };
 export type { AiCall, AiUsage, CostProvenance, CostSource, CostTrendPoint, UsageRow, UsageTotals };

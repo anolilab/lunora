@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAiUsage, costProvenance, extractAiCalls, formatTokens, formatUsd } from "../../../src/features/ai-usage/ai-usage";
+import { buildAiUsage, costProvenance, extractAiCalls } from "../../../src/features/ai-usage/ai-usage";
+import { formatTokens, formatUsd } from "../../../src/features/reports/metrics-format";
 import type { MetricHistoryPoint, MetricHistorySeries, TraceSummary } from "../../../src/lib/admin";
 
 const MINUTE = 60_000;
@@ -67,6 +68,26 @@ describe("ai usage from durable metric history", () => {
             { functionPath: "orders:place", kind: "counter" as const, name: "orders.placed", points: [bucket(0, [1, 1, 1])] },
         ],
     };
+
+    it("counts a call that reported only a cost, and never merges two models' call counts by max", () => {
+        expect.assertions(2);
+
+        const usage = buildAiUsage(
+            {
+                series: [
+                    // A gateway-priced call with no token usage at all.
+                    series("gen_ai.usage.cost", "chat:answer", "openai/gpt-5", [bucket(0, [0.5, 0.25])], "provider"),
+                    // Three input-only calls on one model, two output-only on another.
+                    series("gen_ai.usage.input_tokens", "chat:answer", "model-a", [bucket(0, [1, 1, 1])]),
+                    series("gen_ai.usage.output_tokens", "chat:answer", "model-b", [bucket(0, [1, 1])]),
+                ],
+            },
+            [],
+        );
+
+        expect(usage.totals.calls).toBe(7);
+        expect(usage.byModel.find((row) => row.key === "openai/gpt-5")?.calls).toBe(2);
+    });
 
     it("totals tokens from bucket sums and calls from bucket counts, keeping cost split by source", () => {
         expect.assertions(2);
@@ -217,9 +238,9 @@ describe("cost provenance and formatting", () => {
     it("keeps sub-cent spend readable instead of rounding it to $0.00", () => {
         expect.assertions(4);
 
-        expect(formatUsd(0)).toBe("$0.00");
-        expect(formatUsd(12.345)).toBe("$12.35");
-        expect(formatUsd(0.000_423_1)).toBe("$0.000423");
-        expect(formatTokens(1_234_567)).toBe("1,234,567");
+        expect(formatUsd(0, "en-US")).toBe("$0.00");
+        expect(formatUsd(12.345, "en-US")).toBe("$12.35");
+        expect(formatUsd(0.000_423_1, "en-US")).toBe("$0.000423");
+        expect(formatTokens(1_234_567, "en-US")).toBe("1,234,567");
     });
 });

@@ -14,9 +14,10 @@ import { useT } from "../../i18n/i18n-context";
 import type { MetricHistoryResult, TracesResult, TraceSummary } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
+import { formatTokens, formatUsd } from "../reports/metrics-format";
 import { Sparkline } from "../reports/sparkline";
 import type { AiCall, CostProvenance, UsageRow, UsageTotals } from "./ai-usage";
-import { buildAiUsage, costProvenance, formatTokens, formatUsd, totalCost } from "./ai-usage";
+import { buildAiUsage, costProvenance, totalCost } from "./ai-usage";
 
 /** Coerce a (possibly partial or pre-feature) `getTraces` payload into its `traces` array. */
 const tracesOf = (result: TracesResult | undefined): TraceSummary[] => (Array.isArray(result?.traces) ? result.traces : []);
