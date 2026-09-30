@@ -1,3 +1,24 @@
+## @lunora/platform-node [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.108...@lunora/platform-node@1.0.0-alpha.109) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.154
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+* **@lunora/queue:** upgraded to 1.0.0-alpha.81
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.155
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.184
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.65
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+* **@lunora/storage:** upgraded to 1.0.0-alpha.94
+
 ## @lunora/platform-node [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.107...@lunora/platform-node@1.0.0-alpha.108) (2026-09-30)
 
 ### ⚠ BREAKING CHANGES
