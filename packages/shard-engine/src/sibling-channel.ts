@@ -99,6 +99,29 @@ const asSiblingNamespace = (value: unknown): SiblingNamespaceLike | undefined =>
 };
 
 /**
+ * Resolve `name` off a DO namespace binding value, pinned to `jurisdiction` —
+ * the {@link siblingStub} resolution for a namespace the caller already holds
+ * (the shard registry's, rather than a sibling shard's). Fails closed the same
+ * way: `undefined` when the value is not a namespace or cannot express the
+ * jurisdiction.
+ */
+const stubByName = (value: unknown, name: string, jurisdiction?: string): SiblingStub | undefined => {
+    const bound = asSiblingNamespace(value);
+
+    if (bound === undefined) {
+        return undefined;
+    }
+
+    const namespace = jurisdiction === undefined ? bound : asSiblingNamespace(bound.jurisdiction?.(jurisdiction));
+
+    if (namespace === undefined) {
+        return undefined;
+    }
+
+    return typeof namespace.getByName === "function" ? namespace.getByName(name) : namespace.get(namespace.idFromName(name));
+};
+
+/**
  * Resolve a sibling stub by name off the shard namespace binding, or
  * `undefined` when the binding is unknown/unbound.
  *
@@ -121,25 +144,8 @@ const asSiblingNamespace = (value: unknown): SiblingNamespaceLike | undefined =>
  * boundary. In practice this cannot fire on a host that has no jurisdictions —
  * there `ctx.id.jurisdiction` is unset and nothing is applied.
  */
-const siblingStub = (env: unknown, binding: string | undefined, name: string, jurisdiction?: string): SiblingStub | undefined => {
-    if (binding === undefined) {
-        return undefined;
-    }
-
-    const bound = asSiblingNamespace((env as Record<string, unknown> | undefined)?.[binding]);
-
-    if (bound === undefined) {
-        return undefined;
-    }
-
-    const namespace = jurisdiction === undefined ? bound : asSiblingNamespace(bound.jurisdiction?.(jurisdiction));
-
-    if (namespace === undefined) {
-        return undefined;
-    }
-
-    return typeof namespace.getByName === "function" ? namespace.getByName(name) : namespace.get(namespace.idFromName(name));
-};
+const siblingStub = (env: unknown, binding: string | undefined, name: string, jurisdiction?: string): SiblingStub | undefined =>
+    binding === undefined ? undefined : stubByName((env as Record<string, unknown> | undefined)?.[binding], name, jurisdiction);
 
 export type { SiblingStub };
-export { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody };
+export { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, stubByName, verifySiblingBody };

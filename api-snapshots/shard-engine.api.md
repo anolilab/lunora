@@ -5087,6 +5087,12 @@ const stableWireKey: (value: unknown) => string;
 const stripReservedPatchFields: (patch: Record<string, unknown>) => Record<string, unknown>;
 ```
 
+### `stubByName` (const)
+
+```ts
+const stubByName: (value: unknown, name: string, jurisdiction?: string) => SiblingStub | undefined;
+```
+
 ### `subscriptionFrames` (const)
 
 ```ts

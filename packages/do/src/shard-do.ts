@@ -224,6 +224,7 @@ import {
     ShardRunner,
     stableStringify,
     stableWireKey,
+    stubByName,
     subscriptionFrames,
     summarizeFanoutTopics,
     summarizeSubscriptions,
@@ -337,6 +338,7 @@ import { CdcRetentionRunner } from "./cdc-retention";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
+import { SHARD_REGISTRY_DO_NAME } from "./shard-registry-do";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
 /**
@@ -2358,6 +2360,13 @@ abstract class ShardDO {
      * persists the learned value in SQLite instead of trusting it to be live.
      */
     private shardBinding: string | undefined;
+
+    /**
+     * The `.shardBy()` tables this instance has already registered with the
+     * shard registry. Registration is idempotent, so this only saves the round
+     * trip; it resets with the instance, which re-registers on its next write.
+     */
+    private readonly registeredTables = new Set<string>();
 
     /**
      * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
@@ -5595,6 +5604,16 @@ abstract class ShardDO {
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
     protected currentShardKey(): string {
         return this.runner.shardKey ?? ROOT_SHARD_NAME;
+    }
+
+    /**
+     * The `ShardRegistryDO` namespace this shard reports to, and which of its
+     * tables are `.shardBy()`. Overridden by the generated subclass when the app
+     * declares `.shardRegistry(...)`; the default registers nothing.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the registry binding and its sharded tables
+    protected shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+        return undefined;
     }
 
     /**
@@ -10836,6 +10855,68 @@ abstract class ShardDO {
     }
 
     /**
+     * Tell the shard registry this shard holds rows of each `.shardBy()` table
+     * the flushed write touched — once per table per instance. The cross-shard
+     * fan-outs (export, CDC sync, migrations) only reach the shards the registry
+     * lists, so a shard that never registers is left out of every one of them.
+     *
+     * The write has already committed, so a failure here cannot undo it and must
+     * not fail the caller whose write succeeded: it is logged, and the table
+     * stays unregistered so the shard's next write retries.
+     */
+    private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
+        const registry = this.shardRegistry();
+
+        if (registry === undefined) {
+            return;
+        }
+
+        const tables = [...changed].filter((table) => registry.shardedTables.has(table) && !this.registeredTables.has(table));
+
+        if (tables.length === 0) {
+            return;
+        }
+
+        const shardKey = this.currentShardKey();
+        // Pinned to this DO's own jurisdiction, the same subnamespace the worker
+        // pins the registry it reads — an unpinned stub is a different registry.
+        const stub = stubByName(registry.namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
+
+        if (stub === undefined) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
+            console.error(
+                `[@lunora/do] shard registry binding is not a Durable Object namespace in this shard's jurisdiction; shard "${shardKey}" is not registered`,
+            );
+
+            return;
+        }
+
+        await Promise.all(
+            tables.map(async (table) => {
+                try {
+                    const response = await stub.fetch("https://shard-registry.internal/register", {
+                        body: JSON.stringify({ shardKey, table }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${String(response.status)}: ${await response.text()}`);
+                    }
+
+                    this.registeredTables.add(table);
+                } catch (error: unknown) {
+                    // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
+                    console.error(
+                        `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
+                        error,
+                    );
+                }
+            }),
+        );
+    }
+
+    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
      * resolves, and per-batch during a data migration via
@@ -10858,6 +10939,8 @@ abstract class ShardDO {
         if (!changed || changed.size === 0) {
             return;
         }
+
+        await this.registerWrittenShard(changed);
 
         this.writeGeneration += 1;
 
