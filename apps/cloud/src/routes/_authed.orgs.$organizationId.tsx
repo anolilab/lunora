@@ -106,7 +106,7 @@ const OrganizationLayout = (): ReactElement => {
     const { organizationId } = Route.useParams();
     const { session } = Route.useRouteContext();
     const { organizations } = Route.useLoaderData();
-    const organizationList = usePreloadedQuery(organizations);
+    const organizationList = usePreloadedQuery(organizations) ?? [];
     const navigate = useNavigate();
     const pathname = useLocation({ select: (location) => location.pathname });
 

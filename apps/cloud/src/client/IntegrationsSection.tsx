@@ -27,7 +27,7 @@ import type { SectionProps } from "./tabs";
  * right organization can still claim it without a reinstall.
  */
 export const IntegrationsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.github_installations.list>>): ReactElement => {
-    const installations = usePreloadedQuery(preloaded);
+    const installations = usePreloadedQuery(preloaded) ?? [];
     const unclaim = useMutation(api.github_installations.unclaim);
     const [error, setError] = useState<null | string>(null);
 

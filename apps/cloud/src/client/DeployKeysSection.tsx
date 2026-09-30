@@ -51,7 +51,7 @@ export const DeployKeysSection = ({ organizationId, preloaded }: SectionProps<Re
      * consequence — a second presentation would only invite treating one of them as
      * recoverable.
      */
-    const handleRoll = (id: (typeof keys)[number]["_id"]): void => {
+    const handleRoll = (id: NonNullable<typeof keys>[number]["_id"]): void => {
         setError(null);
 
         void (async () => {

@@ -37,7 +37,7 @@ import { useMetricsSeries } from "./use-metrics-series";
  * text, not a skeleton.
  */
 export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.dashboards.list>>): ReactElement => {
-    const dashboards = usePreloadedQuery(preloaded);
+    const dashboards = usePreloadedQuery(preloaded) ?? [];
     const { from, to } = useTimeRange();
     const { series } = useMetricsSeries(organizationId, from, to);
 
@@ -50,7 +50,7 @@ export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<Re
     const [error, setError] = useState<null | string>(null);
 
     const metricNames = series === undefined ? [] : series.map((metric) => metric.name);
-    const selected = dashboards?.find((board) => board._id === selectedId) ?? dashboards?.[0];
+    const selected = dashboards.find((board) => board._id === selectedId) ?? dashboards[0];
 
     const persistPanels = (id: string, panels: DashboardPanel[]): void => {
         setError(null);

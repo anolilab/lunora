@@ -28,7 +28,7 @@ interface IssuesSectionProps {
  */
 export const IssuesSection = ({ organizationId, preloaded }: IssuesSectionProps): ReactElement => {
     const entitlements = usePreloadedQuery(preloaded);
-    const gated = !entitlements.features.includes("logStreams");
+    const gated = entitlements ? !entitlements.features.includes("logStreams") : false;
     const issues = useQuery(api.issues.list, gated ? "skip" : { organizationId });
 
     if (gated) {

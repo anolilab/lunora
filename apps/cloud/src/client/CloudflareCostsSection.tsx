@@ -127,7 +127,7 @@ export const CloudflareCostsSection = ({ organizationId, preloaded }: Cloudflare
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<null | string>(null);
 
-    const { cloudflareAccountId, connected } = connection;
+    const { cloudflareAccountId, connected } = connection ?? { cloudflareAccountId: null, connected: false };
 
     // The cost view comes from an action (a fetch, not reactive), so — like
     // `use-metrics-series` — poll it in an effect and write state only in the

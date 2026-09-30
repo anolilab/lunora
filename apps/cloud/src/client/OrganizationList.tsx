@@ -67,7 +67,7 @@ const slugify = (value: string): string => {
  */
 export const OrganizationList = ({ onSelect, preloadedCells, preloadedOrganizations }: OrganizationListProps): ReactElement => {
     // Seeded from the SSR render, then live over the WebSocket from mount on.
-    const organizations = usePreloadedQuery(preloadedOrganizations);
+    const organizations = usePreloadedQuery(preloadedOrganizations) ?? [];
     const cells = usePreloadedQuery(preloadedCells);
     const createOrg = useMutation(api.organizations.create);
 

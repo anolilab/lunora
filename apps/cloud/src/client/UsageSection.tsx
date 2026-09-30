@@ -197,6 +197,15 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
     const includedRequests = included.requests ?? 0;
     const includedCpuMs = included.cpuMs ?? 0;
 
+    // `undefined` only after an identity switch, until the new subscription answers.
+    if (summary === undefined) {
+        return (
+            <Card>
+                <CardContent className="text-muted-foreground py-8 text-center font-mono text-xs tracking-[0.09em] uppercase">[Loading…]</CardContent>
+            </Card>
+        );
+    }
+
     return (
         <Card>
             <CardHeader>

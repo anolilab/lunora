@@ -307,12 +307,22 @@ class AppBuilder<Env extends object> {
             // migrator). For production run the migrate command ahead of deploy.
             // The migration instance takes the RAW binding: better-auth migrates
             // only through Kysely and rejects the adapter the request instance uses.
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives `ensureMigrated`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving `/api/auth/*` against tables the
+            // migrator has not created yet. See `emit-app.ts` in @lunora/codegen for
+            // the full reasoning.
+            //
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
             await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
-            // Assigned after the schema exists, never before. Assigning first is
-            // what let a concurrent request see a non-null `auth` and serve
-            // `/api/auth/*` against tables the migrator had not created yet —
-            // `no such table: rateLimit`, from the isolate that was mid-migration.
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
+            auth = requestAuth;
         };
 
         // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
@@ -443,6 +453,9 @@ class AppBuilder<Env extends object> {
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
             options.authAuditReader = authWiring.auditReader;
+            // Set only once auth is pinned to a jurisdiction: copies the users left in the
+            // un-pinned object across (`__lunora_admin__:copyAuthToJurisdiction`).
+            options.authJurisdictionMove = authWiring.jurisdictionMove;
             // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently
@@ -752,6 +765,8 @@ const buildGlobalCdcApplier =
  * bundled into the worker, and a runtime import in that file ships with it.
  */
 interface LunoraConfig<Env extends object = object> {
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. A literal, for the same reason as `target`. */
+    advisor?: { minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */

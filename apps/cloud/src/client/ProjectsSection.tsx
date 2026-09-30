@@ -75,7 +75,7 @@ const gitProviderOf = (repo: string | undefined): "github" | "gitlab" | undefine
 const EMPTY_DRAFT = { framework: "", name: "", slug: "" };
 
 export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionProps): ReactElement => {
-    const projects = usePreloadedQuery(preloaded);
+    const projects = usePreloadedQuery(preloaded) ?? [];
     const createProject = useMutation(api.projects.create);
 
     // The three new-project fields are one draft: they are filled together, cleared
@@ -108,7 +108,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
     };
 
     if (activeProject) {
-        const project = projects?.find((candidate) => candidate._id === activeProject);
+        const project = projects.find((candidate) => candidate._id === activeProject);
 
         return (
             <DeploymentsSection
