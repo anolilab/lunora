@@ -20,6 +20,26 @@ const makeQuickBinding = () => {
 };
 
 describe("quickAction", () => {
+    it("checks a repeated nested URL once and refuses more than 50 distinct ones", async () => {
+        expect.assertions(2);
+
+        const { binding, quickAction } = makeQuickBinding();
+        const browser = createBrowser({ binding, launch: async () => ({}) as never });
+        const many = Array.from({ length: 51 }, (_, index) => {
+            return { url: `https://cdn${String(index)}.example.com/a.js` };
+        });
+
+        await expect(browser.quickAction("screenshot", "https://example.com", { addScriptTag: many })).rejects.toThrow(/more than 50 distinct URLs/u);
+
+        const repeated = Array.from({ length: 60 }, () => {
+            return { url: "https://cdn.example.com/a.js" };
+        });
+
+        await browser.quickAction("screenshot", "https://example.com", { addScriptTag: repeated });
+
+        expect(quickAction).toHaveBeenCalledTimes(1);
+    });
+
     it("guards URLs nested in the options (addScriptTag / addStyleTag), not only the target", async () => {
         expect.assertions(3);
 

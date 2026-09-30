@@ -340,6 +340,28 @@ describe("lunoraContainer native exec", () => {
         expect(kill).toHaveBeenCalledTimes(1);
     });
 
+    it("answers 504 when the timeout fires after the streams closed but before the process exited", async () => {
+        expect.assertions(2);
+
+        let exit: ((code: number) => void) | undefined;
+        const kill = vi.fn<() => void>(() => {
+            exit?.(137);
+        });
+        const { instance } = nativeInstance(async () => {
+            return {
+                exitCode: new Promise<number>((resolve) => {
+                    exit = resolve;
+                }),
+                kill,
+                stderr: streamOf(""),
+                stdout: streamOf("partial"),
+            };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "hang", timeoutMs: 5 })))).resolves.toBe(504);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
     it("passes the container's start env under the per-call env, since exec processes do not inherit it", async () => {
         expect.assertions(1);
 

@@ -21,6 +21,9 @@ import type {
 /** Browser Run refuses a session whose guardrails list more hostnames than this (400 at acquire). */
 const MAX_GUARDRAIL_DOMAINS = 50;
 
+/** The most distinct URLs a Quick Action's options may nest (`addScriptTag[].url`, …) — each is guarded, maybe with DNS lookups. */
+const MAX_NESTED_QUICK_ACTION_URLS = 50;
+
 /** Default navigation timeout when neither the call nor the factory sets one. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -630,7 +633,26 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         // Nested URLs load too — `addScriptTag[].url`, `addStyleTag[].url`, and
         // whatever Browser Run adds later — and a Quick Action has no session
         // guardrails behind it, so each passes the same guard as the target.
-        const guardedOptions = await guardNestedUrls(quickOptions, async (nested) => assertTargetAllowed(nested, defaultDohTimeout()));
+        // One check per distinct URL, however often it repeats, and a bounded
+        // count — each check can start DoH lookups when `resolveDns` is on.
+        const checks = new Map<string, Promise<string>>();
+        const guardedOptions = await guardNestedUrls(quickOptions, async (nested) => {
+            let check = checks.get(nested);
+
+            if (check === undefined) {
+                if (checks.size >= MAX_NESTED_QUICK_ACTION_URLS) {
+                    throw new LunoraError(
+                        "BAD_REQUEST",
+                        `@lunora/browser: quickAction options carry more than ${String(MAX_NESTED_QUICK_ACTION_URLS)} distinct URLs`,
+                    );
+                }
+
+                check = assertTargetAllowed(nested, defaultDohTimeout());
+                checks.set(nested, check);
+            }
+
+            return check;
+        });
 
         return options.binding.quickAction(action, { ...(guardedOptions as QuickActionOptions), url: target });
     };

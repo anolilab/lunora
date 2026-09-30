@@ -43,6 +43,7 @@ const collect = async (exec: ContainerExec, body: ExecRequestBody, startEnv: Rea
     // An object, not two `let`s: the flags are set from the timer and the
     // readers, which control-flow narrowing cannot see.
     const outcome = { overflowed: false, timedOut: false };
+    const hasTimedOut = (): boolean => outcome.timedOut;
     const exitCode = process.exitCode.finally(() => {
         exited = true;
     });
@@ -124,7 +125,16 @@ const collect = async (exec: ContainerExec, body: ExecRequestBody, startEnv: Rea
             throw stderr.reason;
         }
 
-        const document = JSON.stringify({ code: await exitCode, stderr: stderr.value, stdout: stdout.value });
+        const code = await exitCode;
+
+        // Both streams can close before the process exits, so the timer may have
+        // fired (and killed it) while the exit code was pending. Re-read through a
+        // call: narrowing from the check above does not see the timer's write.
+        if (hasTimedOut()) {
+            return new Response(`container "${label}": exec timed out after ${String(body.timeoutMs)}ms`, { status: 504 });
+        }
+
+        const document = JSON.stringify({ code, stderr: stderr.value, stdout: stdout.value });
 
         // JSON escaping can grow the text past the cap the client reads under.
         if (new TextEncoder().encode(document).byteLength > limit) {
