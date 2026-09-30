@@ -6,110 +6,180 @@ import { wranglerToAlchemy } from "../src/cloudflare/wrangler-to-alchemy";
 const BASE: WranglerConfigShape = { main: "src/server/index.ts", name: "my-app" };
 
 describe("wranglerToAlchemy", () => {
-    it("emits a runnable program for a config with no bindings", () => {
-        expect.assertions(4);
+    it("emits an Alchemy 2 stack program for a config with no bindings", () => {
+        expect.assertions(5);
 
         const { source, unsupported } = wranglerToAlchemy(BASE);
 
-        expect(source).toContain(`import alchemy from "alchemy";`);
-        expect(source).toContain(`const app = await alchemy("my-app");`);
-        expect(source).toContain("await app.finalize();");
+        expect(source).toContain(`import { AdoptPolicy, localState, Stack } from "alchemy";`);
+        expect(source).toContain(`import * as Cloudflare from "alchemy/Cloudflare";`);
+        expect(source).toContain(`    "my-app",\n    { providers: Cloudflare.providers(), state: localState() },`);
+        expect(source).toContain(
+            `const worker = yield* Cloudflare.Workers.Worker("Worker", {\n            name: "my-app",\n            main: "src/server/index.ts",\n        });`,
+        );
         expect(unsupported).toStrictEqual([]);
     });
 
     it("adopts existing resources rather than creating alongside them", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { source } = wranglerToAlchemy({
             ...BASE,
             d1_databases: [{ binding: "DB", database_id: "abc123", database_name: "my-app-db" }],
         });
 
-        // The single most important flag here. A project translated from an
-        // existing `wrangler.jsonc` already HAS its database, with data in it.
-        // Without adoption Alchemy treats it as new and creates a second one —
-        // the one outcome a deploy must never have.
-        expect(source).toContain(`await D1Database("DB", { adopt: true, name: "my-app-db" });`);
-
-        // `database_id` is Cloudflare's handle, not an Alchemy input — adoption
-        // matches on the name.
+        // Alchemy 2 adopts on `read`, which matches the physical name — so the
+        // name must be the one wrangler created, never a generated one.
+        expect(source).toContain(`const DB = yield* Cloudflare.D1.Database("DB", { name: "my-app-db" });`);
+        // A wrangler-deployed Worker reads as unowned; without the adopt policy
+        // the planner fails with OwnedBySomeoneElse instead of taking it over.
+        expect(source).toContain(".pipe(AdoptPolicy.adopt(true)),");
+        // `database_id` is Cloudflare's handle, not an Alchemy input.
         expect(source).not.toContain("abc123");
     });
 
-    it("marks a Durable Object as SQLite-backed from any migration entry, not just the newest", () => {
-        expect.assertions(2);
+    it("declares every provisioned kind by its physical name and binds it on env", () => {
+        expect.assertions(6);
 
         const { source } = wranglerToAlchemy({
+            ...BASE,
+            kv_namespaces: [{ binding: "CACHE", id: "kv-id" }],
+            queues: { producers: [{ binding: "JOBS", queue: "jobs" }] },
+            r2_buckets: [{ binding: "FILES", bucket_name: "files" }],
+            vectorize: [{ binding: "SEARCH", index_name: "posts" }],
+        });
+
+        expect(source).toContain(`Cloudflare.R2.Bucket("FILES", { name: "files" })`);
+        expect(source).toContain(`Cloudflare.Queues.Queue("JOBS", { name: "jobs" })`);
+        // eslint-disable-next-line no-secrets/no-secrets -- emitted Alchemy source, not a credential
+        expect(source).toContain(`Cloudflare.Vectorize.Index("SEARCH", { name: "posts" })`);
+        // KV adopts by title and wrangler has only the id — the emitted source says so.
+        expect(source).toContain(`Cloudflare.KV.Namespace("CACHE", { title: "CACHE" })`);
+        expect(source).toMatch(/Adopted by title/u);
+        expect(source).toContain("                FILES,\n");
+    });
+
+    it("binds the binding-only kinds as env descriptors", () => {
+        expect.assertions(4);
+
+        const { source } = wranglerToAlchemy({
+            ...BASE,
+            ai: { binding: "AI" },
+            analytics_engine_datasets: [{ binding: "EVENTS", dataset: "events" }],
+            browser: { binding: "BROWSER" },
+            images: { binding: "IMAGES" },
+        });
+
+        expect(source).toContain(`AI: Cloudflare.Workers.AI("AI"),`);
+        expect(source).toContain(`BROWSER: Cloudflare.Workers.Browser("BROWSER"),`);
+        expect(source).toContain(`IMAGES: Cloudflare.Images.Images("IMAGES"),`);
+        // eslint-disable-next-line no-secrets/no-secrets -- emitted Alchemy source, not a credential
+        expect(source).toContain(`EVENTS: Cloudflare.AnalyticsEngine.Dataset("EVENTS", { dataset: "events" }),`);
+    });
+
+    it("binds Durable Objects and flags a KV-backed class, since Alchemy 2 creates new classes on SQLite", () => {
+        expect.assertions(4);
+
+        const { source, unsupported } = wranglerToAlchemy({
             ...BASE,
             durable_objects: {
                 bindings: [
                     { class_name: "ShardDO", name: "SHARD" },
                     { class_name: "PlainDO", name: "PLAIN" },
+                    { class_name: "OtherDO", name: "OTHER", script_name: "other-worker" },
                 ],
             },
             migrations: [{ new_sqlite_classes: ["ShardDO"] }, { new_classes: ["PlainDO"] }],
         });
 
-        // A class introduced in `v1` is still SQLite-backed at `v3`, so the flag
-        // is accumulated across migrations rather than read off the last one.
-        expect(source).toContain(`DurableObjectNamespace("SHARD", { className: "ShardDO", sqlite: true })`);
-        expect(source).toContain(`DurableObjectNamespace("PLAIN", { className: "PlainDO", sqlite: false })`);
+        // eslint-disable-next-line no-secrets/no-secrets -- emitted Alchemy source, not a credential
+        expect(source).toContain(`SHARD: Cloudflare.Workers.DurableObject("SHARD", { className: "ShardDO" }),`);
+        expect(source).toMatch(/PlainDO is KV-backed/u);
+        // eslint-disable-next-line no-secrets/no-secrets -- emitted Alchemy source, not a credential
+        expect(source).toContain(`OTHER: Cloudflare.Workers.DurableObject("OTHER", { className: "OtherDO", scriptName: "other-worker" }),`);
+        expect(unsupported).toStrictEqual([]);
     });
 
-    it("reports what it could not carry over instead of dropping it silently", () => {
+    it("attaches queue consumers to the worker, declaring a consumed queue nothing produces to", () => {
+        expect.assertions(3);
+
+        const { source } = wranglerToAlchemy({
+            ...BASE,
+            queues: {
+                consumers: [{ dead_letter_queue: "dlq", max_batch_size: 5, max_batch_timeout: 2, queue: "jobs" }, { queue: "inbound" }],
+                producers: [{ binding: "JOBS", queue: "jobs" }],
+            },
+        });
+
+        // Wrangler's batch timeout is seconds; Alchemy's is milliseconds.
+        expect(source).toContain(
+            `yield* Cloudflare.Queues.Consumer("jobs-consumer", { queueId: JOBS.queueId, scriptName: worker.workerName, deadLetterQueue: "dlq", settings: { batchSize: 5, maxWaitTimeMs: 2000 } });`,
+        );
+        expect(source).toContain(`const queue_inbound = yield* Cloudflare.Queues.Queue("inbound", { name: "inbound" });`);
+        expect(source).toContain(`Cloudflare.Queues.Consumer("inbound-consumer", { queueId: queue_inbound.queueId, scriptName: worker.workerName });`);
+    });
+
+    it("reports a pull consumer rather than attaching the worker to it", () => {
+        expect.assertions(2);
+
+        const { source, unsupported } = wranglerToAlchemy({ ...BASE, queues: { consumers: [{ queue: "pulled", type: "http_pull" }] } });
+
+        expect(unsupported).toStrictEqual([`queues.consumers "pulled" (http_pull)`]);
+        expect(source).not.toContain("Consumer(");
+    });
+
+    it("carries workflows, assets, crons, compatibility, tail consumers and workers_dev onto the worker", () => {
+        expect.assertions(6);
+
+        const { source } = wranglerToAlchemy({
+            ...BASE,
+            assets: { binding: "ASSETS", directory: "./dist/client", not_found_handling: "single-page-application" },
+            compatibility_date: "2026-04-07",
+            compatibility_flags: ["nodejs_compat"],
+            tail_consumers: [{ service: "logs-worker" }],
+            triggers: { crons: ["0 * * * *"] },
+            workers_dev: false,
+            workflows: [{ binding: "FLOW", class_name: "MyFlow", name: "my-flow" }],
+        });
+
+        expect(source).toContain(`assets: { directory: "./dist/client", notFoundHandling: "single-page-application" },`);
+        expect(source).toContain(`compatibility: { date: "2026-04-07", flags: ["nodejs_compat"] },`);
+        expect(source).toContain(`crons: ["0 * * * *"],`);
+        expect(source).toContain(`tailConsumers: ["logs-worker"],`);
+        expect(source).toContain("workersDev: false,");
+        expect(source).toContain(`FLOW: Cloudflare.Workflows.Workflow("MyFlow", { className: "MyFlow" }),`);
+    });
+
+    it("reports every section it cannot carry over instead of dropping it silently", () => {
         expect.assertions(2);
 
         const { source, unsupported } = wranglerToAlchemy({
             ...BASE,
-            vectorize: [{ binding: "POSTS_SEARCH", index_name: "posts_search" }],
-        } as WranglerConfigShape);
-
-        // A silently-dropped Vectorize binding produces a worker whose
-        // `env.POSTS_SEARCH` is undefined at runtime, with nothing in the build
-        // to explain it. The caller has to be able to say so.
-        expect(unsupported).toContain("vectorize");
-        expect(source).not.toContain("POSTS_SEARCH");
-    });
-
-    it("reports every binding kind it cannot model, not just the ones with a top-level array", () => {
-        expect.assertions(1);
-
-        // `queues.consumers`, `services`, `secrets_store_secrets`, `send_email`,
-        // `assets`, `flagship` and `tail_consumers` were all absent from the
-        // report while being just as dropped as `vectorize` — so a translated
-        // deploy lost the queue consumer, the service binding and the secret
-        // store with nothing in the build saying why. Lunora writes every one of
-        // these into `wrangler.jsonc` itself.
-        const { unsupported } = wranglerToAlchemy({
-            ...BASE,
-            assets: { directory: "./public" },
+            assets: { binding: "STATIC", directory: "./public" },
             flagship: [{ app_id: "app-abc", binding: "FLAGS" }],
-            queues: { consumers: [{ queue: "jobs" }], producers: [{ binding: "JOBS", queue: "jobs" }] },
+            hyperdrive: [{ binding: "PG", id: "hd-1" }],
             secrets_store_secrets: [{ binding: "WALLET_KEY", secret_name: "wallet", store_id: "store-1" }],
             send_email: [{ name: "MAILER" }],
             services: [{ binding: "AUTH", service: "auth-worker" }],
-            tail_consumers: [{ service: "logs-worker" }],
             worker_loaders: [{ binding: "LOADER" }],
         } as WranglerConfigShape);
 
         expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-            "assets",
+            `assets.binding "STATIC" (Alchemy 2 always binds assets as ASSETS)`,
             "flagship",
-            "queues.consumers",
+            "hyperdrive (Alchemy creates a Hyperdrive config from origin credentials wrangler.jsonc does not carry)",
             "secrets_store_secrets",
             "send_email",
             "services",
-            "tail_consumers",
             "worker_loaders",
         ]);
+        expect(source).not.toContain("AUTH");
     });
 
     it("preserves a var's JSON type instead of stringifying it", () => {
         expect.assertions(3);
 
-        // `literal(String(value))` turned `"MAX": 5` into the string `"5"`, so
-        // the deployed worker read a number var as text — a silent type change
-        // under a translation whose whole promise is fidelity.
+        // Alchemy binds a non-string literal as `json`, so a numeric var stays a number.
         const { source } = wranglerToAlchemy({ ...BASE, vars: { DEBUG: false, LIMITS: { soft: 1 }, MAX: 5 } });
 
         expect(source).toContain("MAX: 5,");
@@ -117,75 +187,26 @@ describe("wranglerToAlchemy", () => {
         expect(source).toContain(`LIMITS: {"soft":1},`);
     });
 
-    it("skips a Durable Object implemented by another worker", () => {
-        expect.assertions(2);
-
-        const { source, unsupported } = wranglerToAlchemy({
-            ...BASE,
-            durable_objects: { bindings: [{ class_name: "OtherDO", name: "OTHER", script_name: "other-worker" }] },
-        });
-
-        // The implementing worker is outside this program's scope, so binding to
-        // it would reference something the program never creates.
-        expect(source).not.toContain("OTHER");
-        expect(unsupported[0]).toContain("external script_name");
-    });
-
     it("quotes a binding name that is not a valid identifier", () => {
         expect.assertions(2);
 
         const { source } = wranglerToAlchemy({ ...BASE, r2_buckets: [{ binding: "my-bucket", bucket_name: "b" }] });
 
-        // Nothing enforces that a binding is `SCREAMING_SNAKE`, and a hyphen
-        // would emit a program that does not parse.
-        expect(source).toContain(`"my-bucket":`);
+        expect(source).toContain(`"my-bucket": binding_my_bucket,`);
         expect(source).toContain("const binding_my_bucket =");
     });
 
-    it("uses shorthand when the binding name is already the local const", () => {
+    it("omits an empty env block rather than emitting an empty object", () => {
         expect.assertions(1);
 
-        const { source } = wranglerToAlchemy({ ...BASE, r2_buckets: [{ binding: "FILES", bucket_name: "files" }] });
-
-        // The generated file gets read by humans debugging a deploy; `FILES: FILES` is noise.
-        expect(source).toContain("        FILES,");
+        expect(wranglerToAlchemy(BASE).source).not.toContain("env:");
     });
 
-    it("carries crons, compatibility settings and vars onto the worker", () => {
-        expect.assertions(4);
-
-        const { source } = wranglerToAlchemy({
-            ...BASE,
-            compatibility_date: "2026-04-07",
-            compatibility_flags: ["nodejs_compat"],
-            triggers: { crons: ["0 * * * *"] },
-            vars: { PUBLIC_URL: "https://example.com" },
-        });
-
-        expect(source).toContain(`compatibilityDate: "2026-04-07",`);
-        expect(source).toContain(`compatibilityFlags: ["nodejs_compat"],`);
-        expect(source).toContain(`crons: ["0 * * * *"],`);
-        expect(source).toContain(`PUBLIC_URL: "https://example.com",`);
-    });
-
-    it("omits an empty bindings block rather than emitting an empty object", () => {
+    it("emits each var binding exactly once", () => {
         expect.assertions(1);
 
-        expect(wranglerToAlchemy(BASE).source).not.toContain("bindings:");
-    });
-
-    it("emits each var binding exactly once (regression: alpha emitted vars twice)", () => {
-        expect.assertions(1);
-
-        // Alpha had both an inline `Object.entries(config.vars)` loop and a
-        // `collectVariables(config, bindings)` call, so every var landed on the
-        // worker twice. The dedupe must not regress — a duplicate binding key is
-        // a Worker deploy error.
         const { source } = wranglerToAlchemy({ ...BASE, vars: { PUBLIC_URL: "https://example.com", SECRET_KEY: "s3cr3t" } });
 
-        const countPublicUrl = (source.match(/PUBLIC_URL:/g) ?? []).length;
-        const countSecretKey = (source.match(/SECRET_KEY:/g) ?? []).length;
-
-        expect([countPublicUrl, countSecretKey]).toStrictEqual([1, 1]);
+        expect([(source.match(/PUBLIC_URL:/gu) ?? []).length, (source.match(/SECRET_KEY:/gu) ?? []).length]).toStrictEqual([1, 1]);
     });
 });

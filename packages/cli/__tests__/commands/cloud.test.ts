@@ -387,7 +387,7 @@ describe("lunora cloud", () => {
         await expect(runCloudCommand({ argument: ["rollback", "dep_1"], cwd: "/x", deps: deps(), logger, org: "o" })).resolves.toMatchObject({ code: 1 });
     });
 
-    it("eject writes the three files into ./eject", async () => {
+    it("eject writes the four files into ./eject", async () => {
         expect.assertions(4);
 
         const written: { content: string; directory: string; name: string }[] = [];
@@ -407,7 +407,7 @@ describe("lunora cloud", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(written.map((file) => file.name)).toStrictEqual(["export.ndjson", "wrangler.jsonc", "README.md"]);
+        expect(written.map((file) => file.name)).toStrictEqual(["export.ndjson", "wrangler.jsonc", "alchemy.run.ts", "README.md"]);
         expect(written[0]?.directory).toBe("/x/eject");
         // The BYO config is named after the deployment's own script, not the cwd.
         expect(written[1]?.content).toContain('"name": "acme-v3"');
@@ -434,6 +434,46 @@ describe("lunora cloud", () => {
         });
 
         expect(written[0]).toBe("/x/backup");
+    });
+
+    it("eject derives the config from the project's own wrangler config", async () => {
+        expect.assertions(2);
+
+        const written = new Map<string, string>();
+        const { logger } = capturingLogger();
+
+        await runCloudCommand({
+            argument: ["eject", "dep_1"],
+            cwd: "/x",
+            deps: deps({
+                writeEjectFile: (_directory, name, content) => {
+                    written.set(name, content);
+
+                    return Promise.resolve();
+                },
+            }),
+            logger,
+        });
+
+        // The fixture's DO binding and cron, not a hard-coded template.
+        expect(JSON.parse(written.get("wrangler.jsonc") ?? "")).toMatchObject({
+            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            triggers: { crons: ["0 0 * * *"] },
+        });
+        // eslint-disable-next-line no-secrets/no-secrets -- emitted Alchemy source, not a credential
+        expect(written.get("alchemy.run.ts")).toContain(`SHARD: Cloudflare.Workers.DurableObject("SHARD", { className: "ShardDO" }),`);
+    });
+
+    it("eject fails before calling the control plane when there is no wrangler config", async () => {
+        expect.assertions(3);
+
+        const ejectFn = vi.fn<CloudCommandDeps["ejectFn"]>();
+        const { errors, logger } = capturingLogger();
+        const result = await runCloudCommand({ argument: ["eject", "dep_1"], cwd: "/x", deps: deps({ ejectFn, readWrangler: () => undefined }), logger });
+
+        expect(result.code).toBe(1);
+        expect(errors[0]).toMatch(/no readable wrangler config/);
+        expect(ejectFn).not.toHaveBeenCalled();
     });
 
     it("eject requires a deployment id", async () => {

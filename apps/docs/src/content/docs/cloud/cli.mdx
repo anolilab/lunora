@@ -94,8 +94,14 @@ have happened, because the effect is immediate and user-visible.
 ## `lunora cloud eject`
 
 Packages a deployment for your own Cloudflare account: your full data snapshot,
-the `wrangler.jsonc` the project would have on BYO, and a README with the restore
-steps.
+your project's config ready for another account — as a `wrangler.jsonc` and as an
+[Alchemy 2](https://alchemy.run) program, the tool Lunora Cloud itself provisions
+with — and a README with the restore steps.
+
+Run it from the project directory. The config is derived from your own
+`wrangler.jsonc`, so every binding the app uses (D1, KV, R2, queues and their
+consumers, Durable Objects, assets, AI, workflows, vars, crons, …) carries over;
+with no wrangler config there, eject stops before contacting the control plane.
 
 ```bash
 lunora cloud eject dep_456          # writes ./eject
@@ -106,13 +112,21 @@ lunora cloud eject dep_456 --out backup
 | ------- | ---------------------------------------- |
 | `--out` | Output directory. Defaults to `./eject`. |
 
-Three files land in it:
+Four files land in it:
 
-| File             | What it is                                                    |
-| ---------------- | ------------------------------------------------------------- |
-| `export.ndjson`  | Your full data snapshot — every shard plus the global tables. |
-| `wrangler.jsonc` | The BYO config, named after your deployment's own script.     |
-| `README.md`      | The restore steps, with your project's names filled in.       |
+| File             | What it is                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `export.ndjson`  | Your full data snapshot — every shard plus the global tables.                                                                                      |
+| `wrangler.jsonc` | Your config, named after the deployment's script, with the old account's D1/KV/Hyperdrive ids replaced by `<create with: …>` placeholders.         |
+| `alchemy.run.ts` | The same config as an Alchemy 2 stack. Alchemy creates the resources itself, so there are no ids to paste; run it with `alchemy deploy --stage …`. |
+| `README.md`      | The restore steps for both paths, with your project's names filled in.                                                                             |
+
+The Alchemy program keeps its state in `.alchemy/` next to your project
+(`localState()`); swap in `Cloudflare.state()` to keep it in your account. It
+adopts resources that already exist by name instead of re-creating them. Sections
+it cannot express — service bindings, Hyperdrive (whose origin credentials are
+not in `wrangler.jsonc`), and the like — are printed as a warning and listed in
+the README.
 
 **Ejecting changes nothing.** It is a read: your managed deployment keeps serving
 afterwards, and you can run it whenever you like — including just to confirm that

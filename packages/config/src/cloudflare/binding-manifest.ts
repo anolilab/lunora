@@ -135,23 +135,12 @@ const NON_BINDING_FIELDS = new Set([
 
 /**
  * The wider config this reads. {@link WranglerConfigShape} covers what the
- * Alchemy translation models; a manifest additionally reports the sections that
- * translation lists as unsupported, so those are declared here.
+ * Alchemy translation models; a manifest additionally lists the sections that
+ * translation reports as unsupported, so those it reads are declared here.
  */
 interface ManifestConfigShape extends WranglerConfigShape {
-    ai?: { binding?: string };
-    analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
-    /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
-    assets?: { binding?: string; directory?: string };
-    browser?: { binding?: string };
     containers?: ReadonlyArray<{ class_name?: string; image?: string; max_instances?: number }>;
-    hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
-    images?: { binding?: string };
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
-    /** Adds `consumers` — the Alchemy translation models producers only. */
-    queues?: { consumers?: ReadonlyArray<{ queue?: string }>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
-    vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
-    workflows?: ReadonlyArray<{ binding?: string; class_name?: string; name?: string }>;
 }
 
 /** Drop keys whose value is `undefined` so the emitted JSON carries no empty fields. */
