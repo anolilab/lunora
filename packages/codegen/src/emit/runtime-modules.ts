@@ -1,4 +1,5 @@
-import type { CronJobIR, VectorIndexIR } from "../ir";
+import type { CronJobIR, TableIR, VectorIndexIR } from "../ir";
+import { isShardByTable } from "../ir";
 import { baseSpecifiers, GENERATED_HEADER } from "./shared";
 
 /**
@@ -74,8 +75,8 @@ export { SchedulerDO } from "@lunora/scheduler";
  * the same signal — so none of the three can disagree about whether the app has
  * a registry.
  */
-const emitShardRegistry = (hasShardedTables: boolean, useUmbrella: boolean): string => {
-    if (!hasShardedTables) {
+const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean): string => {
+    if (!tables.some((table) => isShardByTable(table))) {
         return "";
     }
 
@@ -87,9 +88,10 @@ const emitShardRegistry = (hasShardedTables: boolean, useUmbrella: boolean): str
  *
  * \`export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";\`
  *
- * Named, not \`export *\`: binding inference reads the entry's named exports to
- * provision \`SHARD_REGISTRY\`. A Vite-first (class-A) app needs neither line: the generated worker entry
- * does both whenever this module exists.
+ * Name the class in a hand-written entry: binding inference provisions
+ * \`SHARD_REGISTRY\` off the entry's named exports, and cannot see through an
+ * \`export *\`. A Vite-first (class-A) app needs neither line — its generated
+ * worker entry does both whenever this module exists.
  */
 export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
 `;

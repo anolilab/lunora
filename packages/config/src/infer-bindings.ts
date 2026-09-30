@@ -42,6 +42,7 @@ import {
     detectExportedDurableObjects,
     DURABLE_OBJECT_BINDINGS,
     GENERATED_DIRECTORY,
+    GENERATED_MODULE_DURABLE_OBJECTS,
     resolveWorkerEntry,
 } from "./worker-entry";
 import type { WorkflowIR } from "./workflow-info";
@@ -560,18 +561,17 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     let durableObjects: DurableObjectSpec[];
 
     if (entry.composed) {
-        // Plus `SchedulerDO` when codegen wrote the `scheduler` module: the
-        // composed entry star-re-exports it, so the class IS exported and the
-        // binding is provisionable. Reading only the base list above left
+        // Plus `SchedulerDO` / `ShardRegistryDO` when codegen wrote the module
+        // that forwards it: the composed entry star-re-exports it, so the class
+        // IS exported and the binding is provisionable. Reading only the base list above left
         // `reconcile-bindings` telling a correctly-wired class-A app to
         // "export it so the SCHEDULER binding can be provisioned" — advice that is
         // both wrong and impossible to follow, on every `lunora dev`.
         const composedClasses: DurableObjectClass[] = [
             ...COMPOSED_ENTRY_DURABLE_OBJECTS,
-            ...(existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "scheduler.ts")) ? (["SchedulerDO"] as const) : []),
-            // Same for `ShardRegistryDO`, off the `shardRegistry` module codegen
-            // writes for a schema with `.shardBy()` tables.
-            ...(existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "shardRegistry.ts")) ? (["ShardRegistryDO"] as const) : []),
+            ...Object.entries(GENERATED_MODULE_DURABLE_OBJECTS)
+                .filter(([module]) => existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, `${module}.ts`)))
+                .map(([, className]) => className),
         ];
 
         durableObjects = composedClasses.map((className) => {

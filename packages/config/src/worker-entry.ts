@@ -190,6 +190,17 @@ const GENERATED_CLASS_MODULES = ["agents", "containers", "scheduler", "shardRegi
 type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
 
 /**
+ * The framework Durable Object each class module forwards, for the modules that
+ * carry one: codegen writes them off the same signal that gives the builder the
+ * matching method, so the module's existence means the composed entry exports
+ * the class.
+ */
+const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, DurableObjectClass>> = {
+    scheduler: "SchedulerDO",
+    shardRegistry: "ShardRegistryDO",
+};
+
+/**
  * The class-B composed entry. `lunora deploy` passes this file to wrangler as
  * the positional script whenever it exists, overriding `wrangler.main` — so it
  * is what actually gets bundled and what wrangler checks its DO/Workflow
@@ -465,6 +476,7 @@ export {
     DURABLE_OBJECT_BINDINGS,
     GENERATED_CLASS_MODULES,
     GENERATED_DIRECTORY,
+    GENERATED_MODULE_DURABLE_OBJECTS,
     isFrameworkDurableObject,
     isGeneratedOutput,
     LUNORA_WORKER_VIRTUAL_ID,

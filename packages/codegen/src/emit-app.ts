@@ -2,6 +2,7 @@
 import { APP_METHOD_CAPABILITIES } from "./capabilities";
 import { GENERATED_HEADER } from "./emit";
 import type { IdentityIR, JurisdictionIR, TableIR } from "./ir";
+import { isShardByTable } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
@@ -107,7 +108,7 @@ interface EmitAppOptions {
      * imported `schema`) keeps this working for apps with no `.global()` tables,
      * which never import `schema` at all.
      */
-    tables: ReadonlyArray<{ name: string; shardMode: TableIR["shardMode"] }>;
+    tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
     /** Number of `.vectorize()` / `defineVectorIndex(...)` indexes the schema declares — the app-side half of {@link EmitAppOptions.hasVectors}. Defaults to `0`. */
@@ -224,14 +225,14 @@ const buildInboundImports = (options: EmitAppOptions): string[] =>
 const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
     hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
+/** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
+const hasShardedTables = (options: EmitAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
+
 /**
  * The runtime module's own type and value import lines. Which symbols each side
  * needs is driven entirely by the enabled capabilities, so it is kept next to
  * the other per-capability builders rather than inline in {@link buildImportLines}.
  */
-/** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
-const hasShardedTables = (options: EmitAppOptions): boolean => options.tables.some((table) => typeof table.shardMode === "object");
-
 const buildRuntimeImports = (options: EmitAppOptions): string[] => {
     const { hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, useUmbrella } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
@@ -784,7 +785,6 @@ const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
                 jurisdiction: ${JSON.stringify(options.jurisdiction)},`
         : "";
 
-/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 /** A table's IR shard mode as a runtime `ShardingInfo` literal. */
 const shardingLiteral = (shardMode: TableIR["shardMode"]): string =>
     typeof shardMode === "string"
@@ -816,8 +816,8 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
         options.resolveTableSharding = (table) => tableSharding.get(table);`,
           ]
         : []),
-    // Without a registry the worker's default one refuses every `.shardBy()`
-    // table, since only the shards themselves know which keys hold rows.
+    // A declared registry replaces the worker's default one, which refuses every
+    // `.shardBy()` table because it cannot know which shard keys hold rows.
     ...(hasShardedTables(options)
         ? [
               `        const shardRegistry = this.shardRegistrySelector?.(env);
@@ -829,6 +829,7 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
         : []),
 ];
 
+/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     ...buildTableShardingLines(options),
     ...(options.hasScheduler

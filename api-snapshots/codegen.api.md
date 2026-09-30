@@ -244,10 +244,7 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
-    tables: ReadonlyArray<{
-        name: string;
-        shardMode: TableIR["shardMode"];
-    }>;
+    tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
     voiceAgents?: ReadonlyArray<{

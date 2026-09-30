@@ -9,8 +9,9 @@
  *
  * `export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";`
  *
- * Named, not `export *`: binding inference reads the entry's named exports to
- * provision `SHARD_REGISTRY`. A Vite-first (class-A) app needs neither line: the generated worker entry
- * does both whenever this module exists.
+ * Name the class in a hand-written entry: binding inference provisions
+ * `SHARD_REGISTRY` off the entry's named exports, and cannot see through an
+ * `export *`. A Vite-first (class-A) app needs neither line — its generated
+ * worker entry does both whenever this module exists.
  */
 export { ShardRegistryDO } from "lunorash/do";
