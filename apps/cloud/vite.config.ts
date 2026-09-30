@@ -59,6 +59,13 @@ export default defineConfig(({ command }) => {
                         workerConfig.vars = { WORKER_ENV: "development", ...workerConfig.vars };
                     }
                 },
+                // `@cloudflare/vite-plugin` treats `ai` as never-local, so with remote
+                // bindings on every `pnpm dev` (and the e2e suite) opens a remote proxy
+                // session and hard-fails without Cloudflare credentials — the outcome
+                // the wrangler.jsonc comments go out of their way to avoid. Remote only
+                // when a token is there to authenticate it; otherwise AI calls fail
+                // locally and everything else boots.
+                remoteBindings: Boolean(process.env.CLOUDFLARE_API_TOKEN),
                 viteEnvironment: { name: "ssr" },
             }),
             tanstackStart(),
