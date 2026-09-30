@@ -527,8 +527,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
         case ADMIN_FUNCTIONS.listWorkflows: {
             return {
                 workflows: [
-                    { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-                    { binding: "WORKFLOW_WELCOME_EMAIL", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
+                    { binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    { binding: "WelcomeEmailWorkflow", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
                 ],
             };
         }

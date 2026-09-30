@@ -11,8 +11,9 @@ import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { decodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
 import { dedupNamespace, pinDedupId } from "./dedup-id";
-import { workflowBindingName } from "./define-workflow";
+import { workflowClassName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { raiseNonRetryable } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
@@ -26,6 +27,8 @@ interface RunContextOptions<Params> {
     env: Record<string, unknown>;
     event: WorkflowEventLike<Params>;
     exportName: string;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes the workflows declared in wrangler `exports`. */
+    exports?: unknown;
     fetchImpl?: typeof fetch;
     /** Native `cloudflare:workflows` `NonRetryableError` — injected by `src/do`; absent in Node tests. */
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
@@ -61,17 +64,17 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     const namespace = dedupNamespace(options.exportName, options.event.instanceId);
     const run = pinDedupId(dispatch, `${namespace}#body`);
 
-    // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the
-    // shared naming helper — the same derivation codegen and the config layer use,
-    // so no generated binding map is needed for the workflow body to spawn children.
+    // Resolve a child workflow by its export key (the generated class name) via
+    // the shared naming helper — the same derivation codegen and the config layer
+    // use, so no generated map is needed for the workflow body to spawn children.
     const resolveBinding: WorkflowBindingResolver = (workflow: string) => {
-        const bindingName = workflowBindingName(workflow);
-        const binding = options.env[bindingName] as WorkflowBindingLike | undefined;
+        const key = workflowClassName(workflow);
+        const binding = resolveWorkflowBinding(options.env, options.exports, key) as WorkflowBindingLike | undefined;
 
         if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/workflow: cannot spawn child workflow "${workflow}" — no Workflow binding "${bindingName}" on env (is it declared in lunora/workflows.ts?)`,
+                `@lunora/workflow: cannot spawn child workflow "${workflow}" — no "${key}" on ctx.exports or env (is it declared in lunora/workflows.ts?)`,
             );
         }
 
@@ -112,10 +115,11 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
 
     const fanOutDeps = {
         env: options.env,
+        exports: options.exports,
         instanceId: options.event.instanceId,
         log,
         nextChildId,
-        parentBinding: workflowBindingName(options.exportName),
+        parentBinding: workflowClassName(options.exportName),
         resolveBinding,
         step: options.step,
     };
@@ -148,6 +152,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
 
     return {
         env: options.env,
+        exports: options.exports,
         event: options.event,
         // Re-exposed, not just consumed: a body that builds its own dispatcher
         // (the agent loop does) must dispatch through the same implementation

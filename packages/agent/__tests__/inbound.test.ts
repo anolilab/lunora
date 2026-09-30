@@ -68,10 +68,10 @@ describe(dispatchAgentEmail, () => {
             return { input: email.subject ?? "", owner: "acct-1", threadKey: "thread-1", title: "Support" };
         };
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
-        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
 
         expect(support.calls).toHaveLength(1);
         // The mapper's run is passed straight through as the workflow params.
@@ -90,10 +90,10 @@ describe(dispatchAgentEmail, () => {
             return { input: email.subject ?? "", owner: "acct-1", threadKey: "thread-1", title: "Support" };
         };
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage(UNAUTHENTICATED_EMAIL);
 
-        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
 
         // A run dispatches privileged (its tools bypass RLS), so a message the
         // receiving MX never authenticated must not reach a mapper that could
@@ -110,10 +110,10 @@ describe(dispatchAgentEmail, () => {
         const onEmail: AgentEmailMapper = () => {
             return { input: "x", threadKey: "t" };
         };
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage(raw);
 
-        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
 
         return { bounced: rejects.length === 1, ran: support.calls.length === 1 };
     };
@@ -216,10 +216,10 @@ describe(dispatchAgentEmail, () => {
 
         const onEmail: AgentEmailMapper = () => null;
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
-        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
 
         expect(support.calls).toHaveLength(0);
         // A declined message is simply not claimed — it is NOT bounced.
@@ -238,12 +238,12 @@ describe(dispatchAgentEmail, () => {
         };
 
         const handler = dispatchAgentEmail([
-            { agent: { onEmail: decline }, binding: "AGENT_SALES" },
-            { agent: { onEmail: claim }, binding: "AGENT_SUPPORT" },
+            { agent: { onEmail: decline }, binding: "SalesAgentWorkflow" },
+            { agent: { onEmail: claim }, binding: "SupportAgentWorkflow" },
         ]);
         const { message } = fakeMessage();
 
-        await handler(message, { AGENT_SALES: sales.binding, AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SalesAgentWorkflow: sales.binding, SupportAgentWorkflow: support.binding }, {});
 
         expect(sales.calls).toHaveLength(0);
         expect(support.calls).toHaveLength(1);
@@ -260,12 +260,12 @@ describe(dispatchAgentEmail, () => {
         };
 
         const handler = dispatchAgentEmail([
-            { agent: { onEmail: claim }, binding: "AGENT_FIRST" },
-            { agent: { onEmail: claim }, binding: "AGENT_SECOND" },
+            { agent: { onEmail: claim }, binding: "FirstAgentWorkflow" },
+            { agent: { onEmail: claim }, binding: "SecondAgentWorkflow" },
         ]);
         const { message } = fakeMessage();
 
-        await handler(message, { AGENT_FIRST: first.binding, AGENT_SECOND: second.binding }, {});
+        await handler(message, { FirstAgentWorkflow: first.binding, SecondAgentWorkflow: second.binding }, {});
 
         expect(first.calls).toHaveLength(1);
         expect(second.calls).toHaveLength(0);
@@ -277,10 +277,10 @@ describe(dispatchAgentEmail, () => {
         const claim: AgentEmailMapper = (email: InboundEmail) => {
             return { input: email.subject ?? "", threadKey: "t" };
         };
-        const handler = dispatchAgentEmail([{ agent: { onEmail: claim }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail: claim }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
-        // No AGENT_SUPPORT binding on env → a permanently misconfigured deployment, so
+        // No SupportAgentWorkflow binding on env → a permanently misconfigured deployment, so
         // the dispatch bounces it itself with a generic, non-reflecting setReject.
         await handler(message, {}, {});
 
@@ -300,10 +300,10 @@ describe(dispatchAgentEmail, () => {
                 threadKey: "t",
             }) as unknown as ReturnType<AgentEmailMapper>;
 
-        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, binding: "SupportAgentWorkflow" }]);
         const { message, rejects } = fakeMessage();
 
-        await handler(message, { AGENT_SUPPORT: support.binding }, {});
+        await handler(message, { SupportAgentWorkflow: support.binding }, {});
 
         expect(support.calls).toHaveLength(0);
         expect(rejects).toHaveLength(1);

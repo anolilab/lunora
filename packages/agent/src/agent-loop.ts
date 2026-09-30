@@ -2,11 +2,12 @@
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
 import { APPROVAL_TIMEOUT_MAX_MS, definedColumns } from "./component-shared";
 import { resolveAgentModel } from "./generate";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
 import { buildModelMessages } from "./model-messages";
-import { agentBindingName } from "./naming";
+import { agentClassName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
 import { traceToolExecution } from "./telemetry/tool-execution";
@@ -56,6 +57,8 @@ interface AgentLoopOptions {
     env: Record<string, unknown>;
     /** The agent's `lunora/agents.ts` export name (thread attribution). */
     exportName: string;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes this and sibling agents. */
+    exports?: unknown;
 
     /**
      * The run-end episode-summary seam — production wires AI SDK `generateText`.
@@ -118,6 +121,7 @@ interface TurnContext {
     /** Sub-agent delegation depth of THIS run (`params.depth`), handed to every tool context. */
     depth: number;
     env: Record<string, unknown>;
+    exports?: unknown;
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
     getState: () => Promise<Record<string, unknown> | undefined>;
@@ -416,7 +420,7 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { agent, depth, env, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { agent, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -457,7 +461,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { depth, env, getState, idempotencyKey: stepName, owner, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
+    const toolContext = { depth, env, exports, getState, idempotencyKey: stepName, owner, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
@@ -1026,8 +1030,12 @@ const extractEpisodeAtRunEnd = async (options: {
  * runs from interleaving. Fired once — a replay re-enters `ensureThread` under
  * the SAME instance id, which no longer reports a takeover.
  */
-const terminatePriorInstance = async (env: Record<string, unknown>, exportName: string, priorInstanceId: string): Promise<void> => {
-    const binding = env[agentBindingName(exportName)] as AgentWorkflowBindingLike | undefined;
+const terminatePriorInstance = async (
+    source: { env: Record<string, unknown>; exports?: unknown },
+    exportName: string,
+    priorInstanceId: string,
+): Promise<void> => {
+    const binding = resolveWorkflowBinding(source.env, source.exports, agentClassName(exportName)) as AgentWorkflowBindingLike | undefined;
 
     if (!binding || typeof binding.get !== "function") {
         return;
@@ -1079,11 +1087,11 @@ const awaitDequeue = async (step: AgentStepLike, threadKey: string, instanceId: 
  * and re-running this mutation is not an option.
  */
 const wakeDequeuedRun = async (
-    deps: { env: Record<string, unknown>; exportName: string; step: AgentStepLike },
+    deps: { env: Record<string, unknown>; exportName: string; exports?: unknown; step: AgentStepLike },
     threadKey: string,
     dequeuedInstanceId: string,
 ): Promise<void> => {
-    const binding = deps.env[agentBindingName(deps.exportName)] as AgentWorkflowBindingLike | undefined;
+    const binding = resolveWorkflowBinding(deps.env, deps.exports, agentClassName(deps.exportName)) as AgentWorkflowBindingLike | undefined;
 
     if (!binding || typeof binding.get !== "function") {
         return;
@@ -1283,8 +1291,23 @@ const runTurns = async (
  * @experimental
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
-    const { agent, compact, env, exportName, extractEpisode, extractGraph, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } =
-        options;
+    const {
+        agent,
+        compact,
+        env,
+        exportName,
+        exports,
+        extractEpisode,
+        extractGraph,
+        generate,
+        instanceId,
+        onTokenDelta,
+        params,
+        paths,
+        run,
+        step,
+        streamGenerate,
+    } = options;
     const maxTurns = agent.maxTurns ?? DEFAULT_MAX_TURNS;
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
@@ -1338,7 +1361,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
 
         if (outcome?.dequeued !== undefined) {
-            await wakeDequeuedRun({ env, exportName, step }, params.threadKey, outcome.dequeued);
+            await wakeDequeuedRun({ env, exportName, exports, step }, params.threadKey, outcome.dequeued);
         }
     };
 
@@ -1374,7 +1397,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     // Replace policy: the thread has been taken over — terminate the run it was
     // taken from so it cannot resume and race on the shared seq counter.
     if (bootstrap?.outcome === "replaced") {
-        await terminatePriorInstance(env, exportName, bootstrap.priorInstanceId);
+        await terminatePriorInstance({ env, exports }, exportName, bootstrap.priorInstanceId);
     }
 
     // Memory step: dispatch the configured retrieval action once per run and
@@ -1392,6 +1415,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         compact,
         depth: normalizeDepth(params.depth),
         env,
+        exports,
         generate,
         getState,
         instanceId,

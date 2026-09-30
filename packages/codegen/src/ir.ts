@@ -613,26 +613,24 @@ export interface ContainerIR {
  * shared helpers so codegen and the config layer can never disagree.
  */
 export interface WorkflowIR {
-    /** The Cloudflare `Workflow` binding name, e.g. `WORKFLOW_ORDER_PIPELINE`. */
-    bindingName: string;
-    /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow`. */
+    /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow` — also its `exports` key and `ctx.exports` property. */
     className: string;
-    /** Static `defaultRetention` literal → `workflows[].default_retention`. */
+    /** Static `defaultRetention` literal → `exports.<Class>.default_retention`. */
     defaultRetention?: { errorRetention?: string; successRetention?: string };
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
-    /** Static `limits` literal → `workflows[].limits`. */
+    /** Static `limits` literal → `exports.<Class>.limits`. */
     limits?: { steps?: number };
 
     /**
-     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
      * name (`orderPipeline` → `order-pipeline`); a static `name:` literal in the
      * definition overrides it.
      */
     name: string;
 
     /**
-     * Static `schedules` cron literals → `workflows[].schedules`. Each one
+     * Static `schedules` cron literals → `exports.<Class>.schedules`. Each one
      * starts an instance on Cloudflare; gated by the `workflowSchedules`
      * capability, since a host that ignores them would never run the workflow.
      */
@@ -661,15 +659,13 @@ export interface WorkflowIR {
  * the config layer can never disagree.
  */
 export interface AgentIR {
-    /** The Cloudflare `Workflow` binding name, e.g. `AGENT_SUPPORT`. */
-    bindingName: string;
-    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow`. */
+    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow` — also its `exports` key and `ctx.exports` property. */
     className: string;
     /** The `lunora/agents.ts` export name, e.g. `support`. */
     exportName: string;
 
     /**
-     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
      * name (`support` → `agent-support`); a static `name:` literal in the
      * definition overrides it.
      */

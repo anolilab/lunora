@@ -4,7 +4,6 @@ import { emitFunctions } from "../src/emit";
 import type { AgentIR, FunctionIR } from "../src/ir";
 
 const SUPPORT_AGENT: AgentIR = {
-    bindingName: "AGENT_SUPPORT",
     className: "SupportAgentWorkflow",
     exportName: "support",
     name: "agent-support",

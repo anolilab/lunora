@@ -69,7 +69,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
  * carrying its `WORKFLOW_*` binding and — via the definition's phantom
  * `__params` — its `params` type, so a `cronJobs()` registration that targets it
  * infers the args. Each `lunora/agents.ts` export becomes an `agents.<name>`
- * reference carrying its `AGENT_*` binding (an agent compiles onto a Cloudflare
+ * reference carrying its export key (an agent compiles onto a Cloudflare
  * Workflow, so it IS a workflow reference structurally) typed with the flat
  * `AgentRunInput`, so `crons.daily("sweep", …, agents.support, { input,
  * threadKey })` starts a fresh agent run per fire.
@@ -121,7 +121,7 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
         const objectMembers = sorted
             .map(
                 (workflow) =>
-                    `    ${renderObjectKey(workflow.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
+                    `    ${renderObjectKey(workflow.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.className)}, name: ${JSON.stringify(workflow.exportName)} },`,
             )
             .join("\n");
 
@@ -144,7 +144,7 @@ ${objectMembers}
         const objectMembers = sorted
             .map(
                 (agent) =>
-                    `    ${renderObjectKey(agent.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.bindingName)}, name: ${JSON.stringify(agent.name)} },`,
+                    `    ${renderObjectKey(agent.exportName)}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.className)}, name: ${JSON.stringify(agent.name)} },`,
             )
             .join("\n");
 

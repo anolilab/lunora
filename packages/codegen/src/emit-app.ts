@@ -12,7 +12,7 @@ interface EmitAppOptions {
      * `@lunora/agent/inbound`), so received mail starts a durable run. Empty/absent
      * ⇒ no wiring, byte-identical output for email-free (and agent-free) projects.
      */
-    emailAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
@@ -1625,7 +1625,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const emailAgentsBlock =
         emailAgents.length > 0
             ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.bindingName)} },`).join("\n")}
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.className)} },`).join("\n")}
         ]);
 
 `

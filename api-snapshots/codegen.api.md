@@ -19,7 +19,6 @@ const AGENTS_FILENAME = "agents.ts";
 
 ```ts
 interface AgentIR {
-    bindingName: string;
     className: string;
     exportName: string;
     name: string;
@@ -225,7 +224,7 @@ type DriftScope = "schema" | "table";
 ```ts
 interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{
-        bindingName: string;
+        className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
@@ -1012,7 +1011,6 @@ const WORKFLOWS_FILENAME = "workflows.ts";
 
 ```ts
 interface WorkflowIR {
-    bindingName: string;
     className: string;
     defaultRetention?: {
         errorRetention?: string;

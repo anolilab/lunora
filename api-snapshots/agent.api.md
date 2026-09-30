@@ -404,10 +404,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `agentBindingName` (const)
-
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
 ### `agentClassName` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -548,7 +544,11 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `InboundChannelHandler` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type InboundChannelHandler = (request: Request, env: Record<string, unknown>, context?: {
+    exports?: unknown;
+}) => Promise<Response>;
+```
 
 ### `dispatchAgentChannel` (const)
 
@@ -611,10 +611,6 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/agent/naming`
-
-### `agentBindingName` (const)
-
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `agentClassName` (const)
 

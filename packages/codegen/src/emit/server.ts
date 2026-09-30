@@ -200,20 +200,10 @@ const emitServer = ({
 
             return `    /** Durable Object namespace for the \`${container.exportName}\` container. */\n    readonly ${container.bindingName}?: unknown;`;
         }),
-        ...workflows.map((workflow) => {
-            assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${workflow.exportName}\` workflow. */\n    readonly ${workflow.bindingName}?: unknown;`;
-        }),
         ...queues.map((queue) => {
             assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
 
             return `    /** Queue producer binding for the \`${queue.exportName}\` queue. */\n    readonly ${queue.bindingName}?: unknown;`;
-        }),
-        ...agents.map((agent) => {
-            assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${agent.exportName}\` agent. */\n    readonly ${agent.bindingName}?: unknown;`;
         }),
     ].join("\n");
     const envBlock = `

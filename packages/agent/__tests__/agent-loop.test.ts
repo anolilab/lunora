@@ -1146,7 +1146,7 @@ describe(runAgentLoop, () => {
 
         runtime.threads.set("thread-1", { agent: "support", instanceId: "wf-old", key: "thread-1", messageCount: 3, status: "running" });
 
-        // The loop resolves AGENT_SUPPORT off env to terminate the prior instance.
+        // The loop resolves SupportAgentWorkflow off env to terminate the prior instance.
         const binding = {
             create: async () => {
                 return { id: "unused" };
@@ -1165,7 +1165,7 @@ describe(runAgentLoop, () => {
 
         const result = await runAgentLoop(
             loopDefaults(agent, {
-                env: { AGENT_SUPPORT: binding, LUNORA_TEST: true },
+                env: { SupportAgentWorkflow: binding, LUNORA_TEST: true },
                 generate: scriptedGenerate([finalTurn("took over")]),
                 instanceId: "wf-new",
                 run: runtime.run,

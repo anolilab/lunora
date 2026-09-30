@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader } from "../../../shared/identity-header";
 import { defineAgent } from "../src/define-agent";
-import { agentBindingName, voiceBindingName, voiceClassName } from "../src/naming";
+import { agentClassName, voiceBindingName, voiceClassName } from "../src/naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentFunctionReference, AgentMessageRow, AgentRunFunction, AgentStreamGenerate } from "../src/types";
 import type { VoiceServerFrame, VoiceSynthesize } from "../src/voice-turn";
@@ -65,7 +65,7 @@ describe("voice naming", () => {
         expect(voiceBindingName("supportBot")).toBe("VOICE_SUPPORT_BOT");
         expect(voiceClassName("support")).toBe("SupportVoiceDO");
         // The voice DO name must never collide with the agent's WorkflowEntrypoint.
-        expect(voiceBindingName("support")).not.toBe(agentBindingName("support"));
+        expect(voiceBindingName("support")).not.toBe(agentClassName("support"));
     });
 });
 

@@ -523,6 +523,14 @@ export interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly event: WorkflowEventLike<Params>;
 
     /**
+     * The invoking context's `ctx.exports` — where Cloudflare exposes the
+     * workflows (and agents) declared in wrangler `exports`, keyed by class name.
+     * Absent on a host that binds them on `env` instead. A body that resolves a
+     * sibling workflow itself (as `@lunora/agent` does) reads both.
+     */
+    readonly exports?: unknown;
+
+    /**
      * The `fetch` the host injected for this run, if it injected one — absent on
      * a host that relies on the runtime's global.
      *
@@ -558,7 +566,7 @@ export type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> 
 export interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
     /**
      * How long finished instances keep their state and logs unless `create({
-     * retention })` says otherwise — written to `workflows[].default_retention`.
+     * retention })` says otherwise — written to `exports.<Class>.default_retention`.
      * Durations are Cloudflare's (`"3 days"`, `"12 hours"`); the plan's maximum
      * applies (30 days on Workers Paid, 3 on Free).
      */
@@ -568,24 +576,24 @@ export interface WorkflowConfig<Params = Record<string, unknown>, Output = unkno
     handler: WorkflowHandler<Params, Output>;
 
     /**
-     * Per-instance limits, written to `workflows[].limits`. `steps` raises (or
+     * Per-instance limits, written to `exports.<Class>.limits`. `steps` raises (or
      * lowers) the cap on steps one instance may execute — 10,000 by default,
      * up to 25,000.
      */
     limits?: { steps?: number };
 
     /**
-     * Optional override for the deployed workflow name — the `workflows[].name`
+     * Optional override for the deployed workflow name — the `exports.<Class>.name`
      * written to `wrangler.jsonc`. Defaults to a kebab-cased form of the
      * `lunora/workflows.ts` export name (`orderPipeline` → `order-pipeline`).
-     * This does NOT change the binding name, which is always derived from the
-     * export name (`orderPipeline` → `WORKFLOW_ORDER_PIPELINE`).
+     * This does NOT change the export key, which is always the generated class
+     * name derived from the export name (`orderPipeline` → `OrderPipelineWorkflow`).
      */
     name?: string;
 
     /**
      * Cron expressions that each start a new instance with no params — written
-     * to `workflows[].schedules`, so no separate `scheduled()` handler is
+     * to `exports.<Class>.schedules`, so no separate `scheduled()` handler is
      * needed. Five-field Cloudflare cron syntax (`"0 * * * *"`).
      *
      * Deploy configuration: codegen reads these statically, so each entry must
@@ -659,8 +667,8 @@ export interface Workflows {
 export interface LunoraWorkflowsOptions {
     /**
      * Map of `lunora/workflows.ts` export name → its Cloudflare `Workflow`
-     * binding. Codegen builds this from `env` (`{ orderPipeline:
-     * env.WORKFLOW_ORDER_PIPELINE }`); for manual wiring construct it yourself.
+     * binding. Codegen builds this from `ctx.exports` (`{ orderPipeline:
+     * ctx.exports.OrderPipelineWorkflow }`); for manual wiring construct it yourself.
      */
     bindings: Record<string, WorkflowBindingLike>;
 }

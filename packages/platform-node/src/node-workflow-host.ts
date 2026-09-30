@@ -1,6 +1,7 @@
 /**
  * `createNodeWorkflowHost` — the Node implementation of the `@lunora/workflow`
- * binding surface (`WorkflowBindingLike` + the derived `WORKFLOW_*` env), backed
+ * binding surface (`WorkflowBindingLike`, bound on the derived env under each
+ * workflow's export key — its generated class name), backed
  * by the `@visulima/workflow` engine (`createRuntime`).
  *
  * # How the seam maps
@@ -73,7 +74,7 @@ import type {
     WorkflowStepLike,
     WorkflowStepRollbackOptionsLike,
 } from "@lunora/workflow";
-import { createWorkflowRunContext, isWorkflowDefinition, workflowBindingName, workflowDefaultName } from "@lunora/workflow";
+import { createWorkflowRunContext, isWorkflowDefinition, workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { RunContext, RunStatus, WorkflowRuntime, WorkflowStore } from "@visulima/workflow";
 import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visulima/workflow";
 
@@ -482,7 +483,7 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
 
 /** Options for {@link createNodeWorkflowHost}. */
 interface NodeWorkflowHostOptions<Workflows extends Record<string, { isLunoraWorkflow: true }>> {
-    /** Base env merged under the derived `WORKFLOW_*` bindings — surfaced to workflow bodies as `ctx.env` and used to resolve spawned children. */
+    /** Base env merged under the derived workflow bindings — surfaced to workflow bodies as `ctx.env` and used to resolve spawned children. */
     env?: Record<string, unknown>;
     /** How long (ms) the engine holds a cross-process lease while an activation runs, for stores that implement `acquire`. Defaults to 30000. */
     leaseTtlMs?: number;
@@ -498,7 +499,8 @@ interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: 
     readonly bindings: { [K in keyof Workflows]: WorkflowBindingLike };
 
     /**
-     * The caller's `env` plus one `WORKFLOW_&lt;EXPORT>` binding per workflow —
+     * The caller's `env` plus one binding per workflow under its class name
+     * (`OrderPipelineWorkflow`), the key `ctx.exports` would carry on Cloudflare —
      * merge this into a worker env so `ctx.spawn`/`ctx.parallel` resolve
      * children through the same runtime.
      */
@@ -509,7 +511,7 @@ interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: 
 
 /**
  * Create a Node workflow host: compile every declared Lunora workflow onto the
- * visulima engine, derive the `WORKFLOW_*` env, and expose the per-workflow
+ * visulima engine, derive the workflow env, and expose the per-workflow
  * `WorkflowBindingLike` handles.
  */
 const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkflow: true }>>(
@@ -839,7 +841,7 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         };
 
         bindings[exportName] = binding;
-        env[workflowBindingName(exportName)] = binding;
+        env[workflowClassName(exportName)] = binding;
     }
 
     return { bindings: bindings as NodeWorkflowHost<Workflows>["bindings"], env, runtime };

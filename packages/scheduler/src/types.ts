@@ -184,7 +184,7 @@ export interface ScheduleRecord {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * The workflow/agent export key (its generated class name) to start a fresh durable instance
      * of on fire (the {@link ScheduleRecord.args} become its `params`). Set
      * instead of {@link ScheduleRecord.functionPath} when the job targets a
      * workflow/agent {@link WorkflowReference}. The runtime — not the DO — owns

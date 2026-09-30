@@ -264,6 +264,7 @@ import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
@@ -634,6 +635,13 @@ interface ShardDOState {
      * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Loopback bindings to the Worker's own top-level exports (`ctx.exports`) —
+     * where Cloudflare exposes the workflows and agents declared in wrangler
+     * `exports`, keyed by class name. Absent off Cloudflare.
+     */
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
 
     /**
@@ -9160,12 +9168,14 @@ abstract class ShardDO {
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
 
     /**
-     * Resolve a declared workflow's runtime binding handle from this shard's `env`.
-     * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
-     * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
-     * reads `env[binding]` and validates it carries the `create`/`get` methods. A
-     * bad export name or a missing/malformed binding throws a 400 `LunoraError` so
-     * the studio surfaces an actionable message instead of a generic 500.
+     * Resolve a declared workflow's runtime binding handle. Looks the
+     * `exportName` up in {@link workflowsMetadata} (the codegen subclass's
+     * statically-discovered list) to find its export key (the generated class
+     * name), then reads it off this shard's `ctx.exports` — or `env`, on a host
+     * without workflow exports — and validates it carries the `create`/`get`
+     * methods. A bad export name or a missing/malformed binding throws a 400
+     * `LunoraError` so the studio surfaces an actionable message instead of a
+     * generic 500.
      */
     private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
@@ -9174,7 +9184,7 @@ abstract class ShardDO {
             throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
-        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+        const binding = resolveWorkflowBinding(this.env, this.state.exports, metadata.binding);
 
         if (
             typeof binding !== "object" ||
@@ -9190,7 +9200,7 @@ abstract class ShardDO {
 
     /**
      * Serve `__lunora_admin__:createWorkflowInstance` — the studio's "Start
-     * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
+     * instance" button. Resolves the declared workflow's binding and
      * calls `.create({ id?, params })`, returning the new instance's id and initial
      * status. No SQLite write happens (workflows are not Durable Objects and hold
      * no shard state), so this only records an audit entry — there's nothing to

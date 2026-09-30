@@ -444,7 +444,7 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
 
 /**
  * Each `defineWorkflow` deploy setting as a leaf path inside a wrangler
- * `workflows[]` entry, with the value the declaration gives it. Leaves rather
+ * `exports.<Class>` entry, with the value the declaration gives it. Leaves rather
  * than whole blocks, so a `limits` block that also carries a hand-set key keeps
  * it, and so a setting is written or reported one field at a time.
  */
@@ -454,15 +454,6 @@ const workflowSettingLeaves = (workflow: InferredWorkflow): ReadonlyArray<{ path
     { path: ["default_retention", "success_retention"], value: workflow.defaultRetention?.successRetention },
     { path: ["default_retention", "error_retention"], value: workflow.defaultRetention?.errorRetention },
 ];
-
-/**
- * Render one wrangler `workflows[]` entry from an inferred workflow or agent —
- * an agent compiles onto a Cloudflare Workflow, so its wrangler footprint is
- * identical: a `{ binding, class_name, name }` entry in the same array. Pure.
- */
-const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<string, unknown> => {
-    return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
-};
 
 /** The deploy settings a `defineWorkflow` declares, in wrangler's spelling — merged onto a new entry. Pure. */
 const workflowSettingsFor = (workflow: InferredWorkflow): Record<string, unknown> => {
@@ -481,34 +472,53 @@ const workflowSettingsFor = (workflow: InferredWorkflow): Record<string, unknown
     return settings;
 };
 
+/** The settings a wrangler `workflows[]` binding carries that a workflow export accepts too. */
+const BINDING_SETTING_KEYS = ["default_retention", "limits", "schedules"] as const;
+
 /**
- * Bring each EXISTING `workflows[]` entry a `defineWorkflow` export generates in
- * line with the settings it declares: a declared leaf that differs is written
- * at its own path (so comments elsewhere in the entry survive). A leaf the
- * export does not declare but the entry carries is left alone and reported:
- * without an ownership record, a setting since removed from `defineWorkflow`
- * and one set by hand look the same, and deleting the second is the worse
- * mistake — but a stale `schedules` keeps starting instances, so it is named.
+ * Render one wrangler `exports.<Class>` entry from an inferred workflow or agent
+ * — an agent compiles onto a Cloudflare Workflow, so its footprint is identical.
+ * `carried` holds settings a replaced `workflows[]` binding had set by hand,
+ * kept so the move changes where the workflow is declared and nothing else;
+ * the declaration's own settings win over them. Pure.
  */
-const retuneWorkflows = (
+const workflowExportFor = (
+    workflow: InferredAgent | InferredWorkflow,
+    settings: Record<string, unknown>,
+    carried: Record<string, unknown>,
+): Record<string, unknown> => {
+    return { type: "workflow", name: workflow.name, ...carried, ...settings };
+};
+
+/**
+ * Bring each EXISTING `exports.<Class>` workflow entry a `defineWorkflow` export
+ * generates in line with the settings it declares: a declared leaf that differs
+ * is written at its own path (so comments elsewhere in the entry survive). A
+ * leaf the export does not declare but the entry carries is left alone and
+ * reported: without an ownership record, a setting since removed from
+ * `defineWorkflow` and one set by hand look the same, and deleting the second is
+ * the worse mistake — but a stale `schedules` keeps starting instances, so it is
+ * named.
+ */
+const retuneWorkflowExports = (
     text: string,
-    existing: NonNullable<WranglerShape["workflows"]>,
+    exported: NonNullable<WranglerShape["exports"]>,
     workflows: ReadonlyArray<InferredWorkflow>,
 ): { text: string; updated: string[]; warnings: string[] } => {
     let nextText = text;
     const updated: string[] = [];
     const warnings: string[] = [];
 
-    for (const [index, entry] of existing.entries()) {
-        const workflow = workflows.find((candidate) => candidate.className === entry.class_name);
+    for (const workflow of workflows) {
+        const entry = exported[workflow.className];
 
-        if (workflow === undefined || entry.script_name !== undefined) {
+        if (entry?.type !== "workflow") {
             continue;
         }
 
         for (const leaf of workflowSettingLeaves(workflow)) {
             const current = settingLeaf(entry, leaf.path);
-            const label = `workflows/${workflow.className}.${leaf.path.join(".")}`;
+            const label = `exports/${workflow.className}.${leaf.path.join(".")}`;
 
             if (leaf.value === undefined) {
                 if (current !== undefined) {
@@ -521,7 +531,7 @@ const retuneWorkflows = (
             }
 
             if (JSON.stringify(current) !== JSON.stringify(leaf.value)) {
-                nextText = applyModify(nextText, ["workflows", index, ...leaf.path], leaf.value);
+                nextText = applyModify(nextText, ["exports", workflow.className, ...leaf.path], leaf.value);
                 updated.push(label);
             }
         }
@@ -531,20 +541,22 @@ const retuneWorkflows = (
 };
 
 /**
- * Add any missing `workflows[]` entries (matched by `class_name`) from both
- * `defineWorkflow` and `defineAgent` exports — an agent compiles onto a
- * Cloudflare Workflow, so both land in the SAME `workflows[]` array, and one
- * step owns that key (the reconcile pipeline's disjoint-key invariant forbids a
- * second step rewriting `workflows[]` off the now-stale `parsed`). Workflows and
- * agents are NOT Durable Objects, so — unlike containers — this writes ONLY the
- * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
- * `observability` toggle. An existing workflow entry has its declared deploy
- * settings brought in line by {@link retuneWorkflows}.
+ * Declare every `defineWorkflow` and `defineAgent` export as a wrangler
+ * `exports.<Class>` workflow (`{ type: "workflow", name, …settings }`), which the
+ * runtime reaches through `ctx.exports.<Class>` — no `workflows[]` binding. One
+ * step owns both keys (the reconcile pipeline's disjoint-key invariant): it
+ * adds the missing export entries (matched by class name), and MOVES a
+ * `workflows[]` binding for a declared class that this worker defines (no
+ * `script_name`) into its export. Cloudflare shares instances between a binding
+ * and an export of the same `name`, so the move keeps every running instance.
+ * Workflows and agents are NOT Durable Objects, so nothing else is written. An
+ * existing export has its declared settings brought in line by
+ * {@link retuneWorkflowExports}.
  *
- * Add-only for ENTRIES: an entry whose `class_name` no declaration generates is
- * left in place and reported by `orphanedEntryWarnings` (`reconcile-warnings.ts`)
- * instead — see there for why removal needs ownership this file cannot
- * establish. Pure.
+ * Add-only for classes nothing declares: an entry whose class no declaration
+ * generates is left in place and reported by `orphanedEntryWarnings`
+ * (`reconcile-warnings.ts`) instead — see there for why removal needs ownership
+ * this file cannot establish. Pure.
  */
 const reconcileWorkflows = (
     text: string,
@@ -552,36 +564,47 @@ const reconcileWorkflows = (
     workflows: ReadonlyArray<InferredWorkflow>,
     agents: ReadonlyArray<InferredAgent> = [],
 ): ReconcileStep => {
-    const existing = parsed.workflows ?? [];
-    const existingClasses = new Set(existing.map((entry) => entry.class_name));
-    const missingWorkflows = workflows.filter((workflow) => !existingClasses.has(workflow.className));
-    const missingAgents = agents.filter((agent) => !existingClasses.has(agent.className));
+    // Agents declare no deploy settings; only a `defineWorkflow` contributes any.
+    const declared: ReadonlyArray<{ settings: Record<string, unknown>; workflow: InferredAgent | InferredWorkflow }> = [
+        ...workflows.map((workflow) => {
+            return { settings: workflowSettingsFor(workflow), workflow };
+        }),
+        ...agents.map((agent) => {
+            return { settings: {}, workflow: agent };
+        }),
+    ];
+    const declaredClasses = new Set(declared.map(({ workflow }) => workflow.className));
+    const bindings = parsed.workflows ?? [];
+    const moved = bindings.filter((entry) => entry.script_name === undefined && entry.class_name !== undefined && declaredClasses.has(entry.class_name));
+    const exported = parsed.exports ?? {};
+    const added: string[] = [];
+    const updated: string[] = [];
+    let nextText = text;
 
-    // Append first, retune second: the append rewrites the array from `parsed`,
-    // which would undo a retune written before it, while appending never moves
-    // an existing entry's index.
-    const appended =
-        missingWorkflows.length === 0 && missingAgents.length === 0
-            ? text
-            : applyModify(
-                  text,
-                  ["workflows"],
-                  [
-                      ...existing,
-                      ...missingWorkflows.map((workflow) => {
-                          return { ...workflowEntryFor(workflow), ...workflowSettingsFor(workflow) };
-                      }),
-                      ...missingAgents.map((agent) => workflowEntryFor(agent)),
-                  ],
-              );
-    const retune = retuneWorkflows(appended, existing, workflows);
+    for (const { settings, workflow } of declared) {
+        if (exported[workflow.className] !== undefined && exported[workflow.className] !== null) {
+            continue;
+        }
 
-    return {
-        added: [...missingWorkflows.map((workflow) => `workflows/${workflow.className}`), ...missingAgents.map((agent) => `workflows/${agent.className}`)],
-        text: retune.text,
-        updated: retune.updated,
-        warnings: retune.warnings,
-    };
+        const binding = moved.find((entry) => entry.class_name === workflow.className);
+        const carried = Object.fromEntries(BINDING_SETTING_KEYS.flatMap((key) => (binding?.[key] === undefined ? [] : [[key, binding[key]]])));
+
+        nextText = applyModify(nextText, ["exports", workflow.className], workflowExportFor(workflow, settings, carried));
+        (binding === undefined ? added : updated).push(`exports/${workflow.className}`);
+    }
+
+    // Drop the moved bindings last: rewriting the array from `parsed` never
+    // touches `exports`, and an emptied array goes rather than lingering as `[]`.
+    if (moved.length > 0) {
+        const remaining = bindings.filter((entry) => !moved.includes(entry));
+
+        nextText = applyModify(nextText, ["workflows"], remaining.length === 0 ? undefined : remaining);
+        updated.push(...moved.map((entry) => `workflows/${String(entry.class_name)} → exports`));
+    }
+
+    const retune = retuneWorkflowExports(nextText, exported, workflows);
+
+    return { added, text: retune.text, updated: [...updated, ...retune.updated], warnings: retune.warnings };
 };
 
 /**
@@ -655,7 +678,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // `durable_objects` binding + `new_sqlite_classes` migration, reconciled
     // through the same `reconcileDurableObjects` step as the built-ins and
     // containers. Non-voice agents add nothing here (they only touch
-    // `workflows[]` via `exportedAgents`).
+    // `exports` via `exportedAgents`).
     const voiceAgents = inferred.agents.filter(
         (agent): agent is InferredAgent & { voiceBindingName: string; voiceClassName: string } =>
             agent.exported && agent.voice === true && agent.voiceBindingName !== undefined && agent.voiceClassName !== undefined,
@@ -672,13 +695,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     // Only exported workflow classes are provisionable — wrangler rejects a
     // class_name the worker doesn't export. Workflows are NOT Durable Objects,
-    // so they get their own `workflows[]` step and never touch durable_objects
+    // so they get their own `exports` step and never touch durable_objects
     // / migrations (no `requiredDurableObjects` entry, unlike containers).
     const exportedWorkflows = inferred.workflows.filter((workflow) => workflow.exported);
     // Agents compile onto Cloudflare Workflows, so their exported agent
-    // WorkflowEntrypoint classes reconcile into the SAME `workflows[]` array
-    // (via the single `reconcileWorkflows` step below — see its doc for why one
-    // step must own that key). Same export gate as workflows.
+    // WorkflowEntrypoint classes reconcile into the SAME `exports` map (via the
+    // single `reconcileWorkflows` step below — see its doc for why one step must
+    // own that key). Same export gate as workflows.
     const exportedAgents = inferred.agents.filter((agent) => agent.exported);
 
     // Which queue consumer fields earlier passes wrote, so one taken out of
@@ -692,7 +715,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs workflows). A future step that depends on a key an
+    // observability vs exports + workflows). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (ai/browser/images/analytics) auto-write here;
     // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable

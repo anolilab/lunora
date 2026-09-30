@@ -5,7 +5,7 @@ import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "
 
 const encoder = new TextEncoder();
 
-const NO_BINDING_PATTERN = /no Workflow binding/u;
+const NO_BINDING_PATTERN = /on ctx.exports or env/u;
 const TRANSIENT_FAILURE_PATTERN = /temporarily unavailable/u;
 const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
 const HASHED_SLACK_ID_PATTERN = /^slack-[0-9a-f]{16}$/u;
@@ -178,9 +178,9 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
 
-        const response = await handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret });
 
         expect(response.status).toBe(200);
         expect(created).toStrictEqual([{ input: "hi from slack", owner: "team-42", threadKey: "t-1" }]);
@@ -200,10 +200,10 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
 
         // Signed with the wrong secret.
-        const response = await handler(await slackRequest("WRONG", '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest("WRONG", '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret });
 
         expect(response.status).toBe(401);
         expect(mapped).toBe(false);
@@ -213,9 +213,9 @@ describe(dispatchAgentChannel, () => {
     it("returns 204 when the (verified) event is declined", async () => {
         const { binding, created } = fakeBinding();
         const agent = { onInbound: { channel: "slack" as const, map: () => null, secret: "SLACK_SECRET" } };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
 
-        const response = await handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret });
 
         expect(response.status).toBe(204);
         expect(created).toStrictEqual([]);
@@ -342,8 +342,8 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         const body = JSON.stringify({ event: {}, event_id: "Ev123" });
 
         const first = await handler(await slackRequest(secret, body), env);
@@ -376,8 +376,8 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // 70-char ids sharing their first 60 chars — the old sanitize-then-truncate
         // scheme collapsed these to one key, silently swallowing the second event.
         const shared = "E".repeat(60);
@@ -417,8 +417,8 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         const body = JSON.stringify({ event: {}, event_id: "Ev-transient" });
 
         await expect(handler(await slackRequest(secret, body), env)).rejects.toThrow(TRANSIENT_FAILURE_PATTERN);
@@ -435,8 +435,8 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // An empty (but present) event_id must not collapse every such event to
         // one "slack-" id; the body hash keys it instead.
         const bodyA = JSON.stringify({ event: { ts: "1" }, event_id: "" });
@@ -517,8 +517,8 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // Interactive payloads and slash commands carry no event_id.
         const body = JSON.stringify({ trigger_id: "t-1", type: "block_actions" });
 
@@ -540,17 +540,17 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
 
         const response = await handler(new Request("https://app/webhooks/agent", { body: "{}", method: "POST" }), {
-            AGENT_SUPPORT: binding,
+            SupportAgentWorkflow: binding,
             SLACK_SECRET: secret,
         });
 
         expect(response.status).toBe(400);
     });
 
-    it("throws when a claimed event has no Workflow binding on env", async () => {
+    it("throws when a claimed event has no agent on ctx.exports or env", async () => {
         const agent = {
             onInbound: {
                 channel: "slack" as const,
@@ -581,12 +581,12 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, binding: "SupportAgentWorkflow" }]);
 
         // Verified + claimed, but the mapper's run carries a forged marker — must
         // throw (surfacing as non-2xx so the provider redelivers), never be acked
         // as handled, and never reach `create()`.
-        await expect(handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret })).rejects.toThrow(
+        await expect(handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret })).rejects.toThrow(
             BRANCH_MARKER_PATTERN,
         );
         expect(created).toStrictEqual([]);

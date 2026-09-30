@@ -127,7 +127,7 @@ export interface PlatformCapabilities {
          *
          * Its own key rather than a facet of `workflows` or `ai`, because an
          * agent needs BOTH and neither implies the other: the generated class
-         * compiles onto the host's workflow engine under an `AGENT_*` binding
+         * compiles onto the host's workflow engine as a `ctx.exports.<Class>` workflow
          * the emitted context resolves off `env`, and the loop it runs there
          * calls model inference. A host that emulates workflows but has no
          * inference (or no way to mount a generated class into its engine) can

@@ -3654,7 +3654,6 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 schema: { tables: [], vectorIndexes: [] },
                 workflows: [
                     {
-                        bindingName: "WORKFLOW_ORDER_PIPELINE",
                         className: "OrderPipelineWorkflow",
                         exportName: "orderPipeline",
                         name: "order-pipeline",
@@ -3667,7 +3666,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const LUNORA_WORKFLOWS_INFO = JSON.parse(");
             expect(output).toContain(") as WorkflowsResult;");
             expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
-                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+                workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             });
         });
 
@@ -4634,12 +4633,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     },
                 ],
                 hasAi: true,
-                workflows: [{ bindingName: "WORKFLOW_ORDERS", className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
+                workflows: [{ className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
             });
 
             expect(server).toContain("readonly AI?: unknown;");
             expect(server).toContain("readonly CONTAINER_TRANSCODER?: unknown;");
-            expect(server).toContain("readonly WORKFLOW_ORDERS?: unknown;");
+            expect(server).not.toContain("OrdersWorkflow?: unknown;");
         });
 
         it("wires ctx.kv onto EVERY ctx (a KV read is allowed in deterministic handlers)", () => {

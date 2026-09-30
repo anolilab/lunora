@@ -31,6 +31,12 @@ export interface ExecutionContextLike {
     cache?: {
         purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown>;
     };
+    /**
+     * Loopback bindings to the Worker's own top-level exports — where Cloudflare
+     * exposes the workflows and agents declared in wrangler `exports`, keyed by
+     * class name (see `shared/workflow-binding.ts`).
+     */
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }

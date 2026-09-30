@@ -89,7 +89,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
 
         if (isWorkflowReference(target)) {
             // A workflow/agent target starts a fresh durable instance on fire; carry
-            // its `WORKFLOW_*`/`AGENT_*` binding so the runtime can `create()` it.
+            // its export key (the generated class name) so the runtime can `create()` it.
             if (typeof target.binding !== "string" || target.binding.length === 0) {
                 throw new LunoraError(
                     "INTERNAL",

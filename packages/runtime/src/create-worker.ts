@@ -28,6 +28,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -605,7 +606,8 @@ interface CronJobDispatch {
 
     /**
      * Set when the job targets a durable workflow instead of a function: the
-     * `WORKFLOW_*` binding name on `env`. On a firing trigger the worker starts a
+     * workflow's export key (its generated class name), resolved off the Worker's
+     * `ctx.exports` or `env`. On a firing trigger the worker starts a
      * NEW workflow instance (the {@link CronJobDispatch.args} become its
      * `params`) rather than dispatching {@link CronJobDispatch.functionPath} to a
      * shard. Mutually exclusive with `functionPath`.
@@ -635,7 +637,7 @@ interface CronJobInfo {
     functionPath?: string;
     name: string;
     shardKey?: string;
-    /** The `WORKFLOW_*` binding name when the job starts a durable workflow instead of a function. */
+    /** The workflow's export key (its generated class name) when the job starts a durable workflow instead of a function. */
     workflow?: string;
 }
 
@@ -3288,11 +3290,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * previous attempt's create already landed. Every other rejection propagates,
      * so the record stays retryable.
      */
-    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string, instanceId?: string): Promise<void> => {
-        const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
+    const startWorkflowInstance = async (
+        binding: string,
+        args: Record<string, unknown>,
+        source: { context?: ExecutionContextLike; env: unknown },
+        label: string,
+        instanceId?: string,
+    ): Promise<void> => {
+        const candidate = resolveWorkflowBinding(source.env, source.context?.exports, binding);
 
         if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
-            throw new LunoraError(`${label} targets workflow binding "${binding}", which is not bound on env`, {
+            throw new LunoraError(`${label} targets workflow "${binding}", which is on neither ctx.exports nor env`, {
                 code: "CRON_JOB_FAILED",
                 status: 500,
             });
@@ -3325,9 +3333,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown, traceparent?: string): Promise<void> => {
+    const runOneCronJob = async (job: CronJobDispatch, env: unknown, context: ExecutionContextLike | undefined, traceparent?: string): Promise<void> => {
         if (job.workflow) {
-            await startWorkflowInstance(job.workflow, job.args ?? {}, env, `cron job "${job.name}"`);
+            await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
             return;
         }
@@ -3388,7 +3396,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
-    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error, traceparent?: string): Promise<number> => {
+    const runCronJobs = async (
+        cron: string,
+        env: unknown,
+        context: ExecutionContextLike,
+        errors: Error[],
+        toError: (error: unknown) => Error,
+        traceparent?: string,
+    ): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
         if (!cronJobs) {
@@ -3398,7 +3413,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         for (const job of cronJobs) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
-                await runOneCronJob(job, env, traceparent);
+                await runOneCronJob(job, env, context, traceparent);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
@@ -3414,7 +3429,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * once, and reports success or the dispatch error. Admin-gated like the other
      * `/_lunora/admin/*` mutations.
      */
-    const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
+    const handleRunCronJob = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         assertAdminAuthorized(request);
 
         assertMethod(request, "POST", "cron-jobs run");
@@ -3438,7 +3453,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
         }
 
-        await runOneCronJob(job, env);
+        await runOneCronJob(job, env, context);
 
         return Response.json({ name, ran: true }, { status: 200 });
     };
@@ -3496,7 +3511,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * gate judges end-user callers and does not run here (see
      * {@link WorkerOptions.authorizeShard}).
      */
-    const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
+    const handleSchedulerDispatch = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         assertMethod(request, "POST", "Scheduler dispatch");
 
         // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
@@ -3561,7 +3576,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // A workflow/agent target starts a durable instance (the args become its
         // `params`) rather than dispatching a function to a shard — the
-        // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
+        // workflow/agent is reached off the Worker's `ctx.exports` (or `env`), not the DO.
         // The record id becomes the INSTANCE id, so a re-fire attaches to the
         // running instance instead of starting a second one; the function path
         // below spends the same id as the shard's replay-dedup `mutationId`.
@@ -3579,7 +3594,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // as a string. The wire form IS JSON-safe, so it travels intact and
             // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
             // handler reads `params`.
-            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
+            await startWorkflowInstance(candidate.workflow, args, { context, env }, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 
@@ -5322,7 +5337,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. `env` carries the
         // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
-        const ranJobs = await runCronJobs(controller.cron, env, errors, toError, traceparent);
+        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {
@@ -5526,8 +5541,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
-        [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
-        [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
+        [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
+        [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),
         // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
         // admin bearer (header) / `adminGate`; the studio then sends the minted
         // token — not the master credential — in the WS `?token=`

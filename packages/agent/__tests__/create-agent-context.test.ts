@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import createAgentContext from "../src/create-agent-context";
 import type { AgentFunctionReference, AgentRunInput } from "../src/types";
 
-const MISSING_BINDING_PATTERN = /AGENT_SUPPORT/u;
+const MISSING_BINDING_PATTERN = /SupportAgentWorkflow/u;
 const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
 
 const fakeBinding = (): {
@@ -48,7 +48,7 @@ const fakeBinding = (): {
 describe(createAgentContext, () => {
     it("starts a run through the agent's Workflow binding", async () => {
         const { binding, createCalls } = fakeBinding();
-        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ binding: "SupportAgentWorkflow", exportName: "support" }]);
 
         const handle = await agents["support"]!.run({ input: "hello", threadKey: "t-1", title: "Support" });
 
@@ -56,9 +56,20 @@ describe(createAgentContext, () => {
         expect(createCalls).toStrictEqual([{ params: { input: "hello", threadKey: "t-1", title: "Support" } }]);
     });
 
+    it("resolves the agent off ctx.exports first, where Cloudflare exposes exported agents", async () => {
+        const exported = fakeBinding();
+        const agents = createAgentContext({}, [{ binding: "SupportAgentWorkflow", exportName: "support" }], {
+            exports: { SupportAgentWorkflow: exported.binding },
+        });
+
+        await agents["support"]!.run({ input: "hi", threadKey: "t-1" });
+
+        expect(exported.createCalls).toHaveLength(1);
+    });
+
     it("forwards an explicit instance id and reads status", async () => {
         const { binding, statusCalls } = fakeBinding();
-        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ binding: "SupportAgentWorkflow", exportName: "support" }]);
 
         const handle = await agents["support"]!.run({ input: "hi", threadKey: "t-1" }, { id: "run-42" });
 
@@ -70,14 +81,14 @@ describe(createAgentContext, () => {
     });
 
     it("throws a directed error when the binding is missing", async () => {
-        const agents = createAgentContext({}, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
+        const agents = createAgentContext({}, [{ binding: "SupportAgentWorkflow", exportName: "support" }]);
 
         await expect(agents["support"]!.run({ input: "hi", threadKey: "t-1" })).rejects.toThrow(MISSING_BINDING_PATTERN);
     });
 
     it("rejects run() input carrying the reserved branch-marker key, and never calls create()", async () => {
         const { binding, createCalls } = fakeBinding();
-        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }]);
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ binding: "SupportAgentWorkflow", exportName: "support" }]);
 
         // Reachable from the public `agents:agentRun` mutation when `publicRun:
         // true` — a forged marker must be rejected before it ever reaches create().
@@ -101,7 +112,7 @@ describe(createAgentContext, () => {
             return undefined;
         };
 
-        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }], dispatch);
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ binding: "SupportAgentWorkflow", exportName: "support" }], { dispatch });
 
         await agents["support"]!.cancel("run-7");
 
@@ -117,7 +128,7 @@ describe(createAgentContext, () => {
             throw new Error("dispatch unavailable");
         };
 
-        const agents = createAgentContext({ AGENT_SUPPORT: binding }, [{ binding: "AGENT_SUPPORT", exportName: "support" }], dispatch);
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ binding: "SupportAgentWorkflow", exportName: "support" }], { dispatch });
 
         await expect(agents["support"]!.cancel("run-9")).resolves.toBeUndefined();
         expect(terminateCalls).toStrictEqual(["run-9"]);

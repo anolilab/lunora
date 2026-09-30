@@ -359,7 +359,7 @@ const validateRequiredFieldEntries = (value: unknown, labelPrefix: string, rule:
 const WORKFLOWS_RULE: RequiredFieldsRule = {
     arrayMessage: "workflows must be an array of { name, binding, class_name } entries",
     fields: [
-        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)` },
+        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. MY_WORKFLOW)` },
         { field: "class_name", message: (label) => `${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class` },
         { field: "name", message: (label) => `${label} must have a non-empty "name" naming the deployed workflow` },
     ],

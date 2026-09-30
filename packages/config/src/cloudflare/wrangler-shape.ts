@@ -56,6 +56,15 @@ interface QueuesShape {
     producers?: ReadonlyArray<QueueProducerEntry>;
 }
 
+/** A wrangler `exports.<Class>` entry — only `type: "workflow"` ones are Lunora's to write. */
+interface ExportEntry {
+    default_retention?: unknown;
+    limits?: unknown;
+    name?: string;
+    schedules?: unknown;
+    type?: string;
+}
+
 interface WranglerShape {
     ai?: { binding?: string };
     // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
@@ -68,6 +77,7 @@ interface WranglerShape {
     // Presence-only: read here just to tell whether a requested `--env <name>`
     // is declared at all, for the advisory warning below. Never written into.
     env?: Record<string, unknown>;
+    exports?: Record<string, ExportEntry | null | undefined>;
     // Hint-only: the `app_id` is a remote Flagship app Lunora can't mint — warned, never written.
     flagship?: ReadonlyArray<{ app_id?: string; binding?: string }>;
     // Hint-only: the `id` is a remote Hyperdrive resource Lunora can't mint — warned, never written.

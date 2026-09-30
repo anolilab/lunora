@@ -17,9 +17,11 @@
  * suite and `@lunora/dispatch`'s own tests.
  */
 import { env, introspectWorkflowInstance } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_KEY } from "../../../../shared/branch-marker";
+import { createWorkflowContext } from "../../src/create-workflow-context";
 import createWorkflows from "../../src/create-workflows";
 import type { WorkflowBindingLike } from "../../src/types";
 import type { SmokeParams } from "./test-worker";
@@ -47,6 +49,25 @@ describe("@lunora/workflow (workerd)", () => {
             await expect(instance.waitForStepResult({ name: "load" })).resolves.toBe("order:42");
             await expect(instance.waitForStepResult({ name: "charge" })).resolves.toBe("order:42:charged");
             await expect(instance.getOutput()).resolves.toEqual({ charged: "order:42:charged", loaded: "order:42" });
+        } finally {
+            await instance.dispose();
+        }
+    });
+
+    it("resolves a workflow declared in wrangler exports through ctx.exports, keyed by class", async () => {
+        expect.hasAssertions();
+
+        const id = "smoke-exports-1";
+        const instance = await introspectWorkflowInstance(env.WORKFLOW_SMOKE, id);
+
+        try {
+            // No env binding under the class name: only `ctx.exports` can supply it.
+            const viaExports = createWorkflowContext({}, [{ binding: "SmokeWorkflow", exportName: "smokeWorkflow" }], exports);
+
+            await viaExports.get<SmokeParams>("smokeWorkflow").create({ id, params: { orderId: "7" } });
+            await instance.waitForStatus("complete");
+
+            await expect(instance.getOutput()).resolves.toEqual({ charged: "order:7:charged", loaded: "order:7" });
         } finally {
             await instance.dispose();
         }

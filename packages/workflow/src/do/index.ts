@@ -61,6 +61,7 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
 
         const context = createWorkflowRunContext<Params>({
             env: this.env,
+            exports: this.ctx.exports,
             event: handlerEvent,
             exportName: this.#lunoraName,
             nonRetryableErrorClass: NonRetryableError,
@@ -78,7 +79,7 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
             // failure (`signalBranchParentSafe`) so a broken parent signal never
             // replaces the handler's real error nor skips the conversion below.
             if (marker) {
-                await signalBranchParentSafe({ env: this.env, log: context.log, step: nativeStep }, marker, errorOutcome(error));
+                await signalBranchParentSafe({ env: this.env, exports: this.ctx.exports, log: context.log, step: nativeStep }, marker, errorOutcome(error));
             }
 
             // Convert a portable `NonRetryableError` thrown outside a step (in
@@ -92,7 +93,7 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         // join resolves this branch's slot. Swallowed on failure so a broken parent
         // signal never marks a successfully-completed child instance as errored.
         if (marker) {
-            await signalBranchParentSafe({ env: this.env, log: context.log, step: nativeStep }, marker, okOutcome(output));
+            await signalBranchParentSafe({ env: this.env, exports: this.ctx.exports, log: context.log, step: nativeStep }, marker, okOutcome(output));
         }
 
         return output;

@@ -42,13 +42,13 @@ const fakeBinding = (): WorkflowBindingLike => {
 };
 
 describe("createWorkflowContext", () => {
-    it("resolves declared workflows from env by their binding name", async () => {
+    it("resolves declared workflows by their export key off env (a non-Cloudflare host)", async () => {
         expect.assertions(2);
 
         const binding = fakeBinding();
-        const env = { WORKFLOW_ORDER_PIPELINE: binding };
+        const env = { OrderPipelineWorkflow: binding };
 
-        const workflows = createWorkflowContext(env, [{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" }]);
+        const workflows = createWorkflowContext(env, [{ binding: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
 
         const created = await workflows.get("orderPipeline").create({ params: { orderId: "o1" } });
 
@@ -56,10 +56,26 @@ describe("createWorkflowContext", () => {
         expect(binding.create).toHaveBeenCalledWith({ params: { orderId: "o1" } });
     });
 
-    it("skips specs whose binding is missing from env, erroring lazily on use", () => {
+    it("prefers the invoking context's ctx.exports, where Cloudflare exposes exported workflows", async () => {
+        expect.assertions(2);
+
+        const exported = fakeBinding();
+        const stale = fakeBinding();
+
+        const workflows = createWorkflowContext({ OrderPipelineWorkflow: stale }, [{ binding: "OrderPipelineWorkflow", exportName: "orderPipeline" }], {
+            OrderPipelineWorkflow: exported,
+        });
+
+        await workflows.get("orderPipeline").create({ params: {} });
+
+        expect(exported.create).toHaveBeenCalledTimes(1);
+        expect(stale.create).not.toHaveBeenCalled();
+    });
+
+    it("skips specs whose workflow is missing from exports and env, erroring lazily on use", () => {
         expect.assertions(1);
 
-        const workflows = createWorkflowContext({}, [{ binding: "WORKFLOW_ETL", exportName: "etl" }]);
+        const workflows = createWorkflowContext({}, [{ binding: "EtlWorkflow", exportName: "etl" }]);
 
         expect(() => workflows.get("etl")).toThrow(/no workflows are declared/);
     });
@@ -67,9 +83,9 @@ describe("createWorkflowContext", () => {
     it("ignores env values that are not Workflow bindings", () => {
         expect.assertions(1);
 
-        const env = { WORKFLOW_ETL: { create: 123 } };
+        const env = { EtlWorkflow: { create: 123 } };
 
-        const workflows = createWorkflowContext(env, [{ binding: "WORKFLOW_ETL", exportName: "etl" }]);
+        const workflows = createWorkflowContext(env, [{ binding: "EtlWorkflow", exportName: "etl" }]);
 
         expect(() => workflows.get("etl")).toThrow(/no workflows are declared/);
     });

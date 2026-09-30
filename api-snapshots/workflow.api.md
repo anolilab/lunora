@@ -466,6 +466,7 @@ type WorkflowRollbackHandlerLike<T = unknown> = (context: WorkflowRollbackContex
 interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly env: Record<string, unknown>;
     readonly event: WorkflowEventLike<Params>;
+    readonly exports?: unknown;
     readonly fetchImpl?: typeof fetch;
     readonly log: WorkflowLogger;
     readonly parallel: WorkflowParallelFunction;
@@ -674,7 +675,7 @@ const createWaitForEvent: (deps: WaitForEventDeps) => WorkflowWaitForEventFuncti
 ### `createWorkflowContext` (const)
 
 ```ts
-const createWorkflowContext: (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>) => Workflows;
+const createWorkflowContext: (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>, exports?: unknown) => Workflows;
 ```
 
 ### `createWorkflowRunContext` (const)
@@ -755,12 +756,6 @@ const toNativeNonRetryableError: (error: NonRetryableError, NativeNonRetryableEr
 const validateStepArgs: (validators: StepArgsValidator, source: Record<string, unknown>) => Record<string, unknown>;
 ```
 
-### `workflowBindingName` (const)
-
-```ts
-const workflowBindingName: (exportName: string) => string;
-```
-
 ### `workflowClassName` (const)
 
 ```ts
@@ -796,6 +791,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
+    exports?: unknown;
     event: WorkflowEventLike<Params>;
     exportName: string;
     fetchImpl?: typeof fetch;

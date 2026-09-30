@@ -542,10 +542,6 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Duplicate cron job name";
     };
-    readonly DUPLICATE_AGENT_BINDING: {
-        readonly status: 500;
-        readonly title: "Duplicate agent binding";
-    };
     readonly DUPLICATE_AGENT_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate agent generated class name";

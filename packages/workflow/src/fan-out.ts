@@ -6,7 +6,7 @@
  * `ctx.runStep(...)` would.
  *
  * Node-safe (no `cloudflare:workers` import): the native durable `step`, the
- * `WORKFLOW_*` bindings, and the parent's identity are all injected, so the whole
+ * workflow bindings, and the parent's identity are all injected, so the whole
  * spawn/join orchestration is unit-testable with plain doubles. The workerd-only
  * `src/do` base class supplies the real values and runs the child-side signal.
  *
@@ -28,6 +28,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import { isDuplicateInstanceError, NonRetryableError } from "./errors";
 import type {
@@ -113,19 +114,22 @@ const BRANCH_EVENT_PREFIX = `${RESERVED_EVENT_TYPE_PREFIX}branch:`;
 /** The completion event a branch child sends to its parent. Discriminated so an `undefined` value is distinguishable from a failure. */
 type BranchOutcome = { error: { message: string; name: string }; status: "error" } | { status: "ok"; value?: unknown };
 
+/** The shape `workflowClassName` gives every workflow export key: `OrderPipelineWorkflow`. */
+const WORKFLOW_EXPORT_KEY = /^[A-Z]\w*Workflow$/u;
+
 /** The marker the parent injects into a child's params and the child reads back to address its parent. */
 interface BranchMarker {
     /** The event type the parent waits on for this branch. */
     eventType: string;
     /** Declaration-order index of the branch (for log correlation). */
     index: number;
-    /** The parent workflow's own `WORKFLOW_*` binding name — how the child reaches back. */
+    /** The parent workflow's own export key (its generated class name) — how the child reaches back. */
     parentBinding: string;
     /** The parent workflow instance id. */
     parentId: string;
 }
 
-/** Resolve a declared child workflow's `WORKFLOW_*` binding by export name; throws a helpful error when absent. */
+/** Resolve a declared child workflow's binding by export name; throws a helpful error when absent. */
 type WorkflowBindingResolver = (workflow: string) => {
     create: (options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
@@ -133,15 +137,17 @@ type WorkflowBindingResolver = (workflow: string) => {
 
 /** Dependencies the fan-out factories close over — all injected so the orchestration is Node-testable. */
 interface FanOutDeps {
-    /** The Worker environment bindings (used to reach the parent binding on the child side). */
+    /** The Worker environment bindings (a non-Cloudflare host's workflows live here). */
     env: Record<string, unknown>;
+    /** The invoking context's `ctx.exports` — where Cloudflare exposes the declared workflows. */
+    exports?: unknown;
     /** The running workflow's instance id — the parent id stamped into each child. */
     instanceId: string;
     /** Optional structured logger — used to surface best-effort failures (e.g. a stranded group-saga compensation) without aborting the flow. */
     log?: WorkflowLogger;
     /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). Free to return any length — every result is folded through {@link boundInstanceId} before it reaches `create`. */
     nextChildId: (explicit?: string) => string;
-    /** The running workflow's own `WORKFLOW_*` binding name — passed to children so they can signal back. */
+    /** The running workflow's own export key — passed to children so they can signal back. */
     parentBinding: string;
     /** Resolve a child workflow's binding by export name. */
     resolveBinding: WorkflowBindingResolver;
@@ -652,10 +658,10 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
     }
 
     // Defense-in-depth: even if a marker slips past the create-surface guard,
-    // constrain the parent dereference to a `WORKFLOW_*` binding and the send to
+    // constrain the parent dereference to a workflow export key and the send to
     // the branch event namespace. Legitimate markers always satisfy both
-    // (createParallel builds `WORKFLOW_*` bindings and `lunora:branch:*` types).
-    if (!candidate.parentBinding.startsWith("WORKFLOW_") || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
+    // (createParallel stamps `workflowClassName` keys and `lunora:branch:*` types).
+    if (!WORKFLOW_EXPORT_KEY.test(candidate.parentBinding) || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
         return undefined;
     }
 
@@ -682,11 +688,11 @@ const stripBranchMarker = (payload: unknown): unknown => {
  * its timeout. Pass the result on success or the serialised error on failure.
  */
 const signalBranchParent = async (
-    deps: { env: Record<string, unknown>; step: WorkflowStepLike },
+    deps: { env: Record<string, unknown>; exports?: unknown; step: WorkflowStepLike },
     marker: BranchMarker,
     outcome: BranchOutcome,
 ): Promise<void> => {
-    const binding = deps.env[marker.parentBinding] as { get?: (id: string) => Promise<WorkflowInstanceLike> } | undefined;
+    const binding = resolveWorkflowBinding(deps.env, deps.exports, marker.parentBinding) as { get?: (id: string) => Promise<WorkflowInstanceLike> } | undefined;
 
     if (!binding || typeof binding.get !== "function") {
         return;
@@ -713,7 +719,7 @@ const signalBranchParent = async (
  * logger is provided.
  */
 const signalBranchParentSafe = async (
-    deps: { env: Record<string, unknown>; log?: WorkflowLogger; step: WorkflowStepLike },
+    deps: { env: Record<string, unknown>; exports?: unknown; log?: WorkflowLogger; step: WorkflowStepLike },
     marker: BranchMarker,
     outcome: BranchOutcome,
 ): Promise<void> => {

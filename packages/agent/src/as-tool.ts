@@ -3,7 +3,8 @@ import { isDuplicateInstanceError } from "@lunora/workflow";
 import { jsonSchema } from "ai";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
-import { agentBindingName } from "./naming";
+import { resolveWorkflowBinding } from "../../../shared/workflow-binding";
+import { agentClassName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
 import type {
@@ -158,7 +159,7 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
     }
 
     const { name } = options;
-    const bindingName = agentBindingName(name);
+    const agentKey = agentClassName(name);
     const maxPolls = options.maxPolls ?? DEFAULT_MAX_POLLS;
     const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     const wait = options.wait ?? defaultWait;
@@ -175,12 +176,12 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             return `Sub-agent "${name}" was not started: the maximum delegation depth of ${String(MAX_DELEGATION_DEPTH)} is already reached. Answer with what you have instead of delegating further.`;
         }
 
-        const binding = context.env[bindingName] as AgentWorkflowBindingLike | undefined;
+        const binding = resolveWorkflowBinding(context.env, context.exports, agentKey) as AgentWorkflowBindingLike | undefined;
 
         if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/agent: agent.asTool("${name}") found no Workflow binding "${bindingName}" on env — declare the "${name}" agent so codegen wires its binding`,
+                `@lunora/agent: agent.asTool("${name}") found no "${agentKey}" on ctx.exports or env — declare the "${name}" agent so codegen wires it`,
             );
         }
 

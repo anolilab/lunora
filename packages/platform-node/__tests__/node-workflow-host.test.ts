@@ -826,7 +826,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(waits).not.toContain(2_592_000_000);
     });
 
-    it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {
+    it("binds each workflow on env under its class name so createWorkflowContext resolves the seam", async () => {
         expect.hasAssertions();
 
         const orderPipeline = defineWorkflow<{ orderId: string }, string>({
@@ -836,9 +836,9 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         const host = createNodeWorkflowHost({ store: freshStore(), env: { EXTRA: "kept" }, workflows: { orderPipeline } });
 
         expect(host.env.EXTRA).toBe("kept");
-        expect(host.env.WORKFLOW_ORDER_PIPELINE).toBe(host.bindings.orderPipeline);
+        expect(host.env.OrderPipelineWorkflow).toBe(host.bindings.orderPipeline);
 
-        const workflows = createWorkflowContext(host.env, [{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" }]);
+        const workflows = createWorkflowContext(host.env, [{ binding: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
         const instance = await workflows.get("orderPipeline").create({ params: { orderId: "123" } });
 
         const status2 = await instance.status();
