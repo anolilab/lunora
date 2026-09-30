@@ -265,10 +265,22 @@ Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
 naming it rather than quietly covering the default shard alone. Root and
 `.global()` tables don't need a registry.
 
-A key stays registered once its shard has written, and there is no route to
-remove one yet. Every fan-out therefore visits every shard that has ever held
-`.shardBy()` rows, so gate who can write to which shard with `authorizeShard`
-(see below): a client that can invent shard keys can grow that list.
+A key stays registered after its shard empties, so fan-outs keep visiting it
+until you prune:
+
+```bash
+lunora shards prune --dry-run   # list the registered shards that hold no rows
+lunora shards prune             # remove them from the registry
+```
+
+Each listed shard checks its own rows and removes its entry only if it holds
+none of that table. A shard that is written again later registers again on
+that write. A shard the prune can't reach keeps its entry, and the command
+exits non-zero so you can re-run it. Soft-deleted rows still count as rows.
+
+Gate who can write to which shard with `authorizeShard` (see below). A client
+that can invent shard keys can otherwise grow the registry faster than you
+prune it.
 
 <Callout type="warn">
     Shards register when they write, so a shard whose rows were written **before** the registry was bound is not listed until it is written again. Bind the

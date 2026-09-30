@@ -3162,6 +3162,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
+        shardedTables: () => (options.listSchemaTables?.() ?? []).filter((table) => options.resolveTableSharding?.(table)?.mode.kind === "shardBy"),
     });
 
     /**

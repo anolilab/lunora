@@ -17,12 +17,14 @@ import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
 import type { QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
+import { pruneShardRegistry } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 const MIGRATE_PATH = "/_lunora/migrate";
 const PITR_PATH = "/_lunora/admin/pitr";
 const RANK_PATH = "/_lunora/admin/rank";
 const RANKPAGE_PATH = "/_lunora/admin/rankpage";
+const SHARD_REGISTRY_PRUNE_PATH = "/_lunora/admin/shard-registry/prune";
 const SHARD_TRAFFIC_PATH = "/_lunora/admin/shard-traffic";
 
 /**
@@ -222,6 +224,21 @@ const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficR
     return { table: candidate.table };
 };
 
+/**
+ * Parse a `POST /_lunora/admin/shard-registry/prune` body — `{ tables?, dryRun? }`,
+ * where omitted `tables` means every `.shardBy()` table.
+ */
+const parseShardRegistryPruneRequest = async (request: Request): Promise<{ dryRun: boolean; tables?: string[] }> => {
+    const body = await readLooseJsonBody(request, "Shard-registry prune");
+    const candidate = (body ?? {}) as { dryRun?: unknown; tables?: unknown };
+
+    if (candidate.tables !== undefined && !(Array.isArray(candidate.tables) && candidate.tables.every((table) => typeof table === "string"))) {
+        throw new LunoraError("Shard-registry prune `tables` must be an array of table names", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { dryRun: candidate.dryRun === true, tables: candidate.tables };
+};
+
 interface PitrRequest {
     args: Record<string, unknown>;
     functionPath: string;
@@ -267,11 +284,13 @@ interface OrchestrationAdminRouteDeps {
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across / forwarded to. */
     shardDO: ShardNamespaceLike;
+    /** The schema's `.shardBy()` tables — the ones the shard registry lists shards for. */
+    shardedTables: () => string[];
 }
 
 /** Build the cross-shard orchestration + PITR route map merged into the worker's internal route table. */
 const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { defaultShard, forwardToShard, isAdmin, queryCoordinator: coordinator, resolveForwardContext, shardDO } = deps;
+    const { defaultShard, forwardToShard, isAdmin, queryCoordinator: coordinator, resolveForwardContext, shardDO, shardedTables } = deps;
 
     /** The guard pair every coordinator-backed handler runs: POST-only and admin-gated. `label` names the endpoint in each error. */
     const assertAdminPost = (request: Request, label: string): void => {
@@ -399,6 +418,38 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
+     * `POST /_lunora/admin/shard-registry/prune` — drop the registry entries of
+     * shards that no longer hold rows of their `.shardBy()` table, so fan-outs
+     * stop visiting them. Each shard makes the call itself (see
+     * `pruneShardRegistry`). Answers 207 when a shard could not be reached: its
+     * entries are kept, and a re-run retries them.
+     */
+    const handleShardRegistryPrune = async (request: Request, env: unknown): Promise<Response> => {
+        assertAdminPost(request, "Shard-registry prune");
+
+        const prune = await parseShardRegistryPruneRequest(request);
+        const sharded = shardedTables();
+        const unsharded = (prune.tables ?? []).filter((table) => !sharded.includes(table));
+
+        if (unsharded.length > 0) {
+            throw new LunoraError(`Shard-registry prune names tables that are not \`.shardBy()\`: ${unsharded.join(", ")}`, {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+
+        const result = await pruneShardRegistry(coordinator.registry, shardDO, {
+            dryRun: prune.dryRun,
+            headers: forwardedHeaders,
+            tables: prune.tables ?? sharded,
+        });
+
+        return Response.json(result, { status: result.failed.length > 0 ? 207 : 200 });
+    };
+
+    /**
      * `POST /_lunora/admin/pitr` — drive native Durable-Object point-in-time
      * recovery on a single shard. Admin-gated (its own bearer check), so it is
      * NOT subject to the user-facing `authorizeShard`/`authorizeFanOut`
@@ -434,9 +485,10 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
         [PITR_PATH]: handlePitr,
         [RANK_PATH]: handleRank,
         [RANKPAGE_PATH]: handleRankPage,
+        [SHARD_REGISTRY_PRUNE_PATH]: handleShardRegistryPrune,
         [SHARD_TRAFFIC_PATH]: handleShardTraffic,
     };
 };
 
 export type { OrchestrationAdminRouteDeps };
-export { buildOrchestrationAdminRoutes, MIGRATE_PATH, PITR_PATH, RANK_PATH, RANKPAGE_PATH, SHARD_TRAFFIC_PATH };
+export { buildOrchestrationAdminRoutes, MIGRATE_PATH, PITR_PATH, RANK_PATH, RANKPAGE_PATH, SHARD_REGISTRY_PRUNE_PATH, SHARD_TRAFFIC_PATH };

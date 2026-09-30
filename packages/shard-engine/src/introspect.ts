@@ -123,6 +123,7 @@ const ADMIN_FUNCTIONS = {
     recordContainerEvent: "__lunora_admin__:recordContainerEvent",
     recordMail: "__lunora_admin__:recordMail",
     recordQueueMessage: "__lunora_admin__:recordQueueMessage",
+    releaseShardRegistration: "__lunora_admin__:releaseShardRegistration",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",

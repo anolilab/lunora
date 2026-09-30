@@ -34,6 +34,8 @@ import { resolveShard } from "./resolve-shard";
  * strategy's identity (empty array for `concat`, `0` for `sum`, etc.).
  */
 interface ShardRegistry {
+    /** Drop any cached listing for `table` (every table when omitted) — a registry that caches implements it, so a prune shows up at once in this isolate. */
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 
@@ -1665,6 +1667,108 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
     }
 };
 
+/** A shard-registry prune: release the named `.shardBy()` tables' shards that hold none of their rows. */
+interface ShardRegistryPruneRequest {
+    /** Report what would be released without touching the registry. */
+    dryRun?: boolean;
+    /** Must carry the admin bearer each shard's admin gate requires. */
+    headers?: Record<string, string>;
+    tables: ReadonlyArray<string>;
+}
+
+/** One `(shard, table)` registration the prune reports on. */
+interface ShardRegistration {
+    shardKey: string;
+    table: string;
+}
+
+interface ShardRegistryPruneResult {
+    /** Shards the release could not reach. Their registrations are KEPT: a key nobody checked is never dropped. */
+    failed: ReadonlyArray<{ message: string; shardKey: string; tables: ReadonlyArray<string> }>;
+    /** Registrations whose shard still holds rows of the table. */
+    kept: ReadonlyArray<ShardRegistration>;
+    /** Registrations removed (or, on a dry run, that would be). */
+    released: ReadonlyArray<ShardRegistration>;
+}
+
+/** A shard's `kept` / `released` table list as registrations, dropping anything that is not a table name. */
+const registrationsOf = (shardKey: string, tables: unknown): ShardRegistration[] =>
+    (Array.isArray(tables) ? tables : [])
+        .filter((table): table is string => typeof table === "string")
+        .map((table) => {
+            return { shardKey, table };
+        });
+
+/**
+ * Prune the shard registry: ask every shard it lists for `request.tables` to
+ * release the tables it no longer holds rows of.
+ *
+ * Each shard decides for itself (`__lunora_admin__:releaseShardRegistration`),
+ * because only the shard can order the emptiness check against its own
+ * writes; a check made here and an unregister sent later could drop a shard
+ * written in between. A shard listed for several tables gets one call naming
+ * all of them.
+ */
+const pruneShardRegistry = async (
+    registry: ShardRegistry,
+    namespace: ShardNamespaceInput,
+    request: ShardRegistryPruneRequest,
+): Promise<ShardRegistryPruneResult> => {
+    const tablesByShard = new Map<string, string[]>();
+    const listed = await Promise.all(
+        request.tables.map(async (table) => {
+            return { keys: await registry.listShardKeys(table), table };
+        }),
+    );
+
+    for (const { keys, table } of listed) {
+        for (const shardKey of keys) {
+            tablesByShard.set(shardKey, [...(tablesByShard.get(shardKey) ?? []), table]);
+        }
+    }
+
+    const outcomes = await runBoundedJobs([...tablesByShard], DEFAULT_CONCURRENCY, async ([shardKey, tables]) => {
+        const outcome = await callOneShard(
+            namespace,
+            shardKey,
+            prepareShardRpc({
+                args: { dryRun: request.dryRun === true, tables },
+                functionPath: "__lunora_admin__:releaseShardRegistration",
+                headers: request.headers,
+            }),
+            DEFAULT_TIMEOUT_MS,
+        );
+
+        return { outcome, tables };
+    });
+
+    const failed: { message: string; shardKey: string; tables: ReadonlyArray<string> }[] = [];
+    const kept: ShardRegistration[] = [];
+    const released: ShardRegistration[] = [];
+
+    for (const { outcome, tables } of outcomes) {
+        if (outcome.kind === "err") {
+            failed.push({ message: outcome.message, shardKey: outcome.shardKey, tables });
+            continue;
+        }
+
+        const payload = (unwrapResult(outcome.value) ?? {}) as { kept?: unknown; released?: unknown };
+
+        kept.push(...registrationsOf(outcome.shardKey, payload.kept));
+        released.push(...registrationsOf(outcome.shardKey, payload.released));
+    }
+
+    // The shards unregistered themselves, so a caching registry here still lists
+    // them. Other isolates catch up within their own cache TTL.
+    if (request.dryRun !== true) {
+        for (const table of new Set(released.map((registration) => registration.table))) {
+            registry.invalidate?.(table);
+        }
+    }
+
+    return { failed, kept, released };
+};
+
 const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
     const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1939,7 +2043,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
@@ -1964,6 +2068,8 @@ export type {
     ShardRankOutcome,
     ShardRankPageOutcome,
     ShardRegistry,
+    ShardRegistryPruneRequest,
+    ShardRegistryPruneResult,
     ShardTrafficEntry,
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,
