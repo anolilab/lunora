@@ -8,7 +8,7 @@
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
- * The export/import row producers (`streamExportRows` / `streamingImport`) are
+ * The export/import row producers (`prepareExportRows` / `streamingImport`) are
  * injected rather than imported because they close over the worker options and
  * are shared with the scheduled R2 backup — so this module imports no runtime
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
@@ -90,26 +90,20 @@ interface DataMovementAdminRouteDeps {
     exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
-    /** Admin-gate + require a configured option, else throw the given error. Shared with the sibling admin route modules. */
-    requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
-    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
-    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
-    /** The shard DO namespace fanned across. */
-    shardDO: ShardNamespaceLike;
 
     /**
-     * Produce export rows (shard-local then global), invoking `writeRow` per row.
-     * Injected because it closes over the worker options and is shared with the
-     * scheduled R2 backup.
+     * Settle the shard-local export fan-out and return every row (shard-local
+     * then global). Injected because it closes over the worker options and is
+     * shared with the scheduled R2 backup.
      */
-    streamExportRows: (
-        coordinator: QueryCoordinator,
-        headers: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        writeRow: (row: ExportRow) => void,
-    ) => Promise<void>;
+    prepareExportRows: (headers: Record<string, string>, tables: ReadonlyArray<string> | undefined) => Promise<AsyncIterable<ExportRow>>;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
+    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
+    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
+
+    /** The shard DO namespace fanned across. */
+    shardDO: ShardNamespaceLike;
     /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
     streamingImport: (
         request: Request,
@@ -135,12 +129,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         exportCursorStore,
         exportSinks,
         knownTables,
-        queryCoordinator,
+        queryCoordinator: coordinator,
         assertAdmin,
-        requireAdminOption,
         resolveForwardContext,
         shardDO,
-        streamExportRows,
+        prepareExportRows,
         streamingImport,
         syncGlobals,
     } = deps;
@@ -152,28 +145,28 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const body = await parseExportBody(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
-        // shard returns a single materialised envelope, and the whole fan-out is
-        // collected before the stream drains, so peak worker memory still scales
-        // with the total shard-local row count — the streaming only keeps the
-        // *response* from being buffered, it does not bound the source data.
+        // The shard-local fan-out settles HERE, before any status is committed, so
+        // a failed shard (502) or a `.shardBy()` table the registry cannot list
+        // (400) answers with a real status. Past this point only the `.global()`
+        // rows can still fail, and those end the body as an errored stream.
+        // Caveat: each shard returns a single materialised envelope, so peak
+        // worker memory scales with the total shard-local row count — the
+        // streaming only keeps the *response* from being buffered.
+        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                };
-
                 try {
-                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
+                    for await (const row of rows) {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
+                    }
+
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -212,10 +205,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
@@ -284,10 +274,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Connector sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
@@ -356,10 +343,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Apply endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
@@ -390,11 +374,6 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        // Admin gate only. Import fans out through `streamingImport`, which never
-        // touches the coordinator — this used to demand one anyway, which made
-        // `lunora seed` (and every other bulk import) fail with "requires a
-        // `queryCoordinator`" on every app the builder produces, since the
-        // builder has no way to configure one.
         assertAdmin(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
@@ -430,10 +409,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export-tap endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
             throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", {

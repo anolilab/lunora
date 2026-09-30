@@ -22,8 +22,11 @@
     "dev": { "port": 8788 },
     "vars": { "LUNORA_ALLOWED_ORIGINS": "http://localhost:3000" },
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

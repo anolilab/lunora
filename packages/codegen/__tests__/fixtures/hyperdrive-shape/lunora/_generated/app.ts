@@ -4,8 +4,8 @@
 import type { HyperdriveEngine } from "@lunora/hyperdrive/global";
 import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
 import { LUNORA_CRONS } from "./crons.js";
@@ -54,6 +54,7 @@ class AppBuilder<Env extends object> {
     private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
@@ -156,6 +157,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }
+
     /** Materialise the standalone Cloudflare worker + `ShardDO` class. */
     public build(): ComposedApp {
         return this.assemble();
@@ -204,6 +212,7 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
+            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
@@ -257,7 +266,19 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["notes", "boards"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["notes", { mode: { field: "boardId", kind: "shardBy" } }],
+            ["boards", { mode: { kind: "global" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });
+        }
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

@@ -76,6 +76,7 @@ const ADMIN_FUNCTIONS: {
     readonly recordContainerEvent: "__lunora_admin__:recordContainerEvent";
     readonly recordMail: "__lunora_admin__:recordMail";
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
+    readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
@@ -5085,6 +5086,12 @@ const stableWireKey: (value: unknown) => string;
 
 ```ts
 const stripReservedPatchFields: (patch: Record<string, unknown>) => Record<string, unknown>;
+```
+
+### `stubByName` (const)
+
+```ts
+const stubByName: (value: unknown, name: string, jurisdiction?: string) => SiblingStub | undefined;
 ```
 
 ### `subscriptionFrames` (const)

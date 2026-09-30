@@ -116,6 +116,37 @@ const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", co
  * directed error via `kvStub`.
  */
 /* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
+
+/**
+ * The shard registry wiring, for a schema with `.shardBy()` tables: the
+ * `ShardDOConfig.shardRegistry` field, the `SHARDED_TABLES` constant and the
+ * `shardRegistry()` override through which the shard reports each `.shardBy()`
+ * table it writes. That is how the worker's cross-shard fan-outs learn which
+ * shards exist. All empty without `.shardBy()` tables.
+ */
+const emitShardRegistryFragments = (shardedTableNames: ReadonlySet<string>): { configField: string; constant: string; override: string } => {
+    if (shardedTableNames.size === 0) {
+        return { configField: "", constant: "", override: "" };
+    }
+
+    return {
+        configField: `
+    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). This shard registers its key for each \`.shardBy()\` table it writes, so cross-shard export, sync and migrations reach it. */
+    shardRegistry?: (env: Record<string, unknown>) => unknown;`,
+        constant: `
+/** The \`.shardBy()\` tables this shard registers with the shard registry when it writes them. */
+const SHARDED_TABLES: ReadonlySet<string> = new Set([${[...shardedTableNames].map((name) => JSON.stringify(name)).join(", ")}]);
+`,
+        override: `
+        protected override shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+            const namespace = config.shardRegistry?.((this.env ?? {}) as Record<string, unknown>);
+
+            return namespace === undefined ? undefined : { namespace, shardedTables: SHARDED_TABLES };
+        }
+`,
+    };
+};
+
 const emitKvFragments = (hasKv: boolean): HelperFragments => {
     if (!hasKv) {
         return EMPTY_HELPER_FRAGMENTS;
@@ -579,5 +610,6 @@ export {
     emitPipelinesFragments,
     emitR2sqlFragments,
     emitRelationFanout,
+    emitShardRegistryFragments,
     renderThrowingStub,
 };

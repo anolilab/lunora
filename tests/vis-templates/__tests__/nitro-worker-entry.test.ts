@@ -57,10 +57,12 @@ export default {
 };
 `;
 
-/** `lunora/server.ts` — `defineApp().build()`'s ComposedApp plus the `ShardDO` class it carries. */
+/** `lunora/server.ts` — `defineApp().build()`'s ComposedApp plus the `ShardDO` class it carries, and the `ShardRegistryDO` it re-exports. */
 const LUNORA_APP_STUB = `export const dispatched = [];
 
 export class ShardDO {}
+
+export class ShardRegistryDO {}
 
 export default {
     ShardDO,
@@ -87,6 +89,7 @@ interface WorkerModule {
         tail?: (...args: unknown[]) => Promise<void>;
     };
     ShardDO: unknown;
+    ShardRegistryDO: unknown;
 }
 
 interface Loaded {
@@ -113,11 +116,12 @@ beforeAll(async () => {
         writeFileSync(join(directory, "nitro-stub.ts"), NITRO_STUB, "utf8");
         writeFileSync(join(directory, "lunora-app-stub.ts"), LUNORA_APP_STUB, "utf8");
 
-        // Only the two module specifiers are rewritten; the composition under
-        // test is the template's own source, line for line.
+        // Only the two module specifiers are rewritten (every occurrence: the
+        // entry imports the app and re-exports `ShardRegistryDO` from it); the
+        // composition under test is the template's own source, line for line.
         const source = readFileSync(join(REPO_ROOT, "templates", template, "worker.ts"), "utf8")
             .replace(`"${nitroSpecifier}"`, '"./nitro-stub"')
-            .replace('"./lunora/server"', '"./lunora-app-stub"');
+            .replaceAll('"./lunora/server"', '"./lunora-app-stub"');
 
         writeFileSync(join(directory, "worker.ts"), source, "utf8");
 
@@ -136,10 +140,11 @@ afterAll(() => {
 describe.each(Object.keys(TEMPLATES))("templates/%s worker entry", (template) => {
     const entry = (): Loaded => loaded.get(template) as Loaded;
 
-    it("exports the ShardDO class wrangler binds", () => {
+    it("exports the ShardDO and ShardRegistryDO classes wrangler binds", () => {
         expect.hasAssertions();
 
         expect(typeof entry().worker.ShardDO).toBe("function");
+        expect(typeof entry().worker.ShardRegistryDO).toBe("function");
     });
 
     it("dispatches a cron tick to the Lunora app, not only into Nitro's empty hook", async () => {

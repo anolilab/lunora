@@ -1,5 +1,5 @@
 import { resolveAdminBearer } from "../../util/admin-token";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
@@ -236,11 +236,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     }
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
-    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
     const payload: Record<string, unknown> = { args: {}, functionPath: GET_FUNCTION_STATS_OP };
 

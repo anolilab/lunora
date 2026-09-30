@@ -11,6 +11,7 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
@@ -286,6 +287,7 @@ const mergeImportResult = (
 const streamingImport = async (
     request: Request,
     options: WorkerOptions,
+    coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
 ): Promise<{
@@ -320,12 +322,6 @@ const streamingImport = async (
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
     if (perShard.size > 0) {
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
         // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
         // pins it once). Fanning out through it keeps import writing to the SAME DOs
         // the app reads — using the raw `options.shardDO` would land rows in the

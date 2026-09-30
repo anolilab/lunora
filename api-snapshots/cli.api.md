@@ -67,6 +67,7 @@ const COMMANDS: readonly [
     "export",
     "import",
     "seed",
+    "shards",
     "backup",
     "eval",
     "verify",

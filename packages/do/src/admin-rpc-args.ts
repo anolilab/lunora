@@ -1015,6 +1015,26 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
  * be an array; anything else throws a 400 `LunoraError` so the cross-shard
  * coordinator surfaces a uniform error rather than a downstream SQL failure.
  */
+/** Arguments accepted by the `__lunora_admin__:releaseShardRegistration` admin RPC. */
+interface ReleaseShardRegistrationArgs {
+    /** Report what would be released without touching the registry. */
+    dryRun: boolean;
+    /** The `.shardBy()` tables the registry lists this shard for. */
+    tables: string[];
+}
+
+const parseReleaseShardRegistrationArgs = (args: Record<string, unknown>): ReleaseShardRegistrationArgs => {
+    const tables = Array.isArray(args["tables"])
+        ? (args["tables"] as unknown[]).filter((table): table is string => typeof table === "string" && table !== "")
+        : [];
+
+    if (tables.length === 0) {
+        throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: `tables` must name at least one table");
+    }
+
+    return { dryRun: args["dryRun"] === true, tables };
+};
+
 const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
     const index = typeof args["index"] === "string" ? args["index"] : "";
@@ -1556,6 +1576,7 @@ export {
     parseRecordContainerEventArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
+    parseReleaseShardRegistrationArgs,
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,

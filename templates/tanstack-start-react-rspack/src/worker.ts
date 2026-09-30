@@ -22,4 +22,6 @@ import { lunora } from "./app";
 const app = lunora.buildFrameworkWorker((request: Request) => start.fetch(request));
 
 export const ShardDO = app.ShardDO;
+// Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
+export { ShardRegistryDO } from "../lunora/_generated/shardRegistry.js";
 export default app;

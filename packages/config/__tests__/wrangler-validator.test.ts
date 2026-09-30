@@ -2060,6 +2060,22 @@ export const schema = defineSchema({
                     expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("SchedulerDO");
                 });
 
+                it("counts ShardRegistryDO as exported once codegen has written the shardRegistry module", () => {
+                    expect.assertions(2);
+
+                    // The scheduler's twin: codegen writes `shardRegistry.ts` for a
+                    // schema with `.shardBy()` tables and `@lunora/vite` star-re-exports it.
+                    writeClassAProject(`, { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" }`);
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "shardRegistry.ts"), `export { ShardRegistryDO } from "@lunora/do";\n`, "utf8");
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.filter((error) => error.includes("does not export it"))).toEqual([]);
+
+                    rmSync(join(workdir, "lunora", "_generated", "shardRegistry.ts"));
+
+                    expect(validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n")).toContain("ShardRegistryDO");
+                });
+
                 it("does not tell a framework Durable Object to declare itself as an agent or container", () => {
                     expect.assertions(3);
 

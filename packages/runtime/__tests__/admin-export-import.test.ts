@@ -173,7 +173,7 @@ describe("createWorker — admin export endpoint", () => {
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
     });
 
-    it("errors the stream when a shard's export failed instead of serving a short snapshot", async () => {
+    it("answers 502 when a shard's export failed instead of serving a short snapshot", async () => {
         expect.assertions(2);
 
         const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
@@ -214,11 +214,77 @@ describe("createWorker — admin export endpoint", () => {
             fakeContext,
         );
 
-        // The status line is committed before the fan-out runs, so the only
-        // honest signal left is an aborted body — which a consumer cannot mistake
-        // for a complete dump the way it can mistake a short one.
+        // The shard-local fan-out settles before the status is committed, so a
+        // failed shard is a real 502 — not a short body a consumer could mistake
+        // for a complete dump.
+        expect(response.status).toBe(502);
+        await expect(response.text()).resolves.toContain("c2");
+    });
+
+    it("exports a root table without a configured queryCoordinator", async () => {
+        expect.assertions(3);
+
+        const shardKeys: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { kind: "root" } };
+            },
+            shardDO: {
+                get: (id) => {
+                    shardKeys.push((id as { __name: string }).__name);
+
+                    return { fetch: async () => Response.json({ result: { rows: [{ doc: { _id: "u1" }, table: "users" }] } }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
         expect(response.status).toBe(200);
-        await expect(response.text()).rejects.toThrow(/c2/u);
+
+        const text = await response.text();
+
+        expect(JSON.parse(text.trim())).toEqual({ doc: { _id: "u1" }, table: "users" });
+        expect(shardKeys).toEqual(["__root__"]);
+    });
+
+    it("refuses a .shardBy() export with a 400 when no shard registry is configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { field: "channelId", kind: "shardBy" } };
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // Refused before the status line: from inside the stream this could only
+        // end the body early, which reads as a short but complete dump.
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain(String.raw`cannot discover the shards of \"messages\"`);
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {
@@ -491,6 +557,42 @@ describe("createWorker — admin import endpoint", () => {
         const shardKeys = captured!.batches.map((batch) => batch.shardKey).toSorted((a, b) => a.localeCompare(b));
 
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
+    });
+
+    it("imports without a configured queryCoordinator", async () => {
+        expect.assertions(3);
+
+        const shardKeys: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: {
+                get: (id) => {
+                    shardKeys.push((id as { __name: string }).__name);
+
+                    return { fetch: async () => Response.json({ result: { conflicts: 0, errors: [], inserted: { users: 1 } } }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 1 });
+        expect(shardKeys).toEqual(["__root__"]);
     });
 
     it("reports malformed JSON rows in `errors` but continues", async () => {

@@ -66,6 +66,9 @@ const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "0d7dbc7f1c8601d5", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"boards\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_owner\": {\n          \"fields\": [\n            \"ownerId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"global:d1\"\n    },\n    \"contacts\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"email\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {},\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    },\n    \"notes\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"boardId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"body\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"ownerId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_board\": {\n          \"fields\": [\n            \"boardId\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:boardId\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
+/** The `.shardBy()` tables this shard registers with the shard registry when it writes them. */
+const SHARDED_TABLES: ReadonlySet<string> = new Set(["notes", "contacts"]);
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -83,6 +86,8 @@ export interface ShardDOConfig {
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
     d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
     sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
+    shardRegistry?: (env: Record<string, unknown>) => unknown;
 }
 
 const schedulerStub = {
@@ -791,6 +796,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
+        }
+
+        protected override shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+            const namespace = config.shardRegistry?.((this.env ?? {}) as Record<string, unknown>);
+
+            return namespace === undefined ? undefined : { namespace, shardedTables: SHARDED_TABLES };
         }
 
         protected override async runShardInit(): Promise<void> {
