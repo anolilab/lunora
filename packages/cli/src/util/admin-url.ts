@@ -1,4 +1,5 @@
 import { readLiveDevServerState } from "@lunora/config";
+import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "./logger";
 
@@ -77,4 +78,22 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
     return normalizeAdminBaseUrl(candidate);
 };
 
-export { normalizeAdminBaseUrl, resolveAdminBaseUrl, resolveDefaultAdminUrl };
+/**
+ * `globalThis.fetch` for the admin commands, with a refused or dropped
+ * connection named. Node reports those as a bare "fetch failed" and keeps the
+ * real reason (`ECONNREFUSED …`) on `cause`, so a stopped dev server otherwise
+ * surfaces as a message that says neither where nor why.
+ */
+const adminFetch = async (input: string, init?: RequestInit): Promise<Response> => {
+    try {
+        return await fetch(input, init);
+    } catch (error: unknown) {
+        const reason = error instanceof Error && error.cause instanceof Error ? error.cause.message : String(error);
+
+        throw new LunoraError("INTERNAL", `could not reach ${input} (${reason}) — is the dev server running? Start it, or pass --url to point at the worker`, {
+            cause: error,
+        });
+    }
+};
+
+export { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl, resolveDefaultAdminUrl };

@@ -29,7 +29,7 @@ import type { BackupManifestEntry, BackupRetentionPreview, PrunedBackups } from 
 import { backupObjectKeyOfManifest } from "@lunora/runtime";
 
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Refusal } from "../../util/exit-code";
@@ -472,7 +472,7 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl = options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch;
+    const fetchImpl = options.fetchImpl ?? (adminFetch as unknown as StreamingFetchLike);
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");

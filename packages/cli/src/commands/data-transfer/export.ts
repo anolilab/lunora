@@ -10,7 +10,7 @@ import { createWriteStream } from "node:fs";
 import { rename, unlink } from "node:fs/promises";
 
 import { resolveAdminBearer } from "../../util/admin-token";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -304,7 +304,7 @@ const resolveExportRequest = (options: ExportCommandOptions): ExportRequest | Re
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
+    const fetchImpl = (options.fetchImpl ?? adminFetch) as StreamingFetchLike | undefined;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");

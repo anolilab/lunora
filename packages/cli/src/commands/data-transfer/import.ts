@@ -10,7 +10,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
-import { resolveAdminBaseUrl } from "../../util/admin-url";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -219,7 +219,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return { refused: EXIT_CODE.NOT_FOUND };
     }
 
-    const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
+    const fetchImpl = (options.fetchImpl ?? adminFetch) as StreamingFetchLike | undefined;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
@@ -512,8 +512,14 @@ const drainIntoBatcher = async (
 
         return undefined;
     } catch (error: unknown) {
-        logger.error(`import failed part-way through: ${error instanceof Error ? error.message : String(error)}`);
-        logger.error("the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)");
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (batcher.totals.received === 0) {
+            logger.error(`import failed before any row was written: ${message}`);
+        } else {
+            logger.error(`import failed part-way through: ${message}`);
+            logger.error("the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)");
+        }
 
         return error;
     }

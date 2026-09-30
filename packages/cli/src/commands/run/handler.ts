@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
-import { resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
+import { adminFetch, resolveAdminBaseUrl, resolveDefaultAdminUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
@@ -242,7 +242,7 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     const requestUrl = `${baseUrl}/_lunora/rpc`;
 
-    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+    const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
