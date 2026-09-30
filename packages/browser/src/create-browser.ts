@@ -1,19 +1,32 @@
 import { LunoraError } from "@lunora/errors";
 
+import { capErrorBody } from "../../../shared/cap-error-body";
 import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
 import type {
     Browser,
     BrowserLaunchLike,
     BrowserLike,
+    BrowserRestApiOptions,
     BrowserSession,
+    CrawlJob,
+    CrawlOptions,
+    CrawlResultOptions,
     LunoraBrowserOptions,
     NavigateOptions,
     PageLike,
     PdfOptions,
+    QuickActionName,
+    QuickActionOptions,
     RouteLike,
     ScreenshotOptions,
 } from "./types";
+
+/** Account-scoped Cloudflare REST base; the crawl endpoint hangs off `/{accountId}/browser-run/crawl`. */
+const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4/accounts";
+
+/** Browser Run refuses a session whose guardrails list more hostnames than this (400 at acquire). */
+const MAX_GUARDRAIL_DOMAINS = 50;
 
 /** Default navigation timeout when neither the call nor the factory sets one. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -270,6 +283,34 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         return function_;
     };
 
+    const allowPrivateTargets = options.allowPrivateTargets ?? false;
+    // A configured `allowedHosts` is the STRONGER guard — an exact-origin
+    // allowlist closes rebinding outright — and it may deliberately name an
+    // internal host reachable over a Tunnel/private-network binding. Running
+    // the resolved-address check on top would refuse that documented config,
+    // so the allowlist suppresses it, exactly as `allowedPushOrigins` does in
+    // `@lunora/notify`. An explicit `resolveDns: true` still forces it on.
+    const resolveDns = options.resolveDns ?? options.allowedHosts === undefined;
+
+    /**
+     * Run every URL guard against `url` — {@link validateUrl}, then the
+     * DNS-rebinding re-check when it is on — and return the normalized target.
+     * Shared by the initial navigation, every redirect hop, and the Quick Action
+     * and crawl entry points, so no URL-taking method can skip a guard.
+     */
+    const assertTargetAllowed = async (url: string, dohTimeout: number): Promise<string> => {
+        const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
+
+        if (!allowPrivateTargets && resolveDns) {
+            await assertResolvedHostIsPublic(target, dohTimeout);
+        }
+
+        return target;
+    };
+
+    /** The DoH budget for a call that has no per-call timeout (Quick Actions, crawl). */
+    const defaultDohTimeout = (): number => Math.min(resolveTimeout(undefined, options.timeoutMs), DOH_CEILING_MS);
+
     /**
      * Launch a browser, run `use`, and **always** close the browser in a
      * `finally` — a leaked Browser Rendering session is billed and rate-limited,
@@ -302,11 +343,33 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             );
         }
 
+        const launchOptions: Record<string, unknown> = {};
+
         // `keep_alive` (seconds) holds the Browser Rendering session open after
         // this worker detaches so a later `connect(sessionId)` can re-attach.
         // Closing it here would defeat that, so the close is skipped — the
         // session then expires on Cloudflare's clock rather than ours.
-        const browser = await getLaunch()(options.binding, keepAlive === undefined ? undefined : { keep_alive: keepAlive * 1000 });
+        if (keepAlive !== undefined) {
+            launchOptions["keep_alive"] = keepAlive * 1000;
+        }
+
+        // The allowlist doubles as Browser Run session guardrails, so Cloudflare
+        // enforces it on every request the session makes — including inside the
+        // raw `launch()` escape hatch, where no `page.route` guard runs. An empty
+        // list is forwarded as-is: Browser Run reads it as "block every request",
+        // which is what `allowedHosts: []` means here too.
+        if (options.allowedHosts !== undefined) {
+            if (options.allowedHosts.length > MAX_GUARDRAIL_DOMAINS) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `@lunora/browser: allowedHosts has ${String(options.allowedHosts.length)} entries, but Browser Run session guardrails accept at most ${String(MAX_GUARDRAIL_DOMAINS)}`,
+                );
+            }
+
+            launchOptions["guardrails"] = { allowedDomains: options.allowedHosts.map((host) => normalizeHost(host)) };
+        }
+
+        const browser = await getLaunch()(options.binding, Object.keys(launchOptions).length === 0 ? undefined : launchOptions);
 
         if (keepAlive !== undefined) {
             return await use(browser);
@@ -330,39 +393,13 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         use: (page: PageLike) => Promise<T>,
         viewport?: { height: number; width: number },
     ): Promise<T> => {
-        const allowPrivateTargets = options.allowPrivateTargets ?? false;
-        const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
-        // A configured `allowedHosts` is the STRONGER guard — an exact-origin
-        // allowlist closes rebinding outright — and it may deliberately name an
-        // internal host reachable over a Tunnel/private-network binding. Running
-        // the resolved-address check on top would refuse that documented config,
-        // so the allowlist suppresses it, exactly as `allowedPushOrigins` does in
-        // `@lunora/notify`. An explicit `resolveDns: true` still forces it on.
-        const resolveDns = options.resolveDns ?? options.allowedHosts === undefined;
         // Reuse the navigation timeout budget for the DoH re-check, but never let a
         // single lookup exceed the DoH ceiling — a stalled resolver mustn't burn
         // the full (up to 120s) navigation budget before the browser even launches.
         const dohTimeout = Math.min(timeout, DOH_CEILING_MS);
-
-        // DNS-rebinding re-check: resolve the host and reject if it maps to a
-        // private address, before we pay for a browser launch + `page.goto`.
-        if (!allowPrivateTargets && resolveDns) {
-            await assertResolvedHostIsPublic(target, dohTimeout);
-        }
-
-        /**
-         * Re-run the initial-URL guards against a request URL the browser is about
-         * to navigate to (a redirect target). Throws on a private/off-allowlist
-         * host so the caller can fail the request closed.
-         */
-        const assertNavigationAllowed = async (requestUrl: string): Promise<void> => {
-            validateUrl(requestUrl, allowPrivateTargets, options.allowedHosts);
-
-            if (!allowPrivateTargets && resolveDns) {
-                await assertResolvedHostIsPublic(requestUrl, dohTimeout);
-            }
-        };
+        // Checked before we pay for a browser launch + `page.goto`.
+        const target = await assertTargetAllowed(url, dohTimeout);
 
         /**
          * Sub-resource SSRF guard. A rendered page autonomously issues img/fetch/
@@ -453,8 +490,9 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                         return;
                     }
 
+                    // A redirect hop re-runs the initial-URL guards; a throw fails it closed.
                     try {
-                        await assertNavigationAllowed(request.url());
+                        await assertTargetAllowed(request.url(), dohTimeout);
                     } catch {
                         await route.abort("blockedbyclient");
 
@@ -534,11 +572,112 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
 
     const sessions = async (): Promise<ReadonlyArray<BrowserSession>> => await requirePeer(options.sessions, "sessions")(options.binding);
 
+    const quickAction = async (action: QuickActionName, url: string, quickOptions: QuickActionOptions = {}): Promise<Response> => {
+        if (typeof options.binding.quickAction !== "function") {
+            throw new LunoraError(
+                "INTERNAL",
+                "@lunora/browser: the browser binding has no `quickAction` method — Quick Actions need a Browser Run binding with compatibility_date 2026-03-24 or later",
+            );
+        }
+
+        // Types forbid it; untrusted JS can still pass it. An inline document is
+        // not a URL, so none of the guards below would see what it loads.
+        if (Object.hasOwn(quickOptions, "html")) {
+            throw new LunoraError("BAD_REQUEST", "@lunora/browser: quickAction takes a url, not `html` — inline documents bypass the URL guard");
+        }
+
+        const target = await assertTargetAllowed(url, defaultDohTimeout());
+
+        return options.binding.quickAction(action, { ...quickOptions, url: target });
+    };
+
+    const requireRestApi = (): BrowserRestApiOptions => {
+        if (!options.restApi) {
+            throw new LunoraError(
+                "INTERNAL",
+                "@lunora/browser: crawling needs the Browser Run REST API — pass createBrowser({ …, restApi: { accountId, apiToken } }); /crawl has no binding method",
+            );
+        }
+
+        return options.restApi;
+    };
+
+    /**
+     * Call the account's `/browser-run/crawl` endpoint and unwrap Cloudflare's
+     * `{ success, result }` envelope. The upstream body is capped in the message
+     * (the code is client-visible) and kept whole on `cause`.
+     */
+    const crawlRequest = async (api: BrowserRestApiOptions, path: string, init: RequestInit): Promise<unknown> => {
+        const response = await fetch(`${CLOUDFLARE_API_BASE}/${encodeURIComponent(api.accountId)}/browser-run/crawl${path}`, {
+            ...init,
+            headers: { Authorization: `Bearer ${api.apiToken}`, "Content-Type": "application/json" },
+        });
+        const text = await response.text();
+        let body: { result?: unknown; success?: unknown } | undefined;
+
+        try {
+            body = JSON.parse(text) as { result?: unknown; success?: unknown };
+        } catch {
+            // A gateway error page is not JSON; `response.ok` still decides below.
+        }
+
+        if (!response.ok || body?.success === false) {
+            throw new LunoraError("BROWSER_RUN_ERROR", `@lunora/browser: Browser Run API returned ${String(response.status)}: ${capErrorBody(text)}`, {
+                cause: text,
+                status: response.ok ? 502 : response.status,
+            });
+        }
+
+        return body?.result;
+    };
+
+    const crawl = async (url: string, crawlOptions: CrawlOptions = {}): Promise<string> => {
+        const api = requireRestApi();
+
+        if (options.allowedHosts !== undefined && (crawlOptions.options?.includeExternalLinks === true || crawlOptions.options?.includeSubdomains === true)) {
+            throw new LunoraError(
+                "FORBIDDEN",
+                "@lunora/browser: includeExternalLinks / includeSubdomains would crawl hosts outside the configured allowedHosts allowlist",
+            );
+        }
+
+        const target = await assertTargetAllowed(url, defaultDohTimeout());
+        const jobId = await crawlRequest(api, "", { body: JSON.stringify({ ...crawlOptions, url: target }), method: "POST" });
+
+        if (typeof jobId !== "string") {
+            throw new LunoraError("BROWSER_RUN_ERROR", "@lunora/browser: Browser Run accepted the crawl but returned no job id");
+        }
+
+        return jobId;
+    };
+
+    const crawlResult = async (jobId: string, resultOptions: CrawlResultOptions = {}): Promise<CrawlJob> => {
+        const query = new URLSearchParams();
+
+        for (const [key, value] of Object.entries(resultOptions)) {
+            if (value !== undefined) {
+                query.set(key, String(value));
+            }
+        }
+
+        const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+
+        return (await crawlRequest(requireRestApi(), `/${encodeURIComponent(jobId)}${suffix}`, { method: "GET" })) as CrawlJob;
+    };
+
+    const cancelCrawl = async (jobId: string): Promise<void> => {
+        await crawlRequest(requireRestApi(), `/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+    };
+
     return {
+        cancelCrawl,
         connect,
         content,
+        crawl,
+        crawlResult,
         launch,
         pdf,
+        quickAction,
         scrape,
         screenshot,
         sessions,

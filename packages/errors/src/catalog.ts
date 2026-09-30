@@ -226,6 +226,7 @@ export const ERROR_CATALOG = {
      * here is a fallback; each throw passes the actual upstream HTTP status.
      */
     ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
+    BROWSER_RUN_ERROR: { status: 502, title: "Browser Run API error" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 

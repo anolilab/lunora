@@ -515,7 +515,19 @@ const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
         // `@cloudflare/playwright` peer the worker stays free of), so only the
         // `Browser` type is referenced here.
         importLines: [`import type { Browser } from "@lunora/browser";`],
-        stub: renderThrowingStub("browserStub: Browser", browserMissing, ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]),
+        stub: renderThrowingStub("browserStub: Browser", browserMissing, [
+            "cancelCrawl",
+            "connect",
+            "content",
+            "crawl",
+            "crawlResult",
+            "launch",
+            "pdf",
+            "quickAction",
+            "scrape",
+            "screenshot",
+            "sessions",
+        ]),
     };
 };
 

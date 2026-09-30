@@ -95,7 +95,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway)",
         },
-        browser: { level: "native", note: "Browser Rendering" },
+        browser: {
+            level: "native",
+            note: "Browser Run: Playwright sessions (allowedHosts forwarded as session guardrails), Quick Actions through the binding's quickAction, and /crawl over the account REST API (no binding method; needs an API token)",
+        },
         images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",

@@ -4443,7 +4443,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("stubs every member of the Browser surface, including the session ones", () => {
-            expect.assertions(7);
+            expect.assertions(11);
 
             // The stub is a template string here, and `@lunora/codegen` does not
             // depend on `@lunora/browser`, so nothing typechecks it against the
@@ -4453,7 +4453,19 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // widen it deliberately when `Browser` grows.
             const output = emitShard({ hasBrowser: true, schema: { tables: [], vectorIndexes: [] } });
 
-            for (const member of ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]) {
+            for (const member of [
+                "cancelCrawl",
+                "connect",
+                "content",
+                "crawl",
+                "crawlResult",
+                "launch",
+                "pdf",
+                "quickAction",
+                "scrape",
+                "screenshot",
+                "sessions",
+            ]) {
                 expect(output).toContain(`    ${member}: async () => {`);
             }
         });
