@@ -152,17 +152,20 @@ checkout and no interactive auth.
 
 ### Where Cloudflare is currently hardcoded in `apps/cloud`
 
-Enumerated so the size is not a surprise:
+Enumerated so the size is not a surprise. (Updated after provisioning moved to
+Alchemy 2 in the provision box: the `src/provision.ts` and `src/cloudflare/api.ts`
+rows shrank, the rest still hold.)
 
 | Location                                 | Coupling                                                                                                                                                            |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lunora/schema.ts` `cells`               | `cloudflareAccountId`, `dispatchNamespacePrefix`, `jurisdiction` (DO/R2 terms)                                                                                      |
 | `lunora/schema.ts` `deployments`         | `scriptName` (dispatch-namespace script id), `cronSpecs` (wrangler `triggers.crons`), `bindings[].type` = wrangler kinds, `adminToken*` (tenant `/_lunora/admin/*`) |
-| `src/provision.ts`                       | `TenantBindingSpec` = `{d1, r2, durableObjects}`; `tenantD1Name` / `tenantR2Bucket`                                                                                 |
-| `src/cloudflare/api.ts`                  | the whole REST port                                                                                                                                                 |
+| `src/provision-contract.ts`              | `BINDING_SUPPORT` is keyed by wrangler binding kinds; `tenantResourceName` follows Cloudflare's name limits                                                         |
+| `containers/provision/`                  | the Alchemy 2 program uses only the Cloudflare provider (dispatch-namespace Worker + D1/KV/R2/Queues)                                                               |
+| `src/cloudflare/api.ts`                  | what is left of the REST port: D1 export (backups) and custom hostnames                                                                                             |
 | `src/dispatcher/{route,worker}.ts`       | `env.DISPATCHER.get()` — WfP dispatch is _the_ routing mechanism                                                                                                    |
 | `src/metering/analytics.ts`              | Analytics Engine as the request-count source of truth                                                                                                               |
-| `src/deploy/teardown.ts`                 | deletes a dispatch script; D1/R2 named by convention                                                                                                                |
+| `src/deploy/teardown.ts`                 | a provision-box destroy job for the project's stable Worker + resources stack                                                                                       |
 | `src/fanout/{cron,queue}.ts`             | exists **because** WfP drops cron triggers for namespaced workers                                                                                                   |
 | `lunora/logs.ts` + `tail.wrangler.jsonc` | tail consumers                                                                                                                                                      |
 | `src/fleet/upgrade.ts`                   | "runtime version" == the `@lunora/runtime` bundled into a Worker                                                                                                    |
@@ -218,21 +221,21 @@ and stateful; the control plane's request path is none of those.
 - ✅ **Provider breadth we will not write.** Neon and PlanetScale (branchable
   Postgres/MySQL — directly serves GAPS.md "preview environments / database
   branching"), Upstash Redis, S3, Vercel, plus AWS.
-- ✅ **A real state model.** Today convergence state is implicit in
-  `deployments` rows plus naming conventions (`tenantD1Name`). Alchemy's state
-  store makes "what exists" explicit and diffable, with a D1-backed store that
-  fits our substrate.
+- ✅ **A real state model.** Convergence state used to be implicit in
+  `deployments` rows plus naming conventions. It now lives in Alchemy's state
+  store (`Cloudflare.state()` in the cell's own account), explicit and diffable.
 - ✅ **Destroy that actually works.** `src/deploy/teardown.ts` currently
   best-efforts an R2 delete and logs a known leak for non-empty buckets.
   Lifecycle-managed resources are the cure for convention-named ones.
-- ⚠️ **Not a WfP replacement.** Alchemy's Cloudflare provider is
-  regular-Worker-shaped. Dispatch-namespace script upload, per-plan limits and
-  outbound workers are our differentiator and stay on our own REST port.
+- ✅ **Dispatch namespaces included.** Alchemy 2's `Worker` takes a
+  `namespace`, so the tenant script upload moved off our REST port too. Per-plan
+  limits and outbound workers remain ours (the dispatcher).
 - ⚠️ **New supply-chain surface.** ~30 transitive deps in a path that holds
   tenant credentials. Runs in the container, never in the control plane — which
   is also the right blast radius.
-- ⚠️ **Pre-1.0.** Pin exactly; wrap behind our own port (§5.1) so a v2 move or
-  a drop-out is local.
+- ⚠️ **Pre-1.0.** `alchemy@2.0.0-beta.79` is pinned exactly, with `effect` held
+  at `4.0.0-rc.117` (rc.118 breaks it), behind the `Provisioner` port so a
+  drop-out stays local.
 
 ---
 
