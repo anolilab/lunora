@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.238...@lunora/codegen@1.0.0-alpha.239) (2026-09-29)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
 ## @lunora/codegen [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.237...@lunora/codegen@1.0.0-alpha.238) (2026-09-29)
 
 ### Features
