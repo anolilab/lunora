@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.45...@lunora/platform@1.0.0-alpha.46) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
 ## @lunora/platform [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.44...@lunora/platform@1.0.0-alpha.45) (2026-09-30)
 
 ### ⚠ BREAKING CHANGES
