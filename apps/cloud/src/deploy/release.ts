@@ -45,7 +45,8 @@ export interface ReleaseDeps {
     /** Cell hosting this deployment (§2.5). */
     cell: string;
     /** Map a deployment kind to the dispatch namespace it deploys into. */
-    dispatchNamespace: (kind: DeployKind) => string;
+    /** This environment's one dispatch namespace — every kind deploys into it (the dispatcher binds exactly one). */
+    dispatchNamespace: string;
     provisioner: Provisioner;
     /** Where each deployment's payload is kept for rollback. */
     releases: ReleaseStore;
@@ -199,7 +200,7 @@ export const reprovision = async (
         assets: release.assets,
         bundle,
         cell: deps.cell,
-        dispatchNamespace: deps.dispatchNamespace(target.kind),
+        dispatchNamespace: deps.dispatchNamespace,
         kind: target.kind,
         manifest: release.manifest,
         organizationId: target.organizationId,

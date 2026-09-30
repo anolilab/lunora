@@ -31,6 +31,7 @@ import { resolveAdminToken } from "./deploy/admin-token";
 import type { ReleaseBucket } from "./deploy/release-store";
 import { createReleaseStore } from "./deploy/release-store";
 import { createDeployRouter } from "./deploy/router";
+import { dispatchNamespaceOf } from "./deploy/routes/shared";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { runTeardownSweep } from "./deploy/teardown";
 import type { CronTarget } from "./fanout/cron";
@@ -254,6 +255,7 @@ type Env = {
     LUNORA_ADMIN_TOKEN?: string;
     /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
     LUNORA_CELL?: string;
+    LUNORA_DISPATCH_NAMESPACE?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
     /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
@@ -401,7 +403,9 @@ const sweepTeardown = async (env: Env): Promise<void> => {
         urlForScript: (alias) => alias,
     });
 
-    await runTeardownSweep(teardownPorts(database, { deleteRelease: createReleaseStore(env.RELEASES).delete, destroy: provisioner.destroy }, Date.now()));
+    await runTeardownSweep(
+        teardownPorts(database, { deleteRelease: createReleaseStore(env.RELEASES).delete, destroy: provisioner.destroy }, Date.now(), dispatchNamespaceOf(env)),
+    );
 };
 
 /** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */

@@ -35,7 +35,7 @@ import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
-import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
+import { dispatchNamespaceOf, jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
 import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
@@ -873,7 +873,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                     }),
             },
             cell,
-            dispatchNamespace: (kind) => `lunora-${kind}`,
+            dispatchNamespace: dispatchNamespaceOf(environment),
             provisioner: createAlchemyProvisioner({
                 box: provisionBoxFrom(environment),
                 onLog: (line) => {

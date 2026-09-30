@@ -35,7 +35,17 @@ interface TeardownRow {
  * the live release's database). Reads the full deployments set once to evaluate
  * that, and elects one pending row per dead alias so the destroy job runs once.
  */
-export const teardownPorts = (database: ControlPlaneDatabase, ports: Pick<TeardownPorts, "deleteRelease" | "destroy">, now: number): TeardownPorts => {
+
+/**
+ * `dispatchNamespace` is this environment's one namespace (`LUNORA_DISPATCH_NAMESPACE`):
+ * every kind deploys into it, since the dispatcher binds exactly one.
+ */
+export const teardownPorts = (
+    database: ControlPlaneDatabase,
+    ports: Pick<TeardownPorts, "deleteRelease" | "destroy">,
+    now: number,
+    dispatchNamespace: string,
+): TeardownPorts => {
     return {
         ...ports,
         listPending: async () => {
@@ -72,7 +82,7 @@ export const teardownPorts = (database: ControlPlaneDatabase, ports: Pick<Teardo
                         elected.add(alias);
                     }
 
-                    return { alias, destroyWorker, dispatchNamespace: `lunora-${row.kind}`, id: row._id };
+                    return { alias, destroyWorker, dispatchNamespace, id: row._id };
                 });
         },
         markTornDown: async (id) => {

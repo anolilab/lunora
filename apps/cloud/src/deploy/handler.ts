@@ -751,7 +751,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 assets,
                 bundle,
                 cell: deps.cell,
-                dispatchNamespace: deps.dispatchNamespace(kind),
+                dispatchNamespace: deps.dispatchNamespace,
                 kind,
                 manifest,
                 organizationId: target.organizationId,

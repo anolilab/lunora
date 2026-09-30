@@ -51,6 +51,8 @@ export type RouterEnv = {
     LUNORA_ADMIN_TOKEN?: string;
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
+    /** The dispatch namespace this environment's `DISPATCHER` is bound to — where every tenant deploy lands. */
+    LUNORA_DISPATCH_NAMESPACE?: string;
     /** OTLP ingest base injected into tenant Workers (`LUNORA_OTLP_ENDPOINT`); telemetry is off when unset. */
     LUNORA_OTLP_ENDPOINT?: string;
     /** Shared secret the dispatch-namespace tail worker presents to `POST /v1/logs/tail`. */
@@ -68,6 +70,15 @@ export type RouterEnv = {
     /** Private R2 bucket of tenant data snapshots (docs/RESTORE.md). */
     TENANT_BACKUPS?: TenantBackupBucket;
 };
+
+/**
+ * The one dispatch namespace tenants deploy into: the one this environment's
+ * dispatcher is bound to. Deploying per kind (`lunora-preview`, `lunora-dev`) put
+ * previews where no dispatcher routes, and staging's tenants outside `lunora-staging`.
+ * Aliases are unique platform-wide (the ownership ledger), so kinds share it safely.
+ */
+export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string =>
+    environment.LUNORA_DISPATCH_NAMESPACE ?? "lunora-production";
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 

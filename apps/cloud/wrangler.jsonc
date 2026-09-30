@@ -84,6 +84,8 @@
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
         "LUNORA_APP_DOMAIN": "lunora.app",
+        // The namespace DISPATCHER is bound to (below); every tenant deploy lands here.
+        "LUNORA_DISPATCH_NAMESPACE": "lunora-production",
         // This Worker's own script name, forwarded to the provision box so it can
         // attach this Worker as each per-project queue's consumer. Wrangler
         // suffixes the env name, so every cell below restates it.
@@ -261,6 +263,7 @@
                 "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
                 "LUNORA_APP_DOMAIN": "staging.lunora.app",
                 "LUNORA_CELL": "staging",
+                "LUNORA_DISPATCH_NAMESPACE": "lunora-staging",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-staging",
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-staging-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
@@ -332,6 +335,7 @@
                 "LUNORA_APP_DOMAIN": "lunora.app",
                 "LUNORA_CELL": "default",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-production",
+                "LUNORA_DISPATCH_NAMESPACE": "lunora-production",
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-production-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.

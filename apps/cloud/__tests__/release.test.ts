@@ -71,7 +71,7 @@ const deps = (backend: DeployBackend, overrides: Partial<DeployHandlerDeps> = {}
     return {
         backend,
         cell: "cell-1",
-        dispatchNamespace: (kind) => `lunora-${kind}`,
+        dispatchNamespace: "lunora-production",
         provisioner: capture().provisioner,
         releases: memoryReleaseStore().store,
         scheduler: scheduler(),

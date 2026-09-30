@@ -17,12 +17,12 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000).listPending();
+        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
 
         // One destroy job per dead alias; the other row only drops its stored bundle.
         expect(pending).toStrictEqual([
-            { alias: "a", destroyWorker: true, dispatchNamespace: "lunora-preview", id: "d1" },
-            { alias: "a", destroyWorker: false, dispatchNamespace: "lunora-preview", id: "d3" },
+            { alias: "a", destroyWorker: true, dispatchNamespace: "lunora-production", id: "d1" },
+            { alias: "a", destroyWorker: false, dispatchNamespace: "lunora-production", id: "d3" },
         ]);
     });
 
@@ -36,7 +36,7 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000).listPending();
+        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
 
         expect(pending).toStrictEqual([
             { alias: "app", destroyWorker: false, dispatchNamespace: "lunora-production", id: "v1" },
@@ -52,14 +52,14 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000).listPending();
+        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
 
         expect(pending.map((row) => row.destroyWorker)).toStrictEqual([false, false]);
     });
 
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000);
+        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, "lunora-production");
 
         await ports.markTornDown("dep_1");
 
@@ -69,7 +69,7 @@ describe(teardownPorts, () => {
     it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
-        const ports = teardownPorts(database, noop, 1000);
+        const ports = teardownPorts(database, noop, 1000, "lunora-production");
 
         await ports.releaseAlias("app");
 
@@ -78,7 +78,7 @@ describe(teardownPorts, () => {
 
     it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000);
+        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000, "lunora-production");
 
         await ports.releaseAlias("ghost");
 

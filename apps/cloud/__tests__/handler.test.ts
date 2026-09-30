@@ -30,7 +30,7 @@ const deps = (backend: DeployBackend, provisioner: Provisioner): DeployHandlerDe
     return {
         backend,
         cell: "cell-1",
-        dispatchNamespace: (kind) => `lunora-${kind}`,
+        dispatchNamespace: "lunora-production",
         provisioner,
         releases: memoryReleaseStore().store,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
