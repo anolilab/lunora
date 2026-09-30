@@ -110,7 +110,7 @@ describe(runBuildDispatch, () => {
             ports({
                 claimNext: queue([claimed("boom"), claimed("ok")]),
                 runnerPorts: runnerPorts({
-                    execute: (_source, onLine) =>
+                    execute: (_source, _rootDirectory, onLine) =>
                         onLine("building").then(() => {
                             throw new Error("container OOM");
                         }),

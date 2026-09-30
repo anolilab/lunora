@@ -5510,6 +5510,81 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#projects:updateBuildSettings": {
+      "post": {
+        "description": "Invoke the `mutation` `projects:updateBuildSettings` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "projects:updateBuildSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"projects\">",
+                        "type": "string",
+                        "x-lunora-table": "projects"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "rootDirectory": {},
+                      "watchPaths": {
+                        "items": {},
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId",
+                      "watchPaths"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "projects:updateBuildSettings",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: projects:updateBuildSettings",
+        "tags": [
+          "projects"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
     "/_lunora/rpc#rollouts:abortRollout": {
       "post": {
         "description": "Invoke the `mutation` `rollouts:abortRollout` over the Lunora RPC envelope (POST /_lunora/rpc).",

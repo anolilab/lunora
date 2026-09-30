@@ -159,6 +159,42 @@ describe(createGitHubApp, () => {
 
         await expect(app?.postCommitStatus({ description: "d", installationId: 1, repository: "a/b", sha: "s", state: "pending" })).rejects.toThrow("401");
     });
+
+    it("lists a pull request's changed files, counting both sides of a rename", async () => {
+        const urls: string[] = [];
+        const fetchImpl = vi.fn<FetchSpy>(async (input) => {
+            const url = requestUrl(input);
+
+            urls.push(url);
+
+            return url.includes("access_tokens")
+                ? Response.json({ token: "t" })
+                : Response.json({ files: [{ filename: "apps/web/a.ts" }, { filename: "apps/docs/b.md", previous_filename: "apps/web/b.md" }] });
+        });
+        const app = createGitHubApp({ apiBase: "https://api.test", appId: "1", fetch: fetchImpl, privateKeyPem: await generatePkcs8Pem() });
+
+        await expect(app?.listChangedFiles({ base: "base1", head: "head1", installationId: 1, repository: "acme/app" })).resolves.toStrictEqual({
+            files: ["apps/web/a.ts", "apps/docs/b.md", "apps/web/b.md"],
+        });
+        expect(urls[1]).toBe("https://api.test/repos/acme/app/compare/base1...head1");
+    });
+
+    it("reports a 300-file compare as unknown, because GitHub truncates it there", async () => {
+        const fetchImpl = vi.fn<FetchSpy>(async (input) =>
+            requestUrl(input).includes("access_tokens")
+                ? Response.json({ token: "t" })
+                : Response.json({
+                      files: Array.from({ length: 300 }, (_, index) => {
+                          return { filename: `f${String(index)}` };
+                      }),
+                  }),
+        );
+        const app = createGitHubApp({ apiBase: "https://api.test", appId: "1", fetch: fetchImpl, privateKeyPem: await generatePkcs8Pem() });
+
+        await expect(app?.listChangedFiles({ base: "b", head: "h", installationId: 1, repository: "a/b" })).resolves.toStrictEqual({
+            unknown: "the pull request changes 300+ files",
+        });
+    });
 });
 
 const build: ClaimedBuild = { buildId: "b1", commitSha: "abc1234", projectId: "p1" };

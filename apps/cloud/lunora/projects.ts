@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
 import type { Id } from "./_generated/dataModel.js";
@@ -23,7 +24,9 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    rootDirectory?: string;
     slug: string;
+    watchPaths?: string[];
 }
 
 /**
@@ -47,7 +50,11 @@ export interface ProjectView {
     organizationId: Id<"organizations">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
+    /** Repo-relative directory builds run in; absent means the repository root. */
+    rootDirectory?: string;
     slug: string;
+    /** Globs a push must touch to rebuild; absent means everything under `rootDirectory`. */
+    watchPaths?: string[];
 }
 
 /** Project one stored row onto the public view, dropping the protection secrets. */
@@ -62,6 +69,8 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
         ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),
+        ...(row.rootDirectory === undefined ? {} : { rootDirectory: row.rootDirectory }),
+        ...(row.watchPaths === undefined ? {} : { watchPaths: row.watchPaths }),
     };
 };
 
@@ -143,6 +152,51 @@ export const rename = mutation
         await assertRowInOrg(context, id, organizationId, "project");
         await context.db.patch(id, { name });
         await context.db.insert("auditLog", { action: "project.rename", actorUserId: member.userId, createdAt: context.now, organizationId, target: name });
+    });
+
+/**
+ * Set a project's monorepo build settings (owner/admin): the directory builds
+ * run in, and the globs a push must touch to rebuild. Both are validated here
+ * with the same rules the Studio form shows (`src/builds/paths.ts`); the build
+ * box re-checks the root directory against the extracted source, where it can
+ * also refuse one that does not exist or escapes through a symlink.
+ *
+ * An empty root directory or an empty watch-path list clears the setting.
+ * Audited, because it changes what gets deployed on the next push.
+ */
+export const updateBuildSettings = mutation
+    .use(rateLimit("api"))
+    .input({
+        id: v.id("projects"),
+        organizationId: v.id("organizations"),
+        rootDirectory: boundedString(LIMITS.token),
+        watchPaths: v.array(boundedString(LIMITS.token)),
+    })
+    .mutation(async ({ ctx: context, args: { id, organizationId, rootDirectory, watchPaths } }): Promise<{ rootDirectory: string; watchPaths: string[] }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "project");
+
+        let root: string;
+        let patterns: string[];
+
+        try {
+            root = normalizeRootDirectory(rootDirectory);
+            patterns = normalizeWatchPaths(watchPaths);
+        } catch (error) {
+            throw new LunoraError("BAD_REQUEST", error instanceof Error ? error.message : "invalid build settings");
+        }
+
+        await context.db.patch(id, { rootDirectory: root === "" ? null : root, watchPaths: patterns.length === 0 ? null : patterns });
+        await context.db.insert("auditLog", {
+            action: "project.build_settings.update",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId,
+            target: root === "" ? "/" : root,
+        });
+
+        return { rootDirectory: root, watchPaths: patterns };
     });
 
 /**

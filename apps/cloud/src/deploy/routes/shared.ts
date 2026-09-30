@@ -44,6 +44,8 @@ export type RouterEnv = {
     CLOUDFLARE_API_TOKEN?: string;
     /** The production dispatch namespace — how tenant backup/restore reach a project's Worker. */
     DISPATCHER?: DispatchNamespaceLike;
+    GITHUB_APP_ID?: string;
+    GITHUB_APP_PRIVATE_KEY?: string;
     GITHUB_WEBHOOK_SECRET?: string;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     LUNORA_ADMIN_TOKEN?: string;

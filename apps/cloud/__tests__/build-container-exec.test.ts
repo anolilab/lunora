@@ -40,7 +40,7 @@ describe(executeInContainer, () => {
             '{"bundle":"YmFzZTY0","bundleHash":"abc123"}\n',
         ]);
 
-        const execution = await executeInContainer(handle, SOURCE, onLine);
+        const execution = await executeInContainer(handle, SOURCE, undefined, onLine);
 
         expect(execution).toStrictEqual({ bundle: "YmFzZTY0", bundleHash: "abc123" });
         expect(onLine.mock.calls.map(([line]) => line)).toStrictEqual(["extracting source", "installing dependencies with pnpm"]);
@@ -53,7 +53,7 @@ describe(executeInContainer, () => {
         // The split lands mid-key and mid-value — where a per-chunk parser breaks.
         const handle = streaming(['{"line":"running lun', 'ora build"}\n{"bundle":"YmFz', 'ZTY0","bundleHash":"abc123"}\n']);
 
-        const execution = await executeInContainer(handle, SOURCE, onLine);
+        const execution = await executeInContainer(handle, SOURCE, undefined, onLine);
 
         expect(execution.bundleHash).toBe("abc123");
         expect(onLine).toHaveBeenCalledWith("running lunora build");
@@ -64,7 +64,7 @@ describe(executeInContainer, () => {
 
         const handle = streaming(['{"line":"running lunora build"}\n', '{"error":"no lockfile found"}\n']);
 
-        await expect(executeInContainer(handle, SOURCE, vi.fn().mockResolvedValue(undefined))).rejects.toThrow("no lockfile found");
+        await expect(executeInContainer(handle, SOURCE, undefined, vi.fn().mockResolvedValue(undefined))).rejects.toThrow("no lockfile found");
     });
 
     it("fails loudly when the stream ends with no bundle and no error", async () => {
@@ -74,7 +74,7 @@ describe(executeInContainer, () => {
         // a type error three frames later on an undefined bundle.
         const handle = streaming(['{"line":"installing dependencies with pnpm"}\n']);
 
-        await expect(executeInContainer(handle, SOURCE, vi.fn().mockResolvedValue(undefined))).rejects.toThrow(/without producing a bundle/u);
+        await expect(executeInContainer(handle, SOURCE, undefined, vi.fn().mockResolvedValue(undefined))).rejects.toThrow(/without producing a bundle/u);
     });
 
     it("reports a non-JSON line without failing a build that may still succeed", async () => {
@@ -83,7 +83,7 @@ describe(executeInContainer, () => {
         const onLine = vi.fn<(line: string) => Promise<void>>().mockResolvedValue();
         const handle = streaming(["not json at all\n", '{"bundle":"YmFzZTY0","bundleHash":"abc123"}\n']);
 
-        const execution = await executeInContainer(handle, SOURCE, onLine);
+        const execution = await executeInContainer(handle, SOURCE, undefined, onLine);
 
         expect(execution.bundleHash).toBe("abc123");
         expect(onLine).toHaveBeenCalledWith(expect.stringContaining("not JSON"));
@@ -92,6 +92,6 @@ describe(executeInContainer, () => {
     it("throws when the box refuses the request outright", async () => {
         expect.assertions(1);
 
-        await expect(executeInContainer(streaming(["{}"], 503), SOURCE, vi.fn().mockResolvedValue(undefined))).rejects.toThrow("503");
+        await expect(executeInContainer(streaming(["{}"], 503), SOURCE, undefined, vi.fn().mockResolvedValue(undefined))).rejects.toThrow("503");
     });
 });

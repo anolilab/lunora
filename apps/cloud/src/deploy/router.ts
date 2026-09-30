@@ -12,6 +12,8 @@ import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from ".
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
 import { createDohResolver, verifyDomain } from "../domains/verify";
+import { createGitHubApp } from "../github/app";
+import type { BuildRecordResult } from "../github/webhook";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
@@ -108,7 +110,12 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         return Promise.resolve(jsonError(500, "lunora context unavailable"));
     }
 
+    // Only for the preview path filter's compare call; absent credentials leave
+    // previews building unfiltered rather than failing the webhook.
+    const githubApp = createGitHubApp({ appId: environment.GITHUB_APP_ID, privateKeyPem: environment.GITHUB_APP_PRIVATE_KEY });
+
     return handleGitHubWebhook(request, {
+        ...(githubApp === null ? {} : { listChangedFiles: githubApp.listChangedFiles }),
         // installation created/deleted → link/unlink the org (GAPS.md A4).
         onInstallation: async (intent) => {
             await (intent.action === "created"
@@ -117,16 +124,18 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         },
         // PR upsert → server-side preview build (same pipeline, GAPS.md A3).
         onPreviewBuild: (intent) =>
-            context.runMutation<null | { buildId: string; reused: boolean }>(internal.builds.recordPush, {
+            context.runMutation<BuildRecordResult>(internal.builds.recordPush, {
                 branch: intent.branch,
+                changes: intent.changes,
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
                 repository: intent.repository,
             }),
         // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
         onPush: (intent) =>
-            context.runMutation<null | { buildId: string; reused: boolean }>(internal.builds.recordPush, {
+            context.runMutation<BuildRecordResult>(internal.builds.recordPush, {
                 branch: intent.branch,
+                changes: intent.changes,
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
                 repository: intent.repository,

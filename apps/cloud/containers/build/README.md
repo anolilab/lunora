@@ -10,11 +10,11 @@ already code-complete in `src/builds/`; what was missing was an image to run
 
 ## The contract
 
-| Route                  | Purpose                                                                                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /__lunora/build` | Body **is** the gzipped repo tarball. Responds NDJSON: `{"line"}` per output line as it happens, then `{"bundle","bundleHash"}` or `{"error"}`. |
-| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                  |
-| `GET /__lunora/health` | Readiness probe.                                                                                                                                |
+| Route                  | Purpose                                                                                                                                                                                                    |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens, then `{"bundle","bundleHash"}` or `{"error"}`. |
+| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                             |
+| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                           |
 
 **Why a build route and not just exec.** `BuildRunnerPorts.execute` receives the
 source as an `ArrayBuffer` in the Worker, and exec has nowhere to put it — it
@@ -27,12 +27,21 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
 
 1. Extract the tarball from the request body (`--strip-components=1` drops
    GitHub's `<owner>-<repo>-<sha>/` wrapper).
-2. **Install with the manager the lockfile names** — `pnpm-lock.yaml` → pnpm,
+2. **Resolve the root directory** (`workspace.mjs`). The `rootDirectory` query
+   parameter is re-validated (normalized, relative, no `..`; a bad one is a
+   `400` before the body is read), then `realpath`-resolved inside the
+   extracted repo and prefix-checked against the repo's own real path, so a
+   symlinked directory cannot point the build outside it. A missing directory
+   is refused with a log line naming it. The **workspace root** is the nearest
+   directory from there upward that holds a lockfile, never above the repo —
+   for a pnpm/npm/yarn workspace that is the repo root.
+3. **Install with the manager the lockfile names**, at the workspace root — `pnpm-lock.yaml` → pnpm,
    `package-lock.json` → npm, `yarn.lock` → yarn. Never a default: installing a
    pnpm project with npm resolves a different graph than the one the tenant
    tested, and it surfaces as a mystifying build error rather than as "wrong
    manager". No lockfile is refused.
-3. **Run `node_modules/.bin/lunora build` directly** — not `pnpm exec`, not
+4. **Run `node_modules/.bin/lunora build` directly**, in the root directory —
+   the nearest `node_modules/.bin/lunora` from there up to the workspace root — not `pnpm exec`, not
    `npm exec`, not `yarn run`. Every manager's exec treats a missing binary as
    "fetch it from the registry": verified against npm 10, where both
    `npm exec --no --` and `npx --no` still resolve from the network. A project
@@ -41,7 +50,7 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    the only clue. The `.bin` path can only be the version the lockfile
    installed, and its absence is a clear error. (Yarn PnP writes no `.bin` and
    is refused rather than guessed at.)
-4. Collect the built module and hash it. The deploy path uploads exactly **one**
+5. Collect the built module (from the root directory's `.lunora/build`) and hash it. The deploy path uploads exactly **one**
    `main_module` (`src/cloudflare/api.ts` sets a single form part), so a build
    that produced several modules is refused here rather than deployed as
    whichever file sorted first — that would ship a Worker missing half its code,

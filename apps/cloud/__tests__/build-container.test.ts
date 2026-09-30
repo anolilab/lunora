@@ -1,5 +1,8 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -134,5 +137,38 @@ describe("build box", () => {
         const last = JSON.parse(lines.at(-1) ?? "{}") as { error?: string };
 
         expect(last.error).toMatch(/no lockfile found|tar failed/u);
+    });
+
+    it("400s a root directory that escapes the repo, before reading the source", async () => {
+        expect.assertions(2);
+
+        const response = await fetch(`${origin}/__lunora/build?rootDirectory=..%2Fetc`, { body: new Uint8Array(0), method: "POST" });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/refused/u) });
+    });
+
+    it("refuses a root directory the tarball does not contain, with a clear log line", async () => {
+        expect.assertions(1);
+
+        // A real archive with GitHub's wrapper directory and a lockfile, but no apps/web.
+        const fixture = await mkdtemp(join(tmpdir(), "build-box-fixture-"));
+
+        await mkdir(join(fixture, "acme-mono-abc"));
+        await writeFile(join(fixture, "acme-mono-abc", "pnpm-lock.yaml"), "");
+
+        const tarball = execFileSync("/usr/bin/tar", ["-czf", "-", "-C", fixture, "acme-mono-abc"]);
+
+        await rm(fixture, { force: true, recursive: true });
+
+        const response = await fetch(`${origin}/__lunora/build?${new URLSearchParams({ rootDirectory: "apps/web" }).toString()}`, {
+            body: tarball,
+            method: "POST",
+        });
+        const text = await response.text();
+        const lines = text.trim().split("\n");
+        const last = JSON.parse(lines.at(-1) ?? "{}") as { error?: string };
+
+        expect(last.error).toBe('root directory "apps/web" does not exist in the repository at this commit');
     });
 });

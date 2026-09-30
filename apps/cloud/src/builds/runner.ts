@@ -11,6 +11,8 @@ export interface ClaimedBuild {
     buildId: string;
     commitSha: string;
     projectId: string; // secret-scanner:allow -- domain field name
+    /** Repo-relative directory the build runs in; absent means the repository root. */
+    rootDirectory?: string;
 }
 
 export interface BuildExecution {
@@ -24,8 +26,8 @@ export interface BuildRunnerPorts {
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
     /** Mark the build successful with its bundle hash. */
     complete: (buildId: string, bundleHash: string) => Promise<void>;
-    /** Run the build over the fetched source, streaming output via `onLine`. 🌐 in production. */
-    execute: (source: ArrayBuffer, onLine: (line: string) => Promise<void>) => Promise<BuildExecution>;
+    /** Run the build over the fetched source in `rootDirectory`, streaming output via `onLine`. 🌐 in production. */
+    execute: (source: ArrayBuffer, rootDirectory: string | undefined, onLine: (line: string) => Promise<void>) => Promise<BuildExecution>;
     /** Mark the build failed. */
     fail: (buildId: string, error: string) => Promise<void>;
     /** Fetch the repo tarball at the build's commit (GitHub App token). 🌐 in production. */
@@ -112,7 +114,7 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
 
         await ports.appendLog(build.buildId, "info", "running build");
 
-        const result = await ports.execute(source, (line) => ports.appendLog(build.buildId, "info", line));
+        const result = await ports.execute(source, build.rootDirectory, (line) => ports.appendLog(build.buildId, "info", line));
 
         await ports.complete(build.buildId, result.bundleHash);
 

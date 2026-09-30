@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import { BackupsSection } from "./BackupsSection";
+import { BuildSettingsCard } from "./BuildSettingsCard";
 import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
@@ -38,6 +39,8 @@ interface DeploymentsSectionProps {
     previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
+    rootDirectory?: string;
+    watchPaths?: string[];
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -488,7 +491,8 @@ const resolveActive = (
     const clicked = activeId === null ? undefined : deployments?.find((deployment) => deployment._id === activeId);
     const active = clicked ?? deployments?.[0];
     const isLatest = active !== undefined && active._id === deployments?.[0]?._id;
-    const activeBuild = isLatest ? builds?.[0] : undefined;
+    // A `skipped` push never produced anything, so it is not what is deployed.
+    const activeBuild = isLatest ? builds?.find((build) => build.status !== "skipped") : undefined;
 
     return { active, activeBuild, branch: active?.branch ?? activeBuild?.branch, isLatest };
 };
@@ -524,6 +528,8 @@ export const DeploymentsSection = ({
     previewProtected = false,
     projectId,
     projectName,
+    rootDirectory,
+    watchPaths,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
@@ -534,6 +540,18 @@ export const DeploymentsSection = ({
     const [activeId, setActiveId] = useState<Deployment["_id"] | null>(null);
 
     const { active, activeBuild, branch } = resolveActive(deployments, builds, activeId);
+
+    // Before the first deploy too: a monorepo project needs its root directory
+    // set before the first push can build at all.
+    const buildSettings = (
+        <BuildSettingsCard
+            key={`${rootDirectory ?? ""}|${(watchPaths ?? []).join("\n")}`}
+            organizationId={organizationId}
+            projectId={projectId}
+            rootDirectory={rootDirectory}
+            watchPaths={watchPaths}
+        />
+    );
 
     const header = (
         <div className="flex items-center gap-3">
@@ -554,6 +572,7 @@ export const DeploymentsSection = ({
                         run <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">lunora deploy</code>.
                     </CardContent>
                 </Card>
+                {buildSettings}
             </div>
         );
     }
@@ -578,6 +597,7 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            {buildSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
             <BackupsSection organizationId={organizationId} projectId={projectId} />
             <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />

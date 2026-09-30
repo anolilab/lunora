@@ -31,7 +31,7 @@ RUN corepack enable
 # `node:http`, `node:child_process`, `node:crypto` — so there is no install
 # step here and nothing in this layer to keep patched.
 WORKDIR /srv
-COPY server.mjs ./
+COPY server.mjs workspace.mjs ./
 
 # Builds land under here, one directory per build, owned by the unprivileged
 # user. Created in the image so the server never has to mkdir as root.
