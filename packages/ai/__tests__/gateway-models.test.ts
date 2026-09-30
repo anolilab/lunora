@@ -358,16 +358,25 @@ describe("usage telemetry", () => {
         });
     });
 
-    it("fails a stream's span when the upstream stream errors", async () => {
-        expect.assertions(2);
+    it("fails a stream's span when the upstream stream errors, keeping the usage it reported", async () => {
+        expect.assertions(4);
 
         const telemetry = fakeTelemetry();
         const model = new MockLanguageModelV4({
             doStream: async () => {
+                let sent = false;
+
                 return {
                     stream: new ReadableStream({
                         pull: (controller) => {
-                            controller.error(new Error("upstream reset"));
+                            if (sent) {
+                                controller.error(new Error("upstream reset"));
+
+                                return;
+                            }
+
+                            sent = true;
+                            controller.enqueue({ finishReason: { raw: "stop", unified: "stop" as const }, type: "finish" as const, usage });
                         },
                     }),
                 };
@@ -376,12 +385,16 @@ describe("usage telemetry", () => {
         });
         const wrapped = createAi({ binding: fakeBinding(), telemetry }).model(model) as MockLanguageModelV4;
         const { stream } = await wrapped.doStream({ prompt: [] });
+        const reader = stream.getReader();
 
-        await expect(stream.getReader().read()).rejects.toThrow("upstream reset");
+        await expect(reader.read()).resolves.toMatchObject({ done: false });
+        await expect(reader.read()).rejects.toThrow("upstream reset");
 
         await vi.waitFor(() => {
             expect(telemetry.spans[0]?.settled).toBe("error");
         });
+
+        expect(telemetry.spans[0]?.attributes).toMatchObject({ "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 500 });
     });
 
     it("returns models unwrapped when no telemetry is configured", () => {

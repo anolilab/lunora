@@ -5,6 +5,13 @@ import type { AiSpan, AiTelemetry, AiTracer } from "./types";
 import type { CallOutcome } from "./usage";
 import { modelIdOf, recordUsage } from "./usage";
 
+/** How an instrumented stream ended: the usage it reported, and the upstream error if it failed. */
+interface StreamSettled {
+    error?: unknown;
+    failed?: boolean;
+    outcome: CallOutcome;
+}
+
 const NOOP_SPAN: AiSpan = { setAttribute: () => {}, setAttributes: () => {} };
 
 /** Stands in for an absent `ctx.trace`, so the middleware has one code path. */
@@ -43,9 +50,10 @@ const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTel
             type StreamPart = StreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
 
             // Re-emits the stream part by part, remembering the `finish` part's
-            // usage. A `TransformStream`'s `flush` never runs on cancel or on an
-            // upstream error, which left the span (and its counters) pending forever.
-            const instrument = (result: StreamResult, onFinish: (outcome: CallOutcome) => void, onError: (error: unknown) => void): StreamResult => {
+            // usage, and settles once on close, cancel or an upstream error — with
+            // whatever usage arrived first. A `TransformStream`'s `flush` never runs
+            // on cancel or error, which left the span (and its counters) pending forever.
+            const instrument = (result: StreamResult, onSettle: (settled: StreamSettled) => void): StreamResult => {
                 const reader = result.stream.getReader();
                 let outcome: CallOutcome = {};
 
@@ -53,7 +61,7 @@ const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTel
                     ...result,
                     stream: new ReadableStream<StreamPart>({
                         cancel: async (reason) => {
-                            onFinish(outcome);
+                            onSettle({ outcome });
                             await reader.cancel(reason);
                         },
                         pull: async (controller) => {
@@ -62,14 +70,14 @@ const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTel
                             try {
                                 next = await reader.read();
                             } catch (error) {
-                                onError(error);
+                                onSettle({ error, failed: true, outcome });
                                 controller.error(error);
 
                                 return;
                             }
 
                             if (next.done) {
-                                onFinish(outcome);
+                                onSettle({ outcome });
                                 controller.close();
 
                                 return;
@@ -86,16 +94,25 @@ const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTel
             };
 
             const streamed = Promise.withResolvers<StreamResult>();
-            // Settles once: a later resolve/reject on a settled promise is a no-op.
-            const finished = Promise.withResolvers<CallOutcome>();
+            // Settles once: a later resolve on a settled promise is a no-op.
+            const finished = Promise.withResolvers<StreamSettled>();
 
             trace(
                 "ai.stream",
                 async (_trace, span) => {
                     // A failed dispatch throws here, so the tracer marks the span
                     // errored before the rejection reaches the caller below.
-                    streamed.resolve(instrument(await doStream(), finished.resolve, finished.reject));
-                    recordUsage(modelId, await finished.promise, span, metrics);
+                    streamed.resolve(instrument(await doStream(), finished.resolve));
+
+                    const settled = await finished.promise;
+
+                    // Usage that arrived before a failure is still spend: record it,
+                    // then rethrow so the tracer marks the span errored.
+                    recordUsage(modelId, settled.outcome, span, metrics);
+
+                    if (settled.failed === true) {
+                        throw settled.error;
+                    }
                 },
                 attributes,
             ).catch(streamed.reject);
