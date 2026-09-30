@@ -20,6 +20,8 @@ export type {
     AiBindingLike,
     AiGatewayOptions,
     AiMetrics,
+    AiModelOptions,
+    AiRunOptions,
     AiSpan,
     AiTelemetry,
     AiTracer,

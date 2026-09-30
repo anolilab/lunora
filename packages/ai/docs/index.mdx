@@ -136,6 +136,27 @@ const { object } = await generateObject({
 });
 ```
 
+## Failing fast when Workers AI is busy
+
+By default a synchronous Workers AI call waits in a capacity queue when no
+capacity is free. Pass `rejectIfBusy: true` to fail at once instead. It applies
+to Workers AI model ids (`@cf/…`) only:
+
+```ts
+import { generateText } from "@lunora/ai";
+
+const { text } = await generateText({
+    model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { rejectIfBusy: true }),
+    // The rejection is an AI SDK `APICallError` with `statusCode: 429`, which the
+    // AI SDK retries by default. Turn retries off to actually fail fast.
+    maxRetries: 0,
+    prompt,
+});
+
+// Raw binding: a rejection throws a `LunoraError` with code `RATE_LIMITED`.
+await ctx.ai.run("@cf/meta/m2m100-1.2b", inputs, { rejectIfBusy: true });
+```
+
 ## RAG — `defineRag` (`@lunora/ai/rag`)
 
 `defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a
