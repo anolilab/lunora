@@ -791,9 +791,9 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
-    exports?: unknown;
     event: WorkflowEventLike<Params>;
     exportName: string;
+    exports?: unknown;
     fetchImpl?: typeof fetch;
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
     step: WorkflowStepLike;

@@ -362,7 +362,6 @@ const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
 
         if (priorClass !== undefined) {
             throw new LunoraError(
-                 
                 "DUPLICATE_WORKFLOW_CLASS",
                 `Duplicate workflow class "${workflow.className}": produced by both "${priorClass}" and "${workflow.exportName}". Workflow export names must yield unique generated class names.`,
                 { status: 500 },
