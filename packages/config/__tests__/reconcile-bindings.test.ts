@@ -379,7 +379,7 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "pipelines": [{ "binding": "EVENTS", "pipeline": "events" }],
+    "pipelines": [{ "binding": "EVENTS", "stream": "events" }],
 }
 `,
             "utf8",
@@ -396,7 +396,7 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "pipelines": [{ "binding": "PIPELINES", "pipeline": "events" }],
+    "pipelines": [{ "binding": "PIPELINES", "stream": "events" }],
 }
 `,
             "utf8",
@@ -404,7 +404,35 @@ describe("reconcileWranglerBindings", () => {
 
         expect(reconcileWranglerBindings(root, baseInferred({ usesPipelines: true })).warnings.join(" ")).not.toMatch(/pipelines binding/u);
         // The pipeline resource is un-mintable, so nothing is auto-written either way.
-        expect(readConfig().pipelines).toStrictEqual([{ binding: "PIPELINES", pipeline: "events" }]);
+        expect(readConfig().pipelines).toStrictEqual([{ binding: "PIPELINES", stream: "events" }]);
+    });
+
+    it("warns when a declared secrets.required list omits a secret the app needs", () => {
+        expect.assertions(2);
+
+        // wrangler dev loads ONLY the listed keys from .dev.vars once the list
+        // exists, so an omitted secret is stripped and the worker throws on it.
+        const write = (required: string[]): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
+                    name: "lunora-app",
+                    secrets: { required },
+                }),
+                "utf8",
+            );
+        };
+
+        write(["API_KEY"]);
+
+        expect(reconcileWranglerBindings(root, baseInferred()).warnings.join(" ")).toMatch(/secrets\.required without LUNORA_ADMIN_TOKEN/u);
+
+        write(["API_KEY", "LUNORA_ADMIN_TOKEN"]);
+
+        expect(reconcileWranglerBindings(root, baseInferred()).warnings.join(" ")).not.toMatch(/secrets\.required/u);
     });
 
     it("warns when Flagship binding mode is used but no flagship binding exists, without writing one", () => {

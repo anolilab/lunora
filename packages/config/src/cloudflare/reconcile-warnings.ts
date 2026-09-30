@@ -8,6 +8,8 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type { InferredBindings } from "../infer-bindings";
+import { packageNamesFromBindings } from "../infer-bindings";
+import { requiredSecrets } from "../scaffold-dev-variables";
 import type { ExportGap } from "./reconcile-bindings";
 import type { WranglerShape } from "./wrangler-shape";
 
@@ -50,7 +52,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
         ],
         [
             pipelinesBindingMissing,
-            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", pipeline }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
+            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
         [
             flagshipBindingMissing,
@@ -236,6 +238,32 @@ const hasConfiguredPaymentProvider = (projectRoot: string): boolean => {
     return PAYMENT_PROVIDER_SECRETS.some(({ keys }) => keys.every((key) => (values.get(key) ?? "") !== ""));
 };
 
+/**
+ * A declared `secrets.required` list is an allow-list, not documentation:
+ * `wrangler dev` loads only the listed keys from `.dev.vars`, and `wrangler
+ * deploy` checks only those. A secret the detected packages need but the list
+ * omits is therefore stripped in dev — the worker then throws on its first read
+ * of it. Only checked when the list exists; without one wrangler loads every key.
+ */
+const missingRequiredSecretWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+    const required = parsed?.secrets?.required;
+
+    if (!Array.isArray(required)) {
+        return [];
+    }
+
+    const declared = new Set<unknown>(required);
+    const missing = requiredSecrets(packageNamesFromBindings(inferred))
+        .map((entry) => entry.key)
+        .filter((key) => !declared.has(key));
+
+    return missing.length === 0
+        ? []
+        : [
+              `wrangler.jsonc declares secrets.required without ${missing.join(", ")}, which this app needs — wrangler dev loads only the listed keys from .dev.vars, so add ${missing.length === 1 ? "it" : "them"} to secrets.required.`,
+          ];
+};
+
 const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
     const warnings: string[] = [];
@@ -283,7 +311,7 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
         warnings.push(`@lunora/payment is used; set one provider's secret pair in .dev.vars — ${describePaymentProviders()}.`);
     }
 
-    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
+    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed), ...missingRequiredSecretWarnings(inferred, parsed));
 
     if (parsed !== undefined) {
         warnings.push(...orphanedEntryWarnings(inferred, parsed));

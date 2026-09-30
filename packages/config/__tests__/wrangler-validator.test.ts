@@ -2921,6 +2921,44 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ images: {} })).errors.join(" ")).toContain("images must be an object");
         });
 
+        it("accepts well-formed media and stream blocks and flags empty ones", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ media: { binding: "MEDIA" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ media: {} })).errors.join(" ")).toContain("media must be an object");
+            expect(validateWranglerConfig(validBase({ stream: { binding: "STREAM" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ stream: {} })).errors.join(" ")).toContain("stream must be an object");
+        });
+
+        it("accepts well-formed vpc_services and artifacts entries and rejects ones missing their target", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API", remote: true, service_id: "svc" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API" }] })).errors.join(" ")).toContain('non-empty "service_id"');
+            expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS", namespace: "default" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+        });
+
+        it("requires exactly one of tunnel_id / network_id on a vpc_networks entry", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "MESH", network_id: "cf1:network", remote: true }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "TUNNEL", tunnel_id: "uuid" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "NET" }] })).errors.join(" ")).toContain("exactly one of");
+            expect(
+                validateWranglerConfig(validBase({ vpc_networks: [{ binding: "NET", network_id: "cf1:network", tunnel_id: "uuid" }] })).errors.join(" "),
+            ).toContain("exactly one of");
+        });
+
+        it("accepts a secrets.required list of names and rejects anything else", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ secrets: { required: ["API_KEY", "DB_PASSWORD"] } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ secrets: { required: "API_KEY" } })).errors.join(" ")).toContain("secrets must be an object");
+            expect(validateWranglerConfig(validBase({ secrets: { required: ["API_KEY", ""] } })).errors.join(" ")).toContain("secrets must be an object");
+            expect(validateWranglerConfig(validBase({ secrets: null })).errors.join(" ")).toContain("secrets must be an object");
+        });
+
         it("accepts a well-formed services entry and rejects one missing binding or service", () => {
             expect.assertions(3);
 

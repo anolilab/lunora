@@ -495,7 +495,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         ],
         [
             capabilities.usesPipelines,
-            "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+            "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned",
         ],
         [
             capabilities.usesX402Charge,

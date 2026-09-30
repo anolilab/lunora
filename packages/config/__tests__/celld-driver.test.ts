@@ -279,6 +279,35 @@ describe("celld config projection on disk", () => {
         });
     });
 
+    it("points a Vite build's nested D1 migrations_pattern back at the project", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            JSON.stringify({
+                d1_databases: [{ binding: "DB", migrations_dir: "drizzle", migrations_pattern: "drizzle/*/migration.sql" }],
+                main: "virtual:lunora/worker",
+                name: "app",
+            }),
+            "utf8",
+        );
+        mkdirSync(join(root, "drizzle"));
+        writeFileSync(
+            join(root, "dist", "server", "wrangler.json"),
+            JSON.stringify({ d1_databases: [{ binding: "DB", database_id: "db", database_name: "db" }], main: "index.js", name: "app" }),
+            "utf8",
+        );
+
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
+
+        projected?.write();
+
+        expect(JSON.parse(readFileSync(String(projected?.configPath), "utf8"))).toMatchObject({
+            d1_databases: [{ binding: "DB", migrations_dir: "../../drizzle", migrations_pattern: "../../drizzle/*/migration.sql" }],
+        });
+    });
+
     it("keeps an .assetsignore that is hiding something, and stops instead", () => {
         expect.assertions(2);
 

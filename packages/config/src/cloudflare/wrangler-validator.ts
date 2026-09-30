@@ -28,6 +28,7 @@ import {
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
+    validateVpcNetworks,
     validateWorkflowSettings,
     WORKFLOWS_RULE,
 } from "./validate-bindings";
@@ -41,6 +42,7 @@ import {
     validateObservability,
     validatePlacement,
     validateSchedulerOrigin,
+    validateSecretsRequired,
     validateSendEmail,
     validateTailConsumers,
 } from "./validate-settings";
@@ -174,7 +176,9 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
         validateSelfDescribingBinding(wrangler, rule, errors);
     }
 
+    validateVpcNetworks(wrangler, errors);
     validateSendEmail(wrangler, errors, warnings);
+    validateSecretsRequired(wrangler, errors);
     validateLogpush(wrangler, errors);
     validateLimits(wrangler, errors);
     validatePlacement(wrangler, errors);

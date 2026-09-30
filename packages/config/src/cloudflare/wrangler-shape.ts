@@ -82,6 +82,8 @@ interface WranglerShape {
     // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.
     queues?: QueuesShape;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    // Read-only: checked against the secrets detected packages need (see collectWarnings).
+    secrets?: { required?: unknown } | null;
     // Self-describing: `[{ binding }]` with nothing remote to mint (see reconcileWorkerLoaders).
     worker_loaders?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;

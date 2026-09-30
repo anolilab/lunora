@@ -689,6 +689,8 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
 const SELF_DESCRIBING_BINDING_RULES = [
     { key: "browser", message: 'browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })' },
     { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
+    { key: "media", message: 'media must be an object with a non-empty "binding" (e.g. { "binding": "MEDIA" })' },
+    { key: "stream", message: 'stream must be an object with a non-empty "binding" (e.g. { "binding": "STREAM" })' },
 ] as const satisfies ReadonlyArray<{ key: keyof WranglerConfig; message: string }>;
 
 /**
@@ -760,6 +762,27 @@ const REQUIRED_FIELD_BINDING_RULES = [
         ],
         key: "r2_buckets",
         objectMessage: (label: string) => `${label} must be a { binding, bucket_name } object`,
+    },
+    {
+        arrayMessage: "vpc_services must be an array of { binding, service_id } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the VPC Service binding` },
+            {
+                field: "service_id",
+                message: (label: string) => `${label} must have a non-empty "service_id" (create one with \`wrangler vpc service create\`)`,
+            },
+        ],
+        key: "vpc_services",
+        objectMessage: (label: string) => `${label} must be a { binding, service_id } object`,
+    },
+    {
+        arrayMessage: "artifacts must be an array of { binding, namespace } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the Artifacts binding` },
+            { field: "namespace", message: (label: string) => `${label} must have a non-empty "namespace" naming the Artifacts namespace` },
+        ],
+        key: "artifacts",
+        objectMessage: (label: string) => `${label} must be a { binding, namespace } object`,
     },
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
@@ -839,6 +862,45 @@ const validateD1Databases = (wrangler: WranglerConfig, errors: string[]): void =
     }
 };
 
+/**
+ * Every `vpc_networks[]` entry: a non-empty `binding` plus exactly one target —
+ * a Cloudflare Tunnel (`tunnel_id`) or the Cloudflare Mesh network
+ * (`network_id`, `"cf1:network"`). The two are mutually exclusive, which
+ * {@link RequiredFieldsRule} cannot express, so this is hand-rolled like
+ * {@link validateD1Databases}.
+ */
+const validateVpcNetworks = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { vpc_networks: networks } = wrangler;
+
+    if (networks === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(networks)) {
+        errors.push("vpc_networks must be an array of { binding, tunnel_id | network_id } entries");
+
+        return;
+    }
+
+    for (const [index, entry] of asBindingEntries(networks).entries()) {
+        const label = `vpc_networks[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, tunnel_id | network_id } object`);
+
+            continue;
+        }
+
+        if (!isNonEmptyString(entry.binding)) {
+            errors.push(`${label} must have a non-empty "binding" naming the VPC Network binding`);
+        }
+
+        if (isNonEmptyString(entry.tunnel_id) === isNonEmptyString(entry.network_id)) {
+            errors.push(`${label} must set exactly one of "tunnel_id" (a Cloudflare Tunnel) or "network_id" ("cf1:network" for Cloudflare Mesh)`);
+        }
+    }
+};
+
 // `objectBindingEntries` / `stringEntries` are exported for `reconcile-bindings`,
 // which replays the same hand-edited `migrations` list this validator folds and
 // hit the same raw `TypeError` on a `null` entry. Package-internal only — the
@@ -861,6 +923,7 @@ export {
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
+    validateVpcNetworks,
     validateWorkflowSettings,
     WORKFLOWS_RULE,
 };

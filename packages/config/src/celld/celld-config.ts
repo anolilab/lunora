@@ -312,10 +312,18 @@ const rebaseMigrationDirectories = (config: Config, own: Config, projectRoot: st
                 return database;
             }
 
-            const declared = ownDatabases.find((entry) => entry["binding"] === database["binding"])?.["migrations_dir"];
+            const ownDatabase = ownDatabases.find((entry) => entry["binding"] === database["binding"]);
+            const declared = ownDatabase?.["migrations_dir"];
             const directory = resolve(projectRoot, typeof declared === "string" ? declared : "migrations");
+            const rebased = existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            // `migrations_pattern` (wrangler's glob for nested layouts) is relative
+            // to the config file too. Path resolution never touches the glob
+            // characters, so it rebases like a path.
+            const pattern = ownDatabase?.["migrations_pattern"];
 
-            return existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            return typeof pattern === "string"
+                ? { ...rebased, migrations_pattern: relative(root, resolve(projectRoot, pattern)).split(sep).join("/") }
+                : rebased;
         }),
     };
 };

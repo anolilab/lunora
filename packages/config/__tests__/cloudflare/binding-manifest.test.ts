@@ -29,6 +29,38 @@ describe("buildBindingManifest", () => {
         expect(manifest.version).toBe(BINDING_MANIFEST_VERSION);
     });
 
+    it("models the media, stream, VPC, and artifacts bindings and both pipeline spellings", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            artifacts: [{ binding: "ARTIFACTS", namespace: "default" }],
+            media: { binding: "MEDIA" },
+            pipelines: [
+                { binding: "EVENTS", stream: "events-stream" },
+                { binding: "LEGACY", pipeline: "legacy-stream" },
+            ],
+            secrets: { required: ["API_KEY"] },
+            stream: { binding: "STREAM" },
+            vpc_networks: [
+                { binding: "MESH", network_id: "cf1:network" },
+                { binding: "TUNNEL", tunnel_id: "tunnel-uuid" },
+            ],
+            vpc_services: [{ binding: "PRIVATE_API", service_id: "svc-id" }],
+        } as ManifestConfigShape);
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ARTIFACTS", resource: "default", type: "artifacts" },
+            { binding: "MEDIA", type: "media" },
+            { binding: "EVENTS", resource: "events-stream", type: "pipeline" },
+            { binding: "LEGACY", resource: "legacy-stream", type: "pipeline" },
+            { binding: "STREAM", type: "stream" },
+            { binding: "MESH", resourceId: "cf1:network", type: "vpc_network" },
+            { binding: "TUNNEL", resourceId: "tunnel-uuid", type: "vpc_network" },
+            { binding: "PRIVATE_API", resourceId: "svc-id", type: "vpc_service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
     it("marks a durable object sqlite only when this worker declares the class", () => {
         expect.assertions(1);
 

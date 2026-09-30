@@ -74,6 +74,9 @@ interface WranglerConfig {
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
+    // Artifacts (Git-compatible versioned storage) bindings. The `namespace` is
+    // created out-of-band, so only the `{ binding, namespace }` shape is checked.
+    artifacts?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
     // Workers Static Assets (serves the client build alongside the worker). NOT
     // Cloudflare Pages (an explicit non-goal). See `validateAssets`.
     assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
@@ -90,8 +93,11 @@ interface WranglerConfig {
     containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
     // The `database_id` / `database_name` are remote resources Lunora can't mint
     // (`wrangler d1 create`) — `validateD1Databases` checks the shape (binding +
-    // at least one of the two) only.
-    d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string; database_name?: string } | null | undefined>;
+    // at least one of the two) only. `migrations_pattern` is a glob relative to
+    // the config file (wrangler defaults it to `${migrations_dir}/*.sql`).
+    d1_databases?: ReadonlyArray<
+        { binding?: string; database_id?: string; database_name?: string; migrations_dir?: string; migrations_pattern?: string } | null | undefined
+    >;
     // Workers for Platforms dispatch namespaces — passthrough/shape-check only
     // (the `outbound` shape is deep WfP territory Lunora does not police). See
     // `validateDispatchNamespaces`.
@@ -136,6 +142,8 @@ interface WranglerConfig {
     // The worker entry, relative to the config file. Read to check that every
     // declared Durable Object / Workflow class is actually exported by it.
     main?: string;
+    // Media Transformations binding (`env.MEDIA`). Self-describing { binding }.
+    media?: { binding?: string };
     // Durable Object class history wrangler applies IN ORDER to compute which
     // classes currently exist — a class can be added, renamed, and/or deleted
     // across several entries over a project's lifetime. See
@@ -182,6 +190,10 @@ interface WranglerConfig {
     // alias. Entries stay nullable: the shared array validator reports a
     // non-object entry itself, so narrowing here would only move the failure.
     r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
+    // The secret names the Worker requires (`wrangler dev` loads only these from
+    // `.dev.vars`; `wrangler deploy` fails while one is unset). Untrusted JSONC,
+    // so `validateSecretsRequired` checks it is a list of names.
+    secrets?: { required?: unknown } | null;
     // Cloudflare Secrets Store bindings (`env.<BINDING>.get()`). Each references a
     // remote store + secret by name (created out-of-band); `validateSecretsStore`
     // shape-checks the entries. See also the `ctx.secrets` core built-in.
@@ -194,6 +206,8 @@ interface WranglerConfig {
     // an external worker Lunora can't discover — validate shape only, hint-only
     // inference (the binding name is user-supplied). See `validateServices`.
     services?: ReadonlyArray<{ binding?: string; entrypoint?: string; environment?: string; service?: string } | null | undefined>;
+    // Stream (video library) binding (`env.STREAM`). Self-describing { binding }.
+    stream?: { binding?: string };
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; the validators below guard against that at runtime.
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
@@ -203,6 +217,13 @@ interface WranglerConfig {
     // tolerated and ignored.
     vars?: Record<string, unknown>;
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string } | null | undefined>;
+    // Workers VPC Network bindings: a Cloudflare Tunnel (`tunnel_id`) or the
+    // Cloudflare Mesh network (`network_id: "cf1:network"`) — exactly one. See
+    // `validateVpcNetworks`.
+    vpc_networks?: ReadonlyArray<{ binding?: string; network_id?: string; remote?: boolean; tunnel_id?: string } | null | undefined>;
+    // Workers VPC Service bindings: one host + port, referenced by `service_id`
+    // (created out-of-band). Shape-check only.
+    vpc_services?: ReadonlyArray<{ binding?: string; remote?: boolean; service_id?: string } | null | undefined>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; `validateWorkflows` guards against that at runtime.
     workflows?: ReadonlyArray<WranglerWorkflowEntry | null | undefined>;

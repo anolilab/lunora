@@ -55,9 +55,9 @@ interface BindingRequirement {
      * exports it before publishing.
      */
     className?: string;
-    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), pipeline (`pipelines`). */
+    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`). */
     resource?: string;
-    /** Remote resource id, when the config declares one (`d1`, `kv`, `hyperdrive`). */
+    /** Remote resource id, when the config declares one (`d1`, `kv`, `hyperdrive`, `vpc_service`, `vpc_network`). */
     resourceId?: string;
     /** For `durable_object`: whether the class uses SQLite storage (`new_sqlite_classes`). */
     sqlite?: boolean;
@@ -65,6 +65,7 @@ interface BindingRequirement {
     type:
         | "ai"
         | "analytics_engine"
+        | "artifacts"
         | "assets"
         | "browser"
         | "container"
@@ -73,11 +74,15 @@ interface BindingRequirement {
         | "hyperdrive"
         | "images"
         | "kv"
+        | "media"
         | "pipeline"
         | "queue_consumer"
         | "queue_producer"
         | "r2"
+        | "stream"
         | "vectorize"
+        | "vpc_network"
+        | "vpc_service"
         | "workflow";
 }
 
@@ -127,6 +132,7 @@ const NON_BINDING_FIELDS = new Set([
     "placement",
     "routes",
     "rules",
+    "secrets",
     "triggers",
     "upload_source_maps",
     "vars",
@@ -141,16 +147,22 @@ const NON_BINDING_FIELDS = new Set([
 interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
+    artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
     assets?: { binding?: string; directory?: string };
     browser?: { binding?: string };
     containers?: ReadonlyArray<{ class_name?: string; image?: string; max_instances?: number }>;
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
     images?: { binding?: string };
-    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
+    media?: { binding?: string };
+    /** `pipeline` is wrangler's deprecated spelling of `stream`; both are read. */
+    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     /** Adds `consumers` — the Alchemy translation models producers only. */
     queues?: { consumers?: ReadonlyArray<{ queue?: string }>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
+    stream?: { binding?: string };
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
+    vpc_networks?: ReadonlyArray<{ binding?: string; network_id?: string; tunnel_id?: string }>;
+    vpc_services?: ReadonlyArray<{ binding?: string; service_id?: string }>;
     workflows?: ReadonlyArray<{ binding?: string; class_name?: string; name?: string }>;
 }
 
@@ -170,11 +182,14 @@ const compact = (requirement: BindingRequirement): BindingRequirement =>
 const ARRAY_SECTIONS: ReadonlyArray<{
     bindingKey: string;
     field: keyof ManifestConfigShape;
-    resourceIdKey?: string;
-    resourceKey?: string;
+    /** Entry field(s) carrying the id; with several, the first non-empty one wins. */
+    resourceIdKey?: ReadonlyArray<string> | string;
+    /** Entry field(s) carrying the resource name; with several, the first non-empty one wins. */
+    resourceKey?: ReadonlyArray<string> | string;
     type: BindingRequirement["type"];
 }> = [
     { bindingKey: "binding", field: "analytics_engine_datasets", resourceKey: "dataset", type: "analytics_engine" },
+    { bindingKey: "binding", field: "artifacts", resourceKey: "namespace", type: "artifacts" },
     // Keyed by `class_name`, not `name`: a wrangler `containers[]` entry has no
     // `name` field at all (see `@lunora/config`'s own `ContainerEntry`). Keying on
     // the absent field pushed every real container into `unnamed` — the manifest
@@ -185,18 +200,22 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     { bindingKey: "binding", field: "d1_databases", resourceIdKey: "database_id", resourceKey: "database_name", type: "d1" },
     { bindingKey: "binding", field: "hyperdrive", resourceIdKey: "id", type: "hyperdrive" },
     { bindingKey: "binding", field: "kv_namespaces", resourceIdKey: "id", type: "kv" },
-    { bindingKey: "binding", field: "pipelines", resourceKey: "pipeline", type: "pipeline" },
+    { bindingKey: "binding", field: "pipelines", resourceKey: ["stream", "pipeline"], type: "pipeline" },
     { bindingKey: "binding", field: "r2_buckets", resourceKey: "bucket_name", type: "r2" },
     { bindingKey: "binding", field: "vectorize", resourceKey: "index_name", type: "vectorize" },
+    { bindingKey: "binding", field: "vpc_networks", resourceIdKey: ["tunnel_id", "network_id"], type: "vpc_network" },
+    { bindingKey: "binding", field: "vpc_services", resourceIdKey: "service_id", type: "vpc_service" },
     { bindingKey: "binding", field: "workflows", resourceKey: "name", type: "workflow" },
 ];
 
 /** Parameterless `{ binding }` sections — the platform capabilities with nothing to provision. */
-const SINGLETON_SECTIONS: ReadonlyArray<{ field: "ai" | "assets" | "browser" | "images"; type: BindingRequirement["type"] }> = [
+const SINGLETON_SECTIONS: ReadonlyArray<{ field: "ai" | "assets" | "browser" | "images" | "media" | "stream"; type: BindingRequirement["type"] }> = [
     { field: "ai", type: "ai" },
     { field: "assets", type: "assets" },
     { field: "browser", type: "browser" },
     { field: "images", type: "images" },
+    { field: "media", type: "media" },
+    { field: "stream", type: "stream" },
 ];
 
 /** The binding sections this module understands, derived from the tables above so the three can never disagree. */
@@ -207,10 +226,12 @@ const KNOWN_BINDING_FIELDS = new Set<string>([
     "queues",
 ]);
 
-const readString = (entry: Record<string, unknown>, key: string | undefined): string | undefined => {
-    const value = key === undefined ? undefined : entry[key];
+const readString = (entry: Record<string, unknown>, keys: ReadonlyArray<string> | string | undefined): string | undefined => {
+    const value = (typeof keys === "string" ? [keys] : (keys ?? []))
+        .map((key) => entry[key])
+        .find((candidate) => typeof candidate === "string" && candidate !== "");
 
-    return typeof value === "string" && value !== "" ? value : undefined;
+    return value as string | undefined;
 };
 
 /** The table-driven sections: one binding per array entry. */
