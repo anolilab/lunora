@@ -4,7 +4,7 @@
 import type { HyperdriveEngine } from "@lunora/hyperdrive/global";
 import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
@@ -257,7 +257,13 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["notes", "boards"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["notes", { mode: { field: "boardId", kind: "shardBy" } }],
+            ["boards", { mode: { kind: "global" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
 
         options.logArchive = resolveLogArchiveFromEnv(env);
 

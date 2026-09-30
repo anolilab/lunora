@@ -7,7 +7,7 @@ import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
-import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
 
 import schema from "../schema.js";
@@ -476,21 +476,25 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["profiles", "channels", "messages", "presence", "ratelimit_buckets"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["profiles", { mode: { kind: "global" } }],
+            ["channels", { mode: { kind: "root" } }],
+            ["messages", { mode: { field: "channelId", kind: "shardBy" } }],
+            ["presence", { mode: { field: "channelId", kind: "shardBy" } }],
+            ["ratelimit_buckets", { mode: { kind: "root" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
 
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
                 options.globalIntrospector = buildGlobalIntrospector(database);
-                // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
-                // endpoint: without the former, EVERY row (including a `.global()`
-                // table's) routes to the default shard, so a global table is never
-                // recognised as global and the latter is never reached — the
-                // endpoint answers 200 with `inserted: {}` for a write that never
-                // happened. Both are mechanical over the schema this file already
-                // imports, so there is nothing project-specific to configure.
-                options.resolveTableSharding = buildTableShardingResolver();
+                // `importGlobals` wires the admin bulk-import endpoint's global
+                // plane: the rows `resolveTableSharding` classifies as `.global()`
+                // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
@@ -723,19 +727,6 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
         listTables: () => listGlobalTables(exec, schema as never),
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
     };
-};
-
-/**
- * `resolveTableSharding` for the admin bulk-import endpoint: a lookup over each
- * table's declared `shardMode` (`defineTable(...).global()` / `.shardBy(field)`
- * already record exactly this shape on the table) — mechanical, nothing to
- * configure per project. `undefined` for a table the schema doesn't declare, so
- * the import endpoint's own unknown-table handling still applies.
- */
-const buildTableShardingResolver = (): AdminTableResolver => (table) => {
-    const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];
-
-    return declared?.shardMode ? { mode: declared.shardMode } : undefined;
 };
 
 /**

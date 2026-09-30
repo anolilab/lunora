@@ -1036,11 +1036,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         jurisdiction: schema.jurisdiction,
         // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
         jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
-        // Drives the emitted `listSchemaTables` — export's seed for "every table".
-        tableNames: schema.tables.map((table) => table.name),
+        // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
+        tables: schema.tables.map((table) => {
+            return { name: table.name, shardMode: table.shardMode };
+        }),
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
-        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // `emitApp` takes no schema (only the table list), so the count it
         // needs to make the same decision its siblings make has to come in.
         vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
