@@ -23,6 +23,7 @@ import { toErrorBody } from "@lunora/errors";
 import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
+import type { AdminTableResolver } from "./create-worker";
 import { LunoraError } from "./errors";
 import type { ShardNamespaceInput } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
@@ -52,15 +53,17 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  * The registry a worker gets when it configures none: it answers for every
  * table that lives on the default shard and refuses the rest.
  *
- * A root or `.global()` table has no shard keys to discover, so the empty list
- * is the whole answer and the coordinator's default-shard fallback reaches the
- * one DO that holds its rows. A `.shardBy(...)` table's keys are only known to a
- * real registry, and an empty list there would make an export, CDC sync or
- * migration cover the default shard alone and report success — so it throws
- * instead. Without `resolveSharding` no table can be told apart, so every one
- * is refused for the same reason.
+ * A root table (or one the schema does not declare) lives on the default shard,
+ * so that one key is the whole answer — named outright rather than left empty,
+ * because only export, CDC sync and migrations fall back to the default shard
+ * on an empty list; fan-out, rank and shard traffic would reach nothing. A
+ * `.global()` table lives in D1, on no shard. A `.shardBy(...)` table's keys are
+ * known only to a real registry, and anything less would cover the default
+ * shard alone and report success — so it throws instead. Without
+ * `resolveSharding` no table can be told apart, so every one is refused for the
+ * same reason.
  */
-const createDefaultShardRegistry = (resolveSharding: ((table: string) => { mode: { kind: string } } | undefined) | undefined): ShardRegistry => {
+const createDefaultShardRegistry = (resolveSharding: AdminTableResolver | undefined, defaultShardKey: string): ShardRegistry => {
     return {
         listShardKeys(table) {
             if (resolveSharding === undefined) {
@@ -70,14 +73,16 @@ const createDefaultShardRegistry = (resolveSharding: ((table: string) => { mode:
                 );
             }
 
-            if (resolveSharding(table)?.mode.kind === "shardBy") {
+            const kind = resolveSharding(table)?.mode.kind;
+
+            if (kind === "shardBy") {
                 throw new LunoraError(
-                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and no shard registry is configured — declare \`.shardRegistry((env) => env.SHARD_REGISTRY)\` on the app builder (or pass \`queryCoordinator\` to \`createWorker\`)`,
+                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and the worker has no shard registry — declare \`.shardRegistry((env) => env.SHARD_REGISTRY)\` on the app builder and bind \`SHARD_REGISTRY\` to \`ShardRegistryDO\` (or pass \`queryCoordinator\` to \`createWorker\`)`,
                     { code: "BAD_REQUEST", status: 400 },
                 );
             }
 
-            return [];
+            return kind === "global" ? [] : [defaultShardKey];
         },
     };
 };

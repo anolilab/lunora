@@ -8,7 +8,7 @@
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
- * The export/import row producers (`streamExportRows` / `streamingImport`) are
+ * The export/import row producers (`prepareExportRows` / `streamingImport`) are
  * injected rather than imported because they close over the worker options and
  * are shared with the scheduled R2 backup — so this module imports no runtime
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
@@ -82,8 +82,6 @@ interface DataMovementAdminRouteDeps {
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
     /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
     assertAdmin: (request: Request) => void;
-    /** Refuse an export whose shard-local tables the registry cannot enumerate, before the response is committed. */
-    assertExportDiscoverable: (tables: ReadonlyArray<string> | undefined) => Promise<void>;
     /** The worker's default shard, so an empty discovery still reaches the root DO. */
     defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
@@ -92,24 +90,20 @@ interface DataMovementAdminRouteDeps {
     exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
+
+    /**
+     * Settle the shard-local export fan-out and return every row (shard-local
+     * then global). Injected because it closes over the worker options and is
+     * shared with the scheduled R2 backup.
+     */
+    prepareExportRows: (headers: Record<string, string>, tables: ReadonlyArray<string> | undefined) => Promise<AsyncIterable<ExportRow>>;
     /** The cross-shard query coordinator (the worker's own, or its default). */
     queryCoordinator: QueryCoordinator;
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
+
     /** The shard DO namespace fanned across. */
     shardDO: ShardNamespaceLike;
-
-    /**
-     * Produce export rows (shard-local then global), invoking `writeRow` per row.
-     * Injected because it closes over the worker options and is shared with the
-     * scheduled R2 backup.
-     */
-    streamExportRows: (
-        coordinator: QueryCoordinator,
-        headers: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        writeRow: (row: ExportRow) => void,
-    ) => Promise<void>;
     /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
     streamingImport: (
         request: Request,
@@ -137,10 +131,9 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         knownTables,
         queryCoordinator: coordinator,
         assertAdmin,
-        assertExportDiscoverable,
         resolveForwardContext,
         shardDO,
-        streamExportRows,
+        prepareExportRows,
         streamingImport,
         syncGlobals,
     } = deps;
@@ -156,23 +149,24 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const body = await parseExportBody(request);
 
-        await assertExportDiscoverable(body.tables);
-
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
-        // shard returns a single materialised envelope, and the whole fan-out is
-        // collected before the stream drains, so peak worker memory still scales
-        // with the total shard-local row count — the streaming only keeps the
-        // *response* from being buffered, it does not bound the source data.
+        // The shard-local fan-out settles HERE, before any status is committed, so
+        // a failed shard (502) or a `.shardBy()` table the registry cannot list
+        // (400) answers with a real status. Past this point only the `.global()`
+        // rows can still fail, and those end the body as an errored stream.
+        // Caveat: each shard returns a single materialised envelope, so peak
+        // worker memory scales with the total shard-local row count — the
+        // streaming only keeps the *response* from being buffered.
+        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                };
-
                 try {
-                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
+                    for await (const row of rows) {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
+                    }
+
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);

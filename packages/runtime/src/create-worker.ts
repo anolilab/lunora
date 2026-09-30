@@ -42,7 +42,7 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
-import { assertExportDiscoverable, streamExportRows } from "./export-stream";
+import { prepareExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
@@ -2791,12 +2791,6 @@ const assertX402Configurable = (options: WorkerOptions): void => {
  * be re-exported directly as `export default createWorker(...)`.
  */
 const createWorker = (options: WorkerOptions): LunoraWorker => {
-    // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
-    // coordinator, and the app builder has no way to supply one — so default it.
-    // The default registry covers root and `.global()` tables and refuses to
-    // guess at a `.shardBy()` table's keys (see `createDefaultShardRegistry`).
-    const queryCoordinator = options.queryCoordinator ?? createQueryCoordinator({ registry: createDefaultShardRegistry(options.resolveTableSharding) });
-
     assertX402Configurable(options);
 
     // Resolved once here rather than per request: the trust policy is fixed for
@@ -2804,6 +2798,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const isTrustedUpstream = resolveTraceTrust(options.trustInboundTraceContext);
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
+
+    // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
+    // coordinator, so a worker configured without one gets a default whose
+    // registry serves root and `.global()` tables and refuses to guess at a
+    // `.shardBy()` table's keys (see `createDefaultShardRegistry`).
+    const queryCoordinator =
+        options.queryCoordinator ?? createQueryCoordinator({ registry: createDefaultShardRegistry(options.resolveTableSharding, defaultShard) });
 
     // The trust-boundary identity gate: only the PUBLIC data paths (RPC /
     // WebSocket / HTTP-action / server-query) use this wrapped resolver, which
@@ -3746,7 +3747,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
-        assertExportDiscoverable: async (tables) => assertExportDiscoverable(options, queryCoordinator, tables),
         exportCursorStore: options.exportCursorStore,
         exportSinks: options.exportSinks,
         defaultShardKey: defaultShard,
@@ -3759,7 +3759,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
+        prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
         streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
         syncGlobals: options.syncGlobals,
     });

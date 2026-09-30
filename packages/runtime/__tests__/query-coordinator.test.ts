@@ -59,14 +59,25 @@ const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => 
 };
 
 describe("createDefaultShardRegistry", () => {
-    it("answers a root table with no keys, so the fan-out falls back to the default shard", async () => {
+    it("answers a root or undeclared table with the default shard itself", async () => {
+        expect.assertions(2);
+
+        const registry = createDefaultShardRegistry((table) => (table === "users" ? { mode: { kind: "root" } } : undefined), "__root__");
+
+        // Named outright: fan-out and rank have no empty-list fallback, so `[]`
+        // would reach no shard at all.
+        expect([...(await registry.listShardKeys("users"))]).toStrictEqual(["__root__"]);
+        expect([...(await registry.listShardKeys("unknown"))]).toStrictEqual(["__root__"]);
+    });
+
+    it("answers a .global() table with no shards, since it lives in D1", async () => {
         expect.assertions(1);
 
         const registry = createDefaultShardRegistry(() => {
-            return { mode: { kind: "root" } };
-        });
+            return { mode: { kind: "global" } };
+        }, "__root__");
 
-        expect([...(await registry.listShardKeys("users"))]).toEqual([]);
+        expect([...(await registry.listShardKeys("settings"))]).toStrictEqual([]);
     });
 
     it("refuses a .shardBy() table instead of covering the default shard alone", () => {
@@ -74,15 +85,15 @@ describe("createDefaultShardRegistry", () => {
 
         const registry = createDefaultShardRegistry(() => {
             return { mode: { field: "channelId", kind: "shardBy" } };
-        });
+        }, "__root__");
 
-        expect(() => registry.listShardKeys("messages")).toThrow(/"messages": it is `\.shardBy\(\)` and no shard registry is configured/u);
+        expect(() => registry.listShardKeys("messages")).toThrow(/"messages": it is `\.shardBy\(\)` and the worker has no shard registry/u);
     });
 
     it("refuses every table when the worker cannot tell sharded from root", () => {
         expect.assertions(1);
 
-        const registry = createDefaultShardRegistry(undefined);
+        const registry = createDefaultShardRegistry(undefined, "__root__");
 
         expect(() => registry.listShardKeys("users")).toThrow(/no `resolveTableSharding`/u);
     });

@@ -2,10 +2,10 @@
  * The NDJSON export pipeline, extracted from `create-worker.ts`. Produces export
  * rows for a deployment — shard-local rows (fanned out via the coordinator's
  * `orchestrateExport`) first, then `.global()` (D1) rows (streamed from the
- * `exportGlobals` helper) — invoking a caller-supplied `writeRow` per row.
- * `streamExportRows` is the public entry, shared by the admin export endpoint
- * (which streams the rows back as NDJSON) and the scheduled R2 backup (which
- * writes them to the backup store). The pipeline is parameterised by
+ * `exportGlobals` helper). `prepareExportRows` is the entry the admin export
+ * endpoint uses (it settles the fan-out before committing a status, then
+ * streams the rows back as NDJSON); `streamExportRows` wraps it for the
+ * scheduled R2 backup, which writes them to the backup store. The pipeline is parameterised by
  * `WorkerOptions`, so it imports only that type (erased at build) from
  * `create-worker` — no runtime values cross the edge.
  */
@@ -42,33 +42,30 @@ const partitionExportTables = (options: WorkerOptions, tables: ReadonlyArray<str
 };
 
 /**
- * Fan the shard-local export out via the coordinator and write each shard's
+ * Fan the shard-local export out via the coordinator and collect each shard's
  * rows.
  *
  * A shard that failed aborts the whole export. The rows it holds are simply
  * absent from the roll-up, and there is no way to say so in-band: the NDJSON
- * body is a row per line with no envelope, and the admin route has already
- * committed `200` and its headers before the fan-out runs, so a shorter file is
+ * body is a row per line with no envelope, so a shorter file is
  * indistinguishable from a smaller deployment. Skipping the shard therefore
  * handed the caller an incomplete snapshot labelled complete — one the scheduled
  * backup then wrote a manifest for. Throwing is the one signal a consumer cannot
- * mistake for success: the backup writes nothing, and the streamed response ends
- * as an errored body rather than a clean short one (the CLI discards its staged
- * partial file on exactly that).
+ * mistake for success: the backup writes nothing, and the admin endpoint, which
+ * awaits this before committing a status, answers 502.
  */
 const exportShardLocalRows = async (
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     tables: ReadonlyArray<string> | undefined,
     shardLocalTables: ReadonlyArray<string>,
-    writeRow: (row: ExportRow) => void,
     namespace: ShardNamespaceLike,
     defaultShardKey: string,
-): Promise<void> => {
+): Promise<ExportRow[]> => {
     // Skip only when the caller named tables and none are shard-local. When
     // tables is undefined the per-shard exporter visits every shard-local table.
     if (tables !== undefined && shardLocalTables.length === 0) {
-        return;
+        return [];
     }
 
     // `tables === undefined` (export everything) leaves `shardLocalTables` empty
@@ -77,7 +74,7 @@ const exportShardLocalRows = async (
     // keeps that case from exporting NOTHING — the default shard is contacted and
     // hands back every table it holds. A deployment with `.shardBy(...)` tables
     // still needs a seeded table list to reach the other DOs, which is why
-    // `streamExportRows` fills one in from `listSchemaTables` when it can.
+    // `prepareExportRows` fills one in from `listSchemaTables` when it can.
     //
     // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
     // pins it once). Fanning out through it keeps export reading the SAME DOs the
@@ -90,8 +87,8 @@ const exportShardLocalRows = async (
         tables: shardLocalTables,
     });
 
-    // Checked before a single row is written, so a failed fan-out leaves the
-    // stream untouched rather than truncated mid-table.
+    // Checked before any row is handed back, so a failed fan-out never becomes
+    // a snapshot truncated mid-table.
     const failed = result.shards.filter((shard) => shard.error);
 
     if (failed.length > 0) {
@@ -103,29 +100,27 @@ const exportShardLocalRows = async (
         });
     }
 
-    for (const shard of result.shards) {
-        for (const row of shard.rows ?? []) {
-            writeRow(row);
-        }
-    }
+    return result.shards.flatMap((shard) => shard.rows ?? []);
 };
 
 /**
- * Produce export rows — shard-local first (from `orchestrateExport`'s
- * collected per-shard envelopes), then `.global()` rows (streamed from the
- * `exportGlobals` helper) — invoking `writeRow` for each. `tables ===
- * undefined` means "every table". Shared by the admin export endpoint (which
- * streams the rows back as NDJSON) and the scheduled R2 backup (which writes
- * them to the backup store).
+ * Settle an export's shard-local fan-out and hand back every row it writes —
+ * shard-local first, then `.global()` rows streamed from the `exportGlobals`
+ * helper. `tables === undefined` means "every table".
+ *
+ * The fan-out completes before this resolves, so everything that can refuse
+ * the export — a shard the coordinator failed to reach, a `.shardBy()` table
+ * the registry cannot list (the worker's default registry refuses those) —
+ * throws here, while the admin endpoint can still answer with a status. Only
+ * the global half streams.
  */
-const streamExportRows = async (
+const prepareExportRows = async (
     options: WorkerOptions,
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     tables: ReadonlyArray<string> | undefined,
-    writeRow: (row: ExportRow) => void,
     namespace: ShardNamespaceLike,
-): Promise<void> => {
+): Promise<AsyncIterable<ExportRow>> => {
     // "Every table" is a real table list when codegen could supply one. Shard
     // discovery is driven by that list, so without it only the default shard is
     // contacted and a whole-deployment export silently comes back short.
@@ -143,33 +138,34 @@ const streamExportRows = async (
     }
     const { globalTables, shardLocalTables } = partitionExportTables(options, seeded);
 
-    await exportShardLocalRows(coordinator, forwardedHeaders, seeded, shardLocalTables, writeRow, namespace, options.defaultShardKey ?? "__root__");
+    const shardRows = await exportShardLocalRows(coordinator, forwardedHeaders, seeded, shardLocalTables, namespace, options.defaultShardKey ?? "__root__");
 
-    // Globals: stream rows from the D1 helper when configured.
     const exportGlobalsFunction = options.exportGlobals;
     const wantGlobals = tables === undefined || globalTables.length > 0;
 
-    if (wantGlobals && exportGlobalsFunction) {
-        // `tables === undefined` leaves `globalTables` empty — "every table" on the wire.
-        for await (const row of exportGlobalsFunction({ tables: globalTables })) {
-            writeRow(row);
+    return (async function* rows(): AsyncGenerator<ExportRow> {
+        yield* shardRows;
+
+        if (wantGlobals && exportGlobalsFunction) {
+            // `tables === undefined` leaves `globalTables` empty — "every table" on the wire.
+            yield* exportGlobalsFunction({ tables: globalTables });
         }
+    })();
+};
+
+/** Drain {@link prepareExportRows} into `writeRow` — the scheduled backup's entry. */
+const streamExportRows = async (
+    options: WorkerOptions,
+    coordinator: QueryCoordinator,
+    forwardedHeaders: Record<string, string>,
+    tables: ReadonlyArray<string> | undefined,
+    writeRow: (row: ExportRow) => void,
+    namespace: ShardNamespaceLike,
+): Promise<void> => {
+    for await (const row of await prepareExportRows(options, coordinator, forwardedHeaders, tables, namespace)) {
+        writeRow(row);
     }
 };
 
-/**
- * Ask the registry about every shard-local table an export will reach, before
- * the response is committed. A registry that cannot answer (the worker's default
- * one, for a `.shardBy()` table) throws here and the caller answers 400. Thrown
- * from inside the stream instead, it could only end the body early — and a
- * chunked response can be closed as if it were complete, so the export reads as
- * a clean, short dump.
- */
-const assertExportDiscoverable = async (options: WorkerOptions, coordinator: QueryCoordinator, tables: ReadonlyArray<string> | undefined): Promise<void> => {
-    const { shardLocalTables } = partitionExportTables(options, tables ?? options.listSchemaTables?.());
-
-    await Promise.all(shardLocalTables.map(async (table) => coordinator.registry.listShardKeys(table)));
-};
-
 export type { ExportRow };
-export { assertExportDiscoverable, streamExportRows };
+export { prepareExportRows, streamExportRows };

@@ -331,10 +331,10 @@ const previewBackupRetention = async (options: WorkerOptions): Promise<BackupRet
  * (plus a manifest sidecar) to `backupStore`. The snapshot is keyed by the
  * trigger's `scheduledTime`, so it is named after the moment it represents.
  *
- * Requires `backupStore` and an admin token — the export
- * fans out to each shard's admin gate, which the bearer authenticates. Missing
- * prerequisites throw so the platform records a failed cron invocation rather
- * than silently skipping the backup.
+ * Requires `backupStore` and an admin token — the export fans out to each
+ * shard's admin gate, which the bearer authenticates. Missing prerequisites
+ * throw so the platform records a failed cron invocation rather than silently
+ * skipping the backup.
  */
 const runScheduledBackup = async (
     options: WorkerOptions,

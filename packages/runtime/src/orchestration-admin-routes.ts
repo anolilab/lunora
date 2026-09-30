@@ -271,10 +271,10 @@ interface OrchestrationAdminRouteDeps {
 
 /** Build the cross-shard orchestration + PITR route map merged into the worker's internal route table. */
 const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { defaultShard, forwardToShard, isAdmin, queryCoordinator, resolveForwardContext, shardDO } = deps;
+    const { defaultShard, forwardToShard, isAdmin, queryCoordinator: coordinator, resolveForwardContext, shardDO } = deps;
 
     /** The guard pair every coordinator-backed handler runs: POST-only and admin-gated. `label` names the endpoint in each error. */
-    const requireCoordinator = (request: Request, label: string): QueryCoordinator => {
+    const assertAdminPost = (request: Request, label: string): void => {
         if (request.method !== "POST") {
             throw new LunoraError(`${label} endpoint requires POST`, { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
@@ -282,12 +282,10 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
         if (!isAdmin(request)) {
             throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
-
-        return queryCoordinator;
     };
 
     const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
-        const coordinator = requireCoordinator(request, "Migration");
+        assertAdminPost(request, "Migration");
         const migrate = await parseMigrateRequest(request);
 
         // Forward the inbound `Authorization` bearer so each shard's admin gate
@@ -322,7 +320,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * caller passes the EXPLICIT key tuple (built off the row via `rankKeyFromDoc`).
      */
     const handleRank = async (request: Request, env: unknown): Promise<Response> => {
-        const coordinator = requireCoordinator(request, "Rank");
+        assertAdminPost(request, "Rank");
         const rank = await parseRankRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
@@ -355,7 +353,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * is forwarded so each shard's admin gate accepts the fanned-out call.
      */
     const handleRankPage = async (request: Request, env: unknown): Promise<Response> => {
-        const coordinator = requireCoordinator(request, "Rank page");
+        assertAdminPost(request, "Rank page");
         const rankPage = await parseRankPageRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
@@ -384,7 +382,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * is forwarded so each shard's admin gate accepts the fanned-out call.
      */
     const handleShardTraffic = async (request: Request, env: unknown): Promise<Response> => {
-        const coordinator = requireCoordinator(request, "Shard-traffic");
+        assertAdminPost(request, "Shard-traffic");
         const trafficRequest = await parseShardTrafficRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);

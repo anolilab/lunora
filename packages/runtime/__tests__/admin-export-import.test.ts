@@ -9,7 +9,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
-import { createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 import chunkedBody from "./helpers/chunked-body";
 
@@ -50,7 +49,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -83,7 +82,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -108,7 +107,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -149,7 +148,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -174,7 +173,7 @@ describe("createWorker — admin export endpoint", () => {
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
     });
 
-    it("errors the stream when a shard's export failed instead of serving a short snapshot", async () => {
+    it("answers 502 when a shard's export failed instead of serving a short snapshot", async () => {
         expect.assertions(2);
 
         const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
@@ -200,7 +199,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -215,11 +214,11 @@ describe("createWorker — admin export endpoint", () => {
             fakeContext,
         );
 
-        // The status line is committed before the fan-out runs, so the only
-        // honest signal left is an aborted body — which a consumer cannot mistake
-        // for a complete dump the way it can mistake a short one.
-        expect(response.status).toBe(200);
-        await expect(response.text()).rejects.toThrow(/c2/u);
+        // The shard-local fan-out settles before the status is committed, so a
+        // failed shard is a real 502 — not a short body a consumer could mistake
+        // for a complete dump.
+        expect(response.status).toBe(502);
+        await expect(response.text()).resolves.toContain("c2");
     });
 
     it("exports a root table without a configured queryCoordinator", async () => {
@@ -317,7 +316,7 @@ describe("createWorker — admin export endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
                 table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
@@ -389,7 +388,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -424,7 +423,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -472,7 +471,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             // Recognises `users` as global, but no `importGlobals` is wired — so
             // every row lands on the GLOBAL_NOT_CONFIGURED path.
@@ -521,7 +520,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
                 table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } },
@@ -611,7 +610,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -654,7 +653,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -711,7 +710,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
                 table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
@@ -765,7 +764,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
                 table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
@@ -808,7 +807,7 @@ describe("createWorker — admin import endpoint", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
                 table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
@@ -932,7 +931,7 @@ describe("backup registry snapshot → admin import", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             resolveTableSharding: (): ShardingInfo => {
                 return { mode: { kind: "root" } };
@@ -1009,7 +1008,7 @@ describe("import streaming — large body", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1064,7 +1063,7 @@ describe("import streaming — large body", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1149,7 +1148,7 @@ describe("admin sync (CDC streaming export)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
             syncGlobals,
@@ -1199,7 +1198,7 @@ describe("admin sync (CDC streaming export)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1241,7 +1240,7 @@ describe("admin sync (CDC streaming export)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1279,7 +1278,7 @@ describe("admin sync (CDC streaming export)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1345,7 +1344,7 @@ describe("createWorker — jurisdiction pins the export/import fan-out", () => {
             orchestrateRank: vi.fn<() => never>(),
             orchestrateRankPage: vi.fn<() => never>(),
             orchestrateShardTraffic: vi.fn<() => never>(),
-            registry: createStaticShardRegistry({}),
+            registry: {},
             ...overrides,
         };
     };
@@ -1436,7 +1435,7 @@ describe("admin apply (CDC replay)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1483,7 +1482,7 @@ describe("admin apply (CDC replay)", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1554,7 +1553,7 @@ describe("admin import — a shard the fan-out never reached", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
@@ -1598,7 +1597,7 @@ describe("admin import — a shard the fan-out never reached", () => {
                 orchestrateRank: vi.fn<() => never>(),
                 orchestrateRankPage: vi.fn<() => never>(),
                 orchestrateShardTraffic: vi.fn<() => never>(),
-                registry: createStaticShardRegistry({}),
+                registry: {} as never,
             },
             shardDO: noopNamespace,
         });
