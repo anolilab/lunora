@@ -8,7 +8,7 @@ import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, face
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
-import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
@@ -392,7 +392,45 @@ class AppBuilder<Env extends object> {
             options.adminToken = this.adminToken(env);
         }
 
-        options.listSchemaTables = () => ["cells", "organizations", "members", "projects", "deployments", "aliasOwnership", "metricPoints", "deployKeys", "overageDebits", "tenantLogs", "observations", "githubInstallations", "builds", "buildLogs", "domains", "auditLog", "invitations", "platformUsage", "issues", "incidents", "alertRules", "alertRuleState", "alerts", "uptimeChecks", "uptimeState", "secrets", "cloudflareBilling", "dashboards", "customers", "events", "paymentSessions", "subscriptions", "usageEvents", "rateLimits"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["cells", { mode: { kind: "global" } }],
+            ["organizations", { mode: { kind: "global" } }],
+            ["members", { mode: { kind: "global" } }],
+            ["projects", { mode: { kind: "global" } }],
+            ["deployments", { mode: { kind: "global" } }],
+            ["aliasOwnership", { mode: { kind: "global" } }],
+            ["metricPoints", { mode: { kind: "global" } }],
+            ["deployKeys", { mode: { kind: "global" } }],
+            ["overageDebits", { mode: { kind: "global" } }],
+            ["tenantLogs", { mode: { kind: "global" } }],
+            ["observations", { mode: { kind: "global" } }],
+            ["githubInstallations", { mode: { kind: "global" } }],
+            ["builds", { mode: { kind: "global" } }],
+            ["buildLogs", { mode: { kind: "global" } }],
+            ["domains", { mode: { kind: "global" } }],
+            ["auditLog", { mode: { kind: "global" } }],
+            ["invitations", { mode: { kind: "global" } }],
+            ["platformUsage", { mode: { kind: "global" } }],
+            ["issues", { mode: { kind: "global" } }],
+            ["incidents", { mode: { kind: "global" } }],
+            ["alertRules", { mode: { kind: "global" } }],
+            ["alertRuleState", { mode: { kind: "global" } }],
+            ["alerts", { mode: { kind: "global" } }],
+            ["uptimeChecks", { mode: { kind: "global" } }],
+            ["uptimeState", { mode: { kind: "global" } }],
+            ["secrets", { mode: { kind: "global" } }],
+            ["cloudflareBilling", { mode: { kind: "global" } }],
+            ["dashboards", { mode: { kind: "global" } }],
+            ["customers", { mode: { kind: "global" } }],
+            ["events", { mode: { kind: "global" } }],
+            ["paymentSessions", { mode: { kind: "global" } }],
+            ["subscriptions", { mode: { kind: "global" } }],
+            ["usageEvents", { mode: { kind: "global" } }],
+            ["rateLimits", { mode: { kind: "root" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
 
         if (this.schedulerDeclaration) {
             options.schedulerDO = this.schedulerDeclaration.namespace(env);
@@ -403,14 +441,9 @@ class AppBuilder<Env extends object> {
 
             if (database) {
                 options.globalIntrospector = buildGlobalIntrospector(database);
-                // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
-                // endpoint: without the former, EVERY row (including a `.global()`
-                // table's) routes to the default shard, so a global table is never
-                // recognised as global and the latter is never reached — the
-                // endpoint answers 200 with `inserted: {}` for a write that never
-                // happened. Both are mechanical over the schema this file already
-                // imports, so there is nothing project-specific to configure.
-                options.resolveTableSharding = buildTableShardingResolver();
+                // `importGlobals` wires the admin bulk-import endpoint's global
+                // plane: the rows `resolveTableSharding` classifies as `.global()`
+                // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
@@ -640,19 +673,6 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
         listTables: () => listGlobalTables(exec, schema as never),
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
     };
-};
-
-/**
- * `resolveTableSharding` for the admin bulk-import endpoint: a lookup over each
- * table's declared `shardMode` (`defineTable(...).global()` / `.shardBy(field)`
- * already record exactly this shape on the table) — mechanical, nothing to
- * configure per project. `undefined` for a table the schema doesn't declare, so
- * the import endpoint's own unknown-table handling still applies.
- */
-const buildTableShardingResolver = (): AdminTableResolver => (table) => {
-    const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];
-
-    return declared?.shardMode ? { mode: declared.shardMode } : undefined;
 };
 
 /**
