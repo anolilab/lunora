@@ -1,10 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import type { ManifestConfigShape } from "@lunora/config/cloudflare";
+import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { dirname, resolve } from "@visulima/path";
 
-import type { DeployEvent, WranglerConfig } from "../../util/cloud-client";
-import { deployToCloud, fetchEjectPackage, parseWranglerManifest, rollbackDeployment } from "../../util/cloud-client";
+import type { DeployEvent, DeployToCloudOptions, WranglerAssets } from "../../util/cloud-client";
+import { collectAssets, deployToCloud, fetchEjectPackage, rollbackDeployment } from "../../util/cloud-client";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { runEject } from "../../util/eject";
@@ -15,6 +17,9 @@ type DeployKind = "dev" | "preview" | "production";
 
 const DEPLOY_KINDS = new Set<DeployKind>(["dev", "preview", "production"]);
 
+/** The parsed wrangler config a deploy reads: the binding-manifest shape plus the full `assets` section. */
+type CloudWranglerConfig = Omit<ManifestConfigShape, "assets"> & { assets?: WranglerAssets };
+
 interface CloudCommandDeps {
     /** Deploy client (injected for tests). */
     deployFn: typeof deployToCloud;
@@ -24,8 +29,8 @@ interface CloudCommandDeps {
     env: Record<string, string | undefined>;
     /** Read a bundle file and return it base64-encoded (injected for tests). */
     readBundleBase64: (path: string) => string;
-    /** Read the project's wrangler config (injected for tests). */
-    readWrangler: (cwd: string) => undefined | WranglerConfig;
+    /** Read the project's wrangler config and where it lives (injected for tests). */
+    readWrangler: (cwd: string) => { config: CloudWranglerConfig; path: string } | undefined;
     /** Rollback client (injected for tests). */
     rollbackFn: typeof rollbackDeployment;
     /** Write one eject output file under `<cwd>/<dir>` (injected for tests). */
@@ -62,9 +67,10 @@ const defaultDeps = (): CloudCommandDeps => {
         env: process.env,
         readBundleBase64: (path) => readFileSync(path).toString("base64"),
         readWrangler: (cwd) => {
-            const wranglerPath = findWranglerFile(cwd);
+            const path = findWranglerFile(cwd);
+            const config = path === undefined ? undefined : readWranglerJsonc<CloudWranglerConfig>(path).parsed;
 
-            return wranglerPath ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
+            return path === undefined || config === undefined ? undefined : { config, path };
         },
         ejectFn: fetchEjectPackage,
         rollbackFn: rollbackDeployment,
@@ -98,6 +104,55 @@ const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logge
     return { apiUrl, deployKey };
 };
 
+/**
+ * What the deploy request says about the Worker, derived from its wrangler
+ * config: the binding manifest, the crons, and the static assets. Logs and
+ * returns `undefined` when the assets cannot be collected.
+ */
+const deployPayload = (
+    wrangler: { config: CloudWranglerConfig; path: string },
+    logger: Logger,
+): Pick<DeployToCloudOptions, "assets" | "cronSpecs" | "manifest"> | undefined => {
+    const bindingManifest = buildBindingManifest(wrangler.config);
+
+    // Not fatal: what the manifest does model still deploys, and the server refuses
+    // any of it it cannot support. These sections are simply not described.
+    if (bindingManifest.unknown.length > 0) {
+        logger.warn(
+            `cloud deploy: the binding manifest does not model these wrangler sections: ${bindingManifest.unknown.join(", ")}. Anything they bind will be missing from the deployment.`,
+        );
+    }
+
+    const payload: Pick<DeployToCloudOptions, "assets" | "cronSpecs" | "manifest"> = {
+        cronSpecs: [...bindingManifest.crons],
+        manifest: {
+            bindings: [...bindingManifest.bindings],
+            ...(bindingManifest.compatibilityDate === undefined ? {} : { compatibilityDate: bindingManifest.compatibilityDate }),
+            ...(bindingManifest.compatibilityFlags === undefined ? {} : { compatibilityFlags: [...bindingManifest.compatibilityFlags] }),
+        },
+    };
+
+    if (!wrangler.config.assets) {
+        return payload;
+    }
+
+    const { directory } = wrangler.config.assets;
+
+    if (!directory) {
+        logger.error("cloud deploy: wrangler `assets` has no `directory` — set it to your build output");
+
+        return undefined;
+    }
+
+    try {
+        return { ...payload, assets: collectAssets(resolve(dirname(wrangler.path), directory), wrangler.config.assets) };
+    } catch (error) {
+        logger.error(`cloud deploy: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
+
 const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, auth: { apiUrl: string; deployKey: string }): Promise<CloudCommandResult> => {
     const { logger } = options;
 
@@ -120,7 +175,17 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
     }
 
     const wrangler = deps.readWrangler(options.cwd);
-    const scriptName = options.scriptName ?? (typeof wrangler?.name === "string" ? wrangler.name : undefined);
+
+    // The binding manifest IS the deploy's statement of what the Worker needs;
+    // without a config there is nothing to derive it from, and an empty one would
+    // deploy a Worker whose every `env.X` is undefined.
+    if (!wrangler) {
+        logger.error(`cloud deploy: no readable wrangler config in ${options.cwd} — the binding manifest is derived from it`);
+
+        return { code: 1 };
+    }
+
+    const scriptName = options.scriptName ?? wrangler.config.name;
 
     if (!scriptName) {
         logger.error("cloud deploy: no script name — pass --name or set `name` in wrangler config");
@@ -128,7 +193,11 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
         return { code: 1 };
     }
 
-    const manifest = wrangler ? parseWranglerManifest(wrangler) : { bindings: {}, cronSpecs: [] };
+    const payload = deployPayload(wrangler, logger);
+
+    if (!payload) {
+        return { code: 1 };
+    }
 
     let bundle: string;
 
@@ -156,11 +225,10 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
 
     const result = await deps.deployFn(
         {
+            ...payload,
             apiUrl: auth.apiUrl,
-            bindings: manifest.bindings,
             branch: options.branch,
             bundle,
-            cronSpecs: manifest.cronSpecs,
             deployKey: auth.deployKey,
             ...(options.kind ? { kind: options.kind as DeployKind } : {}),
             projectId: options.project, // gitleaks:allow -- the --project flag's value, not a Cypress project id
