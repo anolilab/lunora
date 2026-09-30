@@ -257,6 +257,8 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { parseRelayName } from "../../../shared/relay-name";
+import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -338,7 +340,7 @@ import { CdcRetentionRunner } from "./cdc-retention";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { SHARD_REGISTRY_DO_NAME } from "./shard-registry-do";
+import { registerShardKey, SHARD_REGISTRY_DO_NAME } from "./shard-registry-do";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
 /**
@@ -1354,6 +1356,9 @@ const streamFrames = (
 
 const ROOT_SHARD_NAME = "__root__";
 
+/** How long a failed shard-registry registration waits before a later write retries it. */
+const SHARD_REGISTRY_RETRY_MS = 30_000;
+
 /**
  * Dependency-set sentinel for admin introspection subscriptions that aren't
  * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
@@ -2362,11 +2367,19 @@ abstract class ShardDO {
     private shardBinding: string | undefined;
 
     /**
-     * The `.shardBy()` tables this instance has already registered with the
-     * shard registry. Registration is idempotent, so this only saves the round
-     * trip; it resets with the instance, which re-registers on its next write.
+     * The `.shardBy()` tables this instance has registered with the shard
+     * registry, or is registering right now — claimed before the round trip so
+     * two concurrent first writes send one. Registration is idempotent, so this
+     * only saves round trips; it resets with the instance.
      */
     private readonly registeredTables = new Set<string>();
+
+    /**
+     * Epoch millis before which registration is not retried, set when one
+     * fails: a registry outage costs one attempt per window rather than one per
+     * write, against the single DO that has to recover.
+     */
+    private registryRetryAt = 0;
 
     /**
      * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
@@ -5608,8 +5621,9 @@ abstract class ShardDO {
 
     /**
      * The `ShardRegistryDO` namespace this shard reports to, and which of its
-     * tables are `.shardBy()`. Overridden by the generated subclass when the app
-     * declares `.shardRegistry(...)`; the default registers nothing.
+     * tables are `.shardBy()`. The generated subclass overrides it for a schema
+     * with `.shardBy()` tables and answers `undefined` until the app declares
+     * `.shardRegistry(...)`; the default registers nothing.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the registry binding and its sharded tables
     protected shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
@@ -10856,18 +10870,28 @@ abstract class ShardDO {
 
     /**
      * Tell the shard registry this shard holds rows of each `.shardBy()` table
-     * the flushed write touched — once per table per instance. The cross-shard
+     * the flushed write touched, once per table per instance. The cross-shard
      * fan-outs (export, CDC sync, migrations) only reach the shards the registry
      * lists, so a shard that never registers is left out of every one of them.
      *
-     * The write has already committed, so a failure here cannot undo it and must
-     * not fail the caller whose write succeeded: it is logged, and the table
-     * stays unregistered so the shard's next write retries.
+     * Runs past the response (see `flushChangedTables`) and never rejects: the
+     * write has already committed, so a failure is logged, the table's claim
+     * released, and the first write after {@link SHARD_REGISTRY_RETRY_MS} retries.
      */
     private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
         const registry = this.shardRegistry();
 
-        if (registry === undefined) {
+        if (registry === undefined || Date.now() < this.registryRetryAt) {
+            return;
+        }
+
+        const shardKey = this.currentShardKey();
+
+        // A replica or relay is a copy of (or a door to) another shard, not a
+        // shard of its own. Listed, it would join every fan-out and refuse the
+        // admin RPCs it was sent — a replica answers 421 to anything not routed
+        // to it as a read — so every export and backup of the table would fail.
+        if (parseReplicaName(shardKey) !== undefined || parseRelayName(shardKey) !== undefined) {
             return;
         }
 
@@ -10877,7 +10901,6 @@ abstract class ShardDO {
             return;
         }
 
-        const shardKey = this.currentShardKey();
         // Pinned to this DO's own jurisdiction, the same subnamespace the worker
         // pins the registry it reads — an unpinned stub is a different registry.
         const stub = stubByName(registry.namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
@@ -10893,19 +10916,13 @@ abstract class ShardDO {
 
         await Promise.all(
             tables.map(async (table) => {
+                this.registeredTables.add(table);
+
                 try {
-                    const response = await stub.fetch("https://shard-registry.internal/register", {
-                        body: JSON.stringify({ shardKey, table }),
-                        headers: { "content-type": "application/json" },
-                        method: "POST",
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${String(response.status)}: ${await response.text()}`);
-                    }
-
-                    this.registeredTables.add(table);
+                    await registerShardKey(stub, table, shardKey);
                 } catch (error: unknown) {
+                    this.registeredTables.delete(table);
+                    this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
                     // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
                     console.error(
                         `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
@@ -10940,7 +10957,9 @@ abstract class ShardDO {
             return;
         }
 
-        await this.registerWrittenShard(changed);
+        // Past the response: the write is durable and nothing below depends on
+        // the registry having heard about it.
+        await this.deferPastResponse(this.registerWrittenShard(changed));
 
         this.writeGeneration += 1;
 
