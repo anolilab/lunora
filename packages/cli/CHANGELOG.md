@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.325...@lunora/cli@1.0.0-alpha.326) (2026-09-30)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.284
+
 ## @lunora/cli [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.324...@lunora/cli@1.0.0-alpha.325) (2026-09-29)
 
 ### Features
