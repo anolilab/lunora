@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.47...@lunora/errors@1.0.0-alpha.48) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
 ## @lunora/errors [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.46...@lunora/errors@1.0.0-alpha.47) (2026-09-28)
 
 ### Bug Fixes
