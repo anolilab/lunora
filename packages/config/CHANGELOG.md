@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.286...@lunora/config@1.0.0-alpha.287) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.242
+* **@lunora/container:** upgraded to 1.0.0-alpha.64
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/seed:** upgraded to 1.0.0-alpha.172
+* **@lunora/studio:** upgraded to 1.0.0-alpha.244
+
 ## @lunora/config [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.285...@lunora/config@1.0.0-alpha.286) (2026-09-30)
 
 ### ⚠ BREAKING CHANGES
