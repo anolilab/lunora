@@ -365,11 +365,7 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | Refusa
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl: FetchLike = options.adminFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
-    }
+    const fetchImpl: FetchLike = options.adminFetch ?? adminFetch;
 
     return { fetchImpl, requestUrl: `${baseUrl}${PITR_ENDPOINT_PATH}`, token };
 };
@@ -472,11 +468,7 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl = options.fetchImpl ?? (adminFetch as unknown as StreamingFetchLike);
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl = options.fetchImpl ?? adminFetch;
 
     return createR2Destination({
         // `default` is how the worker names its unnamed bucket; the storage
@@ -536,11 +528,7 @@ const resolveBackupAdminRequest = (options: BackupCommandOptions): { baseUrl: st
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl: FetchLike = options.adminFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
-    }
+    const fetchImpl: FetchLike = options.adminFetch ?? adminFetch;
 
     return { baseUrl, fetchImpl, token };
 };

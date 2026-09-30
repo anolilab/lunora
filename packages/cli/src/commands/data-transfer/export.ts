@@ -304,11 +304,7 @@ const resolveExportRequest = (options: ExportCommandOptions): ExportRequest | Re
         return { refused: EXIT_CODE.AUTH };
     }
 
-    const fetchImpl = (options.fetchImpl ?? adminFetch) as StreamingFetchLike | undefined;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl = options.fetchImpl ?? adminFetch;
 
     return { fetchImpl, requestUrl: `${baseUrl}${EXPORT_ENDPOINT_PATH}`, tables: resolveTables(options.tables), token };
 };

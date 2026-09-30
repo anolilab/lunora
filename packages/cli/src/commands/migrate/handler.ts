@@ -600,10 +600,6 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
 
     const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
-
     return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
 };
 

@@ -80,19 +80,27 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
 
 /**
  * `globalThis.fetch` for the admin commands, with a refused or dropped
- * connection named. Node reports those as a bare "fetch failed" and keeps the
- * real reason (`ECONNREFUSED …`) on `cause`, so a stopped dev server otherwise
- * surfaces as a message that says neither where nor why.
+ * connection named. Node reports those as a bare "fetch failed" `TypeError` and
+ * keeps the real reason (`ECONNREFUSED …`) on `cause`, so a stopped dev server
+ * otherwise surfaces as a message that says neither where nor why. Anything else
+ * (an abort, a timeout) is rethrown as it is.
+ *
+ * `init` is the narrow shape every admin command sends, so the one widening to
+ * `RequestInit` lives here: a `Uint8Array` body is `BodyInit` at runtime but not
+ * to TypeScript.
  */
-const adminFetch = async (input: string, init?: RequestInit): Promise<Response> => {
+const adminFetch = async (input: string, init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string }): Promise<Response> => {
     try {
-        return await fetch(input, init);
+        return await fetch(input, init as RequestInit);
     } catch (error: unknown) {
-        const reason = error instanceof Error && error.cause instanceof Error ? error.cause.message : String(error);
+        if (!(error instanceof TypeError)) {
+            throw error;
+        }
 
-        throw new LunoraError("INTERNAL", `could not reach ${input} (${reason}) — is the dev server running? Start it, or pass --url to point at the worker`, {
-            cause: error,
-        });
+        const reason = error.cause instanceof Error ? error.cause.message : error.message;
+        const hint = LOOPBACK_HOSTS.has(new URL(input).hostname) ? " — is the dev server running? Start it, or pass --url to point at the worker" : "";
+
+        throw new LunoraError("INTERNAL", `could not reach ${input} (${reason})${hint}`, { cause: error });
     }
 };
 

@@ -244,10 +244,6 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
 
     const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
-    }
-
     const parsed = parseRunPayloads(options, logger);
 
     if (parsed === undefined) {

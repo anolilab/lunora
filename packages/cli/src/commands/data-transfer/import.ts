@@ -219,11 +219,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return { refused: EXIT_CODE.NOT_FOUND };
     }
 
-    const fetchImpl = (options.fetchImpl ?? adminFetch) as StreamingFetchLike | undefined;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl = options.fetchImpl ?? adminFetch;
 
     return { baseUrl, fetchImpl, requestUrl: `${baseUrl}${IMPORT_ENDPOINT_PATH}`, token };
 };
@@ -514,8 +510,12 @@ const drainIntoBatcher = async (
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
+        // `received` grows only once a batch's response is read, so zero means no
+        // write was CONFIRMED, not that none landed: a batch the server committed
+        // and then lost the connection on still counts zero here.
         if (batcher.totals.received === 0) {
-            logger.error(`import failed before any row was written: ${message}`);
+            logger.error(`import failed before any batch was acknowledged: ${message}`);
+            logger.error("re-run the same command once the worker is reachable (existing rows conflict rather than duplicate)");
         } else {
             logger.error(`import failed part-way through: ${message}`);
             logger.error("the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)");

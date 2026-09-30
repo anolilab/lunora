@@ -100,7 +100,7 @@ describe("the import batcher", () => {
         rmSync(workDir, { force: true, recursive: true });
     });
 
-    it("does not claim rows were written when the first batch fails", async () => {
+    it("does not claim rows were written when no batch was acknowledged", async () => {
         expect.assertions(3);
 
         const root = writeConvexExport({}, { docs: [{ _id: "d1" }] });
@@ -118,7 +118,7 @@ describe("the import batcher", () => {
         });
 
         expect(result.code).toBe(1);
-        expect(logs.error[0]).toBe("import failed before any row was written: fetch failed");
+        expect(logs.error[0]).toBe("import failed before any batch was acknowledged: fetch failed");
         expect(logs.error.join("\n")).not.toContain("already been written");
     });
 
