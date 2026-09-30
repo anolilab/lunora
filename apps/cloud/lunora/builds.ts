@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { executeInContainer } from "../src/builds/container-exec";
 import { runBuildDispatch } from "../src/builds/dispatch";
+import type { PushChanges } from "../src/builds/paths";
+import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildRunnerPorts } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure } from "../src/builds/runner";
 import { createGitHubApp } from "../src/github/app";
@@ -24,7 +26,7 @@ type BuildId = Id<"builds">;
  * commit-addressed dedup).
  */
 
-type BuildStatus = "building" | "failed" | "pending" | "successful";
+type BuildStatus = "building" | "failed" | "pending" | "skipped" | "successful";
 
 interface BuildRow {
     _id: Id<"builds">;
@@ -36,6 +38,8 @@ interface BuildRow {
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
+    rootDirectory?: string;
+    skipReason?: string;
     status: BuildStatus;
 }
 
@@ -45,6 +49,18 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
 }
 
+/**
+ * The push's changed files as the webhook parsed them. `files` is deliberately
+ * unbounded per entry: a path over some cap failing validation would 500 the
+ * webhook and drop the deploy, the one outcome the path filter must never have.
+ * The list's length is bounded in the handler instead, by degrading to `unknown`.
+ */
+const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v.object({ unknown: v.string() }));
+
+type RecordPushResult = null | { buildId: Id<"builds">; reused: boolean; skipped?: string };
+
+type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string };
+
 /** A lease older than this is stale — the runner died; the build is reclaimable. */
 export const LEASE_STALE_MS = 30 * 60 * 1000;
 
@@ -53,18 +69,24 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * the project from the repository name itself — callers cannot aim it at an
  * arbitrary project. Reached via the HMAC-verified webhook edge route; the
  * only spoofable input is build volume, which the per-IP limiter caps.
- * Dedup: an existing successful build for (project, commitSha) is returned
- * as-is (`reused: true`) instead of queuing a rebuild.
+ * Dedup: an existing successful build for (project, commitSha, rootDirectory)
+ * is returned as-is (`reused: true`) instead of queuing a rebuild.
+ *
+ * Path filter: a push whose changed files match none of the project's watch
+ * paths is recorded as a `skipped` build carrying the reason, so the Builds tab
+ * says why nothing deployed instead of showing nothing. A push that cannot
+ * prove its changed files builds (see `decideBuild`).
  */
 export const recordPush = internalMutation
     .use(rateLimit("machine"))
     .input({
         branch: boundedString(LIMITS.gitRef),
+        changes: pushChangesValidator,
         commitSha: boundedString(LIMITS.id),
         installationId: v.number(),
         repository: boundedString(LIMITS.token),
     })
-    .mutation(async ({ ctx: context, args: { branch, commitSha, installationId, repository } }): Promise<null | { buildId: Id<"builds">; reused: boolean }> => {
+    .mutation(async ({ ctx: context, args: { branch, changes, commitSha, installationId, repository } }): Promise<RecordPushResult> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = page[0];
 
@@ -82,11 +104,34 @@ export const recordPush = internalMutation
             return null;
         }
 
+        const { rootDirectory, watchPaths } = project;
         const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const successful = existingPage.find((build) => build.status === "successful" && build.bundleHash);
+        const successful = existingPage.find((build) => build.status === "successful" && build.bundleHash && build.rootDirectory === rootDirectory);
 
         if (successful) {
             return { buildId: successful._id, reused: true };
+        }
+
+        const { now } = context;
+        const bounded: PushChanges =
+            "files" in changes && changes.files.length > MAX_CHANGED_FILES
+                ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
+                : changes;
+        const decision = decideBuild(bounded, rootDirectory, watchPaths);
+        const common = {
+            branch,
+            commitSha,
+            createdAt: now,
+            organizationId: project.organizationId,
+            projectId: project._id, // secret-scanner:allow -- domain field name
+            ...(rootDirectory === undefined ? {} : { rootDirectory }),
+            updatedAt: now,
+        };
+
+        if (!decision.build) {
+            const buildId = await context.db.insert("builds", { ...common, skipReason: decision.reason, status: "skipped" });
+
+            return { buildId, reused: false, skipped: decision.reason };
         }
 
         // Backpressure: cap unfinished builds per project so a webhook storm
@@ -98,15 +143,16 @@ export const recordPush = internalMutation
             throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
         }
 
-        const { now } = context;
-        const buildId = await context.db.insert("builds", {
-            branch,
-            commitSha,
+        const buildId = await context.db.insert("builds", { ...common, status: "pending" });
+
+        // The first line of the build's log says why it ran, so a build that a
+        // monorepo filter should have skipped is diagnosable from the log alone.
+        await context.db.insert("buildLogs", {
+            buildId,
             createdAt: now,
+            level: "info",
+            line: `path filter: ${decision.reason}`,
             organizationId: project.organizationId,
-            projectId: project._id, // secret-scanner:allow -- domain field name
-            status: "pending",
-            updatedAt: now,
         });
 
         return { buildId, reused: false };
@@ -125,42 +171,45 @@ const CLAIM_SCAN = 50;
  * `pending` build — or a `building` one whose lease went stale (dead runner) —
  * and stamps the runner id + lease start. SYSTEM only (cron dispatch).
  */
-export const claimNext = internalMutation
-    .input({ runnerId: v.string() })
-    .mutation(async ({ ctx: context, args: { runnerId } }): Promise<null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects"> }> => {
-        const { now } = context;
+export const claimNext = internalMutation.input({ runnerId: v.string() }).mutation(async ({ ctx: context, args: { runnerId } }): Promise<ClaimResult> => {
+    const { now } = context;
 
-        // Two bounded, status-scoped reads rather than one page of EVERY build.
-        // `findMany({})` returned an arbitrary 1000-row slice across all statuses
-        // and filtered afterwards, so on any real fleet the page filled with
-        // finished builds and a queued one was simply never claimed — the queue
-        // stalled while the sweep reported success, and `expireStale` failed the
-        // build 24 hours later with no explanation.
-        const [pendingPage, buildingPage] = await Promise.all([
-            context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "pending" } }),
-            context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "building" } }),
-        ]);
+    // Two bounded, status-scoped reads rather than one page of EVERY build.
+    // `findMany({})` returned an arbitrary 1000-row slice across all statuses
+    // and filtered afterwards, so on any real fleet the page filled with
+    // finished builds and a queued one was simply never claimed — the queue
+    // stalled while the sweep reported success, and `expireStale` failed the
+    // build 24 hours later with no explanation.
+    const [pendingPage, buildingPage] = await Promise.all([
+        context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "pending" } }),
+        context.db.builds.findMany({ limit: CLAIM_SCAN, orderBy: [{ createdAt: "asc" }], where: { status: "building" } }),
+    ]);
 
-        // A `building` row is claimable only once its lease has gone stale — that is
-        // how a dead runner's work is recovered.
-        const stale = buildingPage.page.filter((build) => build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS);
-        const claimable = [...pendingPage.page, ...stale].toSorted((a, b) => a.createdAt - b.createdAt);
-        const next = claimable[0];
+    // A `building` row is claimable only once its lease has gone stale — that is
+    // how a dead runner's work is recovered.
+    const stale = buildingPage.page.filter((build) => build.processingStartedAt != null && now - build.processingStartedAt > LEASE_STALE_MS);
+    const claimable = [...pendingPage.page, ...stale].toSorted((a, b) => a.createdAt - b.createdAt);
+    const next = claimable[0];
 
-        if (!next) {
-            return null;
-        }
+    if (!next) {
+        return null;
+    }
 
-        await context.db.patch(next._id, {
-            buildingAt: now,
-            processingBy: runnerId,
-            processingStartedAt: now,
-            status: "building",
-            updatedAt: now,
-        });
-
-        return { buildId: next._id, commitSha: next.commitSha, projectId: next.projectId }; // secret-scanner:allow -- domain field name
+    await context.db.patch(next._id, {
+        buildingAt: now,
+        processingBy: runnerId,
+        processingStartedAt: now,
+        status: "building",
+        updatedAt: now,
     });
+
+    return {
+        buildId: next._id,
+        commitSha: next.commitSha,
+        projectId: next.projectId, // secret-scanner:allow -- domain field name
+        ...(next.rootDirectory === undefined ? {} : { rootDirectory: next.rootDirectory }),
+    };
+});
 
 const assertLease = (build: BuildRow | null, runnerId: string): BuildRow => {
     if (!build) {
@@ -409,7 +458,7 @@ export const dispatch = internalAction.action(async ({ ctx: context }): Promise<
         // while Cloudflare provisions) while letting a genuine 5xx from a
         // running box pass straight through. Retrying a real build failure
         // would just pay for the same install twice.
-        execute: async (source, onLine) => await executeInContainer(context.containers.buildBox.any(), source, onLine),
+        execute: async (source, rootDirectory, onLine) => await executeInContainer(context.containers.buildBox.any(), source, rootDirectory, onLine),
         fail: async (buildId, error) => {
             await context.runMutation(fail, { buildId: buildId as BuildId, error, runnerId });
         },

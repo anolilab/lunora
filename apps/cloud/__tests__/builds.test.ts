@@ -15,7 +15,13 @@ describe(parsePushEvent, () => {
             repository: { default_branch: "main", full_name: "acme/app" },
         });
 
-        expect(intent).toStrictEqual({ branch: "main", commitSha: "abc123", installationId: 42, repository: "acme/app" });
+        expect(intent).toStrictEqual({
+            branch: "main",
+            changes: { unknown: "the push lists no commits" },
+            commitSha: "abc123",
+            installationId: 42,
+            repository: "acme/app",
+        });
     });
 
     it("ignores non-default branches, branch deletes, and malformed payloads", () => {
@@ -80,7 +86,7 @@ describe(runBuild, () => {
 
                 return Promise.resolve();
             },
-            execute: async (_source, onLine) => {
+            execute: async (_source, _rootDirectory, onLine) => {
                 await onLine("compiling");
 
                 return { bundle: "AA==", bundleHash: "hash-1" };

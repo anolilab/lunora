@@ -61,9 +61,14 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
 export const executeInContainer = async (
     handle: { fetch: (path: string, init?: RequestInit) => Promise<Response> },
     source: ArrayBuffer,
+    rootDirectory: string | undefined,
     onLine: (line: string) => Promise<void>,
 ): Promise<BuildExecution> => {
-    const response = await handle.fetch("/__lunora/build", { body: source, method: "POST" });
+    // A query parameter rather than a header: a directory name is not
+    // guaranteed to be header-safe ASCII, and URLSearchParams encodes anything.
+    // The build box re-validates it; nothing here is trusted over there.
+    const path = rootDirectory ? `/__lunora/build?${new URLSearchParams({ rootDirectory }).toString()}` : "/__lunora/build";
+    const response = await handle.fetch(path, { body: source, method: "POST" });
 
     if (!response.ok || response.body === null) {
         throw new LunoraError("INTERNAL", `build box answered ${String(response.status)}`);

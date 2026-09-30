@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { handleGitHubWebhook, parsePullRequestEvent, verifyGitHubSignature } from "../src/github/webhook";
+import type { PushChanges } from "../src/builds/paths";
+import { handleGitHubWebhook, parsePullRequestEvent, pushChanges, verifyGitHubSignature } from "../src/github/webhook";
 
 const sign = async (secret: string, body: string): Promise<string> => {
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
@@ -79,5 +80,92 @@ describe(handleGitHubWebhook, () => {
         const response = await handleGitHubWebhook(await signedRequest(prBody), { resolveProject: resolveProject(false), secret });
 
         expect(response.status).toBe(202);
+    });
+});
+
+describe(pushChanges, () => {
+    const commit = (...files: string[]) => {
+        return { added: files, modified: [], removed: [] };
+    };
+
+    it("unions added, modified and removed across every commit", () => {
+        expect(
+            pushChanges({
+                before: "aaa",
+                commits: [
+                    { added: ["apps/web/a.ts"], modified: ["README.md"], removed: [] },
+                    { added: [], modified: ["README.md"], removed: ["apps/docs/b.md"] },
+                ],
+            }),
+        ).toStrictEqual({ files: ["apps/web/a.ts", "README.md", "apps/docs/b.md"] });
+    });
+
+    it.each([
+        ["a forced push", { before: "aaa", commits: [commit("x")], forced: true }, "forced push"],
+        ["a created branch", { before: "aaa", commits: [commit("x")], created: true }, "new branch"],
+        ["a zero `before`", { before: "0000000", commits: [commit("x")] }, "new branch"],
+        ["no commits", { before: "aaa", commits: [] }, "the push lists no commits"],
+        ["a missing commits list", { before: "aaa" }, "the push lists no commits"],
+        [
+            "a possibly truncated list",
+            { before: "aaa", commits: Array.from({ length: 20 }, () => commit("x")) },
+            "the push lists 20 commits and may be truncated",
+        ],
+        ["a commit without file lists", { before: "aaa", commits: [{ added: ["x"] }] }, "a commit is missing its file lists"],
+        ["a non-string file", { before: "aaa", commits: [{ added: [42], modified: [], removed: [] }] }, "a commit is missing its file lists"],
+    ])("cannot prove the changes of %s, so the push builds", (_label, payload, reason) => {
+        expect(pushChanges(payload as Parameters<typeof pushChanges>[0])).toStrictEqual({ unknown: reason });
+    });
+});
+
+describe("preview path filter", () => {
+    const secret = "whsec";
+    const body = JSON.stringify({
+        action: "synchronize",
+        installation: { id: 42 },
+        number: 7,
+        pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", sha: "head1" } },
+        repository: { full_name: "acme/app" },
+    });
+    const resolveProject = () => Promise.resolve({ organizationId: "org_1", projectId: "proj_1", slug: "app" });
+
+    const deliver = async (listChangedFiles?: () => Promise<PushChanges>): Promise<PushChanges | undefined> => {
+        let seen: PushChanges | undefined;
+        const request = new Request("https://cloud/v1/github/webhook", { body, headers: { "x-hub-signature-256": await sign(secret, body) }, method: "POST" });
+
+        await handleGitHubWebhook(request, {
+            ...(listChangedFiles === undefined ? {} : { listChangedFiles }),
+            onPreviewBuild: (intent) => {
+                seen = intent.changes;
+
+                return Promise.resolve({ buildId: "b1", reused: false, skipped: "no changes under apps/web/" });
+            },
+            resolveProject,
+            secret,
+        });
+
+        return seen;
+    };
+
+    it("hands the PR's changed files (base...head) to the build recorder", async () => {
+        const calls: unknown[] = [];
+        const changes = await deliver((range?: unknown) => {
+            calls.push(range);
+
+            return Promise.resolve({ files: ["apps/docs/x.md"] });
+        });
+
+        expect(changes).toStrictEqual({ files: ["apps/docs/x.md"] });
+        expect(calls).toStrictEqual([{ base: "base1", head: "head1", installationId: 42, repository: "acme/app" }]);
+    });
+
+    it("builds unfiltered when the compare call fails", async () => {
+        await expect(deliver(() => Promise.reject(new Error("github compare failed: 502")))).resolves.toStrictEqual({
+            unknown: "listing the pull request's files failed: github compare failed: 502",
+        });
+    });
+
+    it("builds unfiltered without App credentials", async () => {
+        await expect(deliver()).resolves.toStrictEqual({ unknown: "the control plane cannot list pull request files (no GitHub App credentials)" });
     });
 });

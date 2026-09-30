@@ -449,6 +449,9 @@ catalogs:
     dotenv:
       specifier: 17.4.2
       version: 17.4.2
+    picomatch:
+      specifier: ^4.0.7
+      version: 4.0.7
     rimraf:
       specifier: 6.1.3
       version: 6.1.3
@@ -619,6 +622,9 @@ catalogs:
     '@types/node':
       specifier: 26.4.1
       version: 26.4.1
+    '@types/picomatch':
+      specifier: ^4.0.3
+      version: 4.0.3
     '@types/semver':
       specifier: ^7.8.0
       version: 7.8.0
@@ -1302,6 +1308,9 @@ importers:
       creem:
         specifier: ^1.5.3
         version: 1.6.2(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
+      picomatch:
+        specifier: catalog:node
+        version: 4.0.7
       posthog-js:
         specifier: catalog:web
         version: 1.427.2(@types/react@19.2.18)(react@19.2.8)
@@ -1342,6 +1351,9 @@ importers:
       '@types/node':
         specifier: catalog:types
         version: 26.4.1
+      '@types/picomatch':
+        specifier: catalog:types
+        version: 4.0.3
       '@types/react':
         specifier: catalog:frontend
         version: 19.2.18
@@ -2531,7 +2543,7 @@ importers:
         version: 26.4.1
       '@visulima/packem':
         specifier: catalog:build
-        version: 2.1.0(d282b1a43dde81ab97e8bdd9c0935a55)
+        version: 2.1.0(3bc567c36cc82f7d20fa04472ffbbfb9)
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
@@ -13551,6 +13563,9 @@ packages:
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
+
   '@types/react-dom@19.2.7':
     resolution: {integrity: sha512-I8bPpDLcHBv1qiIiXDCy71Rt8eQDKJP0sMSWJphDdAcdqiJ1sGpZamavoEIRZmYzjia9LuEb2HlYdDpmoENpvQ==}
     peerDependencies:
@@ -22048,10 +22063,6 @@ packages:
   picomatch@2.3.2:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
-
-  picomatch@4.0.5:
-    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
-    engines: {node: '>=12'}
 
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
@@ -34931,6 +34942,8 @@ snapshots:
       pg-protocol: 1.16.0
       pg-types: 2.2.0
 
+  '@types/picomatch@4.0.3': {}
+
   '@types/react-dom@19.2.7(@types/react@19.2.18)':
     dependencies:
       '@types/react': 19.2.18
@@ -36424,86 +36437,6 @@ snapshots:
       package-manager-detector: 1.8.0
       rollup: 4.63.1
       rollup-plugin-license: 3.7.1(picomatch@4.0.7)(rollup@4.63.1)
-      rs-module-lexer: 2.8.0
-      tinyexec: 1.3.0
-      workerpool: 10.0.3
-    optionalDependencies:
-      '@tailwindcss/node': 4.3.3
-      '@tailwindcss/oxide': 4.3.3
-      cssnano: 8.0.2(postcss@8.5.26)
-      esbuild: 0.28.2
-      icss-utils: 5.1.0(postcss@8.5.26)
-      lightningcss: 1.33.0
-      postcss: 8.5.26
-      postcss-modules-extract-imports: 3.1.0(postcss@8.5.26)
-      postcss-modules-local-by-default: 4.2.0(postcss@8.5.26)
-      postcss-modules-scope: 3.2.1(postcss@8.5.26)
-      postcss-modules-values: 4.0.0(postcss@8.5.26)
-      postcss-value-parser: 4.2.0
-      rolldown: 1.2.7
-      rollup-plugin-svelte: 7.2.3(rollup@4.63.1)(svelte@5.57.0(@typescript-eslint/types@8.69.0))
-      typescript: 6.0.3
-      unplugin-vue: 7.2.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(rolldown@1.2.7)(rollup@4.63.1)(terser@5.51.2)(vue@3.5.42(typescript@6.0.3))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3))(yaml@2.9.0)
-      which-pm-runs: 1.1.0
-    transitivePeerDependencies:
-      - '@bomb.sh/tab'
-      - '@csstools/css-parser-algorithms'
-      - '@csstools/css-tokenizer'
-      - '@csstools/postcss-slow-plugins'
-      - '@opentelemetry/api'
-      - '@sveltejs/kit'
-      - '@ts-macro/tsc'
-      - '@typescript/native-preview'
-      - '@visulima/boxen'
-      - '@visulima/css-style-inject'
-      - '@visulima/find-cache-dir'
-      - '@visulima/redact'
-      - '@visulima/yaml'
-      - elysia
-      - express
-      - fastify
-      - github-slugger
-      - hono
-      - ini
-      - json5
-      - jsonc-parser
-      - next
-      - picomatch
-      - rotating-file-stream
-      - smol-toml
-      - vue-tsc
-
-  '@visulima/packem@2.1.0(d282b1a43dde81ab97e8bdd9c0935a55)':
-    dependencies:
-      '@antfu/install-pkg': 2.0.1
-      '@babel/core': 8.0.1
-      '@clack/prompts': 1.7.0
-      '@rollup/pluginutils': 5.4.0(rollup@4.63.1)
-      '@visulima/cerebro': 3.1.0(@bomb.sh/tab@0.0.22(cac@7.0.0)(citty@0.2.2)(commander@15.0.0))(@visulima/find-cache-dir@3.0.1)(@visulima/pail@4.1.1(@opentelemetry/api@1.9.1)(@visulima/redact@4.0.0)(express@5.2.1(supports-color@10.2.2))(hono@4.13.7))(github-slugger@2.0.0)
-      '@visulima/packem-rollup': 1.1.0(@ts-macro/tsc@0.3.7(rollup@4.63.1))(@visulima/yaml@1.0.0)(esbuild@0.28.2)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rolldown@1.2.7)(rollup@4.63.1)(smol-toml@1.8.0)(typescript@6.0.3)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(vue-tsc@3.3.11(typescript@6.0.3))
-      '@visulima/packem-share': 1.0.1(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rollup@4.63.1)(smol-toml@1.8.0)
-      '@visulima/pail': 4.1.1(@opentelemetry/api@1.9.1)(@visulima/redact@4.0.0)(express@5.2.1(supports-color@10.2.2))(hono@4.13.7)
-      '@visulima/rollup-plugin-css': 1.0.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@3.0.0(postcss@8.5.26))(@tailwindcss/node@4.3.3)(@tailwindcss/oxide@4.3.3)(@visulima/css-style-inject@1.0.1)(@visulima/yaml@1.0.0)(cssnano@8.0.2(postcss@8.5.26))(icss-utils@5.1.0(postcss@8.5.26))(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.33.0)(postcss-modules-extract-imports@3.1.0(postcss@8.5.26))(postcss-modules-local-by-default@4.2.0(postcss@8.5.26))(postcss-modules-scope@3.2.1(postcss@8.5.26))(postcss-modules-values@4.0.0(postcss@8.5.26))(postcss-value-parser@4.2.0)(postcss@8.5.26)(rollup@4.63.1)(smol-toml@1.8.0)
-      '@visulima/rollup-plugin-dts': 1.0.1(@ts-macro/tsc@0.3.7(rollup@4.63.1))(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(rolldown@1.2.7)(rollup@4.63.1)(smol-toml@1.8.0)(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
-      '@visulima/tsconfig': 3.2.12(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(smol-toml@1.8.0)
-      browserslist: 4.28.8
-      cjs-module-lexer: 2.2.1
-      clean-css: 5.3.3
-      defu: 6.1.7
-      estree-walker: 3.0.3
-      fastest-levenshtein: 1.0.16
-      hookable: 6.1.1
-      html-minifier-next: 8.3.0
-      jiti: 2.7.0
-      magic-string: 0.30.21
-      mime: 4.1.0
-      mlly: 1.8.2
-      oxc-parser: 0.147.0
-      oxc-resolver: 11.24.2
-      oxc-transform: 0.147.0
-      package-manager-detector: 1.8.0
-      rollup: 4.63.1
-      rollup-plugin-license: 3.7.1(picomatch@4.0.5)(rollup@4.63.1)
       rs-module-lexer: 2.8.0
       tinyexec: 1.3.0
       workerpool: 10.0.3
@@ -38109,7 +38042,7 @@ snapshots:
       p-queue: 9.3.1
       package-manager-detector: 1.7.0
       piccolore: 0.1.3
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       semver: 7.8.5
       shiki: 4.4.3
       smol-toml: 1.7.1
@@ -41271,10 +41204,6 @@ snapshots:
   fb-watchman@2.0.2:
     dependencies:
       bser: 2.1.1
-
-  fdir@6.5.0(picomatch@4.0.5):
-    optionalDependencies:
-      picomatch: 4.0.5
 
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
@@ -44480,7 +44409,7 @@ snapshots:
       oxc-walker: 1.1.1(@oxc-project/types@0.148.0)(oxc-parser@0.147.0)(rolldown@1.2.7)
       pathe: 2.0.3
       perfect-debounce: 2.1.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       pkg-types: 2.3.1
       rolldown: 1.2.7
       rolldown-string: 0.3.1(rolldown@1.2.7)
@@ -45173,8 +45102,6 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@2.3.2: {}
-
-  picomatch@4.0.5: {}
 
   picomatch@4.0.7: {}
 
@@ -46381,20 +46308,6 @@ snapshots:
     optionalDependencies:
       rollup: 4.63.1
       vite: 8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0)
-
-  rollup-plugin-license@3.7.1(picomatch@4.0.5)(rollup@4.63.1):
-    dependencies:
-      commenting: 1.1.0
-      fdir: 6.5.0(picomatch@4.0.5)
-      lodash: 4.18.1
-      magic-string: 0.30.21
-      moment: 2.30.1
-      package-name-regex: 2.0.6
-      rollup: 4.63.1
-      spdx-expression-validate: 2.0.0
-      spdx-satisfies: 5.0.1
-    transitivePeerDependencies:
-      - picomatch
 
   rollup-plugin-license@3.7.1(picomatch@4.0.7)(rollup@4.63.1):
     dependencies:

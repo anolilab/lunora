@@ -22,6 +22,7 @@
  */
 
 import { fromBase64, toBase64Url } from "../../../../shared/base64";
+import type { PushChanges } from "../builds/paths";
 
 const encoder = new TextEncoder();
 
@@ -95,8 +96,18 @@ export interface GitHubApp {
      * share one mint rather than four.
      */
     downloadTarball: (source: TarballSource) => Promise<ArrayBuffer>;
+
+    /**
+     * The files changed between two commits (`base...head`), for the preview
+     * path filter — a `pull_request` payload carries no file list of its own.
+     * GitHub returns at most 300 files; a list that long comes back `unknown`.
+     */
+    listChangedFiles: (range: { base: string; head: string; installationId: number; repository: string }) => Promise<PushChanges>;
     postCommitStatus: (status: CommitStatus) => Promise<void>;
 }
+
+/** GitHub's cap on `files` in a compare response. A response this long may be cut short. */
+const MAX_COMPARE_FILES = 300;
 
 /** Which repository, at which commit, on whose installation. */
 export interface TarballSource {
@@ -237,6 +248,32 @@ export const createGitHubApp = (options: GitHubAppOptions): GitHubApp | null => 
             }
 
             return body;
+        },
+        listChangedFiles: async ({ base, head, installationId, repository }) => {
+            const token = await installationToken(installationId);
+            const url = `${apiBase}/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+            const response = await fetchImpl(url, {
+                headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "lunora-cloud" },
+            });
+
+            if (!response.ok) {
+                throw new Error(`github compare failed: ${String(response.status)}`);
+            }
+
+            const body: { files?: { filename?: unknown; previous_filename?: unknown }[] } = await response.json();
+
+            if (!Array.isArray(body.files)) {
+                return { unknown: "the compare response listed no files" };
+            }
+
+            if (body.files.length >= MAX_COMPARE_FILES) {
+                return { unknown: `the pull request changes ${String(MAX_COMPARE_FILES)}+ files` };
+            }
+
+            // A rename counts on both sides: moving a file OUT of the app changes it too.
+            const files = body.files.flatMap((file) => [file.filename, file.previous_filename]).filter((name): name is string => typeof name === "string");
+
+            return { files };
         },
         postCommitStatus: async (status) => {
             const token = await installationToken(status.installationId);

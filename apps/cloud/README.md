@@ -83,8 +83,11 @@ src/
   dispatcher/
     route.ts         hostname → tenant script (+ plan) resolution; cached plan resolver
     worker.ts        WfP dispatcher Worker — per-plan limits + per-request usage emit
+  builds/
+    paths.ts         monorepo settings: rootDirectory / watchPaths validation + push path filter
   github/
-    webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3)
+    webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3),
+                     push → changed files (fails open when the payload can't prove them)
   mail/
     notify.ts        transactional email (invitations) on @lunora/mail
   billing/
@@ -360,6 +363,35 @@ Copy `.dev.vars.example` → `.dev.vars` and fill `LUNORA_ADMIN_TOKEN` and
 `AUTH_SECRET` (the studio's better-auth session secret). Before a real deploy,
 create the D1 database and replace the `database_id` placeholder in
 `wrangler.jsonc`.
+
+## Monorepos (push-to-deploy)
+
+A project can live in a subdirectory of its repository. Set it under the
+project's **Build settings** in the Studio (`projects.updateBuildSettings`):
+
+- **Root directory** — repo-relative (`apps/web`); empty means the repository
+  root. It must be normalized: no leading `/`, no `..`/`.`/empty segments, no
+  backslashes or control characters, at most 256 characters. The build box
+  re-checks it against the extracted source and refuses, with a log line, one
+  that does not exist or that resolves outside the repository through a symlink.
+- **Watch paths** — optional globs (picomatch, dotfiles included, at most 20,
+  no `!` negations). A push to the default branch builds only if a changed file
+  matches one. The default is everything under the root directory, and the
+  lockfiles at the repository root and at every directory down to the root
+  directory are always watched, so a dependency bump rebuilds.
+
+The build box installs at the **workspace root** — the nearest directory at or
+above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
+`yarn.lock`, never above the repository — then runs the project's own
+`lunora build` in the root directory and collects its output there.
+
+A push whose files match nothing is recorded as a `skipped` build with its
+reason ("no changes under apps/web/ …"), shown on the Builds tab. The filter
+**fails open**: a forced push, a new branch, a push listing 20+ commits (GitHub
+may have truncated it), a commit without file lists, or more than 1000 changed
+files all build. Pull-request previews use the same filter, with the PR's
+changed files read from GitHub's compare API (`base...head`); a compare that
+fails, returns 300+ files, or cannot run for lack of App credentials also builds.
 
 ## Analytics (PostHog)
 

@@ -190,6 +190,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "projects:remove": lunora_projects_20.remove as unknown as RegisteredLunoraFunction,
     "projects:rename": lunora_projects_20.rename as unknown as RegisteredLunoraFunction,
     "projects:setPreviewProtection": lunora_projects_20.setPreviewProtection as unknown as RegisteredLunoraFunction,
+    "projects:updateBuildSettings": lunora_projects_20.updateBuildSettings as unknown as RegisteredLunoraFunction,
     "projects:verifyPreviewPassword": lunora_projects_20.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
     "rollouts:abortRollout": lunora_rollouts_21.abortRollout as unknown as RegisteredLunoraFunction,
     "rollouts:promoteRollout": lunora_rollouts_21.promoteRollout as unknown as RegisteredLunoraFunction,
@@ -801,14 +802,14 @@ export interface Caller {
     };
     builds: {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
-        claimNext: (args: { runnerId: string }) => Promise<{ buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; } | null>;
+        claimNext: (args: { runnerId: string }) => Promise<{ buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; } | null>;
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
         dispatch: (args?: {}) => Promise<{ ran: number; }>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; status: "building" | "failed" | "pending" | "successful" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { branch: unknown; commitSha: unknown; installationId: number; repository: unknown }) => Promise<{ buildId: Id<"builds">; reused: boolean; } | null>;
+        recordPush: (args: { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown }) => Promise<{ buildId: Id<"builds">; reused: boolean; skipped?: string; } | null>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
     };
     cells: {
@@ -919,10 +920,11 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; slug: string }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; watchPaths?: string[] }[]>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
+        updateBuildSettings: (args: { id: Id<"projects">; organizationId: Id<"organizations">; rootDirectory: unknown; watchPaths: Array<unknown> }) => Promise<{ rootDirectory: string; watchPaths: string[]; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };
     rollouts: {
@@ -1153,6 +1155,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         remove: (args) => callRegistered(context, "projects:remove", args),
         rename: (args) => callRegistered(context, "projects:rename", args),
         setPreviewProtection: (args) => callRegistered(context, "projects:setPreviewProtection", args),
+        updateBuildSettings: (args) => callRegistered(context, "projects:updateBuildSettings", args),
         verifyPreviewPassword: (args) => callRegistered(context, "projects:verifyPreviewPassword", args),
     },
     rollouts: {

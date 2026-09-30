@@ -4,6 +4,8 @@
  * preview down. Signatures are verified with the webhook secret (HMAC-SHA256).
  */
 
+import type { PushChanges } from "../builds/paths";
+import { MAX_CHANGED_FILES } from "../builds/paths";
 import { previewScriptName } from "../deploy/preview";
 import { constantTimeEqual } from "../security/constant-time-equal";
 
@@ -29,6 +31,8 @@ export const verifyGitHubSignature = async (secret: string, body: string, signat
 export interface PreviewIntent {
     /** `upsert` for opened/synchronize/reopened; `remove` for closed/merged. */
     action: "remove" | "upsert";
+    /** PR base commit — the other end of the diff the preview path filter reads. */
+    baseSha?: string;
     branch: string;
     /** PR head commit — the server-side preview build target (GAPS.md A3). */
     commitSha?: string;
@@ -41,7 +45,7 @@ interface PullRequestPayload {
     action?: string;
     installation?: { id?: number };
     number?: number;
-    pull_request?: { head?: { ref?: string; sha?: string } };
+    pull_request?: { base?: { sha?: string }; head?: { ref?: string; sha?: string } };
     repository?: { full_name?: string };
 }
 
@@ -57,6 +61,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     const event = payload as PullRequestPayload;
     const branch = event.pull_request?.head?.ref;
     const commitSha = event.pull_request?.head?.sha;
+    const baseSha = event.pull_request?.base?.sha;
     const installationId = event.installation?.id;
     const repository = event.repository?.full_name;
     const { action, number } = event;
@@ -66,7 +71,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     }
 
     if (action === "opened" || action === "synchronize" || action === "reopened") {
-        return { action: "upsert", branch, commitSha, installationId, number, repository };
+        return { action: "upsert", baseSha, branch, commitSha, installationId, number, repository };
     }
 
     if (action === "closed") {
@@ -78,6 +83,8 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
 
 export interface PushIntent {
     branch: string;
+    /** The files the push changed, or why the payload cannot say — the path filter's input. */
+    changes: PushChanges;
     commitSha: string;
     installationId: number;
     repository: string;
@@ -85,12 +92,71 @@ export interface PushIntent {
 
 interface PushPayload {
     after?: string;
+    before?: string;
+    commits?: { added?: unknown; modified?: unknown; removed?: unknown }[];
+    created?: boolean;
+    forced?: boolean;
     installation?: { id?: number };
     ref?: string;
     repository?: { default_branch?: string; full_name?: string };
 }
 
 const ZERO_SHA = /^0+$/u;
+
+/**
+ * GitHub caps `commits` in a push payload (20 on the events path, and large
+ * pushes arrive with the list cut short). A list this long may be incomplete,
+ * so it proves nothing about the files that are NOT in it.
+ */
+const MAX_TRUSTED_COMMITS = 20;
+
+/**
+ * The files a push changed, or the reason the payload cannot prove it.
+ *
+ * Every doubt resolves to `unknown`, which builds: a forced push rewrote
+ * history the commit list does not describe, a new branch's `commits` is
+ * relative to nothing, and a truncated or malformed list omits files by
+ * construction. Only a complete, well-formed list is allowed to skip a deploy.
+ */
+export const pushChanges = (event: PushPayload): PushChanges => {
+    if (event.forced === true) {
+        return { unknown: "forced push" };
+    }
+
+    if (event.created === true || (typeof event.before === "string" && ZERO_SHA.test(event.before))) {
+        return { unknown: "new branch" };
+    }
+
+    const { commits } = event;
+
+    if (!Array.isArray(commits) || commits.length === 0) {
+        return { unknown: "the push lists no commits" };
+    }
+
+    if (commits.length >= MAX_TRUSTED_COMMITS) {
+        return { unknown: `the push lists ${String(commits.length)} commits and may be truncated` };
+    }
+
+    const files = new Set<string>();
+
+    for (const commit of commits) {
+        for (const list of [commit.added, commit.modified, commit.removed]) {
+            if (!Array.isArray(list) || list.some((file) => typeof file !== "string")) {
+                return { unknown: "a commit is missing its file lists" };
+            }
+
+            for (const file of list as string[]) {
+                files.add(file);
+            }
+        }
+    }
+
+    if (files.size > MAX_CHANGED_FILES) {
+        return { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` };
+    }
+
+    return { files: [...files] };
+};
 
 /**
  * Map a `push` webhook payload to a build intent (GAPS.md A4), or `null` when
@@ -116,7 +182,7 @@ export const parsePushEvent = (payload: unknown): null | PushIntent => {
         return null;
     }
 
-    return { branch: defaultBranch, commitSha, installationId, repository };
+    return { branch: defaultBranch, changes: pushChanges(event), commitSha, installationId, repository };
 };
 
 export interface InstallationIntent {
@@ -151,6 +217,9 @@ export const parseInstallationEvent = (payload: unknown): InstallationIntent | n
     return null;
 };
 
+/** What recording a build returns: `null` for an unconnected repo; `skipped` when the path filter matched nothing. */
+export type BuildRecordResult = null | { buildId: string; reused: boolean; skipped?: string };
+
 /** Resolves a connected GitHub repository to its Lunora project. */
 export type ResolveProject = (repository: string) => Promise<null | { organizationId: string; projectId: string; slug: string }>; // secret-scanner:allow -- domain field name
 
@@ -165,20 +234,53 @@ export type ResolveProject = (repository: string) => Promise<null | { organizati
  * job is project resolution + acknowledgement, not minting cross-org deploys.
  */
 export interface GitHubWebhookHooks {
+    /** Record a server-side preview build for a PR head (upsert events, GAPS.md A3). */
+
+    /**
+     * List the files a PR changes (`base...head`) for the preview path filter.
+     * Absent — no App credentials — previews build unfiltered.
+     */
+    listChangedFiles?: (range: { base: string; head: string; installationId: number; repository: string }) => Promise<PushChanges>;
     /** Link/unlink a GitHub App installation (`installation` events, GAPS.md A4). */
     onInstallation?: (intent: InstallationIntent) => Promise<void>;
-    /** Record a server-side preview build for a PR head (upsert events, GAPS.md A3). */
     onPreviewBuild?: (intent: {
         branch: string;
+        changes: PushChanges;
         commitSha: string;
         installationId: number;
         repository: string;
-    }) => Promise<null | { buildId: string; reused: boolean }>;
+    }) => Promise<BuildRecordResult>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
-    onPush?: (intent: PushIntent) => Promise<null | { buildId: string; reused: boolean }>;
+    onPush?: (intent: PushIntent) => Promise<BuildRecordResult>;
     resolveProject: ResolveProject;
     secret: string;
 }
+
+/**
+ * The files a PR changes, for the preview path filter. A `pull_request`
+ * payload lists none, so they come from GitHub's compare API — and any failure
+ * there degrades to `unknown`, which builds, exactly like an unprovable push.
+ */
+const previewChanges = async (intent: PreviewIntent & { commitSha: string; installationId: number }, options: GitHubWebhookHooks): Promise<PushChanges> => {
+    if (intent.baseSha === undefined) {
+        return { unknown: "the pull request payload has no base commit" };
+    }
+
+    if (!options.listChangedFiles) {
+        return { unknown: "the control plane cannot list pull request files (no GitHub App credentials)" };
+    }
+
+    try {
+        return await options.listChangedFiles({
+            base: intent.baseSha,
+            head: intent.commitSha,
+            installationId: intent.installationId,
+            repository: intent.repository,
+        });
+    } catch (error) {
+        return { unknown: `listing the pull request's files failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+};
 
 /** Handle a parsed PR intent: resolve the project, optionally queue a preview build, acknowledge. */
 const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWebhookHooks): Promise<Response> => {
@@ -190,11 +292,12 @@ const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWeb
 
     // Server-side preview build (GAPS.md A3): a PR upsert with a known head
     // commit + installation queues a build just like a default-branch push.
-    let previewBuild: null | { buildId: string; reused: boolean } = null;
+    let previewBuild: BuildRecordResult = null;
 
     if (intent.action === "upsert" && intent.commitSha && intent.installationId !== undefined && options.onPreviewBuild) {
         previewBuild = await options.onPreviewBuild({
             branch: intent.branch,
+            changes: await previewChanges({ ...intent, commitSha: intent.commitSha, installationId: intent.installationId }, options),
             commitSha: intent.commitSha,
             installationId: intent.installationId,
             repository: intent.repository,

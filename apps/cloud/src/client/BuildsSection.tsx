@@ -22,6 +22,7 @@ const BUILD_TONE = {
     building: "info",
     failed: "danger",
     pending: "warning",
+    skipped: "neutral",
     successful: "success",
 } as const;
 
@@ -84,6 +85,11 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                             <span className="shrink-0 font-mono text-sm">{build.commitSha.slice(0, 10)}</span>
                                             <span className="text-muted-foreground truncate font-mono text-xs">{build.branch}</span>
                                             <StatusBadge tone={BUILD_TONE[build.status]}>{build.status}</StatusBadge>
+                                            {build.skipReason === undefined ? null : (
+                                                <span className="text-muted-foreground truncate text-xs" title={build.skipReason}>
+                                                    {build.skipReason}
+                                                </span>
+                                            )}
                                             <span className="text-muted-foreground hidden font-mono text-xs whitespace-nowrap sm:inline">
                                                 {formatDateTime(build.createdAt)}
                                             </span>

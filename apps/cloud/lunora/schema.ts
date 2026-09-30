@@ -171,7 +171,12 @@ export default defineSchema({
         // browser that set it.
         previewPasswordHash: v.optional(v.string()),
         previewPasswordSalt: v.optional(v.string()),
+        // Monorepo support: the directory the build runs in, repo-relative and
+        // normalized (absent = repo root), and the globs a push must touch to
+        // rebuild (absent = everything under rootDirectory). See src/builds/paths.ts.
+        rootDirectory: v.optional(v.string()),
         slug: v.string(),
+        watchPaths: v.optional(v.array(v.string())),
     })
         .global()
         .index("by_github_repo", ["githubRepo"])
@@ -470,7 +475,13 @@ export default defineSchema({
         processingBy: v.optional(v.string()),
         processingStartedAt: v.optional(v.number()),
         projectId: v.id("projects"),
-        status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed")),
+        // The project's rootDirectory when the push was recorded, so a settings
+        // change mid-queue cannot build a commit from a directory it was not
+        // pushed for, and dedup never reuses a bundle built from another root.
+        rootDirectory: v.optional(v.string()),
+        // Why a push was not built — set only on `skipped` rows (path filter).
+        skipReason: v.optional(v.string()),
+        status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed"), v.literal("skipped")),
         updatedAt: v.number(),
         // Phase timestamps (A2 pattern).
         buildingAt: v.optional(v.number()),

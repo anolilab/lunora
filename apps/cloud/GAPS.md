@@ -19,6 +19,23 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Monorepo builds — 2026-10-01
+
+✅ Push-to-deploy now serves monorepos. Projects carry a `rootDirectory` and
+optional `watchPaths` (Studio → project → Build settings); the build box installs
+at the nearest lockfile at or above the root directory (never above the repo) and
+builds in the root directory, with `realpath` containment so a symlink cannot
+escape. Pushes and PR previews whose changed files match nothing are recorded as
+`skipped` builds with the reason; any payload that cannot prove its files (forced,
+new branch, 20+ commits, missing lists, 1000+ files, compare failure/300+ files)
+builds. See README → Monorepos.
+
+Still open: Yarn PnP stays refused; a `skipped` push posts no commit status; the
+watch-path default covers ancestor lockfiles but not a workspace package the app
+imports from outside its root (list it in `watchPaths`).
+
+---
+
 ## Releases on one stable Worker — 2026-09-30
 
 Every release used to be a new dispatch-namespace script (`{alias}-v{n}`). A

@@ -71,7 +71,9 @@ export interface Doc_projects {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    rootDirectory?: string;
     slug: string;
+    watchPaths?: Array<string>;
 }
 
 export interface Doc_deployments {
@@ -221,7 +223,9 @@ export interface Doc_builds {
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
-    status: "pending" | "building" | "successful" | "failed";
+    rootDirectory?: string;
+    skipReason?: string;
+    status: "pending" | "building" | "successful" | "failed" | "skipped";
     updatedAt: number;
     buildingAt?: number;
     successfulAt?: number;
@@ -757,7 +761,9 @@ export interface Insert_projects {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    rootDirectory?: string;
     slug: string;
+    watchPaths?: Array<string>;
 }
 
 export interface Insert_deployments {
@@ -907,7 +913,9 @@ export interface Insert_builds {
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
-    status: "pending" | "building" | "successful" | "failed";
+    rootDirectory?: string;
+    skipReason?: string;
+    status: "pending" | "building" | "successful" | "failed" | "skipped";
     updatedAt: number;
     buildingAt?: number;
     successfulAt?: number;

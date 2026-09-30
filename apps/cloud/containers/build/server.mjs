@@ -25,26 +25,12 @@
 /* eslint-disable sonarjs/no-os-command-from-path -- `tar` and the package managers are resolved through PATH on purpose. This module only ever runs as PID-adjacent code inside its own purpose-built image, where the Dockerfile owns PATH and the filesystem; hardcoding `/usr/bin/tar` and the corepack shim paths would instead break silently on a base-image rebase, which is the failure this rule cannot see. */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
-/**
- * An error whose message is written FOR the person who pushed the commit.
- *
- * The distinction matters because this server's replies end up in `buildLogs`,
- * which tenants read in the Studio. "no lockfile found" and "your project does
- * not depend on the Lunora CLI" are the whole point — a build box that hid them
- * would leave someone staring at a red build with no cause. But an unexpected
- * `ENOENT /workspace/build-a1b2/node_modules/…` is not their problem, is not
- * actionable, and describes this container's insides to someone outside it.
- *
- * So a `BuildError` is echoed and anything else is generalised, with the detail
- * going to the container's own log. CodeQL flagged the previous code for
- * information exposure and it was right: it echoed every `error.message` alike.
- */
-class BuildError extends Error {}
+import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. `provision.ts` defaults `mainModule` to this. */
 const ENTRY_MODULE = "index.js";
@@ -166,66 +152,6 @@ const run = (command, args, options, onLine) =>
     });
 
 /**
- * Which package manager this project's lockfile was written by.
- *
- * The lockfile decides, never a default: installing a pnpm project with npm
- * resolves a different dependency graph than the one the tenant tested, and the
- * failure surfaces as a mysterious build error rather than as "wrong manager".
- * An unrecognised project is refused for the same reason.
- * @param {string} directory Extracted project root.
- * @returns {Promise<{ args: string[], command: string }>} The install command to run.
- */
-const detectPackageManager = async (directory) => {
-    const entries = new Set(await readdir(directory));
-
-    if (entries.has("pnpm-lock.yaml")) {
-        return { args: ["install", "--frozen-lockfile"], command: "pnpm" };
-    }
-
-    if (entries.has("package-lock.json")) {
-        return { args: ["ci"], command: "npm" };
-    }
-
-    if (entries.has("yarn.lock")) {
-        return { args: ["install", "--immutable"], command: "yarn" };
-    }
-
-    throw new BuildError("no lockfile found (pnpm-lock.yaml, package-lock.json or yarn.lock) — a reproducible build needs one");
-};
-
-/**
- * The project's own installed `lunora` binary.
- *
- * Deliberately NOT `pnpm exec` / `npm exec` / `yarn run`. Every package
- * manager's exec treats a missing binary as "resolve it from the registry":
- * verified against npm 10, where both `npm exec --no --` and `npx --no` still
- * fetch, so a project that never declared the CLI would be built by whatever
- * version is latest that day — a silent, unpinned, network-dependent toolchain
- * swap — and the build log would read `404 lunora` instead of naming the real
- * problem. Running `node_modules/.bin/lunora` can only ever be the version the
- * lockfile installed, and its absence is a clear error.
- *
- * (Yarn's PnP linker writes no `node_modules/.bin`. Such a project is refused
- * here rather than guessed at; the error says so.)
- * @param {string} directory Extracted project root.
- * @returns {Promise<string>} Absolute path to the project's own `lunora` binary.
- */
-const resolveLunoraBin = async (directory) => {
-    const binary = join(directory, "node_modules", ".bin", "lunora");
-
-    try {
-        await access(binary);
-    } catch {
-        throw new BuildError(
-            "node_modules/.bin/lunora is missing after install — add the Lunora CLI to the project's dependencies " +
-                "(`lunorash` or `@lunora/cli`). Yarn PnP projects are not supported by the build box.",
-        );
-    }
-
-    return binary;
-};
-
-/**
  * Collect the built Worker module out of the out-dir.
  *
  * The deploy path uploads exactly ONE module (`api.ts` sets a single
@@ -278,6 +204,20 @@ const collectBundle = async (projectDirectory) => {
  * @returns {Promise<void>} Resolves once the stream is closed.
  */
 const handleBuild = async (request, response) => {
+    // Checked before the body is read, so a malformed value costs nothing. It
+    // is re-checked against the extracted tree below, where "exists" and "does
+    // not escape through a symlink" can be proven.
+    let rootDirectory;
+
+    try {
+        rootDirectory = validateRootDirectory(new URLSearchParams((request.url ?? "").split("?")[1] ?? "").get("rootDirectory") ?? "");
+    } catch (error) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: clientError(error) }));
+
+        return;
+    }
+
     const source = await readBody(request, MAX_SOURCE_BYTES);
 
     response.writeHead(200, { "content-type": "application/x-ndjson", "transfer-encoding": "chunked" });
@@ -316,11 +256,15 @@ const handleBuild = async (request, response) => {
             tar.stdin.end(source);
         });
 
-        const manager = await detectPackageManager(workspace);
+        // Every directory below is a real path proven to sit inside the
+        // extracted repo; nothing past this point touches an unresolved one.
+        const { project, repo } = await resolveProjectDirectory(workspace, rootDirectory);
+        const { directory: workspaceRoot, manager } = await findWorkspaceRoot(project, repo);
+        const shown = (directory) => (directory === repo ? "the repository root" : relative(repo, directory));
 
-        emit({ line: `installing dependencies with ${manager.command}` });
+        emit({ line: `installing dependencies with ${manager.command} in ${shown(workspaceRoot)}` });
 
-        const installCode = await run(manager.command, manager.args, { cwd: workspace, label: "dependency install", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
+        const installCode = await run(manager.command, manager.args, { cwd: workspaceRoot, label: "dependency install", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
 
         if (installCode !== 0) {
             emit({ error: `dependency install failed with exit code ${installCode}` });
@@ -329,14 +273,14 @@ const handleBuild = async (request, response) => {
             return;
         }
 
-        emit({ line: "running lunora build" });
+        emit({ line: `running lunora build in ${shown(project)}` });
 
         // The PROJECT's own lunora CLI, off its lockfile — not a copy baked into
         // this image. A build box that pinned its own CLI version would build
         // tenants' code with a toolchain their lockfile never chose, and every
         // image bump would become a fleet-wide behaviour change.
-        const lunora = await resolveLunoraBin(workspace);
-        const buildCode = await run(lunora, ["build"], { cwd: workspace, label: "`lunora build`", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
+        const lunora = await resolveLunoraBin(project, workspaceRoot);
+        const buildCode = await run(lunora, ["build"], { cwd: project, label: "`lunora build`", timeoutMs: BUILD_TIMEOUT_MS }, onLine);
 
         if (buildCode !== 0) {
             emit({ error: `lunora build failed with exit code ${buildCode}` });
@@ -345,7 +289,7 @@ const handleBuild = async (request, response) => {
             return;
         }
 
-        emit(await collectBundle(workspace));
+        emit(await collectBundle(project));
     } catch (error) {
         emit({ error: clientError(error) });
     } finally {

@@ -41,6 +41,8 @@ export type RouterEnv = {
     __lunoraCtx?: LunoraActionContext;
     CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
+    GITHUB_APP_ID?: string;
+    GITHUB_APP_PRIVATE_KEY?: string;
     GITHUB_WEBHOOK_SECRET?: string;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     LUNORA_ADMIN_TOKEN?: string;
