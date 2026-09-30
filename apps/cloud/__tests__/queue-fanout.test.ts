@@ -15,23 +15,20 @@ describe(routeQueue, () => {
         ).toBe("shop-v3");
     });
 
-    it("prefers the longest alias, then the newest live release", () => {
+    it("tells alias app + B_JOBS apart from alias app-b + JOBS, then prefers the newest release", () => {
         const live = [
             { alias: "app", liveAt: 1, scriptName: "app-v1" },
             { alias: "app-b", liveAt: 1, scriptName: "app-b-v1" },
             { alias: "app-b", liveAt: 2, scriptName: "app-b-v2" },
         ];
 
-        expect(routeQueue("app-b-jobs", live)?.scriptName).toBe("app-b-v2");
-        expect(routeQueue("app-jobs", live)?.scriptName).toBe("app-v1");
-    });
-
-    it("matches sanitized aliases the way tenantResourceName names them", () => {
-        expect(routeQueue("org--project-jobs", [{ alias: "org__Project", scriptName: "s" }])?.scriptName).toBe("s");
+        expect(routeQueue(tenantResourceName("app", { binding: "B_JOBS", type: "queue_producer" }), live)?.scriptName).toBe("app-v1");
+        expect(routeQueue(tenantResourceName("app-b", { binding: "JOBS", type: "queue_producer" }), live)?.scriptName).toBe("app-b-v2");
     });
 
     it("answers undefined for a queue no live project owns", () => {
         expect(routeQueue("lunora-tenant-queue", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
-        expect(routeQueue("shop-", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
+        expect(routeQueue("shop--", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
+        expect(routeQueue("shop-jobs", [{ alias: "shop", scriptName: "shop-v1" }])).toBeUndefined();
     });
 });

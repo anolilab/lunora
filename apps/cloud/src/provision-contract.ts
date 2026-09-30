@@ -88,17 +88,49 @@ export const UNSUPPORTED_REASONS: Record<Extract<keyof typeof BINDING_SUPPORT, "
 };
 
 /**
- * The account-unique name of a per-project resource.
+ * A project alias: dash-separated runs of `[a-z0-9]`, so it never contains `--`
+ * and never starts or ends with `-`. That is what makes {@link tenantResourceName}
+ * injective — the first `--` in a resource name is always the separator.
+ */
+export const ALIAS_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+/** Cloudflare's tightest name limit across the provisioned types (R2 buckets, queues). */
+const MAX_RESOURCE_NAME = 63;
+
+/**
+ * The account-unique name of a per-project resource: `{alias}--{binding}`.
  *
  * Keyed by the project alias (stable across releases) and the binding name, so
- * a re-deploy reuses the resource and a rollback sees the same data. Lowercased
- * and restricted to `[a-z0-9-]`, which every provisioned type accepts;
- * Analytics Engine datasets swap `-` for `_`, the only separator they allow.
+ * a re-deploy reuses the resource and a rollback sees the same data. The binding
+ * is lowercased with `_` → `-` (binding names are `[A-Za-z_]\w*`, so this only
+ * folds case — the handler refuses bindings that differ only in case). Analytics
+ * Engine datasets swap `-` for `_`, the only separator they allow.
+ *
+ * Injective because an alias never contains `--`: two different tenants can never
+ * be handed the same database. A single `-` separator was not — alias `app` +
+ * binding `B_DB` and alias `app-b` + binding `DB` both named `app-b-db`.
+ * @throws when the alias is malformed or the name exceeds 63 characters.
  */
 export const tenantResourceName = (alias: string, requirement: Pick<BindingRequirement, "binding" | "type">): string => {
-    const name = `${alias}-${requirement.binding}`.toLowerCase().replaceAll(/[^a-z0-9-]/gu, "-");
+    if (!ALIAS_PATTERN.test(alias)) {
+        throw new Error(`alias "${alias}" must match ${String(ALIAS_PATTERN)}`);
+    }
+
+    const name = `${alias}--${requirement.binding.toLowerCase().replaceAll("_", "-")}`;
+
+    if (name.length > MAX_RESOURCE_NAME) {
+        throw new Error(`resource name "${name}" exceeds ${String(MAX_RESOURCE_NAME)} characters; shorten the project name or binding ${requirement.binding}`);
+    }
 
     return requirement.type === "analytics_engine" ? name.replaceAll("-", "_") : name;
+};
+
+/** The alias a {@link tenantResourceName} (non-Analytics-Engine) belongs to, or `undefined` for a name it did not produce. */
+export const aliasOfResourceName = (name: string): string | undefined => {
+    const separator = name.indexOf("--");
+    const alias = separator === -1 ? "" : name.slice(0, separator);
+
+    return ALIAS_PATTERN.test(alias) && separator + 2 < name.length ? alias : undefined;
 };
 
 /** A single managed-tier release to converge. */
@@ -130,8 +162,8 @@ export interface TenantDeploymentSpec {
  *
  * Two Alchemy stacks per project, so releases are retained and pruned
  * independently while data outlives them:
- * - `lunora-project-<alias>` owns the `provisioned` resources.
- * - `lunora-release-<scriptName>` owns one release's Worker, referencing the
+ * - `lunora-project-{alias}` owns the `provisioned` resources.
+ * - `lunora-release-{scriptName}` owns one release's Worker, referencing the
  *   project stack's resources. Destroying it never touches project data.
  */
 export type ProvisionJob =

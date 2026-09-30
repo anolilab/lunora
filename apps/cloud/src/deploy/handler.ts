@@ -1,6 +1,6 @@
 import type { Provisioner } from "../provision";
 import type { AssetFile, AssetsUpload, BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
-import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../provision-contract";
+import { ALIAS_PATTERN, BINDING_SUPPORT, tenantResourceName, UNSUPPORTED_REASONS } from "../provision-contract";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
@@ -219,11 +219,13 @@ const bindingSetError = (bindings: BindingRequirement[]): string | undefined => 
     const names = new Set<string>();
 
     for (const { binding } of bindings) {
-        if (names.has(binding)) {
-            return `binding name ${binding} is declared more than once`;
+        // Case-insensitive: per-project resource names fold case, so `DB` and
+        // `db` would share one database.
+        if (names.has(binding.toLowerCase())) {
+            return `binding name ${binding} is declared more than once (names are compared case-insensitively)`;
         }
 
-        names.add(binding);
+        names.add(binding.toLowerCase());
     }
 
     if (bindings.filter((entry) => entry.type === "durable_object").length > MAX_DURABLE_OBJECTS) {
@@ -458,11 +460,40 @@ const parseAssets = (raw: unknown, manifest: DeployManifest): Parsed<AssetsUploa
     return { value: { files, ...(config.value ? { config: config.value } : {}) } };
 };
 
-const parsePayload = (body: DeployBody): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
+/** Every per-project resource name must fit Cloudflare's limits — refused here, not halfway through provisioning. */
+const resourceNameError = (alias: string, manifest: DeployManifest): string | undefined => {
+    for (const requirement of manifest.bindings) {
+        if (BINDING_SUPPORT[requirement.type] !== "provisioned") {
+            continue;
+        }
+
+        try {
+            tenantResourceName(alias, requirement);
+        } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+        }
+    }
+
+    return undefined;
+};
+
+const parsePayload = (body: DeployBody, alias: string): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
+    // The script name is the project alias: it becomes the public subdomain and
+    // keys every per-project resource, so it must be a shape that cannot collide.
+    if (!ALIAS_PATTERN.test(alias)) {
+        return { error: `scriptName must be lowercase letters and digits in dash-separated runs (${String(ALIAS_PATTERN)})` };
+    }
+
     const manifest = parseManifest(body.manifest);
 
     if ("error" in manifest) {
         return manifest;
+    }
+
+    const nameError = resourceNameError(alias, manifest.value);
+
+    if (nameError !== undefined) {
+        return { error: nameError };
     }
 
     const assets = parseAssets(body.assets, manifest.value);
@@ -658,7 +689,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     }
 
     // Refused here, before a deployment row exists or anything is provisioned.
-    const payload = parsePayload(body);
+    const payload = parsePayload(body, body.scriptName);
 
     if ("error" in payload) {
         return json(400, { error: payload.error });

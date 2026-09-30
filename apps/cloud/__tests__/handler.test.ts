@@ -424,6 +424,26 @@ describe("deploy manifest validation", () => {
         await expect(refusal(manifest([{ binding: "SHARD", type: "kv" }]))).resolves.toContain("SHARD is declared more than once");
     });
 
+    it("refuses binding names that differ only in case, since resource names fold case", async () => {
+        await expect(
+            refusal(
+                manifest([
+                    { binding: "DB", type: "d1" },
+                    { binding: "db", type: "kv" },
+                ]),
+            ),
+        ).resolves.toContain("db is declared more than once");
+    });
+
+    it("refuses a script name that could collide as a project alias", async () => {
+        await expect(refusal({ scriptName: "app--b" })).resolves.toContain("scriptName must be");
+        await expect(refusal({ scriptName: "My_App" })).resolves.toContain("scriptName must be");
+    });
+
+    it("refuses a provisioned resource whose name would exceed Cloudflare's limit", async () => {
+        await expect(refusal({ scriptName: "a".repeat(55), ...manifest([{ binding: "UPLOADS", type: "r2" }]) })).resolves.toContain("exceeds 63");
+    });
+
     it("caps the binding and durable object counts", async () => {
         await expect(
             refusal(
