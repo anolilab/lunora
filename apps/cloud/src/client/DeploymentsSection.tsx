@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { BackupsSection } from "./BackupsSection";
 import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
@@ -578,6 +579,7 @@ export const DeploymentsSection = ({
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
+            <BackupsSection organizationId={organizationId} projectId={projectId} />
             <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />
             {rollbackError ? (
                 <p className="text-sm text-destructive" role="alert">

@@ -16,6 +16,7 @@ import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { isLunoraError } from "@lunora/errors";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
+import type { DispatchNamespaceLike, TenantBackupBucket } from "../../backup/tenant-transport";
 import type { ReleaseBucket } from "../release-store";
 
 /** The Lunora action context the worker injects on `env.__lunoraCtx`. */
@@ -41,6 +42,8 @@ export type RouterEnv = {
     __lunoraCtx?: LunoraActionContext;
     CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
+    /** The production dispatch namespace — how tenant backup/restore reach a project's Worker. */
+    DISPATCHER?: DispatchNamespaceLike;
     GITHUB_WEBHOOK_SECRET?: string;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     LUNORA_ADMIN_TOKEN?: string;
@@ -60,6 +63,8 @@ export type RouterEnv = {
     TELEMETRY?: AnalyticsEngineDatasetLike;
     /** Raw-telemetry archive Pipeline for the telemetry ingest (may be unbound). */
     TELEMETRY_PIPELINE?: PipelineBindingLike;
+    /** Private R2 bucket of tenant data snapshots (docs/RESTORE.md). */
+    TENANT_BACKUPS?: TenantBackupBucket;
 };
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });

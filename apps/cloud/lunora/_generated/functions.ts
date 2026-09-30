@@ -26,10 +26,11 @@ import * as lunora_rollouts_21 from "../rollouts.js";
 import * as lunora_secrets_22 from "../secrets.js";
 import * as lunora_sessions_23 from "../sessions.js";
 import * as lunora_telemetry_24 from "../telemetry.js";
-import * as lunora_traces_25 from "../traces.js";
-import * as lunora_traffic_26 from "../traffic.js";
-import * as lunora_uptime_27 from "../uptime.js";
-import * as lunora_usage_28 from "../usage.js";
+import * as lunora_tenant_backups_25 from "../tenant-backups.js";
+import * as lunora_traces_26 from "../traces.js";
+import * as lunora_traffic_27 from "../traffic.js";
+import * as lunora_uptime_28 from "../uptime.js";
+import * as lunora_usage_29 from "../usage.js";
 
 import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "@lunora/values";
 import { LunoraError } from "@lunora/server";
@@ -203,23 +204,28 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "telemetry:ingest": lunora_telemetry_24.ingest as unknown as RegisteredLunoraFunction,
     "telemetry:orgForDeployKey": lunora_telemetry_24.orgForDeployKey as unknown as RegisteredLunoraFunction,
     "telemetry:pruneObservations": lunora_telemetry_24.pruneObservations as unknown as RegisteredLunoraFunction,
-    "traces:get": lunora_traces_25.get as unknown as RegisteredLunoraFunction,
-    "traces:getArchived": lunora_traces_25.getArchived as unknown as RegisteredLunoraFunction,
-    "traces:list": lunora_traces_25.list as unknown as RegisteredLunoraFunction,
-    "traces:listArchived": lunora_traces_25.listArchived as unknown as RegisteredLunoraFunction,
-    "traffic:live": lunora_traffic_26.live as unknown as RegisteredLunoraFunction,
-    "traffic:snapshot": lunora_traffic_26.snapshot as unknown as RegisteredLunoraFunction,
-    "uptime:prune": lunora_uptime_27.prune as unknown as RegisteredLunoraFunction,
-    "uptime:recent": lunora_uptime_27.recent as unknown as RegisteredLunoraFunction,
-    "uptime:summary": lunora_uptime_27.summary as unknown as RegisteredLunoraFunction,
-    "usage:enforceSpendCaps": lunora_usage_28.enforceSpendCaps as unknown as RegisteredLunoraFunction,
-    "usage:ingest": lunora_usage_28.ingest as unknown as RegisteredLunoraFunction,
-    "usage:overageWatermark": lunora_usage_28.overageWatermark as unknown as RegisteredLunoraFunction,
-    "usage:record": lunora_usage_28.record as unknown as RegisteredLunoraFunction,
-    "usage:recordOverageDebit": lunora_usage_28.recordOverageDebit as unknown as RegisteredLunoraFunction,
-    "usage:rollup": lunora_usage_28.rollup as unknown as RegisteredLunoraFunction,
-    "usage:series": lunora_usage_28.series as unknown as RegisteredLunoraFunction,
-    "usage:summary": lunora_usage_28.summary as unknown as RegisteredLunoraFunction,
+    "tenant_backups:authorizeDownload": lunora_tenant_backups_25.authorizeDownload as unknown as RegisteredLunoraFunction,
+    "tenant_backups:beginBackup": lunora_tenant_backups_25.beginBackup as unknown as RegisteredLunoraFunction,
+    "tenant_backups:beginRestore": lunora_tenant_backups_25.beginRestore as unknown as RegisteredLunoraFunction,
+    "tenant_backups:finish": lunora_tenant_backups_25.finish as unknown as RegisteredLunoraFunction,
+    "tenant_backups:list": lunora_tenant_backups_25.list as unknown as RegisteredLunoraFunction,
+    "traces:get": lunora_traces_26.get as unknown as RegisteredLunoraFunction,
+    "traces:getArchived": lunora_traces_26.getArchived as unknown as RegisteredLunoraFunction,
+    "traces:list": lunora_traces_26.list as unknown as RegisteredLunoraFunction,
+    "traces:listArchived": lunora_traces_26.listArchived as unknown as RegisteredLunoraFunction,
+    "traffic:live": lunora_traffic_27.live as unknown as RegisteredLunoraFunction,
+    "traffic:snapshot": lunora_traffic_27.snapshot as unknown as RegisteredLunoraFunction,
+    "uptime:prune": lunora_uptime_28.prune as unknown as RegisteredLunoraFunction,
+    "uptime:recent": lunora_uptime_28.recent as unknown as RegisteredLunoraFunction,
+    "uptime:summary": lunora_uptime_28.summary as unknown as RegisteredLunoraFunction,
+    "usage:enforceSpendCaps": lunora_usage_29.enforceSpendCaps as unknown as RegisteredLunoraFunction,
+    "usage:ingest": lunora_usage_29.ingest as unknown as RegisteredLunoraFunction,
+    "usage:overageWatermark": lunora_usage_29.overageWatermark as unknown as RegisteredLunoraFunction,
+    "usage:record": lunora_usage_29.record as unknown as RegisteredLunoraFunction,
+    "usage:recordOverageDebit": lunora_usage_29.recordOverageDebit as unknown as RegisteredLunoraFunction,
+    "usage:rollup": lunora_usage_29.rollup as unknown as RegisteredLunoraFunction,
+    "usage:series": lunora_usage_29.series as unknown as RegisteredLunoraFunction,
+    "usage:summary": lunora_usage_29.summary as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -648,7 +654,35 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_traces_25.listArchived.args, (source) => {
+installCompiledValidatorMap(lunora_tenant_backups_25.authorizeDownload.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["backupId"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "backupId": source["backupId"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_tenant_backups_25.beginBackup.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_tenant_backups_25.beginRestore.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["backupId"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "backupId": source["backupId"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_tenant_backups_25.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_traces_26.listArchived.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
@@ -663,7 +697,7 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
 return { "from": source["from"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"], "to": source["to"] };
 });
-installCompiledValidatorMap(lunora_traffic_26.live.args, (source) => {
+installCompiledValidatorMap(lunora_traffic_27.live.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
@@ -676,7 +710,7 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_uptime_27.recent.args, (source) => {
+installCompiledValidatorMap(lunora_uptime_28.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -690,20 +724,20 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "deploymentId": source["deploymentId"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_uptime_27.summary.args, (source) => {
+installCompiledValidatorMap(lunora_uptime_28.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_usage_28.overageWatermark.args, (source) => {
+installCompiledValidatorMap(lunora_usage_29.overageWatermark.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_28.recordOverageDebit.args, (source) => {
+installCompiledValidatorMap(lunora_usage_29.recordOverageDebit.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["debitedCredits"] !== "number" || !Number.isFinite(source["debitedCredits"])) return DEFER;
@@ -711,14 +745,14 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "debitedCredits": source["debitedCredits"], "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_28.series.args, (source) => {
+installCompiledValidatorMap(lunora_usage_29.series.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_28.summary.args, (source) => {
+installCompiledValidatorMap(lunora_usage_29.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -944,6 +978,13 @@ export interface Caller {
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
         orgForDeployKey: (args: { deployKey: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
+    };
+    tenant_backups: {
+        authorizeDownload: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ alias: string; createdAt: number; key: string; }>;
+        beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; scriptName: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
+        beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; scriptName: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
+        finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; organizationId: Id<"organizations">; restoreConflicts?: number; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number; trigger: "manual" | "pre-restore" | "scheduled" }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1174,6 +1215,13 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ingest: (args) => callRegistered(context, "telemetry:ingest", args),
         orgForDeployKey: (args) => callRegistered(context, "telemetry:orgForDeployKey", args),
         pruneObservations: (args) => callRegistered(context, "telemetry:pruneObservations", args),
+    },
+    tenant_backups: {
+        authorizeDownload: (args) => callRegistered(context, "tenant_backups:authorizeDownload", args),
+        beginBackup: (args) => callRegistered(context, "tenant_backups:beginBackup", args),
+        beginRestore: (args) => callRegistered(context, "tenant_backups:beginRestore", args),
+        finish: (args) => callRegistered(context, "tenant_backups:finish", args),
+        list: (args) => callRegistered(context, "tenant_backups:list", args),
     },
     traces: {
         get: (args) => callRegistered(context, "traces:get", args),

@@ -409,6 +409,7 @@ class AppBuilder<Env extends object> {
             ["buildLogs", { mode: { kind: "global" } }],
             ["domains", { mode: { kind: "global" } }],
             ["auditLog", { mode: { kind: "global" } }],
+            ["tenantBackups", { mode: { kind: "global" } }],
             ["invitations", { mode: { kind: "global" } }],
             ["platformUsage", { mode: { kind: "global" } }],
             ["issues", { mode: { kind: "global" } }],

@@ -5,9 +5,11 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
-import { proxyAdminRequest, stripTrailingSlashes } from "../admin/proxy";
+import { proxyAdminRequest } from "../admin/proxy";
 import { captureServerEvent } from "../analytics/capture";
 import { currentAuth } from "../auth";
+import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from "../backup/tenant-routes";
+import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
@@ -644,15 +646,18 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
         return jsonError(409, "deployment has no usable admin token");
     }
 
-    const exported = await fetch(`${stripTrailingSlashes(target.url)}/_lunora/admin/export`, {
-        headers: { authorization: `Bearer ${adminToken}` },
-    });
+    // The same export the tenant backups read (src/backup/tenant-transport). Over
+    // the public URL rather than the dispatch namespace: an eject may target a
+    // preview, whose script lives in another namespace than the one bound here.
+    let snapshot: string;
 
-    if (!exported.ok) {
-        return jsonError(502, `tenant export failed (${String(exported.status)})`);
+    try {
+        const exported = await exportTenantSnapshot(tenantSender({ adminToken, scriptName: target.scriptName, url: target.url }, undefined));
+
+        snapshot = await new Response(exported).text();
+    } catch (error) {
+        return jsonError(502, error instanceof TenantAdminError ? error.message : "tenant export failed");
     }
-
-    const snapshot = await exported.text();
 
     await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: target.organizationId });
 
@@ -1014,6 +1019,10 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
         { handler: handleSessionRollbackRoute, method: "POST", path: "/v1/rollback", spec: { auth: "session" } },
         { handler: handleEjectRoute, method: "POST", path: "/v1/eject", spec: { auth: "deployKey" } },
+        // Tenant data backups (docs/RESTORE.md); the `internal.tenant_backups.*` mutations assert owner/admin.
+        { handler: handleBackupNowRoute, method: "POST", path: "/v1/backups", spec: { auth: "session" } },
+        { handler: handleRestoreRoute, method: "POST", path: "/v1/backups/restore", spec: { auth: "session" } },
+        { handler: handleDownloadRoute, method: "POST", path: "/v1/backups/download", spec: { auth: "session" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },

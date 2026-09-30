@@ -48,6 +48,7 @@ export const PLAN_CATALOG: ReadonlyArray<PlanCard> = PLAN_ORDER.map((id) => {
     const projects = plan?.limits?.projects ?? 0;
     const members = plan?.limits?.members ?? 0;
     const previews = plan?.limits?.previewDeployments ?? 0;
+    const backups = plan?.limits?.backupRetention ?? 0;
 
     return {
         features: (plan?.features ?? []).map((feature) => FEATURE_LABELS[feature] ?? feature),
@@ -59,6 +60,7 @@ export const PLAN_CATALOG: ReadonlyArray<PlanCard> = PLAN_ORDER.map((id) => {
             plural(previews, "preview deployment"),
             `${compact(usage?.requests ?? 0)} requests / month included`,
             `${compact(usage?.cpuMs ?? 0)} CPU-ms / month included`,
+            `${plural(backups, "daily data backup")} kept`,
         ],
         tagline: PLAN_META[id].tagline,
     };
