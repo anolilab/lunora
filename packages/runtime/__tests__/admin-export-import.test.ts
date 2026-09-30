@@ -493,6 +493,42 @@ describe("createWorker — admin import endpoint", () => {
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
     });
 
+    it("imports without a configured queryCoordinator", async () => {
+        expect.assertions(3);
+
+        const shardKeys: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: {
+                get: (id) => {
+                    shardKeys.push((id as { __name: string }).__name);
+
+                    return { fetch: async () => Response.json({ result: { conflicts: 0, errors: [], inserted: { users: 1 } } }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 1 });
+        expect(shardKeys).toEqual(["__root__"]);
+    });
+
     it("reports malformed JSON rows in `errors` but continues", async () => {
         expect.assertions(3);
 

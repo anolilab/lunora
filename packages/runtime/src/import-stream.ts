@@ -11,6 +11,7 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import { createQueryCoordinator, createStaticShardRegistry } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
@@ -320,11 +321,10 @@ const streamingImport = async (
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
     if (perShard.size > 0) {
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        // Import fan-out targets the pre-bucketed shard keys and never consults
+        // the registry, so a worker without a configured coordinator (every app
+        // the builder produces) gets a registry-less one rather than a 400.
+        const coordinator = options.queryCoordinator ?? createQueryCoordinator({ registry: createStaticShardRegistry({}) });
 
         // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
         // pins it once). Fanning out through it keeps import writing to the SAME DOs
