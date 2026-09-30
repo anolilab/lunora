@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraError } from "../src/errors";
 import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardCall {
@@ -57,6 +57,36 @@ const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => 
         ...overrides,
     };
 };
+
+describe("createDefaultShardRegistry", () => {
+    it("answers a root table with no keys, so the fan-out falls back to the default shard", async () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(() => {
+            return { mode: { kind: "root" } };
+        });
+
+        expect([...(await registry.listShardKeys("users"))]).toEqual([]);
+    });
+
+    it("refuses a .shardBy() table instead of covering the default shard alone", () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(() => {
+            return { mode: { field: "channelId", kind: "shardBy" } };
+        });
+
+        expect(() => registry.listShardKeys("messages")).toThrow(/"messages": it is `\.shardBy\(\)` and no shard registry is configured/u);
+    });
+
+    it("refuses every table when the worker cannot tell sharded from root", () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(undefined);
+
+        expect(() => registry.listShardKeys("users")).toThrow(/no `resolveTableSharding`/u);
+    });
+});
 
 describe("createStaticShardRegistry", () => {
     it("returns the configured keys for a known table", async () => {

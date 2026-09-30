@@ -261,8 +261,8 @@ interface OrchestrationAdminRouteDeps {
     forwardToShard: (namespace: ShardNamespaceLike, shardKey: string, request: Request) => Promise<Response>;
     /** Admin-token gate predicate (header bearer check). */
     isAdmin: (request: Request) => boolean;
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across / forwarded to. */
@@ -273,7 +273,7 @@ interface OrchestrationAdminRouteDeps {
 const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
     const { defaultShard, forwardToShard, isAdmin, queryCoordinator, resolveForwardContext, shardDO } = deps;
 
-    /** The guard triple every coordinator-backed handler runs: POST-only, admin-gated, coordinator configured. `label` names the endpoint in each error. */
+    /** The guard pair every coordinator-backed handler runs: POST-only and admin-gated. `label` names the endpoint in each error. */
     const requireCoordinator = (request: Request, label: string): QueryCoordinator => {
         if (request.method !== "POST") {
             throw new LunoraError(`${label} endpoint requires POST`, { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -281,10 +281,6 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
 
         if (!isAdmin(request)) {
             throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError(`${label} endpoint requires a \`queryCoordinator\` on the worker`, { code: "BAD_REQUEST", status: 400 });
         }
 
         return queryCoordinator;

@@ -82,6 +82,8 @@ interface DataMovementAdminRouteDeps {
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
     /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
     assertAdmin: (request: Request) => void;
+    /** Refuse an export whose shard-local tables the registry cannot enumerate, before the response is committed. */
+    assertExportDiscoverable: (tables: ReadonlyArray<string> | undefined) => Promise<void>;
     /** The worker's default shard, so an empty discovery still reaches the root DO. */
     defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
@@ -90,10 +92,8 @@ interface DataMovementAdminRouteDeps {
     exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
-    /** Admin-gate + require a configured option, else throw the given error. Shared with the sibling admin route modules. */
-    requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across. */
@@ -135,9 +135,9 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         exportCursorStore,
         exportSinks,
         knownTables,
-        queryCoordinator,
+        queryCoordinator: coordinator,
         assertAdmin,
-        requireAdminOption,
+        assertExportDiscoverable,
         resolveForwardContext,
         shardDO,
         streamExportRows,
@@ -152,12 +152,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const body = await parseExportBody(request);
+
+        await assertExportDiscoverable(body.tables);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -212,10 +211,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
@@ -284,10 +280,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Connector sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
@@ -356,10 +349,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Apply endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
@@ -390,11 +380,6 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        // Admin gate only. Import fans out through `streamingImport`, which never
-        // touches the coordinator — this used to demand one anyway, which made
-        // `lunora seed` (and every other bulk import) fail with "requires a
-        // `queryCoordinator`" on every app the builder produces, since the
-        // builder has no way to configure one.
         assertAdmin(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
@@ -430,10 +415,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export-tap endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
             throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", {

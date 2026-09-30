@@ -49,6 +49,40 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
 };
 
 /**
+ * The registry a worker gets when it configures none: it answers for every
+ * table that lives on the default shard and refuses the rest.
+ *
+ * A root or `.global()` table has no shard keys to discover, so the empty list
+ * is the whole answer and the coordinator's default-shard fallback reaches the
+ * one DO that holds its rows. A `.shardBy(...)` table's keys are only known to a
+ * real registry, and an empty list there would make an export, CDC sync or
+ * migration cover the default shard alone and report success — so it throws
+ * instead. Without `resolveSharding` no table can be told apart, so every one
+ * is refused for the same reason.
+ */
+const createDefaultShardRegistry = (resolveSharding: ((table: string) => { mode: { kind: string } } | undefined) | undefined): ShardRegistry => {
+    return {
+        listShardKeys(table) {
+            if (resolveSharding === undefined) {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": the worker has no \`resolveTableSharding\` to tell a sharded table from a root one, and no shard registry is configured`,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            if (resolveSharding(table)?.mode.kind === "shardBy") {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and no shard registry is configured — pass \`queryCoordinator: createQueryCoordinator({ registry })\``,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            return [];
+        },
+    };
+};
+
+/**
  * Wire-serializable merge strategy. `topK.by` is a field name on the row
  * (the runtime looks it up with a string key), not a closure.
  *
@@ -1900,7 +1934,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

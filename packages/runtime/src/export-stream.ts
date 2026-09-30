@@ -157,5 +157,19 @@ const streamExportRows = async (
     }
 };
 
+/**
+ * Ask the registry about every shard-local table an export will reach, before
+ * the response is committed. A registry that cannot answer (the worker's default
+ * one, for a `.shardBy()` table) throws here and the caller answers 400. Thrown
+ * from inside the stream instead, it could only end the body early — and a
+ * chunked response can be closed as if it were complete, so the export reads as
+ * a clean, short dump.
+ */
+const assertExportDiscoverable = async (options: WorkerOptions, coordinator: QueryCoordinator, tables: ReadonlyArray<string> | undefined): Promise<void> => {
+    const { shardLocalTables } = partitionExportTables(options, tables ?? options.listSchemaTables?.());
+
+    await Promise.all(shardLocalTables.map(async (table) => coordinator.registry.listShardKeys(table)));
+};
+
 export type { ExportRow };
-export { streamExportRows };
+export { assertExportDiscoverable, streamExportRows };
