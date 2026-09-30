@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
+import { dirname, resolve as resolvePath } from "node:path";
 
 import { formatLunoraEvent, lunoraLine } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -29,6 +31,53 @@ interface WorkerProcess {
     stop: () => Promise<void>;
 }
 
+/** The slice of a wrangler config this module reads. */
+interface WranglerSlice {
+    assets?: { directory?: unknown };
+    dev?: { port?: unknown };
+    env?: Record<string, { assets?: { directory?: unknown } } | undefined>;
+}
+
+/** The value of `--name value`, `--name=value` or `-n value` in `args`, last one winning, as a CLI parser reads it. */
+const flagValue = (args: ReadonlyArray<string>, long: string, short: string): string | undefined => {
+    let value: string | undefined;
+
+    for (const [index, argument] of args.entries()) {
+        if (argument.startsWith(`${long}=`)) {
+            value = argument.slice(long.length + 1);
+        } else if ((argument === long || argument === short) && index + 1 < args.length) {
+            value = args[index + 1];
+        }
+    }
+
+    return value;
+};
+
+/**
+ * The wrangler config `wrangler dev` will actually load, given the arguments it
+ * is spawned with: `--config`/`-c` picks the file (relative to the project), and
+ * `--env`/`-e` the environment block — so what is read here is what wrangler
+ * reads, not the default file next to a project that points somewhere else.
+ */
+const readWranglerTarget = (
+    projectRoot: string,
+    wranglerArgs: ReadonlyArray<string> = [],
+): { config: WranglerSlice; env?: string; path: string } | undefined => {
+    const explicit = flagValue(wranglerArgs, "--config", "-c");
+    const path = explicit === undefined ? findWranglerFile(projectRoot) : resolvePath(projectRoot, explicit);
+
+    // A `--config` naming a missing file is wrangler's to report — clearly, when
+    // it starts — not a raw ENOENT from here, which would surface while the
+    // Rsbuild config itself is still loading.
+    if (path === undefined || !existsSync(path)) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerSlice>(path);
+
+    return parsed === undefined ? undefined : { config: parsed, env: flagValue(wranglerArgs, "--env", "-e"), path };
+};
+
 /**
  * The port the Worker should serve on: an explicit option, then the wrangler
  * config's `dev.port`, then {@link DEFAULT_WORKER_PORT}.
@@ -39,22 +88,41 @@ interface WorkerProcess {
  * that picks one deterministic port has no such problem, and a port already in
  * use surfaces as wrangler's own clear error rather than a silent relocation.
  */
-const resolveWorkerPort = (projectRoot: string, explicit?: number): number => {
+const resolveWorkerPort = (projectRoot: string, explicit?: number, wranglerArgs?: ReadonlyArray<string>): number => {
     if (explicit !== undefined) {
         return explicit;
     }
 
-    const wranglerPath = findWranglerFile(projectRoot);
+    // `dev` is top-level only in wrangler — an `env` block cannot override it.
+    const port = readWranglerTarget(projectRoot, wranglerArgs)?.config.dev?.port;
 
-    if (wranglerPath !== undefined) {
-        const { parsed } = readWranglerJsonc<{ dev?: { port?: unknown } }>(wranglerPath);
+    return typeof port === "number" ? port : DEFAULT_WORKER_PORT;
+};
 
-        if (typeof parsed?.dev?.port === "number") {
-            return parsed.dev.port;
-        }
+/**
+ * Create the wrangler config's `assets.directory` when it does not exist yet.
+ *
+ * `wrangler dev` refuses to start without it, and under Rsbuild it is normally
+ * absent: the dev server serves the client from memory, and the directory is the
+ * gitignored build output — so a fresh clone of any app that binds assets would
+ * die here before its first `rsbuild build`. An empty directory is exactly what
+ * the Worker should see in dev; the dev server, not wrangler, serves the client.
+ */
+const ensureAssetsDirectory = (projectRoot: string, wranglerArgs?: ReadonlyArray<string>): void => {
+    const target = readWranglerTarget(projectRoot, wranglerArgs);
+
+    if (target === undefined) {
+        return;
     }
 
-    return DEFAULT_WORKER_PORT;
+    // An `--env` block's own `assets` replaces the top-level one.
+    const envAssets = target.env === undefined ? undefined : target.config.env?.[target.env]?.assets;
+    const directory = (envAssets ?? target.config.assets)?.directory;
+
+    if (typeof directory === "string") {
+        // Relative to the config file, as wrangler resolves it.
+        mkdirSync(resolvePath(dirname(target.path), directory), { recursive: true });
+    }
 };
 
 /** `true` once something accepts a TCP connection on `port`. */
@@ -172,6 +240,8 @@ const startWorker = async (options: StartWorkerOptions): Promise<WorkerProcess> 
             `could not start the worker: port ${String(options.port)} is already in use. Stop whatever is serving there (another \`rsbuild dev\` or \`lunora dev\`?), or set \`workerPort\`.`,
         );
     }
+
+    ensureAssetsDirectory(options.projectRoot, options.wranglerArgs);
 
     const args = ["dev", "--port", String(options.port), "--var", "WORKER_ENV:development", ...(options.wranglerArgs ?? [])];
     // Package managers install `wrangler.cmd` on Windows, and Node will not launch

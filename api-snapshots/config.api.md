@@ -2454,6 +2454,24 @@ const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 const SEED_ENDPOINT = "/__lunora/seed";
 ```
 
+### `STUDIO_PATH` (const)
+
+```ts
+const STUDIO_PATH = "/__lunora";
+```
+
+### `STUDIO_SCRIPT_PATH` (const)
+
+```ts
+const STUDIO_SCRIPT_PATH: string;
+```
+
+### `STUDIO_STYLE_PATH` (const)
+
+```ts
+const STUDIO_STYLE_PATH: string;
+```
+
 ### `SchemaEditRequest` (interface)
 
 ```ts
@@ -2530,6 +2548,17 @@ interface StudioHtmlConfig {
 }
 ```
 
+### `StudioMiddlewareOptions` (interface)
+
+```ts
+interface StudioMiddlewareOptions extends LocalEndpointContext {
+    base?: string;
+    isNonLoopbackBind: boolean;
+    logger?: WarnLogger;
+    projectRoot: string;
+}
+```
+
 ### `WarnLogger` (interface)
 
 ```ts
@@ -2556,6 +2585,12 @@ const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse
 
 ```ts
 const assetContentType: (fileName: string) => string;
+```
+
+### `createStudioMiddleware` (const)
+
+```ts
+const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: IncomingMessage, response: ServerResponse, next: () => void) => void);
 ```
 
 ### `handlePolicyScaffoldRequest` (const)
@@ -2588,6 +2623,12 @@ const headerValue: (raw: string | string[] | undefined) => string | undefined;
 const isLoopbackAddress: (remoteAddress: string | undefined) => boolean;
 ```
 
+### `isNonLoopbackHost` (const)
+
+```ts
+const isNonLoopbackHost: (host: unknown) => boolean;
+```
+
 ### `isStandaloneModulePath` (const)
 
 ```ts
@@ -2618,6 +2659,12 @@ const readStandaloneAsset: (fileName: string, resolveFrom?: string) => Buffer | 
 const renderStudioHtml: (config: StudioHtmlConfig) => string;
 ```
 
+### `requestPathname` (const)
+
+```ts
+const requestPathname: (url: string) => string;
+```
+
 ### `resolveAdminToken` (const)
 
 ```ts
@@ -2646,6 +2693,12 @@ const serveJsonHandler: (request: IncomingMessage, response: ServerResponse, han
 
 ```ts
 const studioAssetsStamp: (resolveFrom?: string) => number | undefined;
+```
+
+### `studioMountPath` (const)
+
+```ts
+const studioMountPath: (base?: string) => string;
 ```
 
 ### `transportRejectionReason` (const)

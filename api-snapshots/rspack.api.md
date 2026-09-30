@@ -42,6 +42,7 @@ class LunoraRspackPlugin {
     #private;
     constructor(options: ResolvedLunoraRspackOptions);
     prepareDevSession(): Promise<void>;
+    generateForDev(): Promise<void>;
     apply(compiler: CompilerLike): void;
 }
 ```
@@ -60,6 +61,16 @@ const lunoraRspack: (options?: LunoraRspackOptions) => LunoraRspackPlugin;
 
 ## `@lunora/rspack/rsbuild`
 
+### `DevServerLike` (interface)
+
+```ts
+interface DevServerLike {
+    middlewares: {
+        use: (handler: (request: IncomingMessage, response: ServerResponse, next: () => void) => void) => unknown;
+    };
+}
+```
+
 ### `LUNORA_PATH` (const)
 
 ```ts
@@ -70,6 +81,7 @@ const LUNORA_PATH = "/_lunora";
 
 ```ts
 interface LunoraRsbuildOptions extends LunoraRspackOptions {
+    studio?: boolean;
     worker?: boolean;
     workerPort?: number;
     wranglerArgs?: ReadonlyArray<string>;
@@ -92,9 +104,15 @@ const RSBUILD_PLUGIN_NAME = "lunora:rsbuild";
 
 ```ts
 interface RsbuildApiLike {
+    getRsbuildConfig: () => Readonly<RsbuildConfigLike>;
     modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
     modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
-    onBeforeStartDevServer: (callback: () => Promise<void> | void) => void;
+    onAfterStartDevServer: (callback: (params: {
+        port: number;
+    }) => Promise<void> | void) => void;
+    onBeforeStartDevServer: (callback: (params: {
+        server: DevServerLike;
+    }) => Promise<void> | void) => void;
     onCloseDevServer: (callback: () => Promise<void> | void) => void;
 }
 ```
@@ -104,6 +122,8 @@ interface RsbuildApiLike {
 ```ts
 interface RsbuildConfigLike {
     server?: {
+        base?: string;
+        host?: string;
         proxy?: ProxyConfigLike;
     };
 }

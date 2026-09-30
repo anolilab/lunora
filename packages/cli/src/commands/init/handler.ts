@@ -70,11 +70,13 @@ type Template =
     | "next"
     | "nuxt"
     | "react-router"
+    | "rspack-react"
     | "saas"
     | "solid-v2"
     | "standalone"
     | "sveltekit"
     | "tanstack-start-react"
+    | "tanstack-start-react-rspack"
     | "tanstack-start-solid"
     | "vinext"
     | "vinext-pages";
@@ -1490,8 +1492,14 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     // different renderer package, JSX source and Vite plugin major.
     { description: "Solid 2.0 SPA — the Solid 2 line (@solidjs/web, vite-plugin-solid 3)", label: "Solid 2", value: "solid-v2" },
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
+    { description: "React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server", label: "React · Rsbuild", value: "rspack-react" },
     { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
+    {
+        description: "TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker",
+        label: "TanStack Start · React · Rsbuild",
+        value: "tanstack-start-react-rspack",
+    },
     // The only template that is an application rather than a starting point: it
     // scaffolds with the SaaS kit already composed (organizations, projects,
     // activity, admin), so `lunora dev` opens a running multi-tenant app.

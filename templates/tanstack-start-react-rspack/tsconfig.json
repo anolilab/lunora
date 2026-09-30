@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "lib": ["ES2024", "DOM", "DOM.Iterable"],
+        "jsx": "react-jsx",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        // `@rsbuild/core/types` for `import.meta.env` (src/routes/__root.tsx reads
+        // PUBLIC_LUNORA_URL) and the `*.css` side-effect import in
+        // src/routes/index.tsx.
+        "types": ["@cloudflare/workers-types", "@rsbuild/core/types"],
+        "paths": {
+            "~/*": ["./src/*"]
+        }
+    },
+    "include": ["src/**/*", "lunora/**/*", "rsbuild.config.ts", "lunora.config.ts"]
+}

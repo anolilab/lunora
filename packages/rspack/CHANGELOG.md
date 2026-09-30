@@ -1,3 +1,22 @@
+## @lunora/rspack [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.4...@lunora/rspack@1.0.0-alpha.5) (2026-09-30)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.284
+
+## @lunora/rspack [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.3...@lunora/rspack@1.0.0-alpha.4) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.238
+* **@lunora/config:** upgraded to 1.0.0-alpha.283
+
 ## @lunora/rspack [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.2...@lunora/rspack@1.0.0-alpha.3) (2026-09-29)
 
 

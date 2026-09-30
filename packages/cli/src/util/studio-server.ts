@@ -40,6 +40,7 @@ import {
     POLICY_SCAFFOLD_ENDPOINT,
     readStandaloneAsset,
     renderStudioHtml,
+    requestPathname,
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
     SEED_ENDPOINT,
@@ -51,12 +52,6 @@ import {
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_lunora";
-
-const pathnameOf = (url: string): string => {
-    const queryIndex = url.indexOf("?");
-
-    return queryIndex === -1 ? url : url.slice(0, queryIndex);
-};
 
 /** Forward an HTTP request to the worker and pipe its response back. */
 /** Milliseconds to wait for the worker to answer a proxied HTTP request before giving up. */
@@ -292,7 +287,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
     const document = Buffer.from(html);
     const server: Server = createServer((request, response) => {
-        const pathname = pathnameOf(request.url ?? "/");
+        const pathname = requestPathname(request.url ?? "/");
 
         // Transport gate: on a loopback bind, reject before serving the
         // token-bearing HTML or proxying the worker admin surface. Shared with
@@ -402,7 +397,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return;
         }
 
-        if (pathnameOf(request.url ?? "").startsWith(PROXY_PREFIX)) {
+        if (requestPathname(request.url ?? "").startsWith(PROXY_PREFIX)) {
             proxyUpgrade(request, socket, head, worker);
         } else {
             socket.destroy();

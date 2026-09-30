@@ -1,3 +1,15 @@
+## @lunora/agent [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.152...@lunora/agent@1.0.0-alpha.153) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.103
+* **@lunora/server:** upgraded to 1.0.0-alpha.160
+
 ## @lunora/agent [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.151...@lunora/agent@1.0.0-alpha.152) (2026-09-29)
 
 ### ⚠ BREAKING CHANGES

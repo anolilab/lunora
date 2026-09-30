@@ -1,0 +1,35 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
+    "scripts": {
+        "dev": "rsbuild dev",
+        "build": "rsbuild build",
+        "preview": "rsbuild preview",
+        "codegen": "lunora codegen",
+        "deploy": "rsbuild build && lunora deploy"
+    },
+    "dependencies": {
+        "@lunora/ratelimit": "^0.0.0",
+        "@lunora/react": "^0.0.0",
+        "@tanstack/react-query": "^5.104.0",
+        "lunorash": "^0.0.0",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260610.1",
+        "@lunora/rspack": "^0.0.0",
+        "@lunora/studio": "^0.0.0",
+        "@rsbuild/core": "^2.2.11",
+        "@rsbuild/plugin-react": "^2.1.1",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "typescript": "^6.0.3",
+        "wrangler": "^4.143.0"
+    }
+}

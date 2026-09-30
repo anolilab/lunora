@@ -22,7 +22,7 @@ interface EmitAppOptions {
     hasAuth: boolean;
     /** App uses `@lunora/browser` / `ctx.browser` → emit `.browser()`. */
     hasBrowser: boolean;
-    /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`) → emit `.buildFrameworkWorker(host)`. */
+    /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`), or hand-composes one in `src/worker.ts` → emit `.buildFrameworkWorker(host)`. */
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;

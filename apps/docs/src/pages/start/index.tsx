@@ -52,6 +52,14 @@ interface Kit {
 const templates: Kit[] = [
     { Icon: TanstackLogo, id: "tanstack-start-react", name: "TanStack Start", note: "SSR with live-loader routes, typed end to end.", stack: "React" },
     { Icon: TanstackLogo, id: "tanstack-start-solid", name: "TanStack Start", note: "The same live loaders on fine-grained Solid reactivity.", stack: "Solid" },
+    {
+        Icon: TanstackLogo,
+        id: "tanstack-start-react-rspack",
+        name: "TanStack Start",
+        note: "Built by Rsbuild, SSR composed into the Lunora worker.",
+        stack: "React · Rsbuild",
+    },
+    { brand: true, Icon: SiReact, id: "rspack-react", name: "React", note: "A React SPA built by Rsbuild, the Worker under wrangler dev.", stack: "Rsbuild" },
     { brand: true, Icon: SiNextdotjs, id: "next", name: "Next.js", note: "App Router on OpenNext, plus a standalone Lunora worker.", stack: "React" },
     {
         brand: true,

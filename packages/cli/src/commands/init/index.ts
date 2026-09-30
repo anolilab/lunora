@@ -9,6 +9,7 @@ const initCommand: Command = {
         ["lunora init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
         ["lunora init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
         ["lunora init my-app -t solid-v2", "Scaffold a Solid 2.0 SPA"],
+        ["lunora init my-app -t rspack-react", "Scaffold a React SPA on Rsbuild"],
         ["lunora init my-app --ref alpha", "Scaffold from the alpha branch's templates"],
         ["lunora init --here", "Add Lunora to the current project"],
         ["lunora init my-app --ci github", "Scaffold + add a GitHub Actions deploy pipeline"],
@@ -28,7 +29,7 @@ const initCommand: Command = {
             // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
             // `-t` selects a bespoke template.
             description:
-                "Template: analog | astro | expo | next | nuxt | react-router | saas | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
+                "Template: analog | astro | expo | next | nuxt | react-router | rspack-react | saas | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-react-rspack | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
             name: "template",
             type: String,
         },

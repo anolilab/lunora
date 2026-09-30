@@ -1,3 +1,33 @@
+## @lunora/cli [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.325...@lunora/cli@1.0.0-alpha.326) (2026-09-30)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.284
+
+## @lunora/cli [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.324...@lunora/cli@1.0.0-alpha.325) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.171
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.84
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.238
+* **@lunora/config:** upgraded to 1.0.0-alpha.283
+* **@lunora/d1:** upgraded to 1.0.0-alpha.151
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.197
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.163
+* **@lunora/seed:** upgraded to 1.0.0-alpha.169
+* **@lunora/testing:** upgraded to 1.0.0-alpha.210
+
 ## @lunora/cli [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.323...@lunora/cli@1.0.0-alpha.324) (2026-09-29)
 
 

@@ -1,3 +1,27 @@
+## @lunora/codegen [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.238...@lunora/codegen@1.0.0-alpha.239) (2026-09-29)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+## @lunora/codegen [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.237...@lunora/codegen@1.0.0-alpha.238) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.171
+* **@lunora/agent:** upgraded to 1.0.0-alpha.153
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/queue:** upgraded to 1.0.0-alpha.78
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.97
+* **@lunora/do:** upgraded to 1.0.0-alpha.181
+* **@lunora/server:** upgraded to 1.0.0-alpha.160
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.99
+
 ## @lunora/codegen [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.236...@lunora/codegen@1.0.0-alpha.237) (2026-09-29)
 
 ### ⚠ BREAKING CHANGES

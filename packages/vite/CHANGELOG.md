@@ -1,3 +1,27 @@
+## @lunora/vite [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.281...@lunora/vite@1.0.0-alpha.282) (2026-09-30)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.284
+
+## @lunora/vite [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.280...@lunora/vite@1.0.0-alpha.281) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.238
+* **@lunora/config:** upgraded to 1.0.0-alpha.283
+* **@lunora/studio:** upgraded to 1.0.0-alpha.241
+
 ## @lunora/vite [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.279...@lunora/vite@1.0.0-alpha.280) (2026-09-29)
 
 
