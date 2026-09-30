@@ -5,9 +5,9 @@ import type { ControlPlaneDatabase } from "../../src/store";
  *
  * The previous version returned every row for every call — `where`, `limit`,
  * `orderBy` and `cursor` were all discarded. That made several suites green
- * against a store that does not exist: the org-scoping predicate in
- * `deploy-alerts.ts` was never exercised, so a regression delivering another
- * org's alerts would have failed nothing, and the 1000-row page cap that
+ * against a store that does not exist: org-scoping predicates were never
+ * exercised, so a regression delivering another org's alerts would have failed
+ * nothing, and the 1000-row page cap that
  * truncated the overage reconciler could not be reproduced at all — the bug and
  * its fix were equally invisible.
  *

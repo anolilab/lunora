@@ -4,7 +4,7 @@
  * `server.mjs` invokes it through the Alchemy CLI once per stack
  * (`alchemy deploy|destroy program.mjs --stage <namespace> --yes`) and hands it
  * everything tenant-derived as data: the plan `plan.mjs` produced (a JSON file
- * named by `LUNORA_PROVISION_PLAN`) and the release's secrets (JSON in
+ * named by `LUNORA_PROVISION_PLAN`) and the Worker's secrets (JSON in
  * `LUNORA_SECRETS`, bound as `Redacted` so they upload as `secret_text` and
  * never render in a plan). `LUNORA_PROVISION_STACK` picks the stack.
  *
@@ -24,7 +24,7 @@ import { Effect, Option, Redacted } from "effect";
 /** @typedef {import("./plan.mjs").Plan & { assetsDirectory: string, workerMain: string }} ProgramPlan */
 
 const plan = /** @type {ProgramPlan} */ (JSON.parse(readFileSync(/** @type {string} */ (process.env.LUNORA_PROVISION_PLAN), "utf8")));
-const kind = process.env.LUNORA_PROVISION_STACK === "project" ? "project" : "release";
+const kind = process.env.LUNORA_PROVISION_STACK === "project" ? "project" : "worker";
 const step = plan.steps.find((candidate) => candidate.kind === kind);
 
 if (step === undefined) {
@@ -94,8 +94,8 @@ const redeclare = (resourceType, id, props) => {
  * consumer on each routed queue.
  *
  * Additive on purpose. A release that drops a binding must not delete the
- * resource: retained releases (rollback targets) still bind it, and it holds
- * data. So every resource already in this stack's state is declared again with
+ * resource: a rollback re-provisions a retained release that still binds it,
+ * and it holds data. So every resource already in this stack's state is declared again with
  * its persisted props; resources are only ever removed by destroying the stack.
  * @param {import("./plan.mjs").ProjectStack} project The project declarations.
  * @returns {Effect.Effect<void, unknown, Providers>} The stack body.
@@ -143,8 +143,8 @@ const projectStack = (project) =>
     });
 
 /**
- * One `env` entry for the release Worker.
- * @param {import("./plan.mjs").ReleaseBinding} binding The binding from the plan.
+ * One `env` entry for the project's Worker.
+ * @param {import("./plan.mjs").WorkerBinding} binding The binding from the plan.
  * @param {string} projectStackName The stack whose state holds the project's resources.
  * @returns {Effect.Effect<Workers.WorkerBindingResource>} The binding value to put on `env`.
  */
@@ -199,29 +199,31 @@ const envBinding = (binding, projectStackName) => {
 };
 
 /**
- * The release stack: one Worker in the dispatch namespace, bound to the
- * project's resources by reference.
- * @param {import("./plan.mjs").ReleaseStack} release The release declarations.
+ * The worker stack: the project's one Worker in the dispatch namespace, named by
+ * its alias and bound to the project's resources by reference. Every deploy and
+ * rollback updates it in place, so its Durable Object namespaces — and their
+ * data — persist across releases.
+ * @param {import("./plan.mjs").WorkerStack} worker The Worker declarations.
  * @param {string} projectStackName The stack whose state holds the project's resources.
  * @returns {Effect.Effect<void, unknown, Providers>} The stack body.
  */
-const releaseStack = (release, projectStackName) =>
-    Effect.gen(function* releaseStackBody() {
+const workerStack = (worker, projectStackName) =>
+    Effect.gen(function* workerStackBody() {
         const secrets = /** @type {Record<string, string>} */ (JSON.parse(process.env.LUNORA_SECRETS ?? "{}"));
         // Null prototype: binding names are tenant data, and `__proto__` must stay
         // an own key rather than reach Object.prototype.
         /** @type {Workers.WorkerBindingProps} */
         const env = Object.create(null);
 
-        for (const binding of release.bindings) {
+        for (const binding of worker.bindings) {
             env[binding.binding] = yield* envBinding(binding, projectStackName);
         }
 
-        for (const [name, value] of Object.entries(release.vars)) {
+        for (const [name, value] of Object.entries(worker.vars)) {
             env[name] = value;
         }
 
-        for (const name of release.secretNames) {
+        for (const name of worker.secretNames) {
             env[name] = Redacted.make(/** @type {string} */ (secrets[name]));
         }
 
@@ -230,19 +232,19 @@ const releaseStack = (release, projectStackName) =>
             // than through `script`, so a multi-megabyte bundle never lands in the
             // state store as a prop.
             bundle: false,
-            compatibility: release.compatibility,
+            compatibility: worker.compatibility,
             env,
             main: plan.workerMain,
-            name: release.workerName,
-            namespace: release.namespace,
-            tags: release.tags,
-            tailConsumers: release.tailConsumers,
-            ...(release.assets === undefined
+            name: worker.workerName,
+            namespace: worker.namespace,
+            tags: worker.tags,
+            tailConsumers: worker.tailConsumers,
+            ...(worker.assets === undefined
                 ? {}
                 : {
                       assets: {
                           directory: plan.assetsDirectory,
-                          ...Object.fromEntries(Object.entries(release.assets.config).filter(([, value]) => value !== undefined)),
+                          ...Object.fromEntries(Object.entries(worker.assets.config).filter(([, value]) => value !== undefined)),
                       },
                   }),
         });
@@ -263,10 +265,10 @@ const body = () => {
         return projectStack(plan.project).pipe(Effect.orDie);
     }
 
-    if (kind === "release" && plan.release !== undefined) {
+    if (kind === "worker" && plan.worker !== undefined) {
         const projectStackName = plan.steps.find((candidate) => candidate.kind === "project")?.stackName ?? "";
 
-        return releaseStack(plan.release, projectStackName).pipe(Effect.orDie);
+        return workerStack(plan.worker, projectStackName).pipe(Effect.orDie);
     }
 
     throw new Error(`the plan has no ${kind} declaration`);

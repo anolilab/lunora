@@ -55,11 +55,11 @@ export interface ApiTypes {
     deployments: {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
-        create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; scriptName: string; version: number; }>;
+        create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; }>;
+        releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects"> }>;
         rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
-        routeForAlias: FunctionReference<"query", { alias: unknown }, { candidateScriptName?: string; percent?: number; scriptName: string; } | null>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
     domains: {
@@ -118,15 +118,15 @@ export interface ApiTypes {
     };
     projects: {
         create: FunctionReference<"mutation", { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }, Id<"projects">>;
-        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string; }; slug: string }[]>;
+        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; slug: string }[]>;
         remove: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations"> }, { destroyed: number; }>;
         rename: FunctionReference<"mutation", { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }, void>;
         setPreviewProtection: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }, { protected: boolean; }>;
     };
     rollouts: {
-        abortRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
-        promoteRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, void>;
-        setRollout: FunctionReference<"mutation", { id: Id<"deployments">; organizationId: Id<"organizations">; percent: number }, { percent: number; }>;
+        abortRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, unknown>;
+        promoteRollout: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, unknown>;
+        setRollout: FunctionReference<"mutation", { id: Id<"deployments">; organizationId: Id<"organizations">; percent: number }, unknown>;
     };
     secrets: {
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
@@ -186,7 +186,7 @@ export interface InternalApiTypes {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
     };
     deploy_keys: {
-        ingestKeyCipher: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
+        ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
         recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
     };
     deployments: {

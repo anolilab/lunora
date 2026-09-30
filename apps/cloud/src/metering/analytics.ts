@@ -71,10 +71,10 @@ export const normalizeHostname = (hostname: string): string => hostname.toLowerC
  *
  * The `outcome` and `route` dimensions are what make per-deployment health
  * charts possible: billing metrics can say a tenant's requests rose, but never
- * which endpoint rose or whether it started failing. There is deliberately no
- * separate version blob — a blue/green alias already resolves to the VERSIONED
- * script name, so `blob1` carries the deploy identity for exactly the traffic
- * that has one.
+ * which endpoint rose or whether it started failing. `blob1` is the script
+ * name, which is the project's alias: every release runs on that one Worker, so
+ * the stream identifies the project, not the release — per-release comparisons
+ * read it against the deployments' `liveAt` timestamps.
  *
  * `country`/`hostname`/`status` answer the three questions the class dimensions
  * cannot: WHERE the traffic came from, WHICH domain it arrived on (so a tenant

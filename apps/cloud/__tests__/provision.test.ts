@@ -11,7 +11,6 @@ const spec: TenantDeploymentSpec = {
     cell: "cell-1",
     dispatchNamespace: "lunora-production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
-    scriptName: "org-project-v1",
     secrets: { LUNORA_ADMIN_TOKEN: "t" },
     tags: ["org:org", "project:project", "env:production"],
 };
@@ -64,8 +63,7 @@ describe(createAlchemyProvisioner, () => {
 
         expect(result).toStrictEqual({
             bundleHash: await sha256HexBytes(spec.bundle),
-            scriptName: "org-project-v1",
-            url: "https://org-project-v1.lunora.app",
+            url: "https://org-project.lunora.app",
         });
         expect(onLog.mock.calls).toStrictEqual([["creating d1"], ["uploading"]]);
         expect(calls).toHaveLength(1);
@@ -95,18 +93,11 @@ describe(createAlchemyProvisioner, () => {
         await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
     });
 
-    it("sends the destroy job, carrying deleteResources as deleteProjectResources", async () => {
+    it("sends the destroy job to the project's box", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 
-        await createAlchemyProvisioner({ box, urlForScript }).destroy({
-            alias: "app",
-            deleteResources: true,
-            dispatchNamespace: "lunora-preview",
-            scriptName: "app-v2",
-        });
+        await createAlchemyProvisioner({ box, urlForScript }).destroy({ alias: "app", dispatchNamespace: "lunora-preview" });
 
-        expect(calls).toStrictEqual([
-            { job: { action: "destroy", alias: "app", deleteProjectResources: true, dispatchNamespace: "lunora-preview", scriptName: "app-v2" }, name: "app" },
-        ]);
+        expect(calls).toStrictEqual([{ job: { action: "destroy", alias: "app", dispatchNamespace: "lunora-preview" }, name: "app" }]);
     });
 });

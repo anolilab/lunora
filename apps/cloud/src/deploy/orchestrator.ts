@@ -30,14 +30,25 @@ export interface RunDeploymentOptions {
     priority?: number;
     provisioner: Provisioner;
     scheduler: CellScheduler;
-    // Health check the freshly uploaded (versioned) script before it is
-    // declared live (GAPS.md A1). Returning `false` fails the deployment — the
-    // previously active version keeps serving; the pointer is never touched.
-    // Omit to skip verification (previews/dev).
+
+    /**
+     * Health check the project's Worker once the release is on it (GAPS.md A1).
+     *
+     * This runs AFTER cutover: the project has one stable script, so the release
+     * is already serving 100% of traffic when it is probed. Returning `false`
+     * fails the deployment with `provisioned: true`, which tells the caller the
+     * broken code is live and the previous release must be re-provisioned.
+     * Omit to skip verification.
+     */
     verify?: (result: ProvisionResult) => Promise<boolean>;
 }
 
-export type DeployOutcome = { error: string; status: "failed" } | { result: ProvisionResult; status: "live" };
+/**
+ * `provisioned` says whether the failed release reached the Worker: true only
+ * for a failed health check. A provisioner failure leaves the Worker on the
+ * previous release (the upload is the box's last step, and it is atomic).
+ */
+export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: ProvisionResult; status: "live" };
 
 export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDeploymentOptions): Promise<DeployOutcome> => {
     const emit = async (progress: DeployProgress): Promise<void> => {
@@ -58,7 +69,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
             if (!healthy) {
                 await emit({ error: "health check failed", phase: "failed", url: result.url });
 
-                return { error: "health check failed", status: "failed" };
+                return { error: "health check failed", provisioned: true, status: "failed" };
             }
         }
 
@@ -70,12 +81,12 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
 
         await emit({ error: message, phase: "failed" });
 
-        return { error: message, status: "failed" };
+        return { error: message, provisioned: false, status: "failed" };
     }
 };
 
 /**
- * Tear a deployment down through the same paced path (preview TTL cleanup,
+ * Tear a project down through the same paced path (preview TTL cleanup,
  * project deletion). Lower default priority than a deploy.
  */
 export const destroyDeployment = async (

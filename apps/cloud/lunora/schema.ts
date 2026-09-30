@@ -147,25 +147,15 @@ export default defineSchema({
         .index("by_user", ["userId"]),
 
     projects: defineTable({
-        // Blue/green pointer (GAPS.md A1): the deployment currently serving the
-        // project's stable URL. Swapped only after a health-checked release;
-        // rollback is a swap back to a retained superseded deployment. A plain
-        // string (not v.id) deliberately: projects ↔ deployments would otherwise
-        // be circularly typed in the generated Drizzle schema.
+        // The production release currently on the project's Worker (GAPS.md A1):
+        // moved by a health-checked deploy or a rollback, which re-provisions a
+        // retained release's stored bundle. A plain string (not v.id)
+        // deliberately: projects ↔ deployments would otherwise be circularly
+        // typed in the generated Drizzle schema.
         activeDeploymentId: v.optional(v.string()),
-        // Denormalized script id of the active deployment, so the dispatcher's
-        // route lookup resolves alias → script in one read.
+        // The project's production script (its alias), so a custom domain
+        // resolves to it in one read.
         activeScriptName: v.optional(v.string()),
-        // Staged rollout in progress (GAPS.md A1 follow-on). Blue/green promotes
-        // all at once; a rollout keeps the candidate live alongside the active
-        // release and serves it `percent` of traffic, so a regression reaches a
-        // fraction of users instead of everyone.
-        //
-        // Nested so the three fields cannot disagree: they are meaningless apart
-        // (a percentage with no candidate splits traffic toward nothing), and one
-        // column makes "a rollout is running" a presence check and clearing it a
-        // single assignment.
-        rollout: v.optional(v.object({ deploymentId: v.id("deployments"), percent: v.number(), scriptName: v.string() })),
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),
@@ -196,8 +186,8 @@ export default defineSchema({
         adminToken: v.optional(v.string()),
         adminTokenCiphertext: v.optional(v.string()),
         adminTokenIv: v.optional(v.string()),
-        // Stable (unversioned) script label — the project's public subdomain.
-        // The dispatcher resolves alias → the project's active versioned script.
+        // The project's stable label — its public subdomain and the name of its
+        // one dispatch-namespace script, which every release updates in place.
         alias: v.optional(v.string()),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
@@ -210,8 +200,9 @@ export default defineSchema({
         // into the tenant's script. `type` is the wrangler kind (d1/kv/r2/queue/ai/
         // durable_object/secret/var), `target` the concrete resource it points at.
         bindings: v.optional(v.array(v.object({ name: v.string(), target: v.optional(v.string()), type: v.string() }))),
-        // Content hash of the uploaded worker bundle; rollback re-converges to a
-        // prior hash retained in R2 (§2.2).
+        // Content hash of the uploaded worker bundle. The bundle itself is stored
+        // in the `RELEASES` R2 bucket under this row's id — a rollback
+        // re-provisions it onto the alias's Worker (§2.2).
         bundleHash: v.optional(v.string()),
         createdAt: v.number(),
         createdBy: v.string(),
@@ -220,9 +211,10 @@ export default defineSchema({
         kind: deploymentKind,
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        // Dispatch-namespace script id this deployment provisioned. Versioned
-        // per release (`{alias}-v{version}`) so every deployment is immutable
-        // and rollback is a pointer swap (GAPS.md A1).
+        // Dispatch-namespace script this deployment was provisioned onto — the
+        // alias. One script per alias, not per release: a Durable Object
+        // namespace belongs to the script defining its class, so a script per
+        // release would start every release on an empty database (GAPS.md A1).
         scriptName: v.string(),
         status: deploymentStatus,
         updatedAt: v.number(),
@@ -241,16 +233,13 @@ export default defineSchema({
         supersededAt: v.optional(v.number()),
         failedAt: v.optional(v.number()),
         destroyedAt: v.optional(v.number()),
-        // Set when the teardown sweep has actually removed the Cloudflare
-        // dispatch script (GAPS.md A1 / §2.3). `destroyedAt` records the
-        // lifecycle transition; `teardownAt` records that the real resource is
-        // gone — the sweep only acts on `destroyed` rows where this is unset, so
-        // it is crash-safe idempotent (a re-run tears down nothing twice).
+        // Set when the teardown sweep has reclaimed this row's stored release —
+        // and, for the alias's last deployment, its Worker and project resources
+        // (GAPS.md A1 / §2.3). The sweep only acts on `destroyed`/`failed` rows
+        // where this is unset, so it is crash-safe idempotent.
         teardownAt: v.optional(v.number()),
     })
         .global()
-        // Dispatcher resolves a stable alias → the project's active script.
-        .index("by_alias", ["alias"])
         .index("by_kind", ["kind"])
         // Every read that scopes deployments to an ORG went unindexed: the Traffic
         // tab, the onboarding checklist and the org purge all filtered on
@@ -268,9 +257,10 @@ export default defineSchema({
         .index("by_status", ["status"]),
 
     // One-row-per-alias ownership ledger. An alias (the tenant's stable script
-    // label) seeds per-deployment D1/R2 resource names + alias→script routing, so
-    // it MUST belong to exactly one project. `deployments.alias` repeats across a
-    // project's versioned releases, so it can't carry a unique index itself; this
+    // label and script name) seeds per-project D1/R2 resource names and names the
+    // project's Worker, so it MUST belong to exactly one project.
+    // `deployments.alias` repeats across a project's releases, so it can't carry
+    // a unique index itself; this
     // side table does, giving the claim DB-level atomicity — two concurrent first
     // deploys of the same alias by different projects can't both win the check
     // (the losing insert violates `by_alias` unique), closing the create() TOCTOU.
@@ -690,7 +680,7 @@ export default defineSchema({
         // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
         // (% error spans), `latency_p95` (p95 durationMs), `llm_cost` (summed
         // generation cost) over `windowMinutes`. Event: `deploy` (a build or a
-        // deployment failed, or the rollout guard aborted a canary) — it carries
+        // deployment failed) — it carries
         // no threshold, because a failed release is not a quantity that crosses a
         // line, it is one thing that happened.
         target: v.union(

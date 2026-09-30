@@ -88,11 +88,10 @@ describe(renderDeployAlert, () => {
         expect(body).toContain("tsc exited 2");
     });
 
-    it("distinguishes the three release-path outcomes", () => {
+    it("distinguishes the release-path outcomes", () => {
         const source = { detail: "d", project: "Acme", reference: "r" };
 
         expect(renderDeployAlert({ name: "R" }, { ...source, kind: "deployment" }).subject).toContain("deployment failed");
-        expect(renderDeployAlert({ name: "R" }, { ...source, kind: "rollout" }).subject).toContain("rollout aborted");
     });
 });
 

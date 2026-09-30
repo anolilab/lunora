@@ -35,12 +35,24 @@ interface DeploymentRow {
     version?: number;
 }
 
-interface ProjectRow {
-    _id: Id<"projects">;
-    activeDeploymentId?: Id<"deployments">;
-    activeScriptName?: string;
-    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
-}
+/** The live deployment of one alias + kind — the release currently on that alias's Worker. */
+const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "alias" | "kind" | "projectId">): Promise<DeploymentRow | undefined> => {
+    const { page } = await context.db.deployments.findMany({ where: { projectId: row.projectId } }); // secret-scanner:allow -- domain field name
+
+    return page.filter((d) => d.alias === row.alias && d.kind === row.kind && d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+};
+
+/**
+ * Move a project's pointer to a deployment. Production only: the pointer answers
+ * "which release serves this project's own domain", and a preview carries an
+ * alias of its own — letting it move the pointer pointed custom domains at a
+ * preview.
+ */
+const pointProjectAt = async (context: MutationContext, deployment: DeploymentRow): Promise<void> => {
+    if (deployment.kind === "production") {
+        await context.db.patch(deployment.projectId, { activeDeploymentId: deployment._id, activeScriptName: deployment.scriptName });
+    }
+};
 
 interface AliasOwnershipRow {
     _id: Id<"aliasOwnership">;
@@ -133,7 +145,9 @@ export const adminTarget = query
             const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
-            if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
+            // Live only: every release of an alias shares one Worker, and only the
+            // release on it holds the admin token that Worker accepts.
+            if (deployment?.organizationId !== organizationId || deployment.status !== "live" || !hasToken || !deployment.url) {
                 return null;
             }
 
@@ -244,6 +258,13 @@ export const listByProject = query
         return page.map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
+/** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
+interface CreatedDeployment {
+    deploymentId: Id<"deployments">;
+    previousDeploymentId?: Id<"deployments">;
+    version: number;
+}
+
 /**
  * Record a new deployment in the `queued` state. Authorized either by a member
  * session (dashboard) or a valid `deployKey` (CI; §2.2). The actual provisioning
@@ -277,7 +298,7 @@ export const create = mutation
         runtimeVersion: v.optional(boundedString(LIMITS.id)),
         scriptName: boundedString(LIMITS.name),
     })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ deploymentId: Id<"deployments">; scriptName: string; version: number }> => {
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<CreatedDeployment> => {
         let createdBy: string;
 
         if (arguments_.deployKey) {
@@ -308,11 +329,13 @@ export const create = mutation
         // first claim by a different project loses on the unique constraint.
         await claimAlias(context, arguments_.scriptName, arguments_.organizationId, arguments_.projectId);
 
-        // Versioned, immutable release: `{alias}-v{n}` per (project, kind). The
-        // stable alias keeps serving the previous version until `activate`
-        // swaps the pointer after the health check (GAPS.md A1).
+        // One Worker per alias: the script name IS the alias, and every release
+        // updates it in place so its Durable Object data persists. `version`
+        // numbers releases per (project, kind) for history and rollback; the
+        // release itself is the payload the deploy handler stores under this id.
         const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
+        const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
 
         const { now } = context;
         const deploymentId = await context.db.insert("deployments", {
@@ -333,20 +356,21 @@ export const create = mutation
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
-            scriptName: `${arguments_.scriptName}-v${String(version)}`,
+            scriptName: arguments_.scriptName,
             status: "queued",
             updatedAt: now,
             version,
         });
 
-        return { deploymentId, scriptName: `${arguments_.scriptName}-v${String(version)}`, version };
+        return { deploymentId, ...(previous ? { previousDeploymentId: previous._id } : {}), version };
     });
 
 /**
- * Point the project's stable URL at a health-checked live deployment (the
- * blue/green pointer swap, GAPS.md A1). Marks every other live deployment of
- * the same (project, kind) `superseded` — retained for rollback. Authorized by
- * the deploy key (CI) or an owner/admin member session.
+ * Record a health-checked deployment as its alias's live release (GAPS.md A1).
+ * The Worker already runs it — this is bookkeeping, not a cutover. Marks every
+ * other live deployment of the same alias + kind `superseded`: their stored
+ * bundles are the rollback targets. Authorized by the deploy key (CI) or an
+ * owner/admin member session.
  */
 export const activate = mutation
     .use(rateLimit("machine"))
@@ -371,17 +395,14 @@ export const activate = mutation
 
         const { now } = context;
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
-        const others = page.filter((d) => d._id !== id && d.kind === deployment.kind && d.status === "live");
+        const others = page.filter((d) => d._id !== id && d.alias === deployment.alias && d.kind === deployment.kind && d.status === "live");
 
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
-        // A new release ends any rollout in progress: the loop above supersedes the
-        // previously-live releases, which includes a rollout candidate, and leaving
-        // the rollout set would keep routing traffic to a script just retired.
-        await context.db.patch(deployment.projectId, { activeDeploymentId: id, activeScriptName: deployment.scriptName, rollout: null });
+        await pointProjectAt(context, deployment);
         // `activate` is the CI path — the most frequent pointer swap on the
         // platform — and it was the only one of the five that wrote no audit row.
         // "Who moved this project's stable URL, and when" was answerable for a
@@ -397,10 +418,12 @@ export const activate = mutation
     });
 
 /**
- * Roll the project's stable URL back to a retained deployment (GAPS.md A1).
- * The target must be a `superseded` (or still-`live`) release of the same
- * project; it becomes `live` and the pointer swaps to it, while the currently
- * active deployment is marked `superseded`.
+ * Record a completed rollback (GAPS.md A1). The deploy edge calls this only
+ * AFTER it has re-provisioned the target's stored bundle onto the alias's
+ * Worker (`src/deploy/release.ts`) — calling it alone would claim a release the
+ * Worker is not running, which is why the studio goes through `POST /v1/rollback`
+ * rather than this mutation. The target must be a `superseded` (or still-`live`)
+ * release; it becomes `live` and the release it replaced is `superseded`.
  */
 export const rollback = mutation
     .use(rateLimit("machine"))
@@ -429,19 +452,14 @@ export const rollback = mutation
         }
 
         const { now } = context;
-        const project = (await context.db.get(target.projectId)) as ProjectRow | null;
+        const replaced = await liveRelease(context, target);
 
-        if (project?.activeDeploymentId && project.activeDeploymentId !== id) {
-            await context.db.patch(project.activeDeploymentId, { status: "superseded", supersededAt: now, updatedAt: now });
+        if (replaced && replaced._id !== id) {
+            await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
         }
 
         await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
-        // Rolling back ends any rollout in progress. This is the control an operator
-        // reaches for when a release is misbehaving, and a staged rollout is a
-        // release — leaving it set would swap the pointer, report success, and keep
-        // serving the candidate to its share of traffic. Rollback and Abort being
-        // separate buttons is not a reason for Rollback to half-work.
-        await context.db.patch(target.projectId, { activeDeploymentId: id, activeScriptName: target.scriptName, rollout: null });
+        await pointProjectAt(context, target);
         await context.db.insert("auditLog", {
             action: "deployment.rollback",
             actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
@@ -454,48 +472,68 @@ export const rollback = mutation
     });
 
 /**
- * Resolve a stable alias (the project's public subdomain label) to the active
- * versioned script. Public + unauthenticated like {@link planForScript} (returns
- * only a script id); the dispatcher reaches it through a bearer-gated
- * control-plane endpoint. Falls back to the newest live deployment when the
- * pointer was never set (pre-blue/green rows).
+ * What the deploy edge needs to re-provision a stored release onto its alias's
+ * Worker (rollback, or the automatic revert after a failed health check): the
+ * deployment's *sealed* admin token — unsealed at the edge, never here — its
+ * identity, and the release currently live on that Worker. Authorized like
+ * {@link rollback}: the deploy key against the deployment's own project, or an
+ * owner/admin session. Only `live`/`superseded` deployments are releases a
+ * Worker can be put back on.
  */
-export const routeForAlias = query
-    .input({ alias: boundedString(LIMITS.name) })
-    .query(async ({ ctx: context, args: { alias } }): Promise<null | { candidateScriptName?: string; percent?: number; scriptName: string }> => {
-        const { page: rows } = await context.db.deployments.findMany({ where: { alias } });
-        const first = rows[0];
+export const releaseTarget = query
+    .input({ deployKey: v.optional(boundedString(LIMITS.token)), id: v.id("deployments"), organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { deployKey, id, organizationId },
+        }): Promise<{
+            adminToken?: string;
+            adminTokenCiphertext?: string;
+            adminTokenIv?: string;
+            alias: string;
+            kind: DeploymentRow["kind"];
+            liveDeploymentId?: Id<"deployments">;
+            projectId: Id<"projects">;
+        }> => {
+            const target = (await context.db.get(id)) as DeploymentRow | null;
 
-        if (!first) {
-            return null;
-        }
+            if (target?.organizationId !== organizationId) {
+                throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
+            }
 
-        const project = (await context.db.get(first.projectId)) as null | ProjectRow;
+            await (deployKey
+                ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+                : assertMember(context, organizationId, ["owner", "admin"]));
 
-        // A staged rollout rides on the same lookup the dispatcher already makes.
-        // Both names cross together or neither does: a candidate without a
-        // percentage would never be served, and a percentage without a candidate
-        // would split traffic toward nothing.
-        const rollout = project?.rollout ? { candidateScriptName: project.rollout.scriptName, percent: project.rollout.percent } : {};
+            if (target.status !== "superseded" && target.status !== "live") {
+                throw new LunoraError("CONFLICT", `cannot re-provision a ${target.status} deployment`);
+            }
 
-        if (project?.activeScriptName) {
-            return { scriptName: project.activeScriptName, ...rollout };
-        }
+            const live = await liveRelease(context, target);
 
-        const live = rows.filter((d) => d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+            return {
+                ...(target.adminToken ? { adminToken: target.adminToken } : {}),
+                ...(target.adminTokenCiphertext && target.adminTokenIv
+                    ? { adminTokenCiphertext: target.adminTokenCiphertext, adminTokenIv: target.adminTokenIv }
+                    : {}),
+                alias: target.alias ?? target.scriptName,
+                kind: target.kind,
+                ...(live ? { liveDeploymentId: live._id } : {}),
+                projectId: target.projectId, // secret-scanner:allow -- domain field name
+            };
+        },
+    );
 
-        return live ? { scriptName: live.scriptName, ...rollout } : null;
-    });
-
-/** Superseded production releases retained per project for rollback (GAPS.md A1). */
+/** Superseded releases retained per alias for rollback (GAPS.md A1). */
 export const SUPERSEDED_RETENTION = 3;
 
 /**
  * Prune old superseded releases beyond the rollback retention window: per
- * (project, kind), keep the newest {@link SUPERSEDED_RETENTION} superseded
- * deployments and mark the rest `destroyed` — the 🌐 teardown path deletes the
- * actual dispatch scripts off that status, so namespaces never accumulate
- * unboundedly. SYSTEM only (cron dispatch).
+ * alias + kind, keep the newest {@link SUPERSEDED_RETENTION} superseded
+ * deployments and mark the rest `destroyed`. A release owns no script — the
+ * alias's one Worker is shared — so the teardown sweep only deletes a pruned
+ * row's stored bundle. The live release is never superseded, so never pruned.
+ * SYSTEM only (cron dispatch).
  */
 export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
     const { now } = context;
@@ -507,7 +545,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
     const byProjectKind = new Map<string, DeploymentRow[]>();
 
     for (const deployment of superseded) {
-        const groupKey = `${deployment.projectId}|${deployment.kind}`;
+        const groupKey = `${deployment.alias ?? deployment.scriptName}|${deployment.kind}`;
         const group = byProjectKind.get(groupKey) ?? [];
 
         group.push(deployment);
@@ -668,7 +706,9 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
 
         const hasToken = deployment.adminToken ?? (deployment.adminTokenCiphertext && deployment.adminTokenIv);
 
-        if (!hasToken || !deployment.url) {
+        // Live only, as in `adminTarget`: the alias's one Worker accepts only the
+        // admin token of the release it is running.
+        if (deployment.status !== "live" || !hasToken || !deployment.url) {
             return null;
         }
 

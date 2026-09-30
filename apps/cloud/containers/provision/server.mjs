@@ -189,11 +189,11 @@ const provision = async (job, emit) => {
                 PATH: process.env.PATH ?? "",
             };
 
-            if (step.kind === "release" && step.op === "deploy") {
+            if (step.kind === "worker" && step.op === "deploy") {
                 env.LUNORA_SECRETS = JSON.stringify(secrets);
             }
 
-            // eslint-disable-next-line no-await-in-loop -- the release references the project stack, so steps are ordered
+            // eslint-disable-next-line no-await-in-loop -- the Worker references the project stack, so steps are ordered
             const code = await run([step.op, PROGRAM, "--stage", plan.stage, "--yes", "--no-input"], { cwd: workspace, env }, (line) => {
                 emit({ line: scrub(line), type: "log" });
             });

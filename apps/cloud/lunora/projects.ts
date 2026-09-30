@@ -23,7 +23,6 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
-    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     slug: string;
 }
 
@@ -39,7 +38,7 @@ interface ProjectRow {
  */
 export interface ProjectView {
     _id: Id<"projects">;
-    /** The deployment currently serving the stable URL, when one has been activated. */
+    /** The production release currently on the project's Worker, when one has been activated. */
     activeDeploymentId?: string;
     createdAt: number;
     framework?: string;
@@ -48,8 +47,6 @@ export interface ProjectView {
     organizationId: Id<"organizations">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
-    /** The staged rollout in progress, if any — candidate and share travel together by construction. */
-    rollout?: { deploymentId: Id<"deployments">; percent: number; scriptName: string };
     slug: string;
 }
 
@@ -65,7 +62,6 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
         ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),
-        ...(row.rollout === undefined ? {} : { rollout: row.rollout }),
     };
 };
 

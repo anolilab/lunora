@@ -50,17 +50,6 @@ describe(toProjectView, () => {
         });
     });
 
-    /**
-     * Rollout state is one nested column, so candidate and share cannot be present
-     * apart — the invariant is structural rather than restated in every reader.
-     */
-    it("carries rollout state as a single unit", () => {
-        const rollout = { deploymentId: "dep_9" as never, percent: 25, scriptName: "web-v9" };
-
-        expect(toProjectView({ ...row, rollout }).rollout).toStrictEqual(rollout);
-        expect(toProjectView(row)).not.toHaveProperty("rollout");
-    });
-
     it("omits optional fields rather than emitting undefined", () => {
         const view = toProjectView({ ...row, framework: "astro", githubRepo: "acme/web" });
 

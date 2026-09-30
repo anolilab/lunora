@@ -1,10 +1,10 @@
-import type { Provisioner } from "../provision";
-import type { AssetFile, AssetsUpload, BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
+import type { AssetFile, AssetsUpload, BindingRequirement, DeployManifest } from "../provision-contract";
 import { ALIAS_PATTERN, BINDING_SUPPORT, tenantResourceName, UNSUPPORTED_REASONS } from "../provision-contract";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
-import type { CellScheduler } from "./scheduler";
+import type { DeployKind, ReleaseBackend, ReleaseDeps } from "./release";
+import { buildDeploymentSpec, decodeBundle, reprovision, resolveTelemetrySafely } from "./release";
 
 /**
  * The deploy API request handler. `POST /v1/deploy`:
@@ -13,12 +13,15 @@ import type { CellScheduler } from "./scheduler";
  * Cloudflare-touching work runs through the cell scheduler + the Alchemy
  * provisioner — both injected, so the whole flow is unit-testable with fakes.
  *
+ * Every deploy updates the project's one stable Worker in place (the script
+ * name is the alias), so Durable Object data survives releases. The validated
+ * payload is stored first ({@link ReleaseDeps.releases}) — that stored copy is
+ * what a rollback, or the automatic revert below, re-provisions.
+ *
  * Pure: all I/O is behind {@link DeployBackend} + the injected provisioner/
- * scheduler. The Worker mount in `src/server.ts` wires the backend to the
+ * scheduler/store. The Worker mount in `src/server.ts` wires the backend to the
  * control-plane mutations via the Lunora action context.
  */
-
-export type DeployKind = "dev" | "preview" | "production";
 
 export interface DeployTarget {
     organizationId: string;
@@ -31,11 +34,11 @@ export interface DeployTarget {
  * presented deploy key so the underlying mutations can authorize by key (the
  * deploy request has no user session).
  */
-export interface DeployBackend {
-    // Swap the project's stable-URL pointer to this now-healthy deployment and
-    // supersede the previous live release (GAPS.md A1). Omit to skip pointer
-    // management (legacy single-script mode).
+export interface DeployBackend extends ReleaseBackend {
+    // Record this now-healthy deployment as live and supersede the previous live
+    // release of its alias (GAPS.md A1). Omit to skip pointer management.
     activateDeployment?: (input: { deploymentId: string; key: string }) => Promise<void>;
+    /** Record a queued deployment; `previousDeploymentId` is the release of the same alias live before it, if any. */
     createDeployment: (input: {
         adminToken: string;
         branch?: string;
@@ -46,9 +49,7 @@ export interface DeployBackend {
         organizationId: string;
         projectId: string; // secret-scanner:allow -- domain field name
         scriptName: string;
-    }) => Promise<{ deploymentId: string; scriptName?: string; version?: number }>;
-    /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
-    resolveSecrets?: (input: { key: string; kind: DeployKind; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
+    }) => Promise<{ deploymentId: string; previousDeploymentId?: string; version?: number }>;
     updateStatus: (input: {
         bundleHash?: string;
         deploymentId: string;
@@ -59,7 +60,7 @@ export interface DeployBackend {
     verifyKey: (key: string) => Promise<DeployTarget | null>;
 }
 
-export interface DeployHandlerDeps {
+export interface DeployHandlerDeps extends ReleaseDeps {
     /**
      * Record the deployment's outcome for platform self-observability
      * (GAPS.md E1 — the studio observes tenants; nothing observed us).
@@ -71,24 +72,13 @@ export interface DeployHandlerDeps {
      */
     analytics?: (event: string, properties: Record<string, boolean | number | string>) => void;
     backend: DeployBackend;
-    /** Cell hosting this deployment (§2.5). */
-    cell: string;
-    /** Map a deployment kind to the dispatch namespace it deploys into. */
-    dispatchNamespace: (kind: DeployKind) => string;
-    /** Probe the uploaded script's URL before release (GAPS.md A1); `false` fails the deployment without touching the active pointer. Omit to skip health gating. */
-    healthCheck?: (url: string) => Promise<boolean>;
-    provisioner: Provisioner;
 
     /**
-     * Resolve the telemetry config injected into a tenant Worker: the OTLP ingest
-     * endpoint (set as a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token (set
-     * as a `LUNORA_OTLP_TOKEN` secret, so a tenant's `otlpSink` ships to the
-     * cloud), and the tail-consumer service to wire. Omit — or return undefined —
-     * to deploy without telemetry (everything still works). Best-effort: a throw
-     * is swallowed and the deploy proceeds untelemetered.
+     * Probe the project's URL once the release is on its Worker (GAPS.md A1).
+     * `false` fails the deployment and re-provisions the previous live release.
+     * Omit to skip health gating.
      */
-    resolveTelemetry?: (input: { key: string; organizationId: string }) => Promise<undefined | { endpoint: string; tailConsumer?: string; token: string }>;
-    scheduler: CellScheduler;
+    healthCheck?: (url: string) => Promise<boolean>;
 }
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
@@ -561,22 +551,6 @@ const isDeployKind = (value: string): value is DeployKind => value === "dev" || 
 /** Whether a requested deploy kind is within the key's own scope. */
 const deployKindWithin = (requested: DeployKind, allowed: DeployKind): boolean => DEPLOY_RANK[requested] <= DEPLOY_RANK[allowed];
 
-/** Decode the base64 bundle payload into the ArrayBuffer the provisioner uploads, or `null` if malformed. */
-const decodeBundle = (encoded: string): ArrayBuffer | null => {
-    try {
-        const binary = atob(encoded);
-        const bytes = new Uint8Array(binary.length);
-
-        for (let index = 0; index < binary.length; index += 1) {
-            bytes[index] = binary.codePointAt(index) ?? 0;
-        }
-
-        return bytes.buffer;
-    } catch {
-        return null;
-    }
-};
-
 const bearerKey = (request: Request): null | string => {
     const header = request.headers.get("authorization") ?? "";
     const [scheme, ...rest] = header.split(" ");
@@ -590,53 +564,36 @@ const bearerKey = (request: Request): null | string => {
     return key === "" ? null : key;
 };
 
-/** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
-interface DeployTelemetry {
-    endpoint: string;
-    tailConsumer?: string;
-    token: string;
-}
-
 /**
- * Assemble the {@link TenantDeploymentSpec} for one release.
+ * Put the previous live release back after a release failed its health check.
  *
- * Split out of the NDJSON stream body because it is pure assembly — every
- * telemetry-conditional field lives here, so the streaming half reads as the
- * sequence of steps it is.
+ * The check runs AFTER cutover — the project has one Worker, and Workers for
+ * Platforms cannot stage a user Worker's version — so a failed check means the
+ * broken release is already serving. There is no previous release on a
+ * project's first deploy, and then the failed release stays up: it is all there
+ * is. Reports each step as an NDJSON event; never throws.
  */
-const buildDeploymentSpec = (input: {
-    adminToken: string;
-    assets: AssetsUpload | undefined;
-    bundle: ArrayBuffer;
-    cell: string;
-    dispatchNamespace: string;
-    kind: string;
-    manifest: DeployManifest;
-    organizationId: string;
-    projectId: string; // gitleaks:allow -- a field declaration; the scanner matches the Cypress project-id shape
-    releaseScriptName: string;
-    scriptName: string;
-    telemetry: DeployTelemetry | undefined;
-    tenantSecrets: Record<string, string>;
-}): TenantDeploymentSpec => {
-    const { telemetry } = input;
+const revertFailedRelease = async (
+    input: { deploymentId: string; key: string; organizationId: string; previousDeploymentId: string | undefined },
+    deps: ReleaseDeps,
+    write: (line: Record<string, unknown>) => void,
+): Promise<void> => {
+    const { deploymentId, previousDeploymentId } = input;
 
-    return {
-        // The stable project label (pre-versioning) keys per-tenant D1/R2, so data
-        // persists across deploys; the versioned releaseScriptName is the
-        // immutable per-deployment worker script id.
-        alias: input.scriptName,
-        ...(input.assets ? { assets: input.assets } : {}),
-        bundle: input.bundle,
-        cell: input.cell,
-        dispatchNamespace: input.dispatchNamespace,
-        manifest: input.manifest,
-        scriptName: input.releaseScriptName,
-        secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
-        ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
-        tags: [`org:${input.organizationId}`, `project:${input.projectId}`, `env:${input.kind}`],
-        ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
-    };
+    if (previousDeploymentId === undefined) {
+        write({ deploymentId, event: "not_reverted", reason: "no previous release to revert to" });
+
+        return;
+    }
+
+    write({ deploymentId, event: "reverting", to: previousDeploymentId });
+
+    try {
+        await reprovision({ deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId }, deps);
+        write({ deploymentId, event: "reverted", to: previousDeploymentId });
+    } catch (error) {
+        write({ deploymentId, error: error instanceof Error ? error.message : String(error), event: "revert_failed", to: previousDeploymentId });
+    }
 };
 
 export const handleDeployRequest = async (request: Request, deps: DeployHandlerDeps): Promise<Response> => {
@@ -670,7 +627,8 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         return json(400, { error: "bundle is required (base64-encoded worker module)" });
     }
 
-    const bundle = decodeBundle(body.bundle);
+    const encodedBundle = body.bundle;
+    const bundle = decodeBundle(encodedBundle);
 
     if (!bundle) {
         return json(400, { error: "bundle is not valid base64" });
@@ -712,10 +670,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     const adminToken = randomSecret();
 
     let deploymentId: string;
-    // The backend mints a versioned, immutable script name per release
-    // (`{alias}-v{n}`, GAPS.md A1); fall back to the requested name when the
-    // backend doesn't version (legacy single-script mode).
-    let releaseScriptName = scriptName;
+    let previousDeploymentId: string | undefined;
 
     try {
         const created = await deps.backend.createDeployment({
@@ -730,7 +685,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         });
 
         deploymentId = created.deploymentId;
-        releaseScriptName = created.scriptName ?? scriptName;
+        previousDeploymentId = created.previousDeploymentId;
     } catch (error) {
         return json(403, { error: error instanceof Error ? error.message : "failed to record deployment" });
     }
@@ -748,8 +703,8 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
              * because three call sites had to do all four steps in order, and a
              * missed one strands the row mid-flight with the client still hanging.
              */
-            const failStream = async (message: string): Promise<void> => {
-                write({ deploymentId, error: message, phase: "failed" });
+            const failStream = async (error: unknown, fallback: string): Promise<void> => {
+                write({ deploymentId, error: error instanceof Error ? error.message : fallback, phase: "failed" });
 
                 try {
                     await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
@@ -764,6 +719,17 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             write({ deploymentId, event: "accepted" });
 
+            // Stored BEFORE anything touches the Worker: this copy is what a later
+            // rollback — or the revert below — puts back, so a release that is not
+            // stored must never go live.
+            try {
+                await deps.releases.put(deploymentId, { ...(assets ? { assets } : {}), bundle: encodedBundle, manifest });
+            } catch (error) {
+                await failStream(new Error(`failed to store the release: ${error instanceof Error ? error.message : String(error)}`), "");
+
+                return;
+            }
+
             // Tenant env secrets are decrypted and merged in; LUNORA_ADMIN_TOKEN
             // is platform-owned and always wins over a same-named tenant secret.
             // A decrypt failure (e.g. a corrupt secret or a rotated master key)
@@ -774,24 +740,14 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             try {
                 tenantSecrets = (await deps.backend.resolveSecrets?.({ key, kind, organizationId: target.organizationId, projectId })) ?? {};
             } catch (error) {
-                await failStream(error instanceof Error ? error.message : "failed to resolve tenant secrets");
+                await failStream(error, "failed to resolve tenant secrets");
 
                 return;
             }
 
-            // Resolve the telemetry config to inject (endpoint var + ingest-token
-            // secret + tail consumer). Best-effort — a failure here must not fail
-            // the deploy, so the tenant just ships untelemetered.
-            let telemetry: DeployTelemetry | undefined;
-
-            try {
-                telemetry = await deps.resolveTelemetry?.({ key, organizationId: target.organizationId });
-            } catch {
-                telemetry = undefined;
-            }
-
             const spec = buildDeploymentSpec({
                 adminToken,
+                alias: scriptName,
                 assets,
                 bundle,
                 cell: deps.cell,
@@ -800,10 +756,8 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 manifest,
                 organizationId: target.organizationId,
                 projectId,
-                releaseScriptName,
-                scriptName,
+                telemetry: await resolveTelemetrySafely(deps, { key, organizationId: target.organizationId }),
                 tenantSecrets,
-                telemetry,
             });
 
             const { healthCheck } = deps;
@@ -830,21 +784,24 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 // this the rejection escapes `start`, the row is stranded mid-flight in
                 // `accepted`/`provisioning` forever, and the NDJSON stream is never
                 // closed, so the client hangs instead of seeing a failure.
-                await failStream(error instanceof Error ? error.message : "deployment failed");
+                await failStream(error, "deployment failed");
 
                 return;
             }
 
-            // Health-checked release: swap the project's stable-URL pointer to
-            // this deployment and supersede the previous one (GAPS.md A1). An
-            // activation failure downgrades the release to failed — the old
-            // version keeps serving.
+            if (outcome.status === "failed" && outcome.provisioned) {
+                await revertFailedRelease({ deploymentId, key, organizationId: target.organizationId, previousDeploymentId }, deps, write);
+            }
+
+            // Health-checked release: record it live and supersede the previous
+            // one (GAPS.md A1). An activation failure downgrades the release to
+            // failed, but the Worker already runs it — the record is what lags.
             if (outcome.status === "live" && deps.backend.activateDeployment) {
                 try {
                     await deps.backend.activateDeployment({ deploymentId, key });
                     write({ deploymentId, event: "released" });
                 } catch (error) {
-                    await failStream(error instanceof Error ? error.message : "activation failed");
+                    await failStream(error, "activation failed");
 
                     return;
                 }

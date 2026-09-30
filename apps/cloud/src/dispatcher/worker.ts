@@ -2,8 +2,8 @@ import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
-import type { AliasRoute, CustomDomainRoute, ScriptFacts } from "./route";
-import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
+import type { CustomDomainRoute, ScriptFacts } from "./route";
+import { createCustomDomainResolver, createPlanResolver, resolveTenant } from "./route";
 
 /**
  * The Lunora Cloud dispatcher Worker — a SEPARATE,
@@ -245,17 +245,15 @@ const guardProtectedPreview = async (request: Request, url: URL, scriptName: str
     return previewLoginPage(false);
 };
 
-// Per-isolate plan + route resolvers, rebuilt only when the control-plane
+// Per-isolate plan + custom-domain resolvers, rebuilt only when the control-plane
 // config changes.
 let planResolver: ((scriptName: string) => Promise<ScriptFacts>) | undefined;
-let routeResolver: ((label: string) => Promise<AliasRoute | null>) | undefined;
 let customDomainResolver: ((hostname: string) => Promise<CustomDomainRoute | null>) | undefined;
 let resolverKey = "";
 
 const buildResolvers = (env: DispatcherEnv): void => {
     if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN) {
         planResolver = undefined;
-        routeResolver = undefined;
         customDomainResolver = undefined;
 
         return;
@@ -267,7 +265,6 @@ const buildResolvers = (env: DispatcherEnv): void => {
         const options = { controlPlaneToken: env.CONTROL_PLANE_TOKEN, controlPlaneUrl: env.CONTROL_PLANE_URL };
 
         planResolver = createPlanResolver(options);
-        routeResolver = createRouteResolver(options);
         customDomainResolver = createCustomDomainResolver(options);
         resolverKey = key;
     }
@@ -313,11 +310,6 @@ export default {
 
         const route = await resolveTenant(url.hostname, {
             appDomain,
-            resolveAlias: routeResolver,
-            // Bucketing key for a staged rollout. The client IP keeps one caller on
-            // one version instead of flipping between two builds mid-session, and
-            // works for the non-browser callers a backend platform actually serves.
-            rolloutKey: request.headers.get("cf-connecting-ip") ?? undefined,
             resolveCustomDomain: async (hostname) => {
                 const custom = await customDomainResolver?.(hostname);
 
@@ -392,8 +384,7 @@ export default {
             // sample containing only the requests it survived. Both read as healthy.
             //
             // Everything downstream of the meter inherits that: the Traffic tab's
-            // error rate, the per-deployment health chart, and the rollout guard,
-            // whose entire job is to notice a candidate failing this way.
+            // error rate and the per-deployment health chart.
             const failure = new Response(null, { status: 502 });
 
             meterRequest(env.USAGE_ANALYTICS, request, failure, route, url, startedAt);

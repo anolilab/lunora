@@ -71,10 +71,20 @@ single file over 25 MiB, or more than 50 MiB in total, is refused.
 
 The command exits non-zero unless the deployment reaches `live`.
 
+Every deploy updates the project's one Worker in place and goes out to all
+traffic at once — Workers for Platforms cannot stage a user Worker's version, so
+there are no canary or percentage rollouts. The health check therefore runs after
+the new code is already serving: if it fails, the deployment is marked `failed`
+and the previous live release is put back automatically.
+
 ## `lunora cloud rollback`
 
-Points a project's stable URL back at a retained earlier release. Deployments are
-immutable and versioned, so a rollback is a pointer swap rather than a rebuild.
+Puts a retained earlier release back on the project's Worker. A project has one
+Worker, updated in place so its Durable Object data survives every release; each
+deploy's bundle is stored, and a rollback re-provisions that stored bundle — no
+rebuild. The last three superseded releases are retained. A rollback that would
+drop a Durable Object class the live release binds is refused, because dropping
+a class deletes its data.
 
 ```bash
 lunora cloud rollback dep_456 --org org_789 --yes

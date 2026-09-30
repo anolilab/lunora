@@ -16,6 +16,8 @@ import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { isLunoraError } from "@lunora/errors";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
+import type { ReleaseBucket } from "../release-store";
+
 /** The Lunora action context the worker injects on `env.__lunoraCtx`. */
 export interface LunoraActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -50,6 +52,8 @@ export type RouterEnv = {
     LUNORA_TAIL_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
     MAIL_FROM?: string;
+    /** Private R2 bucket holding every deployment's payload for rollback (`src/deploy/release-store.ts`). */
+    RELEASES?: ReleaseBucket;
     /** 32-byte hex master key for tenant-secret envelope encryption (§7). */
     SECRET_ENCRYPTION_KEY?: string;
     /** Observability metrics dataset for the telemetry ingest (may be unbound). */

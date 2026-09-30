@@ -61,17 +61,27 @@ Stage = the dispatch namespace (`lunora-production`). Two stacks per project:
   (`forceDestroy`) or Queue per provisioned binding, named by `resourceName`; and for each producer
   queue whose `resource` matches a `queue_consumer` entry, a consumer attaching the Worker named by
   `LUNORA_CONTROL_PLANE_SCRIPT`. **Additive:** resources already in the stack's state are re-declared on
-  every deploy, so a release that drops a binding never deletes data a retained release still binds.
+  every deploy, so a release that drops a binding never deletes data a rollback target still binds.
   They go only when the stack is destroyed.
-- **`lunora-release-<scriptName>`** owns one Worker in the dispatch namespace: the prebuilt bundle
+- **`lunora-worker-<alias>`** owns the project's one Worker in the dispatch namespace, whose script
+  name is the alias. Every deploy and every rollback converges this same Worker in place — a Durable
+  Object namespace belongs to the script that defines its class, so a script per release would start
+  each release on an empty `ShardDO`, and Workers for Platforms has no gradual deployments for user
+  Workers. Releases are bundles the control plane stores in R2; a rollback is a `deploy` job carrying
+  an older one. The Worker declares: the prebuilt bundle
   uploaded as-is (`main` + `bundle: false`), compatibility date/flags (defaults `2026-06-10` /
   `["nodejs_compat"]`), `tags`, `tailConsumers`, assets, and `env` — project resources by typed
   reference into the project stack's state (`Resource.ref(id, { stack, stage })`), `ai`/`browser`/
   `images`, Durable Objects (new classes are created SQLite-backed), Analytics Engine datasets (binding
   metadata only, so declared here), `vars` as `plain_text`, secrets as `Redacted` → `secret_text`.
 
-`deploy` runs project then release. `destroy` removes the release, then the project stack when
-`deleteProjectResources` is set.
+`deploy` runs project then worker. `destroy` is only sent when the project is gone: it removes the
+worker, then the project stack and its data.
+
+Alchemy emits a `deleted_classes` migration for any Durable Object class a dispatch-namespace Worker
+stops binding, so a release (or rollback target) that drops a class deletes that class's data. The
+control plane refuses a manual rollback that would do this; a tenant deploy that drops a class is the
+tenant's call, exactly as with a `deleted_classes` migration in wrangler.
 
 Secrets travel to the Alchemy process in its env (`LUNORA_SECRETS`), never in the plan file, and every
 log line is scrubbed of secret values and the API token before it leaves the box.

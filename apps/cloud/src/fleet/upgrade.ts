@@ -2,9 +2,8 @@
  * Fleet runtime re-release (GAPS.md E4, the operational answer to fat tenant
  * workers). A runtime security patch becomes a paced batch job over the
  * existing machinery: rebuild each stale project (A3 server-side builds),
- * release it as a new immutable version behind the health gate (A1), and let
- * the pointer swap do the cutover — a failed release leaves that tenant on the
- * old-but-serving version. Pure over an injected `release` port; the runner
+ * release it onto the project's Worker through the health-checked release path
+ * (A1) — a failed health check re-provisions the tenant's previous release. Pure over an injected `release` port; the runner
  * canaries the first batch and halts the fleet when the failure rate breaks
  * the threshold, so a bad runtime never ships past its canary.
  */
@@ -77,8 +76,8 @@ export interface RunOptions {
 
     /**
      * Rebuild + release one project on the target runtime (build → deploy →
-     * health gate → pointer swap). Resolve `true` on a successful cutover;
-     * `false`/throw counts as a failure (the tenant stays on its old version).
+     * health check). Resolve `true` on a successful release; `false`/throw
+     * counts as a failure (the tenant is reverted to its previous release).
      */
     release: (deployment: FleetDeployment, targetVersion: string) => Promise<boolean>;
 }

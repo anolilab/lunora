@@ -19,6 +19,56 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Releases on one stable Worker — 2026-09-30
+
+Every release used to be a new dispatch-namespace script (`{alias}-v{n}`). A
+Durable Object namespace belongs to the script that defines its class, so every
+release booted on a fresh, empty `ShardDO` — Lunora's default storage — and a
+rollback resurrected old data while hiding new. Workers for Platforms has no
+Worker Versions or gradual deployments for user Workers ("changes … deployed
+all-at-once to 100% of traffic"), so "many versions on one script" was never
+available either.
+
+- **One Worker per alias.** The dispatch-namespace script name IS the alias;
+  every deploy converges it in place (`lunora-worker-<alias>` in the provision
+  box), so DO data persists across releases. Previews keep their own alias.
+- **Releases are stored records.** Each deploy stores its validated payload
+  (bundle, manifest, assets — never secrets) in the private `RELEASES` R2 bucket
+  under its deployment id before anything touches the Worker; the deployments
+  table keeps the history. **Rollback re-provisions a stored release** onto the
+  stable Worker (`POST /v1/deployments/rollback` for the CLI, `POST /v1/rollback`
+  for the studio), with the project's current secrets and the target
+  deployment's own admin token. The record moves only after the provision.
+- **Health check after cutover — the trade-off.** A versioned script could be
+  probed before the pointer swap; the stable Worker cannot, so the release is
+  serving 100% of traffic when it is checked. A failed check marks the
+  deployment `failed` and automatically re-provisions the previous live release.
+  A project's first deploy has nothing to revert to and stays up.
+- **Durable Object class deletion.** Alchemy emits `deleted_classes` for any class
+  a dispatch-namespace Worker stops binding. A manual rollback to a release that
+  predates a class the live release binds is refused; a tenant deploy that drops
+  a class is the tenant's call (as with a wrangler `deleted_classes` migration).
+- **Staged rollouts: 🧭 refused.** A canary is a second script, and a second
+  script is a second, empty database. The only way to share data is a canary
+  whose DO bindings name the stable Worker's classes (`script_name`), and neither
+  Cloudflare's Workers for Platforms docs nor Alchemy 2's dispatch-namespace path
+  (`WorkerProvider.ts` skips all cross-script DO handling when `namespace` is
+  set) establish that a user Worker can bind another user Worker's class. So
+  `setRollout` / `promoteRollout` / `abortRollout` refuse with "staged rollouts
+  are not supported on Workers for Platforms: a canary cannot share the project's
+  Durable Object data"; the dispatcher's traffic split, the rollout guard and the
+  studio's rollout card are gone. Revisit if Cloudflare documents cross-script DO
+  bindings inside a dispatch namespace, or ships gradual deployments for user
+  Workers.
+- **Pruning and teardown.** Superseded releases beyond `SUPERSEDED_RETENTION` (3
+  per alias) are marked `destroyed`; the teardown sweep deletes their stored
+  bundles (and failed releases' bundles), never the Worker. The Worker and the
+  project stack are destroyed only when an alias has no deployment left — the
+  project or preview is gone.
+- No cell had been provisioned, so no data migration was needed.
+
+---
+
 ## Provisioning pass — 2026-09-30
 
 Tenant provisioning moved off the hand-written REST calls
@@ -48,9 +98,9 @@ authoritative matrix:
 | `workflow`         | 🔨 unsupported | registered per account script; no dispatch-namespace variant yet        |
 
 - Two Alchemy stacks per project: `lunora-project-<alias>` owns the provisioned
-  resources, `lunora-release-<scriptName>` one release's Worker. Teardown
-  (`src/deploy/teardown.ts`) sends a destroy job; the project stack goes only
-  with the alias's last deployment, as before.
+  resources, `lunora-worker-<alias>` the project's one Worker (see "Releases on
+  one stable Worker" above). Teardown (`src/deploy/teardown.ts`) sends a destroy
+  job only with the alias's last deployment.
 - Per-project D1 names changed from `<alias>-db` to `<alias>-<binding>`. No cell
   had been provisioned, so nothing needed migrating.
 - The shared `lunora-tenant-queue` and its `{ script, body }` envelope are gone:
@@ -108,7 +158,7 @@ Shipped since (2026-08-28, same pass):
 | Item                                  | Now                                                                                                                                                                                                                                                                                             |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Deployment protection on previews** | ✅ A per-project password gates every PREVIEW deployment at the dispatcher, before dispatch. The salted hash stays in the control plane (`POST /v1/tenants/preview-auth`); the dispatcher mints a signed, script-scoped cookie so later requests cost no round trip. Production is never gated. |
-| **Staged rollouts (A1 follow-on)**    | ✅ `setRollout` / `promoteRollout` / `abortRollout` serve a candidate to a share of traffic alongside the active release. The split is deterministic per client and monotonic in the percentage, so advancing never moves anyone back. Error rate per script is already readable on Traffic.    |
+| **Staged rollouts (A1 follow-on)**    | 🧭 Withdrawn 2026-09-30: a canary script cannot share the project's Durable Object data on Workers for Platforms, so the mutations refuse. See "Releases on one stable Worker".                                                                                                                 |
 
 ### Audit pass — 2026-08-31
 
@@ -150,8 +200,8 @@ Three loops that were each half-built, closed at the end nobody had reached.
 
 | Item                             | Now                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Rollout guard (A1 follow-on)** | ✅ `src/deploy/rollout-guard.ts`, on the every-minute tick. A staged rollout whose candidate returns materially more 5xx than the release it is replacing is aborted, audited as `deployment.rollout.auto_abort`, and notified. Judged against the ACTIVE release rather than a constant, because the two scripts are two builds of one app splitting the same traffic.                 |
-| **Release-path notifications**   | ✅ A new `deploy` alert target. `builds.fail`, `deployments.updateStatus` (on the transition into `failed` only) and the rollout guard raise it. Previously the alert rules could only watch telemetry the tenant's own app had to send — so the one failure class where the app never starts could raise nothing.                                                                      |
+| **Rollout guard (A1 follow-on)** | 🧭 Removed 2026-09-30 with staged rollouts.                                                                                                                                                                                                                                                                                                                                             |
+| **Release-path notifications**   | ✅ A new `deploy` alert target. `builds.fail` and `deployments.updateStatus` (on the transition into `failed` only) raise it. Previously the alert rules could only watch telemetry the tenant's own app had to send — so the one failure class where the app never starts could raise nothing.                                                                                         |
 | **Undelivered-alert drain**      | ✅ `src/telemetry/alert-drain.ts`, every minute. Sends `alerts` rows left in `firing` past a grace window. Release-path alerts are raised inside mutations, which have no `fetch`; this is also the first thing that re-sends an alert whose delivering request died mid-send, which used to be silently lost forever.                                                                  |
 | **A4 commit-status write-back**  | 🌐 Code complete, infrastructure-blocked. `src/github/app.ts` mints an installation token and posts a `lunora/deploy` commit status; `runBuild` reports pending → success/failure through an optional port. Inert without `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` (`createGitHubApp` returns `null`) — and see the note below on why that credential alone does not make builds run. |
 
@@ -209,8 +259,8 @@ unit tests, verified by codegen + tsc + vitest):
   `destroyed`; nothing deleted the Cloudflare dispatch script, so namespaces grew
   unboundedly (the leak Ring-2 claimed to have closed). A `teardownAt`-checkpointed
   sweep (`src/deploy/teardown.ts`) now deletes the script in `scheduled()`.
-  Per-tenant **D1/R2** are named from the project's stable **alias** (not the
-  versioned script), so tenant `.global()` data persists across deploys and a
+  Per-tenant **D1/R2** are named from the project's stable **alias**, so tenant
+  `.global()` data persists across deploys and a
   rollback sees the same database; they are torn down **only when the alias has no
   remaining non-destroyed deployment** (project/org deletion) — never on a routine
   version prune. R2 delete is best-effort (a non-empty bucket needs an S3-API
@@ -240,12 +290,19 @@ unit tests, verified by codegen + tsc + vitest):
 
 ## A. Deploy pipeline
 
-### A1. Blue/green deploys + rollback (✅ shipped)
+### A1. Health-checked deploys + rollback (✅ shipped, redesigned 2026-09-30)
+
+> **Redesigned 2026-09-30.** The versioned-script design below gave every release
+> an empty Durable Object namespace. A project now has one Worker (its alias),
+> updated in place; releases are bundles stored in R2; rollback re-provisions one;
+> the health check runs after cutover and a failure re-provisions the previous
+> release. See "Releases on one stable Worker" at the top. The original design is
+> kept for the record.
 
 **Today:** `POST /v1/deploy` uploads the bundle over the _same_ script name; a
 bad deploy replaces the good one instantly and there is nothing to roll back to.
 
-**Design (Zeitwork's health-gated pointer swap, mapped to WfP):**
+**Original design (Zeitwork's health-gated pointer swap, mapped to WfP):**
 
 - Mint a **versioned script name per deployment** (`{project}-{kind}-v{n}`), so
   every deployment is its own immutable dispatch script.
@@ -645,11 +702,11 @@ features and findings _in_ them. All code-tractable items shipped:
   installation claims, and both suspension mechanisms (`system:spend-cap` /
   `system:dunning` actors).
 - **Build → deploy handoff**: the runner's optional `release` port feeds a
-  completed bundle into the health-gated blue/green pipeline; a failed release
+  completed bundle into the health-gated release pipeline; a failed release
   keeps the build successful (artifact stays reusable for dedup).
 - **Queue self-healing + retention**: stale/never-claimed builds fail visibly
-  (hourly cron); superseded releases beyond the rollback retention (3/project)
-  are destroyed (6-hourly cron) so dispatch namespaces never grow unboundedly.
+  (hourly cron); superseded releases beyond the rollback retention (3/alias)
+  are destroyed (6-hourly cron) and their stored bundles deleted.
 - **Server-built PR previews**: PR upsert events queue a build for the head
   commit through the same pipeline as pushes.
 - **Per-environment secrets**: `all`/`production`/`preview`/`dev` scoping with

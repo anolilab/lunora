@@ -27,6 +27,6 @@ if (plan.stage === "lunora-slow") {
     await sleep(1500);
 }
 
-if (plan.stage === "lunora-fail" && report.stack === "release") {
+if (plan.stage === "lunora-fail" && report.stack === "worker") {
     process.exitCode = 3;
 }
