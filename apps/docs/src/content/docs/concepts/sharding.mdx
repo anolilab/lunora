@@ -265,9 +265,15 @@ Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
 naming it rather than quietly covering the default shard alone. Root and
 `.global()` tables don't need a registry.
 
+A key stays registered once its shard has written, and there is no route to
+remove one yet. Every fan-out therefore visits every shard that has ever held
+`.shardBy()` rows, so gate who can write to which shard with `authorizeShard`
+(see below): a client that can invent shard keys can grow that list.
+
 <Callout type="warn">
     Shards register when they write, so a shard whose rows were written **before** the registry was bound is not listed until it is written again. Bind the
-    registry before you shard a populated table. A newly registered shard can take up to 30 seconds to appear in another isolate's fan-out.
+    registry before you shard a populated table. A newly registered shard can take up to 30 seconds to appear in a worker's fan-out, including the worker that
+    served the write.
 </Callout>
 
 ## Securing shard access

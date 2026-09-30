@@ -22,7 +22,7 @@ export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
 export { SchedulerDO } from "./scheduler-do.js";
 // The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
 // below points at it, and cross-shard export / CDC sync fan out to what it lists.
-export { ShardRegistryDO } from "lunorash/do";
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
 
 interface Env extends Record<string, unknown> {
     AUTH_SECRET?: string;

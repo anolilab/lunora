@@ -87,7 +87,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: {
             level: "emulated",
-            note: "@lunora/runtime's query coordinator over the in-process shard registry; listShardKeys is seeded from the shard files on disk, and answers every shard rather than only those holding the table (a correct superset, at the cost of visiting shards with nothing to say)",
+            note: "@lunora/runtime's query coordinator over the in-process shard registry; listShardKeys is seeded from the shard files on disk, and answers every shard rather than only those holding the table (a correct superset, at the cost of visiting shards with nothing to say). That registry is the host's own, so the write-time ShardRegistryDO registration a Cloudflare shard does has nothing to report to here and does not run",
         },
         queues: {
             level: "emulated",

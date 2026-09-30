@@ -69,5 +69,5 @@ const worker = {
 };
 
 export { ShardDO };
-export { ShardRegistryDO } from "lunorash/do";
+export { ShardRegistryDO } from "./lunora/server";
 export default worker;
