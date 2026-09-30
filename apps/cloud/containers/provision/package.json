@@ -1,0 +1,21 @@
+{
+    "private": true,
+    "description": "The Lunora Cloud provision box: runs Alchemy 2 against a cell's Cloudflare account. Not a workspace member; installed from package-lock.json at image build.",
+    "type": "module",
+    "dependencies": {
+        "@effect/platform-node": "4.0.0-rc.117",
+        "alchemy": "2.0.0-beta.79",
+        "effect": "4.0.0-rc.117"
+    },
+    "engines": {
+        "node": ">=22.14.0"
+    },
+    "overrides": {
+        "@effect/platform-node": "4.0.0-rc.117",
+        "@effect/platform-node-shared": "4.0.0-rc.117",
+        "@effect/sql-d1": "4.0.0-rc.117",
+        "@effect/sql-sqlite-do": "4.0.0-rc.117",
+        "@effect/vitest": "4.0.0-rc.117",
+        "effect": "4.0.0-rc.117"
+    }
+}
