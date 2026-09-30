@@ -1,4 +1,6 @@
-import type { Provisioner, TenantBindingSpec, TenantDeploymentSpec } from "../provision";
+import type { Provisioner } from "../provision";
+import type { AssetFile, AssetsUpload, BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
+import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../provision-contract";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
@@ -89,14 +91,11 @@ export interface DeployHandlerDeps {
     scheduler: CellScheduler;
 }
 
+const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
+
 interface DeployBody {
-    /**
-     * Per-tenant binding manifest (DO classes / D1 / R2), as declared by the
-     * deploy request — the CLI reads it from the app's `wrangler.jsonc`. The
-     * canonical {@link TenantBindingSpec} shape; {@link normalizeBindings} floors
-     * it to ShardDO before provisioning.
-     */
-    bindings?: TenantBindingSpec;
+    /** Static files behind the manifest's `assets` binding. Validated by {@link parseAssets}. */
+    assets?: unknown;
     branch?: string;
     /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
     bundle?: string;
@@ -110,6 +109,8 @@ interface DeployBody {
      * thing standing between an arbitrary value and the deployment row.
      */
     kind?: string;
+    /** The Worker's binding manifest. `unknown` because it is untrusted wire data; {@link parseManifest} validates it. */
+    manifest?: unknown;
     projectId?: string;
     scriptName?: string;
 }
@@ -117,48 +118,386 @@ interface DeployBody {
 /**
  * Every Lunora tenant worker exports `ShardDO` (binding `SHARD`); without its
  * binding and the matching `new_sqlite_classes` migration tag the uploaded
- * dispatch script cannot boot (`putDispatchScript` omits the DO migration and
- * the worker's `ShardDO` export has nowhere to bind). This is the floor the
- * whole deploy path was missing — the spec was previously built with an empty
- * binding set, so a real tenant could never come up.
+ * dispatch script cannot boot. The floor is added whenever the manifest does
+ * not already bind the class, so an under-declaring caller still comes up.
  */
-const SHARD_DO_BINDING = { binding: "SHARD", className: "ShardDO" } as const;
-
-/** Cap the declared DO classes so a malformed/abusive manifest can't balloon the upload metadata. */
-const MAX_DURABLE_OBJECTS = 25;
-
-const isBindingRef = (value: unknown): value is { binding: string } =>
-    typeof value === "object" && value !== null && typeof (value as { binding?: unknown }).binding === "string";
+const SHARD_DO_BINDING: BindingRequirement = { binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" };
 
 /**
- * Resolve the request's binding manifest into the provisioner spec, guaranteeing
- * the ShardDO floor even when the caller under-declares (or omits `bindings`
- * entirely). Malformed entries are dropped rather than trusted, and the DO list
- * is capped.
+ * The whole request — bundle and assets travel base64 in one JSON body — is
+ * capped before it is parsed. 50 MiB of assets is ~67 MiB base64, which leaves
+ * room for the bundle; it is also Cloudflare's own request-size floor.
  */
-const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBindingSpec => {
-    const declared = Array.isArray(requested?.durableObjects) ? requested.durableObjects : [];
-    const durableObjects = declared
-        .filter(
-            (entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string",
-        )
-        .slice(0, MAX_DURABLE_OBJECTS)
-        .map((entry) => {
-            return { binding: entry.binding, className: entry.className };
-        });
+const MAX_BODY_BYTES = 100 * 1024 * 1024;
+/** Caps so a malformed/abusive manifest can't balloon the upload metadata. */
+const MAX_BINDINGS = 64;
+const MAX_DURABLE_OBJECTS = 25;
+const MAX_COMPATIBILITY_FLAGS = 32;
+const MAX_ASSET_FILES = 20_000;
+const MAX_ASSET_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_ASSETS_BYTES = 50 * 1024 * 1024;
+const MAX_RUN_WORKER_FIRST_RULES = 100;
 
-    if (!durableObjects.some((entry) => entry.className === SHARD_DO_BINDING.className)) {
-        durableObjects.unshift({ ...SHARD_DO_BINDING });
+/** Binding names become `env` keys and resource-name suffixes, so they stay identifier-shaped. */
+const IDENTIFIER = /^[A-Za-z_]\w{0,63}$/u;
+const COMPATIBILITY_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const COMPATIBILITY_FLAG = /^[a-z0-9_]{1,64}$/u;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+/** Bucket / queue / dataset names across the types that carry one. */
+const RESOURCE_NAME = /^[\w.-]{1,63}$/u;
+
+const HTML_HANDLING = ["auto-trailing-slash", "drop-trailing-slash", "force-trailing-slash", "none"] as const;
+const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"] as const;
+const ASSETS_CONFIG_KEYS = new Set(["html_handling", "not_found_handling", "run_worker_first"]);
+
+type BindingType = BindingRequirement["type"];
+type UnsupportedType = keyof typeof UNSUPPORTED_REASONS;
+
+/** Validation outcome: the parsed value, or the 400 message. */
+type Parsed<T> = { error: string } | { value: T };
+
+const isOneOf = <T extends string>(values: ReadonlyArray<T>, value: unknown): value is T =>
+    typeof value === "string" && (values as ReadonlyArray<string>).includes(value);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isBindingType = (value: string): value is BindingType => Object.hasOwn(BINDING_SUPPORT, value);
+
+const isUnsupported = (type: BindingType): type is UnsupportedType => BINDING_SUPPORT[type] === "unsupported";
+
+/** Class-backed types the platform binds straight to an export of the tenant bundle. */
+const needsClassName = (type: BindingType): boolean => type === "durable_object" || type === "workflow";
+
+const parseBinding = (entry: unknown, index: number): Parsed<BindingRequirement> => {
+    if (!isRecord(entry) || typeof entry["binding"] !== "string" || typeof entry["type"] !== "string") {
+        return { error: `manifest.bindings[${String(index)}] must be an object with string \`binding\` and \`type\`` };
     }
 
+    const { binding, className, resource, sqlite, type } = entry;
+
+    if (!IDENTIFIER.test(binding)) {
+        return { error: `binding name "${binding}" must match ${IDENTIFIER.source} (it becomes an env key)` };
+    }
+
+    if (!isBindingType(type)) {
+        return { error: `binding ${binding} has unknown type "${type}"` };
+    }
+
+    if (className !== undefined && (typeof className !== "string" || !IDENTIFIER.test(className))) {
+        return { error: `binding ${binding}: className must be an identifier` };
+    }
+
+    if (needsClassName(type) && className === undefined) {
+        return { error: `binding ${binding}: a ${type} binding needs a className` };
+    }
+
+    if (resource !== undefined && (typeof resource !== "string" || !RESOURCE_NAME.test(resource))) {
+        return { error: `binding ${binding}: resource must match ${RESOURCE_NAME.source}` };
+    }
+
+    if (sqlite !== undefined && typeof sqlite !== "boolean") {
+        return { error: `binding ${binding}: sqlite must be a boolean` };
+    }
+
+    // Rebuilt field by field so unknown keys never reach the provisioner.
+    // `resourceId` is deliberately not carried: an id minted in the tenant's own
+    // account means nothing in the platform account, and honouring one would let
+    // a manifest point a binding at another tenant's resource.
     return {
-        ...(isBindingRef(requested?.d1) ? { d1: { binding: requested.d1.binding } } : {}),
-        ...(isBindingRef(requested?.r2) ? { r2: { binding: requested.r2.binding } } : {}),
-        durableObjects,
+        value: {
+            binding,
+            type,
+            ...(typeof className === "string" ? { className } : {}),
+            ...(typeof resource === "string" ? { resource } : {}),
+            ...(typeof sqlite === "boolean" ? { sqlite } : {}),
+        },
     };
 };
 
-const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
+/** Checks across the (floored) binding list: unique names and per-type caps. */
+const bindingSetError = (bindings: BindingRequirement[]): string | undefined => {
+    const names = new Set<string>();
+
+    for (const { binding } of bindings) {
+        if (names.has(binding)) {
+            return `binding name ${binding} is declared more than once`;
+        }
+
+        names.add(binding);
+    }
+
+    if (bindings.filter((entry) => entry.type === "durable_object").length > MAX_DURABLE_OBJECTS) {
+        return `manifest declares more than ${String(MAX_DURABLE_OBJECTS)} durable_object bindings`;
+    }
+
+    if (bindings.filter((entry) => entry.type === "assets").length > 1) {
+        return "manifest declares more than one assets binding";
+    }
+
+    return undefined;
+};
+
+const parseCompatibility = (date: unknown, flags: unknown): Parsed<Pick<DeployManifest, "compatibilityDate" | "compatibilityFlags">> => {
+    if (date !== undefined && (typeof date !== "string" || !COMPATIBILITY_DATE.test(date))) {
+        return { error: "manifest.compatibilityDate must be YYYY-MM-DD" };
+    }
+
+    if (flags === undefined) {
+        return { value: typeof date === "string" ? { compatibilityDate: date } : {} };
+    }
+
+    if (!Array.isArray(flags) || flags.length > MAX_COMPATIBILITY_FLAGS || !flags.every((flag) => typeof flag === "string" && COMPATIBILITY_FLAG.test(flag))) {
+        return { error: `manifest.compatibilityFlags must be at most ${String(MAX_COMPATIBILITY_FLAGS)} strings matching ${COMPATIBILITY_FLAG.source}` };
+    }
+
+    return {
+        value: {
+            ...(typeof date === "string" ? { compatibilityDate: date } : {}),
+            compatibilityFlags: flags.filter((flag): flag is string => typeof flag === "string"),
+        },
+    };
+};
+
+/**
+ * Validate the request's binding manifest and floor it to ShardDO.
+ *
+ * Every refusal happens here, before a deployment row is recorded or anything
+ * is provisioned. An `unsupported` binding is refused rather than dropped: a
+ * missing binding otherwise surfaces as an undefined `env.X` long after a green
+ * deploy. All unsupported entries are reported at once so one retry fixes them.
+ */
+const parseManifest = (raw: unknown): Parsed<DeployManifest> => {
+    const input = raw ?? { bindings: [] };
+
+    if (!isRecord(input) || !Array.isArray(input["bindings"])) {
+        return { error: "manifest must be an object with a `bindings` array" };
+    }
+
+    const { bindings: entries, compatibilityDate, compatibilityFlags } = input;
+
+    if (entries.length > MAX_BINDINGS) {
+        return { error: `manifest declares ${String(entries.length)} bindings; the limit is ${String(MAX_BINDINGS)}` };
+    }
+
+    const bindings: BindingRequirement[] = [];
+    const unsupported: string[] = [];
+
+    for (const [index, entry] of entries.entries()) {
+        const parsed = parseBinding(entry, index);
+
+        if ("error" in parsed) {
+            return parsed;
+        }
+
+        const { binding, type } = parsed.value;
+
+        if (isUnsupported(type)) {
+            unsupported.push(`${type} (${binding}): ${UNSUPPORTED_REASONS[type]}`);
+        }
+
+        bindings.push(parsed.value);
+    }
+
+    if (unsupported.length > 0) {
+        return { error: `Lunora Cloud cannot provide these bindings — ${unsupported.join("; ")}` };
+    }
+
+    if (!bindings.some((entry) => entry.type === "durable_object" && entry.className === SHARD_DO_BINDING.className)) {
+        bindings.unshift({ ...SHARD_DO_BINDING });
+    }
+
+    const setError = bindingSetError(bindings);
+
+    if (setError !== undefined) {
+        return { error: setError };
+    }
+
+    const compatibility = parseCompatibility(compatibilityDate, compatibilityFlags);
+
+    return "error" in compatibility ? compatibility : { value: { bindings, ...compatibility.value } };
+};
+
+/** Decoded byte length of a base64 string, without decoding it. */
+const base64Bytes = (encoded: string): number => (encoded.length / 4) * 3 - (Number(encoded.endsWith("=")) + Number(encoded.endsWith("==")));
+
+const parseAssetsConfig = (raw: unknown): Parsed<AssetsUpload["config"]> => {
+    if (raw === undefined) {
+        return { value: undefined };
+    }
+
+    if (!isRecord(raw)) {
+        return { error: "assets.config must be an object" };
+    }
+
+    const unknownKey = Object.keys(raw).find((key) => !ASSETS_CONFIG_KEYS.has(key));
+
+    if (unknownKey !== undefined) {
+        return { error: `assets.config.${unknownKey} is not supported; allowed: ${[...ASSETS_CONFIG_KEYS].join(", ")}` };
+    }
+
+    const { html_handling: htmlHandling, not_found_handling: notFoundHandling, run_worker_first: runWorkerFirst } = raw;
+    const config: NonNullable<AssetsUpload["config"]> = {};
+
+    if (htmlHandling !== undefined) {
+        if (!isOneOf(HTML_HANDLING, htmlHandling)) {
+            return { error: `assets.config.html_handling must be one of ${HTML_HANDLING.join(", ")}` };
+        }
+
+        config.html_handling = htmlHandling;
+    }
+
+    if (notFoundHandling !== undefined) {
+        if (!isOneOf(NOT_FOUND_HANDLING, notFoundHandling)) {
+            return { error: `assets.config.not_found_handling must be one of ${NOT_FOUND_HANDLING.join(", ")}` };
+        }
+
+        config.not_found_handling = notFoundHandling;
+    }
+
+    if (runWorkerFirst !== undefined) {
+        const valid =
+            typeof runWorkerFirst === "boolean" ||
+            (Array.isArray(runWorkerFirst) &&
+                runWorkerFirst.length <= MAX_RUN_WORKER_FIRST_RULES &&
+                runWorkerFirst.every((rule) => typeof rule === "string" && rule.length > 0 && rule.length <= 256));
+
+        if (!valid) {
+            return { error: `assets.config.run_worker_first must be a boolean or at most ${String(MAX_RUN_WORKER_FIRST_RULES)} route patterns` };
+        }
+
+        config.run_worker_first =
+            typeof runWorkerFirst === "boolean" ? runWorkerFirst : runWorkerFirst.filter((rule): rule is string => typeof rule === "string");
+    }
+
+    return { value: config };
+};
+
+/** One asset file: a rooted path with no traversal, and base64 content under the per-file cap. */
+const parseAssetFile = (entry: unknown, index: number): Parsed<AssetFile> => {
+    if (!isRecord(entry) || typeof entry["path"] !== "string" || typeof entry["content"] !== "string") {
+        return { error: `assets.files[${String(index)}] must be an object with string \`path\` and \`content\`` };
+    }
+
+    const { content, path } = entry;
+
+    if (!path.startsWith("/") || path.includes("\0") || path.split("/").includes("..")) {
+        return { error: `asset path ${JSON.stringify(path)} must start with / and contain no .. segment or NUL` };
+    }
+
+    if (content.length % 4 !== 0 || !BASE64.test(content)) {
+        return { error: `asset ${path} is not valid base64` };
+    }
+
+    const size = base64Bytes(content);
+
+    if (size > MAX_ASSET_FILE_BYTES) {
+        return { error: `asset ${path} is ${String(size)} bytes; the per-file limit is ${String(MAX_ASSET_FILE_BYTES)}` };
+    }
+
+    return { value: { content, path } };
+};
+
+/**
+ * Validate the static-asset upload against the (already validated) manifest:
+ * an `assets` binding needs files, and files need an `assets` binding.
+ */
+const parseAssets = (raw: unknown, manifest: DeployManifest): Parsed<AssetsUpload | undefined> => {
+    const bound = manifest.bindings.some((entry) => entry.type === "assets");
+
+    if (raw === undefined) {
+        return bound ? { error: "the manifest has an assets binding but the request carries no assets" } : { value: undefined };
+    }
+
+    if (!bound) {
+        return { error: "assets were sent but the manifest has no assets binding" };
+    }
+
+    if (!isRecord(raw) || !Array.isArray(raw["files"]) || raw["files"].length === 0) {
+        return { error: "assets.files must be a non-empty array" };
+    }
+
+    const { files: entries } = raw;
+
+    if (entries.length > MAX_ASSET_FILES) {
+        return { error: `assets carry ${String(entries.length)} files; the limit is ${String(MAX_ASSET_FILES)}` };
+    }
+
+    const files: AssetFile[] = [];
+    const paths = new Set<string>();
+    let total = 0;
+
+    for (const [index, entry] of entries.entries()) {
+        const parsed = parseAssetFile(entry, index);
+
+        if ("error" in parsed) {
+            return parsed;
+        }
+
+        const { content, path } = parsed.value;
+
+        if (paths.has(path)) {
+            return { error: `asset path ${path} appears more than once` };
+        }
+
+        total += base64Bytes(content);
+
+        if (total > MAX_ASSETS_BYTES) {
+            return { error: `assets exceed the ${String(MAX_ASSETS_BYTES)}-byte total limit` };
+        }
+
+        paths.add(path);
+        files.push({ content, path });
+    }
+
+    const config = parseAssetsConfig(raw["config"]);
+
+    if ("error" in config) {
+        return config;
+    }
+
+    return { value: { files, ...(config.value ? { config: config.value } : {}) } };
+};
+
+const parsePayload = (body: DeployBody): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
+    const manifest = parseManifest(body.manifest);
+
+    if ("error" in manifest) {
+        return manifest;
+    }
+
+    const assets = parseAssets(body.assets, manifest.value);
+
+    return "error" in assets ? assets : { value: { assets: assets.value, manifest: manifest.value } };
+};
+
+/**
+ * Read the JSON body, refusing anything over {@link MAX_BODY_BYTES} — checked
+ * against `content-length` first so an honest oversized upload is refused
+ * unread, then against the bytes actually read, since a chunked body has no
+ * declared length.
+ */
+const readBody = async (request: Request): Promise<{ body: DeployBody } | { response: Response }> => {
+    const tooLarge = { response: json(413, { error: `request body exceeds ${String(MAX_BODY_BYTES)} bytes` }) };
+    const declared = Number(request.headers.get("content-length") ?? Number.NaN);
+
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+        return tooLarge;
+    }
+
+    const bytes = await request.arrayBuffer();
+
+    if (bytes.byteLength > MAX_BODY_BYTES) {
+        return tooLarge;
+    }
+
+    try {
+        const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+
+        return isRecord(parsed) ? { body: parsed } : { response: json(400, { error: "request body must be a JSON object" }) };
+    } catch {
+        return { response: json(400, { error: "invalid JSON body" }) };
+    }
+};
 
 /**
  * Deploy kinds ordered by privilege, least to most.
@@ -229,11 +568,12 @@ interface DeployTelemetry {
  */
 const buildDeploymentSpec = (input: {
     adminToken: string;
-    bindings: TenantBindingSpec | undefined;
+    assets: AssetsUpload | undefined;
     bundle: ArrayBuffer;
     cell: string;
     dispatchNamespace: string;
     kind: string;
+    manifest: DeployManifest;
     organizationId: string;
     projectId: string; // gitleaks:allow -- a field declaration; the scanner matches the Cypress project-id shape
     releaseScriptName: string;
@@ -248,10 +588,11 @@ const buildDeploymentSpec = (input: {
         // persists across deploys; the versioned releaseScriptName is the
         // immutable per-deployment worker script id.
         alias: input.scriptName,
-        bindings: normalizeBindings(input.bindings),
+        ...(input.assets ? { assets: input.assets } : {}),
         bundle: input.bundle,
         cell: input.cell,
         dispatchNamespace: input.dispatchNamespace,
+        manifest: input.manifest,
         scriptName: input.releaseScriptName,
         secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
         ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
@@ -273,13 +614,13 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         return json(403, { error: "invalid or revoked deploy key" });
     }
 
-    let body: DeployBody;
+    const read = await readBody(request);
 
-    try {
-        body = await request.json();
-    } catch {
-        return json(400, { error: "invalid JSON body" });
+    if ("response" in read) {
+        return read.response;
     }
+
+    const { body } = read;
 
     if (!body.projectId || !body.scriptName) {
         return json(400, { error: "projectId and scriptName are required" });
@@ -315,6 +656,15 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             error: `this deploy key is scoped to ${target.type} and cannot deploy ${kind}. Issue a ${kind} key, or deploy with kind "${target.type}".`,
         });
     }
+
+    // Refused here, before a deployment row exists or anything is provisioned.
+    const payload = parsePayload(body);
+
+    if ("error" in payload) {
+        return json(400, { error: payload.error });
+    }
+
+    const { assets, manifest } = payload.value;
     const { branch, projectId, scriptName } = body;
     // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.
     const cronSpecs = Array.isArray(body.cronSpecs) ? body.cronSpecs.filter((cron): cron is string => typeof cron === "string").slice(0, 50) : undefined;
@@ -404,11 +754,12 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             const spec = buildDeploymentSpec({
                 adminToken,
-                bindings: body.bindings,
+                assets,
                 bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 kind,
+                manifest,
                 organizationId: target.organizationId,
                 projectId,
                 releaseScriptName,
