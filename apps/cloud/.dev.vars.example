@@ -10,8 +10,10 @@ AUTH_SECRET=replace-with-openssl-rand-hex-32
 # the request origin when unset (fine for local dev on a single origin).
 # AUTH_URL=http://localhost:5174
 
-# Cloudflare API token for the cell's account — used by the provisioner to
-# create D1/R2 and upload tenant Workers into the dispatch namespace.
+# Cloudflare API token for the cell's account. Forwarded into the provision box
+# (Alchemy 2), which creates tenant resources and uploads tenant Workers into
+# the dispatch namespace; the box refuses to start without it. Also used for the
+# D1 backup export and Analytics Engine reads.
 CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 
 # Control-plane backups (GAPS.md D1). The export REST call addresses the database

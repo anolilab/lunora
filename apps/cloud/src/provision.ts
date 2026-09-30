@@ -1,56 +1,21 @@
 /**
- * `@lunora/provision` — the control plane's coupling to the deploy substrate
- *. The provisioner converges a tenant deployment into a
- * Workers-for-Platforms dispatch namespace. It talks to Cloudflare only through
- * the injected {@link CloudflareApi} port, so the orchestration is unit-testable
- * with a fake and the live wire protocol lives in `src/cloudflare/api.ts`.
+ * The control plane's coupling to the deploy substrate. The provisioner
+ * converges a tenant release into a Workers-for-Platforms dispatch namespace by
+ * posting a {@link ProvisionJob} to the provision box (`lunora/containers.ts`),
+ * which runs Alchemy 2 with the cell's Cloudflare token, and reading its
+ * {@link ProvisionEvent} NDJSON back.
  *
- * (We provision via the documented Cloudflare REST API rather than the
- * unverified `alchemy@next` beta — see the note in §2.2. The port boundary means
- * an Alchemy-backed implementation can replace `createHttpCloudflareApi` later
- * with no change above this module.)
+ * The box is reached through a container handle, so the orchestration is
+ * unit-testable with a fake `fetch` and no Cloudflare credentials.
  */
-import type { CloudflareApi, ScriptBinding } from "./cloudflare/api";
+import type { ContainerAccessor, ContainerHandle } from "@lunora/container";
+import { containerBindingName, createContainerContext } from "@lunora/container";
+import { LunoraError } from "@lunora/server";
+
+import { provisionBox } from "../lunora/containers";
 import { sha256HexBytes } from "./deploy/keys";
-
-/** Per-tenant bindings to provision alongside a tenant Worker (§2.1). */
-export interface TenantBindingSpec {
-    /** Provision (or reuse) a per-tenant D1 database under this binding name. */
-    d1?: { binding: string };
-    /** Durable Object classes the tenant bundle exports (ShardDO / SessionDO …). */
-    durableObjects?: { binding: string; className: string }[];
-    /** Provision (or reuse) a per-tenant R2 bucket under this binding name. */
-    r2?: { binding: string };
-}
-
-/** A single managed-tier deployment to converge into a dispatch namespace. */
-export interface TenantDeploymentSpec {
-    /**
-     * The project's stable label (its public subdomain), shared by every
-     * version of the project. Per-tenant D1/R2 are named from this — NOT from
-     * the versioned {@link scriptName} — so a tenant's `.global()` data persists
-     * across deploys and a rollback sees the same database.
-     */
-    alias: string;
-    /** Bindings to attach in the script-upload metadata. */
-    bindings: TenantBindingSpec;
-    /** Prebuilt worker bundle (output of the app's Vite pipeline — never built here). */
-    bundle: ArrayBuffer;
-    /** Which cell (Cloudflare account) hosts this tenant (§2.5). */
-    cell: string;
-    /** Dispatch namespace to deploy into (e.g. `lunora-production`). */
-    dispatchNamespace: string;
-    /** Dispatch-namespace script id. */
-    scriptName: string;
-    /** Per-deployment secrets, applied via the WfP script-secrets API. */
-    secrets: Record<string, string>;
-    /** Lifecycle tags: `org:…`, `project:…`, `env:…`, `plan:…` (§2.1). */
-    tags: string[];
-    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
-    tailConsumers?: string[];
-    /** Plain (non-secret) env vars, e.g. `LUNORA_OTLP_ENDPOINT`. */
-    vars?: Record<string, string>;
-}
+import readNdjson from "./lib/read-ndjson";
+import type { ProvisionEvent, ProvisionJob, TenantDeploymentSpec } from "./provision-contract";
 
 export interface ProvisionResult {
     bundleHash: string;
@@ -58,16 +23,12 @@ export interface ProvisionResult {
     url: string;
 }
 
-/**
- * Per-tenant resource names, derived from the (unique, versioned) script id.
- * The provisioner creates resources under these names and teardown deletes them
- * under the same names — the convention is the contract, so both sides call
- * these helpers rather than inlining the suffix (no drift).
- */
-export const tenantD1Name = (scriptName: string): string => `${scriptName}-db`;
-export const tenantR2Bucket = (scriptName: string): string => `${scriptName}-files`;
-
+/** A release to tear down (preview TTL cleanup, version prune, project deletion). */
 export interface DestroyRef {
+    /** The project label; keys the project stack whose resources {@link deleteResources} removes. */
+    alias: string;
+    /** Also destroy the project stack (D1, R2, KV, queues …) — only when this is the alias's last deployment. */
+    deleteResources: boolean;
     dispatchNamespace: string;
     scriptName: string;
 }
@@ -75,81 +36,122 @@ export interface DestroyRef {
 export interface Provisioner {
     /** Converge a tenant deployment (create/update). Safe to retry. */
     deploy: (spec: TenantDeploymentSpec) => Promise<ProvisionResult>;
-    /** Tear a deployment down (preview TTL cleanup, project deletion). */
+    /** Tear a release down, and its project's resources when {@link DestroyRef.deleteResources}. */
     destroy: (reference: DestroyRef) => Promise<void>;
 }
 
-export interface CloudflareProvisionerOptions {
-    /** The Cloudflare API port (HTTP impl in `src/cloudflare/api.ts`). */
-    api: CloudflareApi;
-    /** Entry module name inside the uploaded bundle. Defaults to `index.js`. */
-    mainModule?: string;
+export interface AlchemyProvisionerOptions {
+    /** The provision box; one instance per project (`.get(alias)`) serializes a project's jobs. */
+    box: { get: (name: string) => Pick<ContainerHandle, "fetch"> };
+    /** Receives each `log` line the box emits, in order. */
+    onLog?: (line: string) => Promise<void> | void;
     /** Maps a script id to its public URL (routed via the dispatcher). */
     urlForScript: (scriptName: string) => string;
 }
 
-/**
- * Provisioner backed by the Cloudflare REST API. `deploy` provisions the per-
- * tenant resources the bindings call for (D1, R2), uploads the user Worker into
- * the dispatch namespace with the binding + DO-migration metadata, applies
- * secrets, and returns the content hash + routed URL. `destroy` removes the
- * script.
- */
-export const createCloudflareProvisioner = (options: CloudflareProvisionerOptions): Provisioner => {
-    const { api, urlForScript } = options;
-    const mainModule = options.mainModule ?? "index.js";
+/** The provision box accessor off a Worker env that carries its `CONTAINER_PROVISION_BOX` binding. */
+export const provisionBoxFrom = (env: Record<string, unknown>): ContainerAccessor =>
+    createContainerContext(env, [{ binding: containerBindingName("provisionBox"), exportName: "provisionBox", maxInstances: provisionBox.maxInstances }])
+        .provisionBox;
 
+/** Base64 for the job body — chunked, since spreading a whole bundle into `fromCharCode` overflows the stack. */
+const toBase64 = (data: ArrayBuffer): string => {
+    const bytes = new Uint8Array(data);
+    let binary = "";
+
+    for (let offset = 0; offset < bytes.length; offset += 0x80_00) {
+        binary += String.fromCodePoint(...bytes.subarray(offset, offset + 0x80_00));
+    }
+
+    return btoa(binary);
+};
+
+/**
+ * Post one job and read the box's NDJSON to its single terminal event.
+ *
+ * A 409 is the box saying a job for this project is already running: retryable,
+ * surfaced as `SERVICE_UNAVAILABLE` so the caller can tell it from a failure.
+ */
+const runJob = async (handle: Pick<ContainerHandle, "fetch">, job: ProvisionJob, onLog: AlchemyProvisionerOptions["onLog"]): Promise<{ url?: string }> => {
+    const response = await handle.fetch("/__lunora/provision", { body: JSON.stringify(job), headers: { "content-type": "application/json" }, method: "POST" });
+
+    if (response.status === 409) {
+        throw new LunoraError("SERVICE_UNAVAILABLE", "the provision box is busy with another job for this project; retry shortly");
+    }
+
+    if (!response.ok || response.body === null) {
+        throw new LunoraError("INTERNAL", `provision box answered ${String(response.status)}`);
+    }
+
+    let result: { url?: string } | undefined;
+    let failure: string | undefined;
+
+    await readNdjson(response.body, async (line) => {
+        let event: ProvisionEvent;
+
+        try {
+            event = JSON.parse(line) as ProvisionEvent;
+        } catch {
+            await onLog?.(`provision box emitted a line that was not JSON: ${line.slice(0, 200)}`);
+
+            return;
+        }
+
+        switch (event.type) {
+            case "error": {
+                failure = event.message;
+                break;
+            }
+            case "log": {
+                await onLog?.(event.line);
+                break;
+            }
+            case "result": {
+                result = event.url === undefined ? {} : { url: event.url };
+                break;
+            }
+            default:
+        }
+    });
+
+    if (failure !== undefined) {
+        throw new LunoraError("INTERNAL", failure);
+    }
+
+    if (result === undefined) {
+        // The box died mid-job (OOM, eviction): the stream closed with no verdict.
+        throw new LunoraError("INTERNAL", "the provision box closed the stream without a result or an error");
+    }
+
+    return result;
+};
+
+/** Provisioner backed by the Alchemy provision box. */
+export const createAlchemyProvisioner = (options: AlchemyProvisionerOptions): Provisioner => {
     return {
         deploy: async (spec) => {
-            const bindings: ScriptBinding[] = [];
+            const { bundle, ...rest } = spec;
+            const [bundleHash] = await Promise.all([
+                sha256HexBytes(bundle),
+                runJob(options.box.get(spec.alias), { action: "deploy", spec: { ...rest, bundle: toBase64(bundle) } }, options.onLog),
+            ]);
 
-            if (spec.bindings.d1) {
-                // Per-project (alias-keyed), find-or-create: a re-deploy of the
-                // same project reuses its existing database so tenant `.global()`
-                // data persists across versions.
-                const databaseName = tenantD1Name(spec.alias);
-                const existing = await api.findD1DatabaseByName(databaseName);
-                // `??` still short-circuits: the create only runs when the lookup missed.
-                const database = existing ?? (await api.createD1Database(databaseName));
-                const { uuid } = database;
-
-                bindings.push({ id: uuid, name: spec.bindings.d1.binding, type: "d1" });
-            }
-
-            if (spec.bindings.r2) {
-                // Per-project (alias-keyed); createR2Bucket tolerates "already
-                // exists" so a re-deploy reuses the project's bucket.
-                const bucketName = tenantR2Bucket(spec.alias);
-
-                await api.createR2Bucket(bucketName);
-                bindings.push({ bucket_name: bucketName, name: spec.bindings.r2.binding, type: "r2_bucket" });
-            }
-
-            const durableObjects = spec.bindings.durableObjects ?? [];
-
-            for (const durableObject of durableObjects) {
-                bindings.push({ class_name: durableObject.className, name: durableObject.binding, type: "durable_object_namespace" });
-            }
-
-            await api.putDispatchScript({
-                bindings,
-                bundle: spec.bundle,
-                mainModule,
-                namespace: spec.dispatchNamespace,
-                newSqliteClasses: durableObjects.map((durableObject) => durableObject.className),
-                scriptName: spec.scriptName,
-                ...(spec.tailConsumers ? { tailConsumers: spec.tailConsumers } : {}),
-                tags: spec.tags,
-                ...(spec.vars ? { vars: spec.vars } : {}),
-            });
-
-            for (const [name, text] of Object.entries(spec.secrets)) {
-                // eslint-disable-next-line no-await-in-loop -- secrets applied sequentially; the set is small
-                await api.putSecret({ name, namespace: spec.dispatchNamespace, scriptName: spec.scriptName, text });
-            }
-
-            return { bundleHash: await sha256HexBytes(spec.bundle), scriptName: spec.scriptName, url: urlForScript(spec.scriptName) };
+            // The dispatcher's URL, not the box's: tenants are reached through the
+            // dispatcher, so a box-reported `workers.dev` URL is not the public one.
+            return { bundleHash, scriptName: spec.scriptName, url: options.urlForScript(spec.scriptName) };
         },
-        destroy: (reference) => api.deleteDispatchScript({ namespace: reference.dispatchNamespace, scriptName: reference.scriptName }),
+        destroy: async (reference) => {
+            await runJob(
+                options.box.get(reference.alias),
+                {
+                    action: "destroy",
+                    alias: reference.alias,
+                    deleteProjectResources: reference.deleteResources,
+                    dispatchNamespace: reference.dispatchNamespace,
+                    scriptName: reference.scriptName,
+                },
+                options.onLog,
+            );
+        },
     };
 };

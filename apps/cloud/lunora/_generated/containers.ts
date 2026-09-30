@@ -15,7 +15,7 @@
  */
 import { LunoraContainer } from "@lunora/container/do";
 
-import { buildBox } from "../containers.js";
+import { buildBox, provisionBox } from "../containers.js";
 
 export { ContainerProxy } from "@lunora/container/do";
 
@@ -23,5 +23,12 @@ export { ContainerProxy } from "@lunora/container/do";
 export class BuildBoxContainer extends LunoraContainer {
     public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
         super(ctx, env, buildBox, "buildBox");
+    }
+}
+
+/** Container DO for the `provisionBox` definition (binding `CONTAINER_PROVISION_BOX`). */
+export class ProvisionBoxContainer extends LunoraContainer {
+    public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
+        super(ctx, env, provisionBox, "provisionBox");
     }
 }

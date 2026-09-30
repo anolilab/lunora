@@ -20,6 +20,10 @@
                 "class_name": "BuildBoxContainer",
                 "name": "CONTAINER_BUILD_BOX",
             },
+            {
+                "class_name": "ProvisionBoxContainer",
+                "name": "CONTAINER_PROVISION_BOX",
+            },
         ],
     },
     "migrations": [
@@ -36,6 +40,12 @@
             // others — `@cloudflare/containers` keeps its instance state there.
             "new_sqlite_classes": ["BuildBoxContainer"],
             "tag": "v3",
+        },
+        {
+            // The provision box's Container DO (Alchemy 2, holds the cell's
+            // Cloudflare token — see lunora/containers.ts).
+            "new_sqlite_classes": ["ProvisionBoxContainer"],
+            "tag": "v4",
         },
     ],
     "d1_databases": [
@@ -57,12 +67,11 @@
     // dev server that won't boot. Tenant fan-out is inert locally either way;
     // exercise it against a WfP-enabled account.
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
-    // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
-    // WfP, so the control plane drains a shared queue and forwards each message to
-    // its tenant's /_lunora/queue. Tenant producers tag messages with their script.
-    "queues": {
-        "consumers": [{ "queue": "lunora-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
-    },
+    // No `queues.consumers` here on purpose (§2.4): tenants can't be queue
+    // consumers under WfP, so the provision box attaches THIS Worker as the
+    // consumer of each per-project queue it creates, by API, and `queue()` in
+    // src/server.ts routes by queue name. The set is per tenant and changes with
+    // every deploy, so it cannot live in static config.
     "triggers": {
         // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
         // usage rollup). `* * * * *` drives the tenant cron fan-out — the fan-out
@@ -75,6 +84,10 @@
         // Cell id + the apex the dispatcher routes tenant scripts under.
         "LUNORA_CELL": "default",
         "LUNORA_APP_DOMAIN": "lunora.app",
+        // This Worker's own script name, forwarded to the provision box so it can
+        // attach this Worker as each per-project queue's consumer. Wrangler
+        // suffixes the env name, so every cell below restates it.
+        "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud",
         // This cell's public OTLP ingest base — injected into every tenant Worker
         // as `LUNORA_OTLP_ENDPOINT` (+ a scoped `LUNORA_OTLP_TOKEN` secret) so its
         // `otlpSink` ships traces/logs/metrics back here. Set to this cloud
@@ -169,7 +182,7 @@
     // always passes `--env`, so a deploy names the cell it is going to.
     //
     // Cloudflare does NOT inherit resource bindings into a named environment —
-    // `vars`, `d1_databases`, `r2_buckets`, `queues`, `durable_objects`,
+    // `vars`, `d1_databases`, `r2_buckets`, `containers`, `durable_objects`,
     // `dispatch_namespaces`, `analytics_engine_datasets`, `pipelines`, `ai` and
     // `version_metadata` all have to be restated. That is why these blocks are
     // long rather than a diff against the top level; a key omitted here is a
@@ -179,7 +192,7 @@
     // The `<replace-with-…>` ids are real blockers, not decoration: the deploy
     // workflow greps the resolved environment for them and refuses to publish
     // while any remain. Create the resources once per cell
-    // (`wrangler d1 create`, `wrangler r2 bucket create`, `wrangler queues create`,
+    // (`wrangler d1 create`, `wrangler r2 bucket create`,
     // `wrangler pipelines create`) and paste the ids in.
     "env": {
         "staging": {
@@ -194,12 +207,14 @@
                     { "class_name": "ShardDO", "name": "SHARD" },
                     { "class_name": "SchedulerDO", "name": "SCHEDULER" },
                     { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
+                    { "class_name": "ProvisionBoxContainer", "name": "CONTAINER_PROVISION_BOX" },
                 ],
             },
             "migrations": [
                 { "new_sqlite_classes": ["ShardDO"], "tag": "v1" },
                 { "new_sqlite_classes": ["SchedulerDO"], "tag": "v2" },
                 { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
+                { "new_sqlite_classes": ["ProvisionBoxContainer"], "tag": "v4" },
             ],
             // Repeated per cell on purpose: wrangler does NOT inherit
             // `containers` into an environment, so a top-level-only entry
@@ -215,15 +230,22 @@
                     "instance_type": "standard-2",
                     "max_instances": 5,
                 },
+                {
+                    "class_name": "ProvisionBoxContainer",
+                    "image": "./containers/provision/Dockerfile",
+                    "image_build_context": "./containers/provision",
+                    "instance_type": "basic",
+                    "max_instances": 3,
+                },
             ],
             "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-staging-d1-id>", "database_name": "lunora-cloud-staging" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
-            "queues": { "consumers": [{ "max_batch_size": 100, "max_batch_timeout": 5, "queue": "lunora-tenant-queue-staging" }] },
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
                 "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
                 "LUNORA_APP_DOMAIN": "staging.lunora.app",
                 "LUNORA_CELL": "staging",
+                "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-staging",
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-staging-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.
@@ -251,12 +273,14 @@
                     { "class_name": "ShardDO", "name": "SHARD" },
                     { "class_name": "SchedulerDO", "name": "SCHEDULER" },
                     { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
+                    { "class_name": "ProvisionBoxContainer", "name": "CONTAINER_PROVISION_BOX" },
                 ],
             },
             "migrations": [
                 { "new_sqlite_classes": ["ShardDO"], "tag": "v1" },
                 { "new_sqlite_classes": ["SchedulerDO"], "tag": "v2" },
                 { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
+                { "new_sqlite_classes": ["ProvisionBoxContainer"], "tag": "v4" },
             ],
             // Repeated per cell on purpose: wrangler does NOT inherit
             // `containers` into an environment, so a top-level-only entry
@@ -272,15 +296,22 @@
                     "instance_type": "standard-2",
                     "max_instances": 5,
                 },
+                {
+                    "class_name": "ProvisionBoxContainer",
+                    "image": "./containers/provision/Dockerfile",
+                    "image_build_context": "./containers/provision",
+                    "instance_type": "basic",
+                    "max_instances": 3,
+                },
             ],
             "d1_databases": [{ "binding": "DB", "database_id": "<replace-with-production-d1-id>", "database_name": "lunora-cloud" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
-            "queues": { "consumers": [{ "max_batch_size": 100, "max_batch_timeout": 5, "queue": "lunora-tenant-queue" }] },
             "triggers": { "crons": ["0 */1 * * *", "*/1 * * * *", "0 */6 * * *"] },
             "vars": {
                 "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
                 "LUNORA_APP_DOMAIN": "lunora.app",
                 "LUNORA_CELL": "default",
+                "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-production",
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-production-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
                 // callbacks here, and refuses to schedule at all without it.
@@ -311,6 +342,13 @@
             "image_build_context": "./containers/build",
             "instance_type": "standard-2",
             "max_instances": 5,
+        },
+        {
+            "class_name": "ProvisionBoxContainer",
+            "image": "./containers/provision/Dockerfile",
+            "image_build_context": "./containers/provision",
+            "instance_type": "basic",
+            "max_instances": 3,
         },
     ],
 }

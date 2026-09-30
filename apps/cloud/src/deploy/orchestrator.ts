@@ -1,4 +1,5 @@
-import type { Provisioner, ProvisionResult, TenantDeploymentSpec } from "../provision";
+import type { DestroyRef, Provisioner, ProvisionResult } from "../provision";
+import type { TenantDeploymentSpec } from "../provision-contract";
 import type { CellScheduler } from "./scheduler";
 
 /**
@@ -9,7 +10,7 @@ import type { CellScheduler } from "./scheduler";
  * concern; the platform's phases are queued → provisioning → live / failed.
  *
  * The actual Cloudflare work is paced through the cell's {@link CellScheduler}
- * and executed by the {@link Provisioner} (Alchemy v2). Both are injected, so a
+ * and executed by the {@link Provisioner} (the Alchemy 2 provision box). Both are injected, so a
  * deployment can be driven end-to-end in tests with a fake provisioner.
  */
 
@@ -78,7 +79,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
  * project deletion). Lower default priority than a deploy.
  */
 export const destroyDeployment = async (
-    reference: { dispatchNamespace: string; scriptName: string },
+    reference: DestroyRef,
     options: { priority?: number; provisioner: Provisioner; scheduler: CellScheduler },
 ): Promise<void> => {
     await options.scheduler.run(() => options.provisioner.destroy(reference), { priority: options.priority ?? -1 });

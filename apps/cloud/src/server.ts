@@ -28,14 +28,15 @@ import { resolveAdminToken } from "./deploy/admin-token";
 import { runRolloutGuard } from "./deploy/rollout-guard";
 import { createDeployRouter } from "./deploy/router";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
-import { createResourceTeardown, runTeardownSweep } from "./deploy/teardown";
+import { runTeardownSweep } from "./deploy/teardown";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
-import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
-import { fanOutQueue, groupByTenant } from "./fanout/queue";
+import type { QueueRouteCandidate } from "./fanout/queue";
+import { routeQueue } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
+import { createAlchemyProvisioner, provisionBoxFrom } from "./provision";
 import readJson from "./read-json";
 import type { ControlPlaneDatabase } from "./store";
 import { runAlertDrain } from "./telemetry/alert-drain";
@@ -219,10 +220,12 @@ type Env = {
      * token and auth session in the cell, so this bucket must never be public.
      */
     BACKUPS?: BackupBucket;
-    /** Cloudflare account hosting this cell — the teardown sweep's REST target (§2.5). */
+    /** Cloudflare account hosting this cell (§2.5) — the backup/analytics REST target, forwarded to the provision box. */
     CLOUDFLARE_ACCOUNT_ID?: string;
-    /** Scoped Cloudflare API token; absent → resource teardown is skipped. */
+    /** Scoped Cloudflare API token — REST reads here, forwarded to the provision box for provisioning. */
     CLOUDFLARE_API_TOKEN?: string;
+    /** The provision box's Container DO namespace; absent → resource teardown is skipped. */
+    CONTAINER_PROVISION_BOX?: unknown;
 
     /**
      * The control-plane D1's own uuid, which the export REST call addresses.
@@ -311,7 +314,9 @@ interface LiveDeploymentRow {
     adminToken?: string;
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
+    alias?: string;
     cronSpecs?: string[];
+    liveAt?: number;
     scriptName: string;
 }
 
@@ -362,27 +367,28 @@ const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
     createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
 /**
- * Delete the Cloudflare dispatch scripts (+ tenant D1 / best-effort R2) of
+ * Destroy the releases (+ the project stack, on a project's last deployment) of
  * deployments the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1) so
- * dispatch namespaces don't grow unboundedly. No-ops without Cloudflare
- * credentials; the `teardownAt` stamp makes the sweep crash-safe idempotent.
+ * dispatch namespaces don't grow unboundedly. Each teardown is a destroy job on
+ * the provision box. No-ops without the box binding; the `teardownAt` stamp
+ * makes the sweep crash-safe idempotent.
  */
 const sweepTeardown = async (env: Env): Promise<void> => {
-    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+    if (!env.DB || !env.CONTAINER_PROVISION_BOX) {
         return;
     }
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
-    const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
-
-    // script + tenant D1 + tenant R2 (best-effort; a non-empty bucket is logged
-    // and left for a follow-up purge).
-    const destroy = createResourceTeardown(api, (bucket, error) => {
-        // eslint-disable-next-line no-console -- surface non-empty R2 teardown for the follow-up purge
-        console.warn("[teardown] R2 bucket not deleted (needs object purge):", bucket, error);
+    const provisioner = createAlchemyProvisioner({
+        box: provisionBoxFrom(env),
+        onLog: (line) => {
+            // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
+            console.log("[teardown]", line);
+        },
+        urlForScript: (scriptName) => scriptName,
     });
 
-    await runTeardownSweep(teardownPorts(database, destroy, Date.now()));
+    await runTeardownSweep(teardownPorts(database, provisioner.destroy, Date.now()));
 };
 
 /** Epoch ms for the first instant of the current UTC month — the usage period bucket (§4). */
@@ -604,25 +610,6 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_MINUTE, run: sweepRollouts },
 ];
 
-/** Script id → per-deployment admin token (decrypted in-process), for the queue fan-out. */
-const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
-    const live = await readLiveDeployments(env);
-    const resolved = await Promise.all(
-        live.map(async (row) => {
-            return { adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY), scriptName: row.scriptName };
-        }),
-    );
-    const tokens = new Map<string, string>();
-
-    for (const row of resolved) {
-        if (row.adminToken) {
-            tokens.set(row.scriptName, row.adminToken);
-        }
-    }
-
-    return tokens;
-};
-
 /** Tick one tenant's cron over the dispatcher, gated by its admin token. */
 const dispatchCronTick = async (
     dispatcher: NonNullable<Env["DISPATCHER"]>,
@@ -640,15 +627,28 @@ const dispatchCronTick = async (
 };
 
 /**
- * Forward one tenant's queue sub-batch to its `/_lunora/queue` endpoint, gated by
- * its admin token. Returns the message ids the tenant asked to retry; on a
- * delivery failure the whole group is retried (the caller catches the throw).
+ * Forward a batch to its tenant's `/_lunora/queue` endpoint, gated by its admin
+ * token. Returns the message ids the tenant asked to retry; a delivery failure
+ * throws and the caller retries the whole batch.
+ *
+ * ponytail: `queue` is the platform's per-project queue name, not the name the
+ * tenant's wrangler config declared; map it back when a tenant needs to route
+ * several queues by their own names.
  */
-const dispatchQueueBatch = async (dispatcher: NonNullable<Env["DISPATCHER"]>, group: TenantQueueGroup, adminToken: string): Promise<string[]> => {
-    const response = await dispatcher.get(group.script).fetch(
+const dispatchQueueBatch = async (
+    dispatcher: NonNullable<Env["DISPATCHER"]>,
+    target: { adminToken: string; scriptName: string },
+    batch: QueueBatchLike,
+): Promise<string[]> => {
+    const response = await dispatcher.get(target.scriptName).fetch(
         new Request("https://tenant.internal/_lunora/queue", {
-            body: JSON.stringify({ messages: group.messages, queue: "tenant" }),
-            headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+            body: JSON.stringify({
+                messages: batch.messages.map((message) => {
+                    return { body: message.body, id: message.id };
+                }),
+                queue: batch.queue,
+            }),
+            headers: { authorization: `Bearer ${target.adminToken}`, "content-type": "application/json" },
             method: "POST",
         }),
     );
@@ -665,16 +665,33 @@ const dispatchQueueBatch = async (dispatcher: NonNullable<Env["DISPATCHER"]>, gr
 
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 interface QueueBatchLike {
-    messages: ReadonlyArray<QueueMessage & { ack: () => void; retry: () => void }>;
+    messages: ReadonlyArray<{ ack: () => void; body: unknown; id: string; retry: () => void }>;
     queue: string;
 }
 
+/** The live deployment that owns a per-project queue, with its admin token decrypted in-process. */
+const readQueueTarget = async (env: Env, queue: string): Promise<undefined | { adminToken: string; scriptName: string }> => {
+    const live = await readLiveDeployments(env);
+    const target = routeQueue(
+        queue,
+        live.filter((row): row is LiveDeploymentRow & QueueRouteCandidate => row.alias !== undefined),
+    );
+
+    if (!target) {
+        return undefined;
+    }
+
+    const adminToken = await resolveAdminToken(target, env.SECRET_ENCRYPTION_KEY);
+
+    return adminToken ? { adminToken, scriptName: target.scriptName } : undefined;
+};
+
 /**
  * The platform-owned queue consumer (§2.4). WfP tenants can't be queue
- * consumers, so this account-level handler drains the shared queue, groups by
- * the producing tenant's script, and forwards each sub-batch to that tenant's
- * `/_lunora/queue` (admin tokens resolved in-process). Per the tenant's reply
- * (or a delivery failure) it retries only the failed messages.
+ * consumers, so the provision box attaches this Worker to every per-project
+ * queue it creates. A batch comes from one queue, so it routes whole: queue name
+ * → alias → the alias's live release (see `src/fanout/queue.ts`). Per the
+ * tenant's reply (or a delivery failure) it retries only the failed messages.
  */
 const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> => {
     if (!env.DISPATCHER) {
@@ -685,34 +702,22 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
         return;
     }
 
-    const dispatcher = env.DISPATCHER;
-    const tokens = await readDeploymentTokens(env);
-    const { groups, unrouted } = groupByTenant(
-        batch.messages.map((message) => {
-            return { body: message.body, id: message.id };
-        }),
-    );
-    const unroutedSet = new Set(unrouted);
+    const target = await readQueueTarget(env, batch.queue);
 
-    // A group whose tenant has no live deployment (or token) can't be delivered;
-    // treat its ids as unrouted (ack — retrying would loop) rather than retry.
-    const deliverable = groups.filter((group) => tokens.has(group.script));
+    // No live release (or token) owns this queue: acked, since retrying an
+    // undeliverable message would only loop until it hits the retry limit.
+    let retry = new Set<string>();
 
-    for (const group of groups) {
-        if (!tokens.has(group.script)) {
-            for (const message of group.messages) {
-                unroutedSet.add(message.id);
-            }
+    if (target) {
+        try {
+            retry = new Set(await dispatchQueueBatch(env.DISPATCHER, target, batch));
+        } catch {
+            retry = new Set(batch.messages.map((message) => message.id));
         }
     }
 
-    const { retry } = await fanOutQueue({
-        dispatch: (group) => dispatchQueueBatch(dispatcher, group, tokens.get(group.script) as string),
-        groups: deliverable,
-    });
-
     for (const message of batch.messages) {
-        if (retry.has(message.id) && !unroutedSet.has(message.id)) {
+        if (retry.has(message.id)) {
             message.retry();
         } else {
             message.ack();

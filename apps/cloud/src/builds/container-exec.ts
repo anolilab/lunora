@@ -9,6 +9,7 @@
  */
 import { LunoraError } from "@lunora/server";
 
+import readNdjson from "../lib/read-ndjson";
 import type { BuildExecution } from "./runner";
 
 /**
@@ -56,10 +57,6 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
  * output in `buildLogs` while it is still running — the live tail the Studio's
  * Builds tab is built around — and it sidesteps the exec contract's 1MB
  * response cap, which a real build log passes easily.
- *
- * `TextDecoder` with `{ stream: true }` rather than `TextDecoderStream`: the
- * latter is not in the Node floor this package declares, and a multi-byte
- * character split across two chunks has to survive either way.
  */
 export const executeInContainer = async (
     handle: { fetch: (path: string, init?: RequestInit) => Promise<Response> },
@@ -72,33 +69,11 @@ export const executeInContainer = async (
         throw new LunoraError("INTERNAL", `build box answered ${String(response.status)}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
     let execution: BuildExecution | undefined;
 
-    // Read to the end even after the bundle arrives: abandoning the stream
-    // cancels the container's response, and the last lines — the ones
-    // explaining a failure — are exactly the ones that would be lost.
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- reading a stream is inherently sequential
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        buffered += decoder.decode(value, { stream: true });
-
-        const lines = buffered.split("\n");
-
-        buffered = lines.pop() ?? "";
-
-        for (const line of lines.filter((candidate) => candidate.trim() !== "")) {
-            // eslint-disable-next-line no-await-in-loop -- log lines must land in order
-            execution = (await consumeBuildLine(line, onLine)) ?? execution;
-        }
-    }
+    await readNdjson(response.body, async (line) => {
+        execution = (await consumeBuildLine(line, onLine)) ?? execution;
+    });
 
     if (execution === undefined) {
         // The stream ended with neither a bundle nor an error: the container

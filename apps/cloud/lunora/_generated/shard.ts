@@ -75,6 +75,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "3dad7811
 /** Wiring specs for `ctx.containers` (codegen-derived from `lunora/containers.ts`). */
 const LUNORA_CONTAINERS: ReadonlyArray<ContainerBindingSpec> = [
     { binding: "CONTAINER_BUILD_BOX", exportName: "buildBox", maxInstances: 5 },
+    { binding: "CONTAINER_PROVISION_BOX", exportName: "provisionBox", maxInstances: 3 },
 ];
 
 export interface ShardDOConfig {

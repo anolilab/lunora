@@ -137,17 +137,31 @@ inside each mutation (deploy key or membership).
 
 ### The provisioning seam (`src/provision.ts`)
 
-By design, the control plane's only coupling to the deploy
-substrate lives behind the `Provisioner` interface. The shipped implementation
-(`createCloudflareProvisioner`) talks to Cloudflare through the injected
-`CloudflareApi` port (`src/cloudflare/api.ts`) over the **documented REST API**:
-`deploy` provisions per-tenant D1/R2, uploads the user Worker into the dispatch
-namespace with binding + DO-migration metadata, applies secrets, and returns the
-content hash + routed URL; `destroy` removes the script. The port boundary keeps
-orchestration unit-testable with a fake, and means an `alchemy@next`-backed
-implementation could replace `createHttpCloudflareApi` later with no change above
-this module. (What still needs a live account is end-to-end validation against
-real Cloudflare — the wire calls themselves are implemented, not stubbed.)
+The control plane's only coupling to the deploy substrate is the `Provisioner`
+interface. `createAlchemyProvisioner` implements it by posting a `ProvisionJob`
+(`src/provision-contract.ts`) to the **provision box** — a trusted container
+declared in `lunora/containers.ts` running **Alchemy 2** — and reading its NDJSON
+reply: `log` lines go to Workers Logs, and exactly one `result` or `error` ends
+the job. `deploy` converges the project's resources and uploads the release into
+the dispatch namespace; `destroy` removes a release, and the project's resources
+with its last one. One box instance per project (`.get(alias)`) serializes a
+project's jobs; a busy box answers 409, surfaced as a retryable error.
+
+Why a container and not the Worker: Alchemy wants a Node process with a
+filesystem for its state and the full SDK surface, and a converge over many
+resources outlives what a request should hold. Why not the build box: that one
+runs untrusted tenant code (`postinstall`, build scripts) and must never share a
+machine with the cell's Cloudflare API token. The provision box runs only our
+code, with egress limited to the Cloudflare API, and receives
+`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` from the Worker's env at start. That
+token therefore needs edit rights on everything the box creates: Workers Scripts
+(dispatch namespaces), D1, R2, Workers KV, Queues and Analytics Engine.
+
+What each binding type gets (provisioned, bound, routed or refused) is
+`BINDING_SUPPORT` in the contract; GAPS.md has the table. Queue consumers are
+routed: the box attaches this Worker as the consumer of each per-project queue,
+and `queue()` in `src/server.ts` forwards the batch to the owning project's live
+release.
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 
@@ -527,7 +541,6 @@ resource id or hostname belongs. Create the resources, then paste the ids in:
 # Per environment; drop the -staging suffix for production.
 wrangler d1 create lunora-cloud-staging
 wrangler r2 bucket create lunora-cloud-telemetry-staging
-wrangler queues create lunora-tenant-queue-staging
 wrangler pipelines create lunora-cloud-telemetry-staging
 ```
 

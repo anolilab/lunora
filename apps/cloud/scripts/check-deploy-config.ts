@@ -99,7 +99,6 @@ if (findings.length > 0) {
             "Create the resources once per cell and paste the ids in:",
             "  wrangler d1 create lunora-cloud[-staging]",
             "  wrangler r2 bucket create lunora-cloud-telemetry[-staging]",
-            "  wrangler queues create lunora-tenant-queue[-staging]",
             "  wrangler pipelines create lunora-cloud-telemetry[-staging]",
             "",
             "The control-plane URLs are this cell's own reachable origin (the workers.dev",

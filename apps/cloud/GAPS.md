@@ -19,6 +19,46 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Provisioning pass — 2026-09-30
+
+Tenant provisioning moved off the hand-written REST calls
+(`createCloudflareProvisioner`, D1/R2/DO only) onto **Alchemy 2 in the provision
+box** (`containers/provision/`, driven by `createAlchemyProvisioner` in
+`src/provision.ts`). The deploy handler validates the CLI's binding manifest
+against `BINDING_SUPPORT` in `src/provision-contract.ts`, which is the
+authoritative matrix:
+
+| Binding type       | Support        | How                                                                     |
+| ------------------ | -------------- | ----------------------------------------------------------------------- |
+| `d1`               | provisioned    | per project, `tenantResourceName(alias, binding)`                       |
+| `kv`               | provisioned    | per project                                                             |
+| `r2`               | provisioned    | per project                                                             |
+| `analytics_engine` | provisioned    | per project (`_` separators)                                            |
+| `queue_producer`   | provisioned    | per project; the control plane is attached as its consumer              |
+| `queue_consumer`   | routed         | control-plane `queue()` routes queue name → alias → `/_lunora/queue`    |
+| `durable_object`   | bound          | class lives in the tenant bundle                                        |
+| `workflow`         | bound          | class lives in the tenant bundle                                        |
+| `ai`               | bound          | account capability                                                      |
+| `browser`          | bound          | account capability                                                      |
+| `images`           | bound          | account capability                                                      |
+| `assets`           | bound          | uploaded with the release                                               |
+| `hyperdrive`       | 🔨 unsupported | bring-your-own origin; refused at deploy                                |
+| `vectorize`        | 🔨 unsupported | wrangler.jsonc carries no dimensions/metric; refused at deploy          |
+| `pipeline`         | 🔨 unsupported | wrangler.jsonc carries no stream/sink config; refused at deploy         |
+| `container`        | 🔨 unsupported | needs a per-deploy image build + push WfP cannot run; refused at deploy |
+
+- Two Alchemy stacks per project: `lunora-project-<alias>` owns the provisioned
+  resources, `lunora-release-<scriptName>` one release's Worker. Teardown
+  (`src/deploy/teardown.ts`) sends a destroy job; the project stack goes only
+  with the alias's last deployment, as before.
+- Per-project D1 names changed from `<alias>-db` to `<alias>-<binding>`. No cell
+  had been provisioned, so nothing needed migrating.
+- The shared `lunora-tenant-queue` and its `{ script, body }` envelope are gone:
+  a body-carried address let any tenant enqueue into another tenant's consumer.
+  The route is now the queue name, which the platform chose.
+
+---
+
 ## Status pass — 2026-07-29
 
 A re-verification of every non-✅ item against the code (not against this
