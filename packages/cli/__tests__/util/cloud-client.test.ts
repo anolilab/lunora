@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeployEvent } from "../../src/util/cloud-client";
-import { collectAssets, deployToCloud, rollbackDeployment } from "../../src/util/cloud-client";
+import { collectAssets, deployToCloud, resolveDeployConfigPath, rollbackDeployment } from "../../src/util/cloud-client";
 
 /** The slice of `fetch` these tests actually drive — the real signature is wider. */
 type FetchStub = (url: string, init: RequestInit) => Promise<Response>;
@@ -187,5 +187,35 @@ describe(collectAssets, () => {
         }
 
         expect(() => collectAssets(directory, {})).toThrow(/exceed the 50 MiB upload cap/);
+    });
+});
+
+describe(resolveDeployConfigPath, () => {
+    let directory: string;
+
+    beforeEach(() => {
+        directory = mkdtempSync(join(tmpdir(), "lunora-cloud-redirect-"));
+    });
+
+    afterEach(() => {
+        rmSync(directory, { force: true, recursive: true });
+    });
+
+    it("follows .wrangler/deploy/config.json to the built config", () => {
+        mkdirSync(join(directory, ".wrangler", "deploy"), { recursive: true });
+        mkdirSync(join(directory, "dist", "server"), { recursive: true });
+        writeFileSync(join(directory, "dist", "server", "wrangler.json"), "{}");
+        writeFileSync(join(directory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+
+        expect(resolveDeployConfigPath(directory)).toBe(join(directory, "dist", "server", "wrangler.json"));
+    });
+
+    it("answers undefined without a redirect, or when it points at nothing", () => {
+        expect(resolveDeployConfigPath(directory)).toBeUndefined();
+
+        mkdirSync(join(directory, ".wrangler", "deploy"), { recursive: true });
+        writeFileSync(join(directory, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/missing.json" }));
+
+        expect(resolveDeployConfigPath(directory)).toBeUndefined();
     });
 });

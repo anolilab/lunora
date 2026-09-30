@@ -48,7 +48,10 @@ LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.
 | `--branch`  | Git branch to record against the deployment — what preview URLs are keyed on. |
 | `--url`     | Control-plane API URL, if not using `LUNORA_CLOUD_URL`.                       |
 
-It reads your wrangler config and sends the full **binding manifest** — the
+It reads your wrangler config — the built one a Vite build points
+`.wrangler/deploy/config.json` at when it exists (that is where the Cloudflare
+Vite plugin records your client build as `assets`), otherwise `wrangler.jsonc` —
+and sends the full **binding manifest** — the
 same document `lunora info --bindings` prints: every binding your Worker reads
 off `env` (KV, D1, R2, Durable Objects, queues, Workflows, AI, and the rest),
 plus `compatibility_date` and `compatibility_flags`. The platform provisions or

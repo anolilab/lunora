@@ -6,7 +6,7 @@ import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@luno
 import { dirname, resolve } from "@visulima/path";
 
 import type { DeployEvent, DeployToCloudOptions, WranglerAssets } from "../../util/cloud-client";
-import { collectAssets, deployToCloud, fetchEjectPackage, rollbackDeployment } from "../../util/cloud-client";
+import { collectAssets, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment } from "../../util/cloud-client";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { runEject } from "../../util/eject";
@@ -67,7 +67,8 @@ const defaultDeps = (): CloudCommandDeps => {
         env: process.env,
         readBundleBase64: (path) => readFileSync(path).toString("base64"),
         readWrangler: (cwd) => {
-            const path = findWranglerFile(cwd);
+            // The built config first (a Vite build's resolved, assets-bearing config), then the source one.
+            const path = resolveDeployConfigPath(cwd) ?? findWranglerFile(cwd);
             const config = path === undefined ? undefined : readWranglerJsonc<CloudWranglerConfig>(path).parsed;
 
             return path === undefined || config === undefined ? undefined : { config, path };

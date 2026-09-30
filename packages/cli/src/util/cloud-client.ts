@@ -13,7 +13,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 
 import type { BindingRequirement } from "@lunora/config/cloudflare";
 import { matcher, walkSync } from "@visulima/fs";
-import { join, relative } from "@visulima/path";
+import { dirname, join, relative, resolve } from "@visulima/path";
 
 type DeployEvent = Record<string, unknown>;
 
@@ -318,7 +318,35 @@ const collectAssets = (directory: string, wranglerAssets: WranglerAssets): Asset
     return { ...(Object.keys(config).length > 0 ? { config } : {}), files };
 };
 
-export { collectAssets, deployToCloud, fetchEjectPackage, rollbackDeployment };
+/**
+ * The built deploy config Wrangler would use, when a build left one.
+ *
+ * `@cloudflare/vite-plugin` writes the config it actually deploys to its output
+ * directory — with the `assets` section it infers from the client build and the
+ * `CLOUDFLARE_ENV` environment already applied — and points
+ * `.wrangler/deploy/config.json` at it. The source `wrangler.jsonc` of a Vite app
+ * usually has no `assets` section at all, so reading it would ship the Worker
+ * without its frontend. Wrangler follows the same redirect.
+ */
+const resolveDeployConfigPath = (cwd: string): string | undefined => {
+    const redirect = join(cwd, ".wrangler", "deploy", "config.json");
+
+    if (!existsSync(redirect)) {
+        return undefined;
+    }
+
+    const { configPath } = JSON.parse(readFileSync(redirect, "utf8")) as { configPath?: unknown };
+
+    if (typeof configPath !== "string" || configPath === "") {
+        return undefined;
+    }
+
+    const path = resolve(dirname(redirect), configPath);
+
+    return existsSync(path) ? path : undefined;
+};
+
+export { collectAssets, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment };
 export type {
     AssetFile,
     AssetsUpload,
