@@ -69,4 +69,5 @@ const worker = {
 };
 
 export { ShardDO };
+export { ShardRegistryDO } from "lunorash/do";
 export default worker;

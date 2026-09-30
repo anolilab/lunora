@@ -9,4 +9,6 @@ import { lunora } from "./app";
 const app = lunora.build();
 
 export const ShardDO = app.ShardDO;
+// Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
+export { ShardRegistryDO } from "lunorash/do";
 export default app;

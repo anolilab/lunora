@@ -4,6 +4,7 @@ import { defineApp } from "../lunora/_generated/app.js";
 
 interface Env extends Record<string, unknown> {
     SHARD: ShardNamespaceLike;
+    SHARD_REGISTRY: ShardNamespaceLike;
 }
 
 /**
@@ -19,6 +20,7 @@ interface Env extends Record<string, unknown> {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .shardRegistry((env) => env.SHARD_REGISTRY)
     // Demo/local default: this app has no auth, so shard access is left OPEN
     // (any caller may target any shard). Nothing else guards the data either: the
     // demo schema declares no RLS, so any caller can read and write every row.
@@ -31,4 +33,6 @@ const app = defineApp<Env>()
     .build();
 
 export const ShardDO = app.ShardDO;
+// Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
+export { ShardRegistryDO } from "lunorash/do";
 export default app;

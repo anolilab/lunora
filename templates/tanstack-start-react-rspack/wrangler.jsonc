@@ -10,9 +10,12 @@
     // The client bundle `rsbuild build` writes, served ahead of the Worker.
     "assets": { "directory": "./dist/client" },
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
     // threshold trips, the runaway handler has already run — so a CPU ceiling is
     // one of the few controls that bounds the damage rather than reporting it.
