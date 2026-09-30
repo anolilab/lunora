@@ -45,7 +45,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora follows the shard's CDC changelog into a replica DO placed in the reader's region; the platform replicates for durability, not for reads, so the follow loop is ours",
         },
-        crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
+        crossShardFanout: {
+            level: "emulated",
+            note: "Lunora query coordinator + relay tier over Durable Objects. The shard keys a fan-out reaches come from ShardRegistryDO, which each shard registers with on its first write to a .shardBy() table; a shard written before the registry was bound is not listed until it is written again",
+        },
         queues: { level: "native", note: "Cloudflare Queues" },
         relationGraph: {
             level: "emulated",

@@ -2043,6 +2043,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface ShardRegistry {
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 ```

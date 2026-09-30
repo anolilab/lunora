@@ -39,7 +39,7 @@ const baseOptions = {
     hasVectors: false,
     hasWorkflow: false,
     hasX402: false,
-    tableNames: [],
+    tables: [],
     useUmbrella: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,

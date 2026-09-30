@@ -17,8 +17,11 @@
     "compatibility_flags": ["nodejs_compat"],
     "dev": { "port": 8787 },
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

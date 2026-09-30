@@ -41,6 +41,7 @@ import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
 import { sdkCommand } from "./commands/sdk";
 import { seedCommand } from "./commands/seed";
+import { shardsCommand } from "./commands/shards";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
 import { detectPackageManager } from "./util/detect-package-manager";
@@ -72,6 +73,7 @@ const COMMANDS = [
     "export",
     "import",
     "seed",
+    "shards",
     "backup",
     "eval",
     "verify",
@@ -166,6 +168,7 @@ const CLI_COMMANDS = [
     exportCommand,
     importCommand,
     seedCommand,
+    shardsCommand,
     introspectCommand,
     backupCommand,
     evalCommand,

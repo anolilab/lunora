@@ -555,6 +555,7 @@ const GENERATED_CLASS_MODULES: readonly [
     "agents",
     "containers",
     "scheduler",
+    "shardRegistry",
     "workflows"
 ];
 ```

@@ -1,4 +1,5 @@
 import { readLiveDevServerState } from "@lunora/config";
+import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "./logger";
 
@@ -77,4 +78,30 @@ const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger, cwd?: s
     return normalizeAdminBaseUrl(candidate);
 };
 
-export { normalizeAdminBaseUrl, resolveAdminBaseUrl, resolveDefaultAdminUrl };
+/**
+ * `globalThis.fetch` for the admin commands, with a refused or dropped
+ * connection named. Node reports those as a bare "fetch failed" `TypeError` and
+ * keeps the real reason (`ECONNREFUSED …`) on `cause`, so a stopped dev server
+ * otherwise surfaces as a message that says neither where nor why. Anything else
+ * (an abort, a timeout) is rethrown as it is.
+ *
+ * `init` is the narrow shape every admin command sends, so the one widening to
+ * `RequestInit` lives here: a `Uint8Array` body is `BodyInit` at runtime but not
+ * to TypeScript.
+ */
+const adminFetch = async (input: string, init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string }): Promise<Response> => {
+    try {
+        return await fetch(input, init as RequestInit);
+    } catch (error: unknown) {
+        if (!(error instanceof TypeError)) {
+            throw error;
+        }
+
+        const reason = error.cause instanceof Error ? error.cause.message : error.message;
+        const hint = LOOPBACK_HOSTS.has(new URL(input).hostname) ? " — is the dev server running? Start it, or pass --url to point at the worker" : "";
+
+        throw new LunoraError("INTERNAL", `could not reach ${input} (${reason})${hint}`, { cause: error });
+    }
+};
+
+export { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl, resolveDefaultAdminUrl };

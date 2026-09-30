@@ -42,7 +42,7 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
-import { streamExportRows } from "./export-stream";
+import { prepareExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
@@ -61,6 +61,7 @@ import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
@@ -1235,9 +1236,10 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
 
     /**
-     * Coordinator for cross-shard RPCs. When absent, envelopes with
-     * `fanOut` set are rejected with a 400. Construct via
-     * `createQueryCoordinator({ registry })`.
+     * Coordinator for cross-shard RPCs and the admin fan-outs. Construct via
+     * `createQueryCoordinator({ registry })`. When absent, the worker uses one
+     * whose registry covers root and `.global()` tables and rejects a
+     * `.shardBy()` table with a 400, since only a real registry knows its keys.
      */
     queryCoordinator?: QueryCoordinator;
 
@@ -2797,6 +2799,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
+    // coordinator, so a worker configured without one gets a default whose
+    // registry serves root and `.global()` tables and refuses to guess at a
+    // `.shardBy()` table's keys (see `createDefaultShardRegistry`).
+    const queryCoordinator =
+        options.queryCoordinator ?? createQueryCoordinator({ registry: createDefaultShardRegistry(options.resolveTableSharding, defaultShard) });
+
     // The trust-boundary identity gate: only the PUBLIC data paths (RPC /
     // WebSocket / HTTP-action / server-query) use this wrapped resolver, which
     // validates every resolved identity against the `defineIdentity(...)` contract
@@ -3150,9 +3159,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         defaultShard,
         forwardToShard,
         isAdmin: requestIsAdmin,
-        queryCoordinator: options.queryCoordinator,
+        queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
+        shardedTables: () => (options.listSchemaTables?.() ?? []).filter((table) => options.resolveTableSharding?.(table)?.mode.kind === "shardBy"),
     });
 
     /**
@@ -3734,9 +3744,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // The data-movement admin routes (export / sync / connector-sync / apply /
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
-    // the scheduled R2 backup (mirroring the other extracted clusters). Threads the
-    // shared `requireAdminOption` gate helper like its siblings (every route gates
-    // behind the coordinator option, so no bare `assertAdmin` is needed).
+    // the scheduled R2 backup (mirroring the other extracted clusters).
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
@@ -3749,12 +3757,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // that host, and leaving this blind kept CDC sync and the export tap
         // discovering no shards at all.
         knownTables: () => [...(options.listSchemaTables?.() ?? [])],
-        queryCoordinator: options.queryCoordinator,
-        requireAdminOption,
+        queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
+        prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
         syncGlobals: options.syncGlobals,
     });
 
@@ -4695,13 +4702,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * The three pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
+     * The two pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
      * so the hot path stays flat: (1) `fanOut` + `shardKey` are mutually exclusive;
      * (2) a `__lunora_relation__:*` single-shard envelope would bypass the
      * `authorizeFanOut` gate and read raw rows, so it is refused (the literal prefix
-     * is inlined to keep the runtime free of a `@lunora/do` dependency); (3) a
-     * `fanOut` envelope is rejected BEFORE `resolveIdentity` runs when no coordinator
-     * is configured, so a request already destined for a 400 wastes no identity IO.
+     * is inlined to keep the runtime free of a `@lunora/do` dependency).
      */
     const assertDispatchableEnvelope = (envelope: RpcEnvelope): void => {
         if (envelope.fanOut && envelope.shardKey) {
@@ -4710,13 +4715,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (!envelope.fanOut) {
             assertNotReservedRelationPath(envelope.functionPath);
-        }
-
-        if (envelope.fanOut && !options.queryCoordinator) {
-            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
         }
     };
 
@@ -4731,9 +4729,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // are visible; off by default.
         logRpcDebug(env, envelope);
 
-        // Throwing envelope guards: fan-out+shardKey, the fan-out-only relation
-        // prefix, and fan-out without a coordinator (checked BEFORE `resolveIdentity`
-        // so a doomed request never triggers the identity hook's DB/IO).
+        // Throwing envelope guards: fan-out+shardKey and the fan-out-only relation
+        // prefix (checked BEFORE `resolveIdentity` so a doomed request never
+        // triggers the identity hook's DB/IO).
         assertDispatchableEnvelope(envelope);
 
         // Reserved single-shard RPCs served at the worker boundary instead of being
@@ -4764,8 +4762,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         {
-            // Timing wraps the dispatch only — envelope parse + coordinator
-            // gate + identity resolution happen above and are not part of
+            // Timing wraps the dispatch only — envelope parse + envelope
+            // guards + identity resolution happen above and are not part of
             // the user-observable RPC duration we report.
             const rpcStartedAt = Date.now();
             const { observability } = options;
@@ -4776,19 +4774,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
 
             if (envelope.fanOut) {
-                // Coordinator presence was checked above; re-assert for the
-                // type system without a non-null assertion.
-                const coordinator = options.queryCoordinator;
-
-                if (!coordinator) {
-                    throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                        code: "BAD_REQUEST",
-                        status: 400,
-                    });
-                }
-
                 try {
-                    const result = await coordinator.fanOut(shardDO, {
+                    const result = await queryCoordinator.fanOut(shardDO, {
                         args: envelope.args ?? {},
                         fanOut: envelope.fanOut,
                         functionPath: envelope.functionPath,
@@ -5340,7 +5327,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (isBackupCron) {
             try {
-                await runScheduledBackup(options, shardDO, effectiveAdminToken(), controller);
+                await runScheduledBackup(options, queryCoordinator, shardDO, effectiveAdminToken(), controller);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }

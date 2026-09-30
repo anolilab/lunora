@@ -94,6 +94,7 @@ import {
     emitScheduler,
     emitSeed,
     emitShard,
+    emitShardRegistry,
     emitVectors,
     emitWorkflows,
     emitWranglerCronTriggers,
@@ -949,6 +950,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -1036,11 +1038,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         jurisdiction: schema.jurisdiction,
         // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
         jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
-        // Drives the emitted `listSchemaTables` — export's seed for "every table".
-        tableNames: schema.tables.map((table) => table.name),
+        // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
+        tables: schema.tables.map((table) => {
+            return { name: table.name, shardMode: table.shardMode };
+        }),
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
-        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // `emitApp` takes no schema (only the table list), so the count it
         // needs to make the same decision its siblings make has to come in.
         vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
@@ -1126,6 +1130,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emitOptional("agents.ts", agentsContent);
         emitOptional("queues.ts", queuesContent);
         emitOptional("scheduler.ts", schedulerContent);
+        emitOptional("shardRegistry.ts", shardRegistryContent);
         emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         emitOptional("collections.ts", collectionsContent);

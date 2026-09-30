@@ -123,15 +123,11 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     // Pin the registry DO to the configured jurisdiction (unchanged when unset).
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
-    // The stub is keyed by the fixed `instanceName` for the lifetime of this
-    // registry, so resolve it once at construction. Avoids paying the
-    // resolution cost on every `register`/`list`/`unregister`.
-    let cachedStub: ResolvedShard | undefined;
-    const stub = (): ResolvedShard => {
-        cachedStub ??= resolveShard(namespace, instanceName);
-
-        return cachedStub;
-    };
+    // Resolved per call, never cached: a registry is built once per isolate
+    // (the generated worker memoizes its options), and workerd refuses I/O on
+    // a stub created during a different request — so a cached stub serves the
+    // first request and throws on every one after it.
+    const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
     const post = async (path: string, body: unknown): Promise<Response> =>
         stub().fetch(

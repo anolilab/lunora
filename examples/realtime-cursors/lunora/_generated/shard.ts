@@ -65,6 +65,9 @@ const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "a266edaab2cc5a98", json: "{\n  \"migrationIds\": [],\n  \"tables\": {\n    \"cursors\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"color\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"lastSeen\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"name\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"roomId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"sessionId\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"x\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"y\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_room_session\": {\n          \"fields\": [\n            \"roomId\",\n            \"sessionId\"\n          ],\n          \"unique\": true\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"shardBy:roomId\"\n    },\n    \"ratelimit_buckets\": {\n      \"commitOrdered\": false,\n      \"fields\": {\n        \"key\": {\n          \"kind\": \"string\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"prev\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": true,\n          \"unique\": false\n        },\n        \"ts\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        },\n        \"value\": {\n          \"kind\": \"number\",\n          \"nullable\": false,\n          \"optional\": false,\n          \"unique\": false\n        }\n      },\n      \"indexes\": {\n        \"by_key\": {\n          \"fields\": [\n            \"key\"\n          ],\n          \"unique\": false\n        }\n      },\n      \"memory\": false,\n      \"relations\": {},\n      \"shardMode\": \"root\"\n    }\n  },\n  \"version\": 1\n}\n" };
 
+/** The `.shardBy()` tables this shard registers with the shard registry when it writes them. */
+const SHARDED_TABLES: ReadonlySet<string> = new Set(["cursors"]);
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -80,6 +83,8 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
+    shardRegistry?: (env: Record<string, unknown>) => unknown;
 }
 
 const schedulerStub = {
@@ -456,6 +461,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
+        }
+
+        protected override shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+            const namespace = config.shardRegistry?.((this.env ?? {}) as Record<string, unknown>);
+
+            return namespace === undefined ? undefined : { namespace, shardedTables: SHARDED_TABLES };
         }
 
         protected override async runShardInit(): Promise<void> {
