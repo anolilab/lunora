@@ -7,7 +7,7 @@
  * boot a real `SchedulerDO` and drive its alarm via `runDurableObjectAlarm`.
  */
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { TestSchedulerDO } from "./test-worker";
 
@@ -87,18 +87,19 @@ describe("schedulerDO (workerd)", () => {
         await post(stub, "/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now - 1000 });
         await post(stub, "/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 });
 
-        // `runDurableObjectAlarm()` short-circuits the wall clock — it fires
-        // the pending alarm synchronously.
-        const ran = await runDurableObjectAlarm(stub);
+        // `runDurableObjectAlarm()` short-circuits the wall clock and fires the
+        // pending alarm — unless the runtime already fired it: the due record's
+        // alarm is in the past, and recent workerd releases run an overdue alarm
+        // promptly on their own, so the helper can find nothing left to run.
+        // Either way the due record must be dispatched exactly once and the
+        // alarm re-armed for the later one.
+        await runDurableObjectAlarm(stub);
 
-        expect(ran).toBe(true);
-
-        await runInDurableObject(stub, async (instance, state) => {
-            expect(instance.dispatched.map((d) => d.functionPath)).toEqual(["due"]);
-
-            const remainingAlarm = await state.storage.getAlarm();
-
-            expect(remainingAlarm).toBe(now + 60_000);
+        await vi.waitFor(async () => {
+            await runInDurableObject(stub, async (instance, state) => {
+                expect(instance.dispatched.map((d) => d.functionPath)).toEqual(["due"]);
+                await expect(state.storage.getAlarm()).resolves.toBe(now + 60_000);
+            });
         });
     });
 

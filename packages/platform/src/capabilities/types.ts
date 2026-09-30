@@ -30,11 +30,12 @@
  * gate-bearing keys are:
  *
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
- * `containerEgressPolicy`, `containers`, `cronTriggers`, `crossShardFanout`,
+ * `containerEgressPolicy`, `containerRuntimeScheduling`, `containers`,
+ * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
  * `scheduler`, `secrets`, `vectorStore`, `workerLoaders`, `workflowRollback`,
- * `workflows`.
+ * `workflowSchedules`, `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
@@ -79,9 +80,11 @@
  * and the rating is still consulted by nothing. Codegen already has the shape
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
- * (`agents`, `commitOrderedTables`, `containerEgressPolicy`, `cronTriggers`,
+ * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
+ * `containerRuntimeScheduling`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`).
+ * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`,
+ * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
  * setting the signal from the IR.
@@ -124,7 +127,7 @@ export interface PlatformCapabilities {
          *
          * Its own key rather than a facet of `workflows` or `ai`, because an
          * agent needs BOTH and neither implies the other: the generated class
-         * compiles onto the host's workflow engine under an `AGENT_*` binding
+         * compiles onto the host's workflow engine as a `ctx.exports.<Class>` workflow
          * the emitted context resolves off `env`, and the loop it runs there
          * calls model inference. A host that emulates workflows but has no
          * inference (or no way to mount a generated class into its engine) can
@@ -196,6 +199,22 @@ export interface PlatformCapabilities {
         containerEgressPolicy?: Capability;
 
         /**
+         * The `durable_object` container scheduling policy —
+         * `defineContainer({ schedulingPolicy: "durable_object" })`: each
+         * instance picks its image and size at `start()`, and can save and
+         * restore its filesystem (`snapshot()` / `start({ snapshot })`).
+         *
+         * One key for both halves because snapshots only exist under this
+         * policy — there is no app declaration for a snapshot that codegen
+         * could gate apart from the policy. Rated apart from `containers`
+         * because a host can run a container from one configured image and
+         * still have no way to start a chosen image or restore a filesystem.
+         * Gate-bearing: codegen sets the `containerRuntimeScheduling`
+         * `PlatformSignals` flag off `ContainerIR.schedulingPolicy`.
+         */
+        containerRuntimeScheduling?: Capability;
+
+        /**
          * Container execution (Cloudflare Containers / Fargate), including
          * `ctx.containers.<name>.exec`. Deliberately one rating rather than two:
          * `exec` is a method on the accessor this key already gates, not a
@@ -260,7 +279,8 @@ export interface PlatformCapabilities {
          * Merging Lunora's spans into the HOST's own trace tree, so its native
          * tracing shows one nested tree instead of two unrelated ones — the
          * sink's `fuseCloudflareTraces` opt-in, which reaches `cloudflare:workers`'
-         * `tracing.enterSpan`.
+         * `tracing.enterSpan` (plus, where present, `getActiveSpan` for the
+         * invocation root and a span's `setAttributes` / `recordException`).
          *
          * Rated because it is the one telemetry surface that reaches past
          * `ShardHost` into a provider API. Everything else in the pipeline is
@@ -504,8 +524,24 @@ export interface PlatformCapabilities {
          * than a step that fails on first use.
          */
         workflowRollback?: Capability;
+
         /** Durable workflows (step-based). */
         workflows?: Capability;
+
+        /**
+         * Cron-started workflow instances — `defineWorkflow({ schedules })`,
+         * written to the wrangler `workflows[].schedules` list, where the host
+         * itself creates an instance on each tick (no `scheduled()` handler).
+         *
+         * Rated apart from `workflows` and from `cronTriggers` because it is
+         * neither: a host can run workflows it is asked to create, and dispatch
+         * declared crons to `scheduled()`, and still never start a workflow off
+         * its own schedule list. That host would build the app green and the
+         * workflow would simply never run. Gate-bearing: codegen sets the
+         * `workflowSchedules` `PlatformSignals` flag when a workflow declares
+         * `schedules`.
+         */
+        workflowSchedules?: Capability;
     };
     /** Platform identifier used in codegen and config (e.g. "cloudflare", "aws"). */
     id: string;

@@ -658,12 +658,11 @@ export interface StudioPlatform {
  * One declared Cloudflare Workflow, hand-mirroring `@lunora/do`'s
  * `WorkflowMetadata` (the studio can't import `@lunora/do`). Pure declaration
  * data — workflows hold no shard runtime state — discovered at codegen time from
- * `lunora/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
- * `className` the generated `WorkflowEntrypoint` subclass, `exportName` the
- * `defineWorkflow` export, and `name` the stable deployed `workflows[].name`.
+ * `lunora/workflows.ts`. `className` is the generated `WorkflowEntrypoint`
+ * subclass (its `ctx.exports` key), `exportName` the `defineWorkflow` export,
+ * and `name` the stable deployed workflow name.
  */
 export interface WorkflowMetadata {
-    binding: string;
     className: string;
     exportName: string;
     name: string;

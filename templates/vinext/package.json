@@ -23,7 +23,7 @@
         "vinext": "^1.0.0-beta.5"
     },
     "devDependencies": {
-        "@cloudflare/vite-plugin": "^1.29.0",
+        "@cloudflare/vite-plugin": "^1.62.1",
         "@cloudflare/workers-types": "^4.20260610.1",
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
@@ -33,6 +33,6 @@
         "@vitejs/plugin-rsc": "^0.5.34",
         "typescript": "^6.0.2",
         "vite": "^8.0.16",
-        "wrangler": "^4.100.0"
+        "wrangler": "^4.143.1"
     }
 }

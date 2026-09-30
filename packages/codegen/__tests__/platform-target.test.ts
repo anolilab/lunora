@@ -192,14 +192,19 @@ describe("gatePlatformFeatures", () => {
     // feature, so they are gated from the app's declaration, not discovered in
     // production. Worker Loaders (`jsCodeTool`) exist on both Workers hosts only.
     it.each([
-        ["celld", ["containerEgressPolicy", "workflowRollback"]],
-        ["node", ["containerEgressPolicy", "workerLoaders"]],
+        ["celld", ["containerEgressPolicy", "containerRuntimeScheduling", "workflowRollback"]],
+        ["node", ["containerEgressPolicy", "containerRuntimeScheduling", "workerLoaders"]],
         ["cloudflare", []],
-    ])("gates step rollback, container egress policies and worker loaders per target (%s)", async (target, refused) => {
+    ])("gates step rollback, container egress policies, container scheduling and worker loaders per target (%s)", async (target, refused) => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        const result = gatePlatformFeatures(ALL_OFF, target, { containerEgressPolicy: true, workerLoaders: true, workflowRollback: true });
+        const result = gatePlatformFeatures(ALL_OFF, target, {
+            containerEgressPolicy: true,
+            containerRuntimeScheduling: true,
+            workerLoaders: true,
+            workflowRollback: true,
+        });
 
         expect(
             result.diagnostics
@@ -207,6 +212,19 @@ describe("gatePlatformFeatures", () => {
                 .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1])
                 .toSorted((a, b) => String(a).localeCompare(String(b))),
         ).toStrictEqual(refused);
+    });
+
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates scheduled workflows per target (%s)", async (target, refused) => {
+        expect.assertions(1);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { workflowSchedules: true });
+
+        expect(result.signals.workflowSchedules).toBe(!refused);
     });
 
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {

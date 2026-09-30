@@ -94,6 +94,14 @@ await context.step.do("charge", { retries: { limit: 3, delay: "2 seconds", backo
     context.run(api.payments.charge, { orderId }, { dedupId: `charge:${orderId}` }),
 );
 
+// `delay` can also be a function of the failed attempt: return the next wait as a
+// duration. It replaces `backoff`, so it can honour a provider's Retry-After.
+await context.step.do(
+    "sync",
+    { retries: { limit: 5, delay: ({ ctx, error }) => (error.message.includes("rate limit") ? `${ctx.attempt * 30} seconds` : "10 seconds") } },
+    () => context.run(api.customers.sync, { orderId }, { dedupId: `sync:${orderId}` }),
+);
+
 // Durable delays — minutes to weeks, not held in memory.
 await context.step.sleep("cool-off", "1 minute");
 await context.step.sleepUntil("run-at", new Date("2026-07-01T00:00:00Z"));
@@ -354,8 +362,8 @@ For fire-and-forget (start a child pipeline without awaiting it), use
 await ctx.spawn("sendReceipt", { orderId: ctx.params.orderId });
 ```
 
-Both reach child workflows through the standard `WORKFLOW_*` bindings codegen
-already wires, so there is nothing extra to configure. A branch/spawn name with
+Both reach child workflows through `ctx.exports`, keyed by the class codegen
+generates, so there is nothing extra to configure. A branch/spawn name with
 no matching declared workflow throws an error.
 
 ### Rollback (saga compensation)
@@ -414,6 +422,37 @@ export const charge = defineStep("charge", {
 });
 ```
 
+### Deploy settings (`schedules`, `limits`, `defaultRetention`)
+
+Three optional keys on `defineWorkflow` are deploy configuration: codegen reads
+them statically (string and number literals only) and writes them into the
+workflow's `wrangler.jsonc` entry.
+
+```ts
+export const nightlyReport = defineWorkflow({
+    handler: async (ctx) => {
+        /* … */
+    },
+    // Each cron tick starts a new instance with no params — no scheduled() handler needed.
+    schedules: ["0 3 * * *"],
+    // Raise the per-instance step cap (10,000 by default, up to 25,000).
+    limits: { steps: 25_000 },
+    // How long finished instances keep their state, unless create({ retention }) overrides it.
+    defaultRetention: { successRetention: "3 days", errorRetention: "30 days" },
+});
+```
+
+These land as `schedules`, `limits.steps`, and
+`default_retention.{success_retention,error_retention}`. Each cron expression is
+checked at codegen. When you change a setting, the existing entry is updated.
+When you remove one, it stays in `wrangler.jsonc` and reconcile warns about it,
+because a removed setting and a hand-set one look the same. Delete it by hand.
+
+<Callout type="warn">
+    `schedules` needs a host that starts instances itself. It is refused with a `platform_unsupported_feature` diagnostic on `target: "node"` (nothing reads the
+    list there) and on celld (not verified). `limits` and `defaultRetention` are ignored by the Node host.
+</Callout>
+
 ## Start and manage instances
 
 Codegen wires a typed `ctx.workflows` handle onto **mutations and actions**.
@@ -444,6 +483,8 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
     </Callout>
 
 - `createBatch([...])`: start many in one batch.
+- `deleteBatch([...ids])`: delete up to 100 instances and their stored state. Returns
+  `{ deleted, errors }` with one entry per id; unknown ids come back as errors.
 - `get(id)`: a handle to an existing instance.
 
 - `sendEvent(instanceId, event, payload)`: deliver a
@@ -452,7 +493,26 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 
 `create`/`get` hand back the native Cloudflare instance, which exposes its own
 lifecycle: `status()` (returns `status` + `output`/`error`), `pause()`, `resume()`,
-`restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
+`restart()`, `terminate()`, `delete()` (stops the instance and frees its state), `subscribe()`, and the untyped `sendEvent({ type, payload })`.
+
+`subscribe({ cursor?, filter? })` streams the instance's events without polling.
+It replays the full history, then waits for new events until the instance
+completes, errors, or is terminated. Each event carries `eventId`, `instanceId`,
+`timestamp`, and a `type` (`workflow_started`, `step_completed`,
+`attempt_errored`, `rollback_started`, …) plus that type's fields. The typed
+mirror leaves those fields open so new event types still type-check:
+
+```ts
+const instance = await ctx.workflows.get("orderPipeline").get(instanceId);
+const subscription = await instance.subscribe({ filter: ["step_completed", "workflow_completed"] });
+
+for (let event = await subscription.next(); !event.done; event = await subscription.next()) {
+    console.log(event.value.type, event.value.stepName);
+}
+```
+
+The Node host rejects `subscribe()` with `NOT_IMPLEMENTED`, because its engine
+keeps no per-instance event log.
 
 ### Listing instances and step timelines
 
@@ -487,8 +547,9 @@ save). It:
 1. Emits a `WorkflowEntrypoint` subclass per export into
    `lunora/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
 2. Wires the typed `ctx.workflows` handle.
-3. Reconciles the `binding`, `class_name`, and `name` entries of
-   `wrangler.jsonc`'s `workflows[]` array from the same definition.
+3. Declares each workflow in `wrangler.jsonc`'s `exports` map, keyed by the
+   generated class, with its `name` and any
+   [deploy settings](#deploy-settings-schedules-limits-defaultretention).
 
 Your worker entry must re-export the generated classes so wrangler can find
 them:
@@ -498,14 +559,47 @@ them:
 export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows";
 ```
 
-The resulting binding:
+The resulting entry:
 
 ```jsonc
 // wrangler.jsonc (codegen-reconciled)
 {
-    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
+    "exports": {
+        "ChannelWelcomeWorkflow": { "type": "workflow", "name": "channel-welcome" },
+    },
 }
 ```
+
+There is no `workflows[]` binding. The shard Durable Object that runs your
+mutations, the Worker that runs actions and cron triggers, and every generated
+`WorkflowEntrypoint` (`ctx.spawn`, `ctx.parallel`) each reach the workflow as
+`ctx.exports.ChannelWelcomeWorkflow`. Agents are declared the same way. This
+needs Wrangler 4.142.0 or newer (or `@cloudflare/vite-plugin` 1.61.0 or newer)
+to run locally.
+
+A project with a `workflows[]` binding for a class Lunora declares has it moved
+into `exports` on the next reconcile, under the binding's deployed `name` (a
+different declared `name` is reported, not applied). Cloudflare shares
+instances between a binding and an export with the same `name`, so running
+instances carry over. Settings you set by hand on the binding move with it. A
+binding to another Worker's workflow (`script_name`) is left alone. When the
+installed wrangler is older than 4.142 (or `@cloudflare/vite-plugin` older than
+1.61), reconcile leaves `workflows[]` untouched and warns with the upgrade
+command. A `workflows[]` block inside an `env.<name>` environment is reported,
+not rewritten.
+
+<Callout type="warn">
+    Work queued before the upgrade still names the old `WORKFLOW_*` / `AGENT_*` bindings: a `ctx.scheduler.runAfter(workflows.x, …)` job that has not fired yet,
+    and a `ctx.parallel` branch still running. After the deploy the scheduled job fails and is dead-lettered, and the branch cannot signal its parent (the
+    parent waits out its timeout). Let the scheduler drain and in-flight fan-outs finish before deploying the upgrade.
+</Callout>
+
+On celld, which has no workflow `exports`, the deploy projection turns each
+export back into a `workflows[]` binding named after the class. The runtime
+looks that name up on `env` when `ctx.exports` has no match.
+
+`introspectWorkflow()` in `@cloudflare/vitest-plugin` still needs a binding: add
+a test-only `workflows[]` binding with the same `name` to introspect one.
 
 ## Advisor lints
 

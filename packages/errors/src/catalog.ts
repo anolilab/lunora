@@ -226,6 +226,7 @@ export const ERROR_CATALOG = {
      * here is a fallback; each throw passes the actual upstream HTTP status.
      */
     ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
+    BROWSER_RUN_ERROR: { status: 502, title: "Browser Run API error" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 
@@ -467,7 +468,6 @@ export const ERROR_CATALOG = {
     DUPLICATE_CRON_NAME: { status: 500, title: "Duplicate cron job name" },
 
     /** More codegen build-time diagnostics — see the cron-family comment above; same reasoning applies. */
-    DUPLICATE_AGENT_BINDING: { status: 500, title: "Duplicate agent binding" },
     DUPLICATE_AGENT_CLASS: { status: 500, title: "Duplicate agent generated class name" },
     DUPLICATE_AGENT_NAME: { status: 500, title: "Duplicate agent name" },
     DUPLICATE_MIGRATION_ID: { status: 500, title: "Duplicate migration id" },

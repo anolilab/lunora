@@ -933,8 +933,8 @@ export const agentComponent = (): AgentComponent => {
      * Resolve a human-in-the-loop tool approval: deliver the client's
      * approve/reject decision to the paused run so its `waitForEvent` resumes.
      * PUBLIC (a client calls it) but OWNER-GATED — the same `readableThread`
-     * gate as the reads, so only the thread's owner may approve. The AGENT_*
-     * workflow binding is reached via `ctx.agents` (woven onto the function-run
+     * gate as the reads, so only the thread's owner may approve. The agent's
+     * exported workflow is reached via `ctx.agents` (woven onto the function-run
      * ctx by generated code); the mutation ctx has no raw `env`.
      *
      * Two extra checks close a cross-run bypass (the owner gate alone isn't

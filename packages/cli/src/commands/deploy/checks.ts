@@ -173,17 +173,25 @@ const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsS
  */
 const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
     for (const container of discoverContainerInfo(cwd, "lunora").containers) {
-        const { image } = container;
+        const image = container.schedulingPolicy === undefined ? container.image : undefined;
+        // A `durable_object` container's local sources are its named images.
+        const dockerfiles = [
+            ...(image?.kind === "dockerfile" ? [{ field: "image", path: image.dockerfilePath }] : []),
+            ...Object.entries(container.schedulingPolicy === "durable_object" ? (container.images ?? {}) : {}).flatMap(([name, named]) =>
+                named.kind === "dockerfile" ? [{ field: `images["${name}"]`, path: named.dockerfilePath }] : [],
+            ),
+        ];
+        const missing = dockerfiles.find((dockerfile) => !existsSync(join(cwd, dockerfile.path)));
 
-        if (image.kind === "dockerfile" && !existsSync(join(cwd, image.dockerfilePath))) {
-            const message = `${command} blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in lunora/containers.ts.`;
+        if (missing !== undefined) {
+            const message = `${command} blocked: container "${container.exportName}" references a Dockerfile at "${missing.path}" that does not exist. Create it or fix the \`${missing.field}\` path in lunora/containers.ts.`;
 
             logger.error(message);
 
             return message;
         }
 
-        if (image.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
+        if (image?.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
             const message = `${command} blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in lunora/containers.ts.`;
 
             logger.error(message);

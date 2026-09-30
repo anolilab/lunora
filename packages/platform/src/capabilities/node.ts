@@ -103,7 +103,11 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         workflows: {
             level: "emulated",
-            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so the adapter ignores rollbackConfig's retries and a crash mid-unwind leaves it half-done (@lunora/workflow itself still reads rollbackConfig.timeout to end a rollback's decline wait). terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running. @lunora/workflow still ends a ctx.runStep decline wait 2s before the step's timeout (Cloudflare's 10-minute default when unset), so here that wait charges an attempt the host would not have ended, and the next attempt resumes it; no pause/restart; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+            note: "createNodeWorkflowHost (@lunora/platform-node) binds each workflow on env under its class name — the key `ctx.exports` carries on Cloudflare — and compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so the adapter ignores rollbackConfig's retries and a crash mid-unwind leaves it half-done (@lunora/workflow itself still reads rollbackConfig.timeout to end a rollback's decline wait). A `retries.delay` function is awaited in that same loop and its result replaces the backoff, as on Cloudflare. defineWorkflow's limits and defaultRetention are wrangler settings this host never reads: no per-instance step cap is enforced, and a finished run's state stays until it is deleted. delete and deleteBatch (capped at 100 ids) drop a run's stored state behind the same in-process barrier as terminate, but leave no tombstone, so a deleted run's status reads `unknown`. terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running. @lunora/workflow still ends a ctx.runStep decline wait 2s before the step's timeout (Cloudflare's 10-minute default when unset), so here that wait charges an attempt the host would not have ended, and the next attempt resumes it; no pause/restart; subscribe rejects NOT_IMPLEMENTED, since the engine keeps no per-instance event log to replay; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+        },
+        workflowSchedules: {
+            level: "unsupported",
+            note: "createNodeWorkflowHost only runs instances something creates: nothing reads a workflow's schedules list, so a scheduled workflow would never start. Gate-bearing: codegen refuses an app that declares one here. Start it from a mutation with ctx.workflows.get(name).create() instead, re-armed through ctx.scheduler.runAt",
         },
         scheduler: {
             level: "emulated",
@@ -123,7 +127,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         agents: {
             level: "unsupported",
-            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved off an AGENT_ prefixed env binding this host never provides. That missing mount is the whole gap: inference is not, since a model factory or AI SDK model object needs no binding and `ai` is emulated here through LUNORA_AI_PROXY_URL",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved by its class name off `ctx.exports` or `env`, and this host binds neither. That missing mount is the whole gap: inference is not, since a model factory or AI SDK model object needs no binding and `ai` is emulated here through LUNORA_AI_PROXY_URL",
         },
         objectStorageBackups: {
             level: "emulated",
@@ -144,11 +148,15 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids and `ctx.ai.run` are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run` and their `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
         },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },
+        containerRuntimeScheduling: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is no image to pick at start and no filesystem to snapshot",
+        },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",

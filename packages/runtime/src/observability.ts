@@ -136,7 +136,11 @@ export interface ObservabilitySink {
      * span the Durable Object records is ALSO emitted as a Cloudflare **custom
      * span** (`tracing.enterSpan` from `cloudflare:workers`, GA 2026-06-16) so it
      * nests inside CF's native binding/fetch/handler trace tree on the hosted
-     * path — a deeper waterfall in Cloudflare's own trace viewer.
+     * path — a deeper waterfall in Cloudflare's own trace viewer. On runtimes
+     * with the 2026-09-25 span APIs, a failed span also gets a native
+     * `recordException` event (the redacted message, never the raw error), and
+     * the dispatch's `ctx.span` wide-event attributes land on the invocation's
+     * root span via `tracing.getActiveSpan()`.
      *
      * Capability-probed: a safe no-op off-Cloudflare, on a compat date predating
      * custom spans, or when the trace is unsampled. This ONLY ADDS a CF-side span;

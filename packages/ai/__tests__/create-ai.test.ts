@@ -75,6 +75,24 @@ describe("createAi", () => {
             expect(model).toStrictEqual({ __model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
         });
 
+        it("forwards rejectIfBusy as a provider setting for a Workers AI id only", () => {
+            expect.assertions(1);
+
+            const settingsCalls: unknown[] = [];
+            const provider = ((modelId: string, settings?: Record<string, unknown>) => {
+                settingsCalls.push(settings);
+
+                return { __model: modelId } as unknown as LanguageModel;
+            }) as WorkersAiProviderLike;
+            const ai = createAi({ provider });
+
+            ai.model("@cf/meta/llama-3.1-8b-instruct", { rejectIfBusy: true });
+            ai.model("@cf/meta/llama-3.1-8b-instruct");
+            ai.model("openai/gpt-5", { rejectIfBusy: true });
+
+            expect(settingsCalls).toStrictEqual([{ rejectIfBusy: true }, undefined, undefined]);
+        });
+
         it("passes a bring-your-own AI SDK model straight through (no provider call)", () => {
             expect.assertions(2);
 
@@ -289,6 +307,58 @@ describe("createAi", () => {
             await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } });
 
             expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } }]]);
+        });
+
+        it("rethrows a rejectIfBusy capacity rejection (3040) as RATE_LIMITED", async () => {
+            expect.assertions(3);
+
+            const busy = new Error("InferenceUpstreamError: 3040: Capacity temporarily exceeded, please try again.");
+            const runCalls: (Record<string, unknown> | undefined)[] = [];
+            const ai = createAi({
+                binding: {
+                    run: async (_model, _inputs, options) => {
+                        runCalls.push(options);
+
+                        throw busy;
+                    },
+                },
+            });
+
+            const error: unknown = await ai.run("@cf/meta/llama-3.1-8b-instruct", { prompt: "hi" }, { rejectIfBusy: true }).catch((error_: unknown) => error_);
+
+            expect(runCalls).toStrictEqual([{ rejectIfBusy: true }]);
+            expect(isLunoraError(error) && error.code === "RATE_LIMITED").toBe(true);
+            expect((error as Error).cause).toBe(busy);
+        });
+
+        it("rethrows any other binding error unchanged", async () => {
+            expect.assertions(1);
+
+            const failure = new Error("5007: No such model");
+            const ai = createAi({
+                binding: {
+                    run: async () => {
+                        throw failure;
+                    },
+                },
+            });
+
+            await expect(ai.run("@cf/nope", {}, { rejectIfBusy: true })).rejects.toBe(failure);
+        });
+
+        it("does not mistake a 3040 elsewhere in a message for the capacity code", async () => {
+            expect.assertions(1);
+
+            const failure = new Error("5006: input invalid at line 3040: unexpected token");
+            const ai = createAi({
+                binding: {
+                    run: async () => {
+                        throw failure;
+                    },
+                },
+            });
+
+            await expect(ai.run("@cf/nope", {})).rejects.toBe(failure);
         });
 
         it("leaves run options untouched when no gateway is configured", async () => {

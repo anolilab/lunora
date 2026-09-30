@@ -11,7 +11,7 @@ export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/fu
 /**
  * Typed reference to a Lunora durable workflow — either the generated
  * `workflows.<name>` reference object (`_generated/api.ts`, which carries the
- * `WORKFLOW_*` binding + export name) or, structurally, a `defineWorkflow()`
+ * workflow's class name + export name) or, structurally, a `defineWorkflow()`
  * result imported directly. Both are matched by the `isLunoraWorkflow` brand and
  * carry the workflow's `params` in the phantom `__params`, so a `cronJobs()`
  * registration infers them.
@@ -28,8 +28,8 @@ export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/fu
 export interface WorkflowReference<Params = Record<string, unknown>> {
     /** Phantom carrier for the workflow's `params` type — drives `cronJobs()` arg inference. Never read at runtime. */
     readonly __params?: Params;
-    /** The `WORKFLOW_*` binding name (present on a generated `workflows.<name>` ref). */
-    readonly binding?: string;
+    /** The workflow's export key — its generated class name, reached as `ctx.exports.<className>` (present on a generated ref). */
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     /** The workflow's export/stable name (present on a generated ref; a `defineWorkflow({ name })` override otherwise). */
     readonly name?: string;
@@ -184,7 +184,7 @@ export interface ScheduleRecord {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * The workflow/agent export key (its generated class name) to start a fresh durable instance
      * of on fire (the {@link ScheduleRecord.args} become its `params`). Set
      * instead of {@link ScheduleRecord.functionPath} when the job targets a
      * workflow/agent {@link WorkflowReference}. The runtime — not the DO — owns

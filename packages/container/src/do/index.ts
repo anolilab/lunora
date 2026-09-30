@@ -14,9 +14,12 @@ import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { CONTAINER_EXEC_PATH, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
-import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
+import type { ContainerDefinition, ContainerReadinessCheck, ContainerSnapshot } from "../types";
+import runNativeExec from "./native-exec";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
 import { reportContainerLifecycle } from "./report-lifecycle";
+import type { StartOverride } from "./start-override";
+import { resolveImageReference, sameStart, START_OVERRIDE_KEY } from "./start-override";
 
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 
@@ -45,24 +48,10 @@ const READINESS_TIMEOUT_MS = 30_000;
 const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
 
 /**
- * Durable-storage key holding a per-instance `start({ envVars })` override.
- * Persisted so it outlives the run it was given for: every later start of the
- * instance — an explicit `start()`, or the implicit one a `fetch`/`exec`
- * triggers after a sleep, crash or `hardTimeout` — boots with it rather than
- * falling back to the declared env and secrets. Cleared by `destroy()`.
+ * The `start()` options `LunoraContainer` accepts on top of the base's: the
+ * `durable_object`-policy image, size and snapshot to restore.
  */
-const ENV_OVERRIDE_KEY = "__lunoraEnvOverride";
-
-/** Whether two env maps hold the same variables with the same values. */
-const sameEnv = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
-    if (a === undefined || b === undefined) {
-        return a === b;
-    }
-
-    const keys = Object.keys(a);
-
-    return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
-};
+type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & Pick<StartOverride, "image" | "instanceType"> & { snapshot?: ContainerSnapshot };
 
 /** Lower-cased marker of Lunora's reserved container namespace (`/__lunora/*`). */
 const RESERVED_PATH_MARKER = "__lunora";
@@ -141,12 +130,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     /** The definition's `env` + `secrets`, as resolved at construction — the env a start uses absent an override. */
     private readonly lunoraDeclaredEnv: Record<string, string>;
 
-    /** The persisted `start({ envVars })` override, once loaded. See {@link ENV_OVERRIDE_KEY}. */
-    private lunoraEnvOverride?: Record<string, string>;
+    /** The persisted start override, once loaded. See {@link START_OVERRIDE_KEY}. */
+    private lunoraOverride?: StartOverride;
     /** Whether the override field reflects storage (read once per DO instance, then kept in step). */
-    private lunoraEnvOverrideLoaded = false;
+    private lunoraOverrideLoaded = false;
     /** Memoised Secrets Store resolution: the resolved `name → value` map, fetched once. */
     private lunoraSecretsStoreResolved?: Promise<Record<string, string>>;
+
+    /** Whether the definition uses the `durable_object` scheduling policy. */
+    private readonly lunoraDurableObjectScheduled: boolean;
+    /** The definition's default image name and instance size (`durable_object` policy only). */
+    private readonly lunoraDefaultSelection: StartOverride;
 
     /**
      * Count of runs observed to have ENDED, bumped by the `onStop` hook. Read
@@ -211,6 +205,31 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraReadyOn = definition.readyOn ? [...definition.readyOn] : [];
         this.lunoraHardTimeoutSeconds = definition.hardTimeout === undefined ? undefined : parseDurationSeconds(definition.hardTimeout);
         this.lunoraSecretsStore = definition.secretsStore;
+        this.lunoraDurableObjectScheduled = definition.schedulingPolicy === "durable_object";
+        this.lunoraDefaultSelection =
+            definition.schedulingPolicy === "durable_object" ? { image: definition.image, instanceType: definition.instanceType } : {};
+    }
+
+    /**
+     * Save the running container's filesystem (`durable_object` policy only).
+     * The handle is plain data: store it and pass it to `start({ snapshot })` to
+     * restore it here or in another instance. Memory and processes are not
+     * captured — a restored container runs its entrypoint again.
+     */
+    public async lunoraSnapshot(options: { name?: string } = {}): Promise<ContainerSnapshot> {
+        if (!this.lunoraDurableObjectScheduled) {
+            throw new LunoraError("BAD_REQUEST", `container "${this.lunoraName}": snapshots need schedulingPolicy "durable_object"`);
+        }
+
+        const { container } = this.ctx;
+
+        if (container?.running !== true || typeof container.snapshotContainer !== "function") {
+            throw new LunoraError("BAD_REQUEST", `container "${this.lunoraName}": snapshot() needs a running container — start it first`);
+        }
+
+        const { id, name, size } = await container.snapshotContainer({ ...(options.name === undefined ? {} : { name: options.name }) });
+
+        return { id, size, ...(name === undefined ? {} : { name }) };
     }
 
     /**
@@ -269,7 +288,28 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         await this.awaitReadinessGate();
 
-        return super.containerFetch(request, port);
+        const { container } = this.ctx;
+
+        // Without native exec (an older runtime, another host), the container's
+        // own app serves the route, as it always has.
+        if (typeof container?.exec !== "function") {
+            return super.containerFetch(request, port);
+        }
+
+        // The same start the proxied path makes, so a native exec boots the
+        // instance with its env, image and readiness gate exactly as a fetch would.
+        await this.startAndWaitForPorts(port);
+
+        // Counted in flight like a proxied request, so `sleepAfter` cannot stop
+        // the container under a long-running command.
+        this.inflightRequests += 1;
+        this.renewActivityTimeout();
+
+        try {
+            return await runNativeExec(container.exec.bind(container), request, this.envVars ?? {}, this.lunoraName);
+        } finally {
+            this.decrementInflight();
+        }
     }
 
     /**
@@ -287,6 +327,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // first call, and a container that exits inside it used to leave the
         // snapshot claiming the run was still up. See {@link beginStart}.
         await this.applyStartEnv();
+        await this.applyStartSelection();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -312,31 +353,31 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * return early on a live container, reporting a start whose env never took
      * effect. `stop()` it first, or `destroy()` it to drop the override.
      */
-    public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
-        const [options] = args;
+    public override async start(options?: LunoraStartOptions, waitOptions?: Parameters<Container<Env>["start"]>[1]): Promise<void> {
+        const { image, instanceType, snapshot, ...baseOptions } = options ?? {};
 
-        if (options?.envVars !== undefined) {
-            await this.persistEnvOverride({ ...options.envVars });
-        }
-
+        await this.recordStartOverride({ envVars: options?.envVars, image, instanceType }, snapshot);
         await this.applyStartEnv();
+        await this.applyStartSelection(snapshot !== undefined);
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
 
-        await super.start(...args);
+        // The patched base forwards `containerSnapshot` to `ctx.container.start()`,
+        // where it replaces the image for this one start.
+        await super.start({ ...baseOptions, ...(snapshot === undefined ? {} : { containerSnapshot: snapshot }) }, waitOptions);
 
         await this.afterContainerStart(wasRunning && this.lunoraStops === stops);
     }
 
     /**
-     * Stop the container and forget this instance's `start({ envVars })`
-     * override, so the next start uses the declared env again.
+     * Stop the container and forget this instance's start override, so the next
+     * start uses the declared env, image and size again.
      */
     public override async destroy(): Promise<void> {
         await super.destroy();
-        await this.ctx.storage.delete(ENV_OVERRIDE_KEY);
-        this.lunoraEnvOverride = undefined;
+        await this.ctx.storage.delete(START_OVERRIDE_KEY);
+        this.lunoraOverride = undefined;
     }
 
     public override async onActivityExpired(): Promise<void> {
@@ -674,35 +715,70 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         return this.lunoraSecretsStoreResolved;
     }
 
-    /** The persisted `start({ envVars })` override, read from storage once per instance lifetime. */
-    private async readEnvOverride(): Promise<Record<string, string> | undefined> {
-        if (!this.lunoraEnvOverrideLoaded) {
-            this.lunoraEnvOverride = await this.ctx.storage.get<Record<string, string>>(ENV_OVERRIDE_KEY);
-            this.lunoraEnvOverrideLoaded = true;
+    /** The persisted start override, read from storage once per instance lifetime. */
+    private async readOverride(): Promise<StartOverride> {
+        if (!this.lunoraOverrideLoaded) {
+            this.lunoraOverride = await this.ctx.storage.get<StartOverride>(START_OVERRIDE_KEY);
+            this.lunoraOverrideLoaded = true;
         }
 
-        return this.lunoraEnvOverride;
+        return this.lunoraOverride ?? {};
     }
 
     /**
-     * Record a `start({ envVars })` override, refusing one that differs from
-     * the env a running (or starting) container already has — see {@link start}.
+     * Validate an explicit start's choices and persist them — merged over the
+     * stored override, so `start({ instanceType })` alone keeps a chosen image.
+     * Everything is checked before the one write, so a rejected start stores
+     * nothing. A start whose choices differ from what a running (or starting)
+     * container has is REJECTED rather than silently joined: the base would
+     * return early on a live container, reporting a start that never took
+     * effect. A snapshot restore only applies to a fresh start, so it is refused
+     * on a busy one.
      */
-    private async persistEnvOverride(override: Record<string, string>): Promise<void> {
-        const current = await this.readEnvOverride();
-        // `startInFlight` is the base's coalescing marker: a start joined there
-        // would run with the env it was launched with, not this one.
-        const busy = this.ctx.container?.running === true || (this as unknown as { startInFlight?: unknown }).startInFlight !== undefined;
+    private async recordStartOverride(chosen: StartOverride, snapshot: ContainerSnapshot | undefined): Promise<void> {
+        const chose = chosen.image !== undefined || chosen.instanceType !== undefined;
 
-        if (busy && !sameEnv(current, override)) {
+        if ((chose || snapshot !== undefined) && !this.lunoraDurableObjectScheduled) {
             throw new LunoraError(
-                "CONFLICT",
-                `container "${this.lunoraName}": start({ envVars }) on an instance that is already running with a different env — the running container keeps its own. stop() it first (or destroy() it to also drop the override), then start again.`,
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": start({ image | instanceType | snapshot }) needs schedulingPolicy "durable_object" — a default-policy container's image and size are set in lunora/containers.ts`,
             );
         }
 
-        await this.ctx.storage.put(ENV_OVERRIDE_KEY, override);
-        this.lunoraEnvOverride = override;
+        if (chosen.image !== undefined && snapshot !== undefined) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": start() takes an image or a snapshot, not both — the snapshot is the filesystem`,
+            );
+        }
+
+        if (chosen.image !== undefined) {
+            // Throws for an unknown name now, rather than on every later restart.
+            this.resolveImage(chosen.image);
+        }
+
+        const stored = await this.readOverride();
+        const next: StartOverride = {
+            ...stored,
+            ...(chosen.envVars === undefined ? {} : { envVars: { ...chosen.envVars } }),
+            ...(chosen.image === undefined ? {} : { image: chosen.image }),
+            ...(chosen.instanceType === undefined ? {} : { instanceType: chosen.instanceType }),
+        };
+        // `startInFlight` is the base's coalescing marker: a start joined there
+        // runs with what it was launched with, not this one.
+        const busy = this.ctx.container?.running === true || this.startInFlight !== undefined;
+
+        if (busy && (snapshot !== undefined || !sameStart({ ...this.lunoraDefaultSelection, ...stored }, { ...this.lunoraDefaultSelection, ...next }))) {
+            throw new LunoraError(
+                "CONFLICT",
+                `container "${this.lunoraName}": start() on an instance that is already running with a different env, image or size (or a snapshot to restore) — the running container keeps its own. stop() it first (or destroy() it to also drop the override), then start again.`,
+            );
+        }
+
+        if (chose || chosen.envVars !== undefined) {
+            await this.ctx.storage.put(START_OVERRIDE_KEY, next);
+            this.lunoraOverride = next;
+        }
     }
 
     /**
@@ -711,9 +787,40 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * the resolved Secrets Store values.
      */
     private async applyStartEnv(): Promise<void> {
-        const override = await this.readEnvOverride();
+        const { envVars } = await this.readOverride();
 
-        this.envVars = override === undefined ? { ...this.lunoraDeclaredEnv, ...(await this.resolveSecretsStoreEnv()) } : { ...override };
+        this.envVars = envVars === undefined ? { ...this.lunoraDeclaredEnv, ...(await this.resolveSecretsStoreEnv()) } : { ...envVars };
+    }
+
+    /**
+     * Resolve the image reference and instance size for the start about to
+     * happen (`durable_object` policy only): the persisted explicit choice, else
+     * the definition default. A fresh boot with neither an image nor a snapshot
+     * would be rejected by the runtime, so it fails here with the fix instead.
+     */
+    private async applyStartSelection(restoringSnapshot = false): Promise<void> {
+        if (!this.lunoraDurableObjectScheduled) {
+            return;
+        }
+
+        const selection = { ...this.lunoraDefaultSelection, ...(await this.readOverride()) };
+
+        // A running container needs no image — e.g. one restored from a snapshot,
+        // whose `fetch` / `exec` reach this through `startAndWaitForPorts`.
+        if (selection.image === undefined && !restoringSnapshot && this.ctx.container?.running !== true) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `container "${this.lunoraName}": no image to start — pass start({ image }) or start({ snapshot }), or set a default \`image\` in lunora/containers.ts`,
+            );
+        }
+
+        this.instance = selection.instanceType;
+        this.image = selection.image === undefined ? undefined : this.resolveImage(selection.image);
+    }
+
+    /** Map an image name to the reference `ctx.container.start()` takes, via `ctx.container.images`. */
+    private resolveImage(name: string): string {
+        return resolveImageReference(this.ctx.container?.images ?? {}, name, this.lunoraName);
     }
 
     /**

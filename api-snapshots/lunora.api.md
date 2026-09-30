@@ -1085,6 +1085,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowInstanceEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowInstanceStatus` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3420,6 +3424,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `resolveTraceAnchor` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `setHostSpanAttributes` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -5931,6 +5939,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowInstanceEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowInstanceStatus` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7726,6 +7738,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `WorkflowInstance` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WorkflowInstanceEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

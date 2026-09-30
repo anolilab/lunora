@@ -59,25 +59,23 @@ import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } fro
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
- * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
- * or generated `className`. `discoverWorkflows`/`discoverAgents` each guard
+ * Reject a workflow and an agent that share a deployed `name` or generated
+ * `className`. `discoverWorkflows`/`discoverAgents` each guard
  * uniqueness WITHIN their own kind, but both kinds land in the exact same
- * wrangler `workflows[]` array (matched only by `class_name`/binding) — an
+ * wrangler `exports` map (keyed by the generated class) — an
  * agent named like a workflow (or vice versa) passes both discoverers silently
  * and either fails late in wrangler or clobbers a binding at reconcile time.
- * The `className` check catches the case where the deployed `name`/`bindingName`
- * differ but the derived generated class collides — two implementations would
+ * The `className` check catches the case where the deployed `name`s differ but
+ * the derived generated class collides — two implementations would
  * then compete for one worker export/`class_name`. Runs after both are
  * discovered, before reconcile ever sees them.
  */
 const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, agents: ReadonlyArray<AgentIR>): void => {
     const namesByLabel = new Map<string, string>();
-    const bindingsByLabel = new Map<string, string>();
     const classesByLabel = new Map<string, string>();
 
     for (const workflow of workflows) {
         namesByLabel.set(workflow.name, `workflow "${workflow.exportName}"`);
-        bindingsByLabel.set(workflow.bindingName, `workflow "${workflow.exportName}"`);
         classesByLabel.set(workflow.className, `workflow "${workflow.exportName}"`);
     }
 
@@ -88,18 +86,7 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
             throw new LunoraError(
                 // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
                 "DUPLICATE_WORKFLOW_NAME",
-                `Duplicate deployed name "${agent.name}": produced by both ${priorName} and agent "${agent.exportName}". Workflow and agent names share the same wrangler workflows[] array and must be unique together.`,
-                { status: 500 },
-            );
-        }
-
-        const priorBinding = bindingsByLabel.get(agent.bindingName);
-
-        if (priorBinding !== undefined) {
-            throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
-                "DUPLICATE_WORKFLOW_BINDING",
-                `Duplicate binding "${agent.bindingName}": produced by both ${priorBinding} and agent "${agent.exportName}". Workflow and agent bindings share the same wrangler workflows[] array and must be unique together.`,
+                `Duplicate deployed name "${agent.name}": produced by both ${priorName} and agent "${agent.exportName}". Workflow and agent names share one account-wide namespace and must be unique together.`,
                 { status: 500 },
             );
         }
@@ -282,6 +269,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         cronTriggers: crons.length > 0,
         crossShardFanout: schema.tables.some((table) => isShardByTable(table)),
         containerEgressPolicy: codeSignals.containerEgressPolicy,
+        // Read off the container IR: the policy is deploy configuration codegen
+        // already lifts statically, so no separate AST signal is needed.
+        containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,
@@ -299,6 +289,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         vectorStore: schema.vectorIndexes.length > 0,
         workerLoaders: sandboxUsage.usesSandboxLoader,
         workflowRollback: codeSignals.workflowRollback,
+        // Read off the workflow IR like `cronTriggers` off the crons: the cron
+        // list is deploy configuration a host either turns into instances or
+        // silently ignores, and ignoring it means the workflow never runs.
+        workflowSchedules: workflows.some((workflow) => workflow.schedules !== undefined),
     });
     const featureUsage = platformGate.usage;
     // The gate's `vectorStore` verdict, named once for both consumers below.

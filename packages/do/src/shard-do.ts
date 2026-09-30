@@ -58,6 +58,7 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    setHostSpanAttributes,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -263,6 +264,7 @@ import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
@@ -476,8 +478,11 @@ interface TelemetrySink {
      * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
      * older compat date / when unsampled. This only ADDS a CF-side span; the
      * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
-     * source of truth. The bridge is now workerd-validated as available and
-     * side-effect-free inside a real DO (our recorded spans stay intact); CF's
+     * source of truth. Where the runtime has them, failures also get a native
+     * `recordException` and the `ctx.span` wide event is mirrored onto
+     * `tracing.getActiveSpan()` (the invocation root). The bridge is now
+     * workerd-validated as available and side-effect-free inside a real DO (our
+     * recorded spans stay intact); CF's
      * exported parent-linking under sampling is still unverified, so it stays
      * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
@@ -630,6 +635,13 @@ interface ShardDOState {
      * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Loopback bindings to the Worker's own top-level exports (`ctx.exports`) —
+     * where Cloudflare exposes the workflows and agents declared in wrangler
+     * `exports`, keyed by class name. Absent off Cloudflare.
+     */
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
 
     /**
@@ -2539,6 +2551,18 @@ abstract class ShardDO {
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
+
+        // Settle the host-tracing probe before the first dispatch, so every
+        // dispatch — including the isolate's first — reads it synchronously (the
+        // root-span mirror in `recordDispatchRootSpan` has no await to wait on).
+        // Memoized and self-catching, so the gate costs one dynamic import once.
+        state
+            .blockConcurrencyWhile?.(async () => {
+                await resolveHostTracing();
+            })
+            .catch(() => {
+                /* unreachable: the probe catches its own failures */
+            });
 
         // Build the provider-neutral Cloudflare host adapters and mount the
         // host-neutral shard engine runner. The runner owns the platform contract
@@ -7791,22 +7815,34 @@ abstract class ShardDO {
         const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
         try {
-            this.spans.push(
-                dispatchRootSpan({
-                    anchor,
-                    // Raw failure messages in dev only — matches `makeTracer`'s
-                    // `captureRaw` posture for this synthetic root span.
-                    captureRaw: isDevEnvironment(this.env),
-                    // The wide event, if the handler attached one through `ctx.span`.
-                    ...(collected === undefined ? {} : { collected }),
-                    durationMs,
-                    failure,
-                    functionPath,
-                    shardKey: this.runner.shardKey,
-                    startTs: startedAt,
-                    userId: this.getCurrentUserId(),
-                }),
-            );
+            const rootSpan = dispatchRootSpan({
+                anchor,
+                // Raw failure messages in dev only — matches `makeTracer`'s
+                // `captureRaw` posture for this synthetic root span.
+                captureRaw: isDevEnvironment(this.env),
+                // The wide event, if the handler attached one through `ctx.span`.
+                ...(collected === undefined ? {} : { collected }),
+                durationMs,
+                failure,
+                functionPath,
+                shardKey: this.runner.shardKey,
+                startTs: startedAt,
+                userId: this.getCurrentUserId(),
+            });
+
+            this.spans.push(rootSpan);
+
+            // Fused: land the (already redacted) wide-event attributes on the
+            // host's own invocation span too. Every `ctx.trace` custom span has
+            // ended by now, so `getActiveSpan()` is the invocation's root span —
+            // the host-side twin of this dispatch. The probe settled at construction.
+            if (wide?.sink?.fuseCloudflareTraces === true && rootSpan.attributes !== undefined) {
+                const hostSpan = cloudflareTracing?.getActiveSpan?.();
+
+                if (hostSpan !== undefined) {
+                    setHostSpanAttributes(hostSpan, rootSpan.attributes);
+                }
+            }
         } catch {
             // Best-effort — span capture must never fail a served request.
         }
@@ -9133,37 +9169,34 @@ abstract class ShardDO {
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
 
     /**
-     * Resolve a declared workflow's runtime binding handle from this shard's `env`.
-     * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
-     * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
-     * reads `env[binding]` and validates it carries the `create`/`get` methods. A
-     * bad export name or a missing/malformed binding throws a 400 `LunoraError` so
-     * the studio surfaces an actionable message instead of a generic 500.
+     * Resolve a declared workflow's runtime binding handle. Looks the
+     * `exportName` up in {@link workflowsMetadata} (the codegen subclass's
+     * statically-discovered list) to find its export key (the generated class
+     * name), then reads it off this shard's `ctx.exports` — or `env`, on a host
+     * without workflow exports — and validates it carries the `create`/`get`
+     * methods. A bad export name or a missing/malformed binding throws a 400
+     * `LunoraError` so the studio surfaces an actionable message instead of a
+     * generic 500.
      */
-    private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
+    private declaredWorkflowHandle(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
             throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
-        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+        const binding = resolveWorkflowHandle<WorkflowBindingHandle>(this.env, this.state.exports, metadata.className, ["create", "get"]);
 
-        if (
-            typeof binding !== "object" ||
-            binding === null ||
-            typeof (binding as WorkflowBindingHandle).create !== "function" ||
-            typeof (binding as WorkflowBindingHandle).get !== "function"
-        ) {
-            throw new LunoraError("BAD_REQUEST", `workflow binding "${metadata.binding}" is not available on this deployment`);
+        if (binding === undefined) {
+            throw new LunoraError("BAD_REQUEST", `workflow "${metadata.className}" is not available on this deployment`);
         }
 
-        return binding as WorkflowBindingHandle;
+        return binding;
     }
 
     /**
      * Serve `__lunora_admin__:createWorkflowInstance` — the studio's "Start
-     * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
+     * instance" button. Resolves the declared workflow's binding and
      * calls `.create({ id?, params })`, returning the new instance's id and initial
      * status. No SQLite write happens (workflows are not Durable Objects and hold
      * no shard state), so this only records an audit entry — there's nothing to
@@ -9171,7 +9204,7 @@ abstract class ShardDO {
      */
     private async handleCreateWorkflowInstance(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseCreateWorkflowInstanceArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.create({ id: parsed.id, params: parsed.params });
         const snapshot = await instance.status();
@@ -9191,7 +9224,7 @@ abstract class ShardDO {
      */
     private async handleGetWorkflowInstanceStatus(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseGetWorkflowInstanceStatusArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.get(parsed.id);
         const snapshot = await instance.status();
@@ -9840,7 +9873,7 @@ abstract class ShardDO {
      * statically-discovered list) to find its generated `QUEUE_*` binding, then
      * reads `env[binding]` and validates it carries `send`/`sendBatch`. A bad export
      * name or a missing/malformed binding throws a 400 `LunoraError` so the studio
-     * surfaces an actionable message. Mirrors {@link resolveWorkflowBinding}.
+     * surfaces an actionable message. Mirrors {@link declaredWorkflowHandle}.
      */
     private resolveQueueBinding(exportName: string): { binding: QueueBindingHandle; metadata: QueueMetadata } {
         const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);
@@ -10124,6 +10157,10 @@ abstract class ShardDO {
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.
+            // Deliberately WITHOUT `{ retryAlarm: false }`: this is an admin
+            // request, not the alarm, and an in-flight alarm it interrupts (the
+            // scheduler / poll tick that re-arms itself) must retry against the
+            // restored state, or the self-re-arming chain could stop for good.
             this.state.abort?.("lunora PITR restore");
         }
 

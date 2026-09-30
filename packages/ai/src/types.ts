@@ -45,6 +45,39 @@ export interface AiGatewayOptions {
 }
 
 /**
+ * Options for the raw `ctx.ai.run(...)` passthrough — the Workers AI binding's
+ * third argument. Unlisted keys are forwarded to the binding unchanged.
+ * @experimental
+ */
+export interface AiRunOptions {
+    [key: string]: unknown;
+    /** Route this call through a Cloudflare AI Gateway. Defaults to the gateway `createAi` resolved. */
+    gateway?: AiGatewayOptions;
+
+    /**
+     * Fail at once instead of waiting in the Workers AI capacity queue when no
+     * capacity is free. The rejection surfaces as a `LunoraError` with code
+     * `RATE_LIMITED` (Workers AI error `3040`, HTTP 429).
+     */
+    rejectIfBusy?: boolean;
+}
+
+/**
+ * Per-call settings for `ctx.ai.model(...)`. Applied to Workers AI model ids
+ * (`@cf/…`) only; a gateway slug or a bring-your-own model ignores them.
+ * @experimental
+ */
+export interface AiModelOptions {
+    /**
+     * Fail at once instead of waiting in the Workers AI capacity queue. The
+     * provider reports the rejection as an AI SDK `APICallError` with
+     * `statusCode: 429`, which the AI SDK retries unless the call sets
+     * `maxRetries: 0`.
+     */
+    rejectIfBusy?: boolean;
+}
+
+/**
  * Structural slice of the span handle `ctx.trace` hands its body — enough to
  * attach a model call's usage once it is known. Declared here rather than
  * imported so `@lunora/ai` takes no dependency on `@lunora/server`; the real
@@ -203,7 +236,7 @@ export interface LunoraAi {
      * provider key in the app) or, with `LUNORA_AI_PROXY_URL` set, to that
      * OpenAI-compatible proxy; an object → passthrough.
      */
-    model: (model?: ModelInput) => LanguageModel;
+    model: (model?: ModelInput, options?: AiModelOptions) => LanguageModel;
 
     /**
      * Raw Workers AI binding passthrough (void-style `ai.run`). Bypasses the AI
@@ -211,7 +244,7 @@ export interface LunoraAi {
      * translation) not surfaced through the provider. Throws if no binding was
      * supplied.
      */
-    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+    run: (model: string, inputs: Record<string, unknown>, options?: AiRunOptions) => Promise<unknown>;
     /** The underlying Workers AI provider — `ai.workersai("@cf/...")` for a raw model. */
     workersai: WorkersAiProviderLike;
 }

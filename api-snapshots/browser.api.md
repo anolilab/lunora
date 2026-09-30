@@ -31,6 +31,50 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `BrowserRestApiOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `BrowserRunCrawlEvent` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `BrowserRunCrawlEventConfig` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `BrowserRunEventEnvelope` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlFormat` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlJob` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlJobStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlRecord` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlRecordStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `CrawlResultOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `LunoraBrowserOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -47,7 +91,19 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `QuickActionName` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `QuickActionOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ScreenshotOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `SnapshotFormat` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

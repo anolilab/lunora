@@ -12,7 +12,7 @@ const immediate = async (): Promise<void> => {};
 const SUB_AGENT_ERRORED = /Sub-agent "research" errored/u;
 const SUB_AGENT_TERMINATED = /Sub-agent "research" terminated/u;
 const DID_NOT_FINISH = /did not finish within/u;
-const NO_WORKFLOW_BINDING = /no Workflow binding "AGENT_RESEARCH"/u;
+const NO_WORKFLOW_BINDING = /no "ResearchAgentWorkflow" on ctx.exports or env/u;
 const REQUIRES_NAME = /requires a `name`/u;
 const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
 const QUOTA_EXCEEDED = /quota exceeded/u;
@@ -127,7 +127,7 @@ describe(agentAsTool, () => {
         const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 3 }]);
 
         const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
-        const output = await tool.execute({ prompt: "find X" }, context({ AGENT_RESEARCH: binding }, run));
+        const output = await tool.execute({ prompt: "find X" }, context({ ResearchAgentWorkflow: binding }, run));
 
         expect(output).toBe("the answer");
         expect(binding.created).toHaveLength(1);
@@ -150,7 +150,7 @@ describe(agentAsTool, () => {
         // duplicate, so it rethrows, the enclosing `step.do` burns its retries,
         // and `codeTool` + `asTool` never worked together at all.
         const tool = agentAsTool({ description: "Delegate research.", name: "research", wait: immediate });
-        const output = await tool.execute({ prompt: "find X" }, context({ AGENT_RESEARCH: binding }, run, { toolCallId: "call_9:fetch" }));
+        const output = await tool.execute({ prompt: "find X" }, context({ ResearchAgentWorkflow: binding }, run, { toolCallId: "call_9:fetch" }));
 
         expect(output).toBe("the answer");
         expect(binding.created[0]?.id).toStrictEqual(expect.stringMatching(ENGINE_INSTANCE_ID_PATTERN));
@@ -163,7 +163,7 @@ describe(agentAsTool, () => {
         const { keys, run } = runWithChildThread([{ content: "done", role: "assistant", seq: 1 }]);
 
         const tool = agentAsTool({ description: "Delegate.", name: "research", wait: immediate });
-        const output = await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run));
+        const output = await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run));
 
         expect(output).toBe("done");
         // The child answer is read from its persisted thread (the source of truth).
@@ -174,8 +174,10 @@ describe(agentAsTool, () => {
         const errored = agentAsTool({ description: "d", name: "research", wait: immediate });
         const { run } = runWithChildThread([]);
 
-        await expect(errored.execute({ prompt: "go" }, context({ AGENT_RESEARCH: mockAgentBinding(["errored"]) }, run))).resolves.toMatch(SUB_AGENT_ERRORED);
-        await expect(errored.execute({ prompt: "go" }, context({ AGENT_RESEARCH: mockAgentBinding(["terminated"]) }, run))).resolves.toMatch(
+        await expect(errored.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: mockAgentBinding(["errored"]) }, run))).resolves.toMatch(
+            SUB_AGENT_ERRORED,
+        );
+        await expect(errored.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: mockAgentBinding(["terminated"]) }, run))).resolves.toMatch(
             SUB_AGENT_TERMINATED,
         );
     });
@@ -186,7 +188,7 @@ describe(agentAsTool, () => {
 
         const tool = agentAsTool({ description: "d", maxPolls: 3, name: "research", wait: immediate });
 
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
     });
 
     it("throws a clear error when the child agent's binding is absent", async () => {
@@ -204,7 +206,7 @@ describe(agentAsTool, () => {
         // A real create failure (quota/config/service error) must surface, not
         // fall through to `binding.get()` and return some other instance's
         // (possibly stale/empty) answer.
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).rejects.toThrow(QUOTA_EXCEEDED);
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).rejects.toThrow(QUOTA_EXCEEDED);
     });
 
     it("takes over the existing instance on a genuine duplicate-instance-id error", async () => {
@@ -214,7 +216,7 @@ describe(agentAsTool, () => {
 
         // A duplicate-instance-id rejection means a prior attempt already
         // created this child run — take it over rather than failing.
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toBe("already running answer");
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toBe("already running answer");
     });
 
     it("is exposed as `agent.asTool` and drives a durable sub-run inside the loop", async () => {
@@ -250,7 +252,7 @@ describe(agentAsTool, () => {
 
         const generate = scriptedGenerate([toolTurn("call_9", "research", { prompt: "find X" }, "delegating…"), { text: "Done.", toolCalls: [] }]);
 
-        const result = await runAgentLoop(loopDefaults(supervisor, { env: { AGENT_RESEARCH: binding }, generate, run: runtime.run, step: journal }));
+        const result = await runAgentLoop(loopDefaults(supervisor, { env: { ResearchAgentWorkflow: binding }, generate, run: runtime.run, step: journal }));
 
         expect(result.stopped).toBe("final");
         expect(journal.invoked).toStrictEqual(["llm:turn:0", "tool:research:call_9", "llm:turn:1"]);
@@ -280,7 +282,7 @@ describe("sub-agent recursion bound", () => {
         const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 0 }]);
         const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
 
-        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run));
+        await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run));
 
         // A top-level run is depth 0, so its child runs at depth 1.
         expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "go", threadKey: "thread-1::sub::research::call_9" });
@@ -291,7 +293,7 @@ describe("sub-agent recursion bound", () => {
         const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 0 }]);
         const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
 
-        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { depth: 2 }));
+        await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run, { depth: 2 }));
 
         expect((binding.created[0]?.params as { depth?: number }).depth).toBe(3);
     });
@@ -305,7 +307,7 @@ describe("sub-agent recursion bound", () => {
         // forever: every level mints a DISTINCT child threadKey, so the per-thread
         // run-queue cap never applies across them and `maxTurns` only bounds each
         // level. The depth counter is what bounds the TREE.
-        const answer = await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { depth: 3 }));
+        const answer = await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run, { depth: 3 }));
 
         expect(answer).toMatch(DEPTH_EXCEEDED);
         expect(binding.created).toStrictEqual([]);
@@ -323,7 +325,7 @@ describe("sub-agent recursion bound", () => {
 
         await runAgentLoop(
             loopDefaults(supervisor, {
-                env: { AGENT_RESEARCH: binding },
+                env: { ResearchAgentWorkflow: binding },
                 generate,
                 params: { depth: 3, input: "hello", threadKey: "thread-1" },
                 run: runtime.run,
@@ -362,7 +364,7 @@ describe("sub-agent recursion bound", () => {
 
         // Giving up on the poll did NOT stop the child: the parent reported "did
         // not finish" while the subtree kept running (and billing) invisibly.
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
         expect(terminated).toBe(1);
     });
 
@@ -385,7 +387,7 @@ describe("sub-agent recursion bound", () => {
         const { run } = runWithChildThread([]);
         const tool = agentAsTool({ description: "d", maxPolls: 2, name: "research", wait: immediate });
 
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toMatch(DID_NOT_FINISH);
     });
 });
 
@@ -398,7 +400,7 @@ describe("child-run reporting", () => {
 
         const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
 
-        await expect(tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run))).resolves.toMatch(TURN_CAP_PATTERN);
+        await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toMatch(TURN_CAP_PATTERN);
     });
 
     it("creates the child thread under the PARENT run's owner", async () => {
@@ -407,7 +409,7 @@ describe("child-run reporting", () => {
 
         const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
 
-        await tool.execute({ prompt: "go" }, context({ AGENT_RESEARCH: binding }, run, { owner: "user-7" }));
+        await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run, { owner: "user-7" }));
 
         // Created ownerless, the sub-thread of an owned conversation was readable by
         // anyone who knew its (derivable) key.

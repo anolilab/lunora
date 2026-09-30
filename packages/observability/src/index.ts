@@ -31,9 +31,6 @@ export type {
     ContextFetch,
     ContextMetrics,
     ContextTracer,
-    HostSpanLike,
-    HostTracingLike,
-    HostTracingResolver,
     MetricEvent,
     MetricKind,
     MetricsDeps,
@@ -71,6 +68,8 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
+export type { HostSpanLike, HostTracingLike, HostTracingResolver } from "./host-span";
+export { setHostSpanAttributes } from "./host-span";
 export type { AiRunBinding, ExplainIssueArgs, ExplainIssueDegradedReason, ExplainIssueGrounding, ExplainIssueResult } from "./issue-explainer";
 export { DEFAULT_EXPLAIN_ISSUE_MODEL, explainIssue, parseExplainIssueArgs } from "./issue-explainer";
 export type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";

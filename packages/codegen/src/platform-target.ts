@@ -259,6 +259,8 @@ interface PlatformSignals {
     commitOrderedTables?: boolean;
     /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
     containerEgressPolicy?: boolean;
+    /** A `defineContainer({ schedulingPolicy: "durable_object" })` — runtime image/size choice and snapshots. */
+    containerRuntimeScheduling?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
@@ -279,6 +281,8 @@ interface PlatformSignals {
     workerLoaders?: boolean;
     /** A `defineStep({ rollback })` compensation. */
     workflowRollback?: boolean;
+    /** A `defineWorkflow({ schedules })` cron list. */
+    workflowSchedules?: boolean;
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
@@ -286,6 +290,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "agents",
     "commitOrderedTables",
     "containerEgressPolicy",
+    "containerRuntimeScheduling",
     "cronTriggers",
     "crossShardFanout",
     "durableStreams",
@@ -296,6 +301,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "vectorStore",
     "workerLoaders",
     "workflowRollback",
+    "workflowSchedules",
 ] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
@@ -303,6 +309,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     agents: "durable agents (`defineAgent`)",
     commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
     containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
+    containerRuntimeScheduling: 'per-instance container images and snapshots (`defineContainer({ schedulingPolicy: "durable_object" })`)',
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
@@ -313,6 +320,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     vectorStore: "vector indexes (`.vectorize()`)",
     workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",
     workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
+    workflowSchedules: "scheduled workflow instances (`defineWorkflow({ schedules })`)",
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */

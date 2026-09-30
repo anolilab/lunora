@@ -138,7 +138,7 @@ describe("createWorkflowRunContext", () => {
         expect(names).toStrictEqual(["processItem", "processItem", "processItem"]);
     });
 
-    it("spawning a workflow with no matching WORKFLOW_* binding throws a helpful error", async () => {
+    it("spawning a workflow with no matching workflow export throws a helpful error", async () => {
         expect.assertions(1);
 
         const ctx = createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() });
@@ -296,7 +296,7 @@ describe("createWorkflowRunContext", () => {
         const event = { ...makeEvent(), instanceId: "order-42" };
 
         const spawnFrom = async (exportName: string): Promise<void> => {
-            await createWorkflowRunContext({ env: { WORKFLOW_SEND_RECEIPT: binding }, event, exportName, step }).spawn("sendReceipt", {});
+            await createWorkflowRunContext({ env: { SendReceiptWorkflow: binding }, event, exportName, step }).spawn("sendReceipt", {});
         };
 
         await spawnFrom("chargeOrder");

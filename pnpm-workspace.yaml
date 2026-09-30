@@ -358,8 +358,8 @@ catalogs:
     # That leg has never been run — it was outstanding at 1.3.5 too, so 1.3.6 does not
     # cross a line 1.3.5 was on the safe side of. Types and the 89 local specs pass.
     "@cloudflare/playwright": 1.3.6
-    "@cloudflare/vitest-plugin": ^1.1.4
-    # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
+    "@cloudflare/vitest-plugin": ^1.3.2
+    # PATCHED (patches/@cloudflare__workers-types@5.20260929.1.patch), and the patch
     # is version-pinned in `patchedDependencies` — so this range must be exact, not a
     # caret: upstream publishes daily, and any drift makes the patch unused, which is
     # a hard install failure (ERR_PNPM_UNUSED_PATCH). Regenerate the patch when bumping.
@@ -369,9 +369,11 @@ catalogs:
     # alone). That makes every `process.*` and `Buffer.*` read an untyped `any`,
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
-    "@cloudflare/workers-types": 5.20260811.1
+    "@cloudflare/workers-types": 5.20260929.1
     miniflare: ^4.20260730.0
-    wrangler: ^4.129.0
+    # >= 4.142.0 for Workflows declared in `exports` (and run on `ctx.exports`
+    # locally), >= 4.143 for the containers `durable_object` scheduling policy.
+    wrangler: ^4.143.1
   e2e:
     "@playwright/test": ^1.63.0
     playwright: ^1.63.0
@@ -446,11 +448,10 @@ catalogs:
     # worker is the backend — so `pnpm run e2e` covers it. (There is no
     # `@lunora/vite dev` script; an earlier revision of this note named one.)
     #
-    # 1.54.4 vetted that way on 2026-09-08: 31/31 chromium specs, and its
-    # workerd 1.20260903.1 / wrangler 4.129.0 / miniflare 5.20260903.0-alpha are all
-    # past the age gate. The alpha-tagged miniflare is not new — 1.51.2 shipped
-    # 5.20260804.0-alpha — it is how this plugin pins its own runtime.
-    "@cloudflare/vite-plugin": 1.54.4
+    # 1.62.1 (>= 1.61.0 runs Workflows declared in `exports` on `ctx.exports`
+    # locally) — see the e2e note in the commit that bumped it. The alpha-tagged
+    # miniflare is how this plugin pins its own runtime.
+    "@cloudflare/vite-plugin": 1.62.1
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
     "@visulima/vite-overlay": 2.0.20
@@ -1094,6 +1095,6 @@ packageExtensions:
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
-  '@cloudflare/workers-types@5.20260811.1': patches/@cloudflare__workers-types@5.20260811.1.patch
+  '@cloudflare/workers-types@5.20260929.1': patches/@cloudflare__workers-types@5.20260929.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch

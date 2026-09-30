@@ -85,7 +85,9 @@ const emitContainerFragments = (
 
     const specEntries = containers
         .map((container) => {
-            const maxInstances = container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
+            // The `.any()` pool size; a `durable_object` container has no cap to size it by.
+            const maxInstances =
+                container.schedulingPolicy !== undefined || container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
 
             return `    { binding: "${container.bindingName}", exportName: "${container.exportName}"${maxInstances} },`;
         })
@@ -136,7 +138,7 @@ const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>): string => {
             assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
             assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
 
-            return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition (binding \`${workflow.bindingName}\`). */
+            return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition, reached as \`ctx.exports.${workflow.className}\`. */
 export class ${workflow.className} extends LunoraWorkflow<WorkflowParamsOf<typeof ${workflow.exportName}>, WorkflowOutputOf<typeof ${workflow.exportName}>> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, ${workflow.exportName}, "${workflow.exportName}");
@@ -195,7 +197,7 @@ const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
             assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
             assertIdentifier(agent.className, `agent class "${agent.className}"`);
 
-            const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent (binding \`${agent.bindingName}\`). */
+            const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent, reached as \`ctx.exports.${agent.className}\`. */
 export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunResult> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, compileAgentWorkflow(${agent.exportName}, "${agent.exportName}"), "${agent.exportName}");
@@ -301,9 +303,9 @@ ${entries}
  * The `ctx.workflows` code fragments woven into the generated ShardDO, or empty
  * strings when the project declares no workflows. Mirrors
  * {@link emitContainerFragments}: the spec list is emitted as a
- * `LUNORA_WORKFLOWS` const and handed to `createWorkflowContext`, which resolves
- * the `WORKFLOW_*` bindings off `env` lazily (a missing binding only throws when
- * the handle is used).
+ * `LUNORA_WORKFLOWS` const and handed to `createWorkflowContext` with the shard
+ * DO's `ctx.exports`, which resolves each workflow by its class name lazily (a
+ * missing one only throws when the handle is used).
  */
 const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (workflows.length === 0) {
@@ -312,14 +314,14 @@ const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: s
 
     for (const workflow of workflows) {
         assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
-        assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
+        assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
     }
 
-    const specEntries = workflows.map((workflow) => `    { binding: "${workflow.bindingName}", exportName: "${workflow.exportName}" },`).join("\n");
+    const specEntries = workflows.map((workflow) => `    { className: "${workflow.className}", exportName: "${workflow.exportName}" },`).join("\n");
 
     return {
         build: `
-            const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);
+            const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);
 `,
         contextField: `\n                workflows,`,
         importLines: [`import type { WorkflowBindingSpec } from "@lunora/workflow";`, `import { createWorkflowContext } from "@lunora/workflow";`],
@@ -373,7 +375,7 @@ ${specEntries}
 
 /**
  * The `ctx.agents` producer fragments, mirroring {@link emitQueueFragments}.
- * Every declared agent resolves its `AGENT_*` Workflow binding off `env` lazily
+ * Every declared agent resolves off the shard DO's `ctx.exports` lazily
  * (via `createAgentContext`), so a missing binding only throws when that agent
  * is actually started. `ctx.agents` rides Mutation + Action contexts (starting a
  * run is a side effect — the type omits it from QueryCtx), but at runtime it is
@@ -386,16 +388,16 @@ const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; co
 
     for (const agent of agents) {
         assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
-        assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
+        assertIdentifier(agent.className, `agent class "${agent.className}"`);
     }
 
     const specEntries = agents
-        .map((agent) => `    { binding: "${agent.bindingName}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
+        .map((agent) => `    { className: "${agent.className}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
         .join("\n");
 
     return {
         build: `
-            const agents = createAgentContext(env, LUNORA_AGENTS);
+            const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });
 `,
         contextField: `\n                agents,`,
         importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
@@ -444,7 +446,6 @@ const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): {
     const metadata: WorkflowsResult = {
         workflows: workflows.map((workflow) => {
             return {
-                binding: workflow.bindingName,
                 className: workflow.className,
                 exportName: workflow.exportName,
                 name: workflow.name,

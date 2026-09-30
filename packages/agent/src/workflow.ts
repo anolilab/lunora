@@ -89,6 +89,7 @@ const compileAgentWorkflow = (
                 // takes the byte-identical no-compaction path.
                 compact: createCompact(),
                 env: context.env,
+                exports: context.exports,
                 exportName,
                 // Run-end graph extraction. Dormant unless the agent declares a
                 // `kind: "graph"` memory source AND the run carries an owner — the

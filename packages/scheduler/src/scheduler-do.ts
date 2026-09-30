@@ -254,7 +254,7 @@ interface ScheduleRequestBody {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * The workflow/agent export key (its generated class name) to start a fresh durable instance
      * of on fire (the {@link ScheduleRequestBody.args} become its `params`). Set
      * instead of {@link ScheduleRequestBody.functionPath} when the job targets a
      * workflow/agent. Passed straight through to the dispatch payload so the
@@ -435,7 +435,7 @@ class SchedulerDO {
     /**
      * Normalize the mutually-exclusive dispatch target off an untrusted body: a
      * one-shot function path (`functionPath`) or a durable workflow/agent
-     * instance (`workflow`, a `WORKFLOW_*`/`AGENT_*` binding). Returns `undefined`
+     * instance (`workflow`, a workflow/agent export key). Returns `undefined`
      * when neither is present so the caller can reject the schedule.
      */
     private static resolveScheduleTarget(body: ScheduleRequestBody | undefined): { functionPath?: string; workflow?: string } | undefined {

@@ -272,6 +272,10 @@ const execViaFetch =
                     command,
                     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
                     ...(options.env === undefined ? {} : { env: options.env }),
+                    // Lets a runner that buffers the output itself — the native
+                    // `ctx.container.exec()` path in `LunoraContainer` — stop at
+                    // the same cap instead of holding more than the caller reads.
+                    maxOutputBytes: limit,
                     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
                 }),
                 headers: { "content-type": "application/json", [CONTAINER_EXEC_HEADER]: "1" },
@@ -329,4 +333,4 @@ const execViaFetch =
     };
 
 export type { ContainerExecOptions, ContainerExecResult };
-export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, execViaFetch, pathMatchesAnyDecoding };
+export { CONTAINER_EXEC_HEADER, CONTAINER_EXEC_PATH, DEFAULT_EXEC_MAX_OUTPUT_BYTES, execViaFetch, pathMatchesAnyDecoding };

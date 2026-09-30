@@ -31,6 +31,24 @@ interface CustomContainerInstanceType {
 type ContainerInstanceType = CustomContainerInstanceType | NamedContainerInstanceType;
 
 /**
+ * An instance size a Durable Object can pick at start under the
+ * `durable_object` scheduling policy. The runtime does not accept `basic` (or
+ * the legacy `dev`/`standard` aliases), and a custom size must set all three
+ * fields — it is passed to `ctx.container.start({ instance })` as-is.
+ */
+type ContainerRuntimeInstanceType = Exclude<NamedContainerInstanceType, "basic"> | Required<CustomContainerInstanceType>;
+
+/**
+ * One named image under the `durable_object` scheduling policy. A `string` is
+ * a local Dockerfile path or directory, built and uploaded by `wrangler deploy`
+ * (wrangler `dockerfile` + `build_context`); `{ registry }` must be a
+ * digest-pinned (`@sha256:…`) reference under `registry.cloudflare.com/`,
+ * the Cloudflare managed registry — Cloudflare does not accept Docker Hub, ECR
+ * or Artifact Registry references here.
+ */
+type ContainerNamedImageSource = RegistryImageSource | string;
+
+/**
  * Rolling-deploy tuning for a container.
  */
 interface ContainerRollout {
@@ -81,18 +99,18 @@ type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 interface ContainerReadinessCheck {
     /** HTTP path probed on the container, e.g. `"/ready"` (a leading slash is optional). */
     path: string;
-    /** Port to probe. Defaults to {@link ContainerConfig.defaultPort}. */
+    /** Port to probe. Defaults to {@link ContainerConfigBase.defaultPort}. */
     port?: number;
     /** HTTP status that means "ready". Defaults to `200`. */
     status?: number;
 }
 
 /**
- * `ContainerConfig` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ * The fields every container accepts, whichever scheduling policy it uses.
  */
-interface ContainerConfig {
+interface ContainerConfigBase {
     /**
-     * Hostnames the container may reach **even when {@link ContainerConfig.enableInternet}
+     * Hostnames the container may reach **even when {@link ContainerConfigBase.enableInternet}
      * is `false`** — an egress allow-list (Cloudflare's `allowedHosts`). Glob
      * patterns like `*.stripe.com` are supported. Pair with `enableInternet:
      * false` to deny all egress except these hosts (the firewall pattern
@@ -106,7 +124,7 @@ interface ContainerConfig {
     /**
      * Build-time variables for a Dockerfile/Railpack image — wrangler's
      * `image_vars` (equivalent to `docker build --build-arg`). For *runtime*
-     * values use {@link ContainerConfig.env} / {@link ContainerConfig.secrets}.
+     * values use {@link ContainerConfigBase.env} / {@link ContainerConfigBase.secrets}.
      * Ignored for a pre-built `{ registry }` image.
      */
     buildArgs?: Readonly<Record<string, string>>;
@@ -114,7 +132,7 @@ interface ContainerConfig {
     /**
      * The port the container listens on. Worker → container requests target
      * this port. Locally the Dockerfile must also `EXPOSE` it. For a
-     * multi-port container also declare {@link ContainerConfig.requiredPorts}
+     * multi-port container also declare {@link ContainerConfigBase.requiredPorts}
      * and route per request with the handle's `.port(n)`.
      */
     defaultPort?: number;
@@ -122,7 +140,7 @@ interface ContainerConfig {
     /**
      * Hostnames the container may **never** reach — an egress deny-list
      * (Cloudflare's `deniedHosts`). Overrides everything else, including
-     * `enableInternet: true` and {@link ContainerConfig.allowedHosts}. Glob
+     * `enableInternet: true` and {@link ContainerConfigBase.allowedHosts}. Glob
      * patterns like `*.evil.com` are supported.
      */
     deniedHosts?: ReadonlyArray<string>;
@@ -130,8 +148,8 @@ interface ContainerConfig {
     /**
      * Whether the container may open outbound internet connections. Defaults
      * to `true` — the platform default. Note that container egress is billed
-     * per GB by Cloudflare. Combine with {@link ContainerConfig.allowedHosts} /
-     * {@link ContainerConfig.deniedHosts} for a precise egress firewall.
+     * per GB by Cloudflare. Combine with {@link ContainerConfigBase.allowedHosts} /
+     * {@link ContainerConfigBase.deniedHosts} for a precise egress firewall.
      */
     enableInternet?: boolean;
 
@@ -144,7 +162,7 @@ interface ContainerConfig {
 
     /**
      * Static environment variables passed to the container on every start.
-     * For secret values use {@link ContainerConfig.secrets} instead so they
+     * For secret values use {@link ContainerConfigBase.secrets} instead so they
      * flow through Worker Secrets rather than source code.
      */
     env?: Readonly<Record<string, string>>;
@@ -152,7 +170,7 @@ interface ContainerConfig {
     /**
      * Hard cap on how long an instance may run, measured from start regardless
      * of activity — a runaway-cost backstop on top of the idle
-     * {@link ContainerConfig.sleepAfter}. Same grammar as `sleepAfter`
+     * {@link ContainerConfigBase.sleepAfter}. Same grammar as `sleepAfter`
      * (`"30s"`, `"5m"`, `"1h"`, or a plain number of seconds). When it elapses,
      * the `LunoraContainer.onHardTimeoutExpired` hook runs (default: `stop()`,
      * which sends SIGTERM and does not escalate — a container that ignores the
@@ -160,15 +178,6 @@ interface ContainerConfig {
      * `destroy()`). (Upstream cloudflare/containers#85.)
      */
     hardTimeout?: number | string;
-
-    /** Image source — a local Dockerfile path/directory or a registry reference. */
-    image: ContainerImageSource;
-
-    /**
-     * Resource class for each instance: a named Cloudflare instance type or a
-     * custom `{ vcpu, memoryMib, diskMb }` object.
-     */
-    instanceType?: ContainerInstanceType;
 
     /**
      * Intercept the container's outbound **HTTPS** traffic so the egress
@@ -186,12 +195,6 @@ interface ContainerConfig {
      * `start({ labels })`.
      */
     labels?: Readonly<Record<string, string>>;
-
-    /**
-     * Maximum number of concurrently *running* instances. Stopped (slept)
-     * containers don't count. Also the default pool size for `.any()`.
-     */
-    maxInstances?: number;
 
     /**
      * Override for the wrangler `containers[].name` identifier. Defaults to
@@ -221,18 +224,10 @@ interface ContainerConfig {
      * Ports the container must be listening on before it's considered ready
      * (Cloudflare's `requiredPorts`) — for multi-port containers. Start-up
      * waits for every listed port, and the handle's `.port(n)` routes a request
-     * to any of them; {@link ContainerConfig.defaultPort} is the target when a
+     * to any of them; {@link ContainerConfigBase.defaultPort} is the target when a
      * request doesn't pick one.
      */
     requiredPorts?: ReadonlyArray<number>;
-
-    /**
-     * Rolling-deploy tuning. `stepPercentage` is the share of instances updated
-     * per rollout step (wrangler `rollout_step_percentage`); `gracePeriodSeconds`
-     * is how long an active instance is left running before it's eligible for
-     * update (wrangler `rollout_active_grace_period`).
-     */
-    rollout?: ContainerRollout;
 
     /**
      * Names of Worker secrets (from `wrangler secret` / `.dev.vars`) forwarded
@@ -248,7 +243,7 @@ interface ContainerConfig {
      * binding name*. Each binding is resolved with its async `.get()` the first
      * time the instance starts, then injected as that env var — e.g.
      * `{ STRIPE_KEY: "STRIPE_SECRET" }` runs `env.STRIPE_SECRET.get()` and sets
-     * `STRIPE_KEY` inside the container. Unlike {@link ContainerConfig.secrets}
+     * `STRIPE_KEY` inside the container. Unlike {@link ContainerConfigBase.secrets}
      * (plain Worker text secrets), this pulls from a `secrets_store_secrets`
      * binding. A name already used by `env`/`secrets` is rejected at authoring
      * time; a missing binding or unreadable value fails the start. Applies
@@ -267,12 +262,105 @@ interface ContainerConfig {
 }
 
 /**
+ * A container under the `default` scheduling policy: one application-wide
+ * image and instance size, set in wrangler and rolled out by Cloudflare on
+ * deploy.
+ */
+interface DefaultScheduledContainerConfig extends ContainerConfigBase {
+    /** Image source — a local Dockerfile path/directory or a registry reference. */
+    image: ContainerImageSource;
+
+    /**
+     * Resource class for each instance: a named Cloudflare instance type or a
+     * custom `{ vcpu, memoryMib, diskMb }` object.
+     */
+    instanceType?: ContainerInstanceType;
+
+    /**
+     * Maximum number of concurrently *running* instances. Stopped (slept)
+     * containers don't count. Also the default pool size for `.any()`.
+     */
+    maxInstances?: number;
+
+    /**
+     * Rolling-deploy tuning. `stepPercentage` is the share of instances updated
+     * per rollout step (wrangler `rollout_step_percentage`); `gracePeriodSeconds`
+     * is how long an active instance is left running before it's eligible for
+     * update (wrangler `rollout_active_grace_period`).
+     */
+    rollout?: ContainerRollout;
+
+    /**
+     * Where the image and instance size are configured. `"default"` (the
+     * default) sets them once in wrangler; `"durable_object"` is the
+     * per-instance policy.
+     * Immutable once deployed: switching policies means a new container
+     * application, which replaces every running instance.
+     */
+    schedulingPolicy?: "default";
+}
+
+/**
+ * A container under the `durable_object` scheduling policy (Cloudflare public
+ * beta): each instance picks its image and size when it starts, via
+ * `ctx.containers.<name>.get(id).start({ image, instanceType })`, and can save
+ * and restore its filesystem with `snapshot()` / `start({ snapshot })`.
+ * Instances keep the image they started with across deploys — there is no
+ * application-wide rollout, and no `maxInstances` cap (running instances count
+ * against the account limit).
+ */
+interface DurableObjectScheduledContainerConfig extends ContainerConfigBase {
+    /**
+     * The image a start uses when it names none — including the implicit start a
+     * `fetch`/`exec` triggers. Either a key of `images`
+     * or a Cloudflare-managed image such as `"cloudflare/debian-trixie"`.
+     * Without it, an instance must be started explicitly with an `image` (or a
+     * `snapshot`) before it can serve requests.
+     */
+    image?: string;
+
+    /**
+     * Named images an instance can start from, keyed by the name `start({ image })`
+     * takes (wrangler `containers[].images`). Up to 100, each name 1–128
+     * characters. Updating the map does not restart running instances.
+     */
+    images?: Readonly<Record<string, ContainerNamedImageSource>>;
+
+    /**
+     * The instance size a start uses when it names none. Cloudflare's runtime
+     * default is `"lite"`.
+     */
+    instanceType?: ContainerRuntimeInstanceType;
+
+    /** Selects the per-instance policy. Immutable once deployed. */
+    schedulingPolicy: "durable_object";
+}
+
+/**
+ * `ContainerConfig` is part of the experimental `@lunora/container` API and may change without a major version bump.
+ */
+type ContainerConfig = DefaultScheduledContainerConfig | DurableObjectScheduledContainerConfig;
+
+/**
  * The value `defineContainer` returns: the validated config plus a brand the
  * codegen discovery and the generated Container DO class key on.
  */
-interface ContainerDefinition extends ContainerConfig {
+type ContainerDefinition = ContainerConfig & {
     /** Brand marking a value as a Lunora container definition. */
     readonly isLunoraContainer: true;
+};
+
+/**
+ * A saved container filesystem, as `snapshot()` returns it. Plain data: store
+ * it anywhere and pass it back to `start({ snapshot })`, from the same or
+ * another instance of the same container. Tied to the image it was taken
+ * from; Cloudflare keeps it 30 days, refreshed on each restore.
+ */
+interface ContainerSnapshot {
+    id: string;
+    name?: string;
+    /** Size in bytes. */
+    size: number;
 }
 
 /**
@@ -300,12 +388,18 @@ type NormalizedContainerImage =
 export type {
     BuildImageSource,
     ContainerConfig,
+    ContainerConfigBase,
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerNamedImageSource,
     ContainerReadinessCheck,
     ContainerRollout,
+    ContainerRuntimeInstanceType,
+    ContainerSnapshot,
     CustomContainerInstanceType,
+    DefaultScheduledContainerConfig,
+    DurableObjectScheduledContainerConfig,
     NamedContainerInstanceType,
     NormalizedContainerImage,
     RegistryImageSource,

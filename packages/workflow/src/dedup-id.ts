@@ -69,7 +69,7 @@ import type { RunFunctionOptions, WorkflowRunFunction } from "./types";
  * alone their first body calls were both `order-42#body.1`, so the second
  * workflow's call was answered from the first one's cached result and its
  * handler never ran. The export name is unique per project (it derives the
- * `WORKFLOW_*` binding) and, being an identifier, never contains `/`, so the
+ * workflow's class name) and, being an identifier, never contains `/`, so the
  * prefix splits unambiguously.
  */
 const dedupNamespace = (exportName: string, instanceId: string): string => `${exportName}/${instanceId}`;

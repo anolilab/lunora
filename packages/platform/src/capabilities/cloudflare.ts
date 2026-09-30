@@ -59,7 +59,14 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "The `worker_loaders` binding (Dynamic Workers, in open beta): `load()` compiles a script into its own isolate, `globalOutbound: null` removes its network, and `limits.cpuMs` bounds it",
         },
         workflowRollback: { level: "native", note: "Workflows step rollback (the step.do rollback option)" },
-        workflows: { level: "native", note: "Cloudflare Workflows" },
+        workflowSchedules: {
+            level: "native",
+            note: "wrangler workflows[].schedules — Cloudflare creates an instance on each cron tick, no scheduled() handler involved",
+        },
+        workflows: {
+            level: "native",
+            note: "Cloudflare Workflows declared in wrangler `exports` (no workflows[] binding) and reached through `ctx.exports.<Class>` from the shard DO, the Worker and every WorkflowEntrypoint; needs Wrangler >= 4.142 / @cloudflare/vite-plugin >= 1.61 locally",
+        },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         cronTriggers: {
             level: "native",
@@ -71,7 +78,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         agents: {
             level: "emulated",
-            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow under an AGENT_* binding (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
+            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow declared in wrangler `exports` and reached through `ctx.exports` (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
         },
         objectStorage: { level: "native", note: "R2" },
         objectStorageBackups: {
@@ -89,15 +96,22 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "native",
-            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway)",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is",
         },
-        browser: { level: "native", note: "Browser Rendering" },
+        browser: {
+            level: "native",
+            note: "Browser Run: Playwright sessions (allowedHosts forwarded as session guardrails), Quick Actions through the binding's quickAction, and /crawl over the account REST API (no binding method; needs an API token)",
+        },
         images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",
-            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
+            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec)",
         },
         containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
+        containerRuntimeScheduling: {
+            level: "native",
+            note: "Cloudflare Containers' durable_object scheduling policy and container snapshots (both public beta): LunoraContainer resolves the named image through ctx.container.images and forwards image / instance / containerSnapshot to ctx.container.start() through the patched @cloudflare/containers base",
+        },
         analytics: { level: "native", note: "Analytics Engine" },
         edgeRequestMetadata: {
             level: "native",
@@ -105,7 +119,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         hostTraceFusion: {
             level: "native",
-            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
+            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Feature-detected on top: span.recordException for failed spans (redacted message only), span.setAttributes for the attribute mirror, and tracing.getActiveSpan to put the ctx.span wide event on the invocation's root span. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines",
         },
         logArchive: {
             level: "native",
