@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.330...@lunora/cli@1.0.0-alpha.331) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.176
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.244
+* **@lunora/config:** upgraded to 1.0.0-alpha.289
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.202
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.168
+* **@lunora/seed:** upgraded to 1.0.0-alpha.174
+* **@lunora/testing:** upgraded to 1.0.0-alpha.215
+
 ## @lunora/cli [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.329...@lunora/cli@1.0.0-alpha.330) (2026-10-01)
 
 
