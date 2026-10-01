@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { Node, NodeMouseHandler, NodeProps, NodeTypes } from "@xyflow/react";
-import { Background, Controls, ReactFlow } from "@xyflow/react";
+import { Background, Controls, Handle, Position, ReactFlow } from "@xyflow/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useMemo, useRef, useState } from "react";
 
@@ -36,9 +36,21 @@ const LaneNode = ({ data }: NodeProps): ReactElement => (
     </div>
 );
 
+/** Edges attach to a node's handles; the diagram is read-only, so they are invisible. */
+const HIDDEN_HANDLE = { opacity: 0 } as const;
+
+/** A function, table, queue, … inside a lane: its label, with edges entering left and leaving right. */
+const MemberNode = ({ data }: NodeProps): ReactElement => (
+    <>
+        <Handle isConnectable={false} position={Position.Left} style={HIDDEN_HANDLE} type="target" />
+        <span className="truncate">{String(data.label)}</span>
+        <Handle isConnectable={false} position={Position.Right} style={HIDDEN_HANDLE} type="source" />
+    </>
+);
+
 // Registered once: a narrow custom-node component can't be assigned to React
 // Flow's broad `NodeTypes` map without widening, so cast at the single seam.
-const NODE_TYPES = { lane: LaneNode } as unknown as NodeTypes;
+const NODE_TYPES = { lane: LaneNode, member: MemberNode } as unknown as NodeTypes;
 
 /** Classify the fetched document: no modules means the app has not opted in yet. */
 const classifyManifest = (value: unknown): SpecFetchState<ArchitectureManifest> => {

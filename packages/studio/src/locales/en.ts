@@ -26,6 +26,8 @@ const MESSAGE_IDS = [
     "No modules declared",
     "{count} call sites could not be drawn",
     "{count} edges shown",
+    "Topic {topic} · {count} subscriptions",
+    "{topic} (topic → {count} subscriptions)",
     "Component",
     "Installed component",
     "Send this link to the invitee. It is shown once and cannot be recovered.",

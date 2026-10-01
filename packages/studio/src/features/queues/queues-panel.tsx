@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import ErrorAlert from "../../components/error-alert";
@@ -28,6 +28,7 @@ import type {
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { computeQueueReliability } from "./reliability";
+import { groupByTopic, sendTargets, topicTarget } from "./topic-groups";
 
 interface QueuesPanelProps {
     /** Newest-N consumed messages to load into the log (default {@link DEFAULT_MESSAGE_LIMIT}). */
@@ -91,9 +92,22 @@ const tabLabel = (value: QueuesTab, t: ReturnType<typeof useT>): string => {
     return t("Declared");
 };
 
-/** Declared-producers tab: the `defineQueue` producers `@lunora/codegen` statically discovered. */
+/** One declared queue (or topic subscription) row. */
+const QueueRow = ({ queue }: { readonly queue: QueueMetadata }): ReactElement => (
+    <TableRow data-testid={`queues-row-${queue.exportName}`}>
+        <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
+    </TableRow>
+);
+
+/** Declared-producers tab: the `defineQueue` producers and topic subscriptions `@lunora/codegen` statically discovered. */
 const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueMetadata[] }): ReactElement => {
     const t = useT();
+    // Subscriptions sit under their topic, after the plain queues.
+    const { plain, topics } = groupByTopic(queues);
 
     return (
         <div className="flex flex-col gap-4" data-testid="queues-declared">
@@ -120,19 +134,23 @@ const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueM
                                     <TableHead>{t("Mode")}</TableHead>
                                     <TableHead>{t("Binding")}</TableHead>
                                     <TableHead>{t("Dead-letter")}</TableHead>
-                                    <TableHead>{t("Topic")}</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {queues.map((queue) => (
-                                    <TableRow data-testid={`queues-row-${queue.exportName}`} key={queue.exportName}>
-                                        <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.topic ?? "—"}</TableCell>
-                                    </TableRow>
+                                {plain.map((queue) => (
+                                    <QueueRow key={queue.exportName} queue={queue} />
+                                ))}
+                                {[...topics].map(([topic, subscriptions]) => (
+                                    <Fragment key={topic}>
+                                        <TableRow className="bg-muted/40" data-testid={`queues-topic-${topic}`}>
+                                            <TableCell className="text-xs font-medium" colSpan={5}>
+                                                {t("Topic {topic} · {count} subscriptions", { count: subscriptions.length, topic })}
+                                            </TableCell>
+                                        </TableRow>
+                                        {subscriptions.map((queue) => (
+                                            <QueueRow key={queue.exportName} queue={queue} />
+                                        ))}
+                                    </Fragment>
                                 ))}
                             </TableBody>
                         </Table>
@@ -333,6 +351,11 @@ const QueuesSendTab = ({
                                     {queue.exportName}
                                 </option>
                             ))}
+                            {[...groupByTopic(queues).topics].map(([topic, subscriptions]) => (
+                                <option key={topic} value={topicTarget(topic)}>
+                                    {t("{topic} (topic → {count} subscriptions)", { count: subscriptions.length, topic })}
+                                </option>
+                            ))}
                         </select>
                         <Input
                             aria-label={t("Delay (seconds)")}
@@ -429,7 +452,10 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const [replayingId, setReplayingId] = useState<null | string>(null);
 
     // Default the Send target to the first declared queue until the user picks one.
-    const selectedExportName = queues.some((queue) => queue.exportName === selectedExport) ? selectedExport : (queues[0]?.exportName ?? "");
+    // Every queue, plus one publish target per topic.
+    const { topics } = groupByTopic(queues);
+    const targets = [...queues.map((queue) => queue.exportName), ...[...topics.keys()].map((topic) => topicTarget(topic))];
+    const selectedExportName = targets.includes(selectedExport) ? selectedExport : (targets[0] ?? "");
 
     const readError = tab === "messages" ? messagesError : queuesError;
     const readErrorSource = tab === "messages" ? messagesErrorSource : queuesErrorSource;
@@ -490,10 +516,13 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
         // `args` is built before the `try`: React Compiler bails on a conditional (or
         // optional-chaining) expression *inside* a try/catch. And no `finally` (that also
         // bails) — the catch swallows the error, so the trailing `setSending(false)` always runs.
-        const args = batchMode ? { batch: body as unknown[], delaySeconds, exportName } : { body, delaySeconds, exportName };
+        // A topic target publishes like `ctx.topics.<name>.publish`: one send per subscription.
+        const requests = sendTargets(exportName, topics).map((target) =>
+            batchMode ? { batch: body as unknown[], delaySeconds, exportName: target } : { body, delaySeconds, exportName: target },
+        );
 
         try {
-            (await client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))) as SendQueueMessageResult;
+            await Promise.all(requests.map(async (args) => (await client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))) as SendQueueMessageResult));
             refetchMessages();
         } catch (error_) {
             setActionError(errorMessage(error_));

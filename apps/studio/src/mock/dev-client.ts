@@ -496,6 +496,17 @@ const dataFor = (reference: string, args: unknown): unknown => {
             // though it seeds only a handful of representative waterfalls.
             return { total: 63, traces: TRACES };
         }
+        case ADMIN_FUNCTIONS.listQueues: {
+            // One plain queue and a topic with two subscriptions, so the Queues
+            // page shows its topic grouping and the topic send target.
+            return {
+                queues: [
+                    { binding: "QUEUE_EMAIL", exportName: "email", mode: "push", name: "email" },
+                    { binding: "QUEUE_AUDIT_SIGNUP", exportName: "auditSignup", mode: "push", name: "audit-signup", topic: "signups" },
+                    { binding: "QUEUE_WELCOME_EMAIL", exportName: "welcomeEmail", mode: "push", name: "welcome-email", topic: "signups" },
+                ],
+            };
+        }
         case ADMIN_FUNCTIONS.listSubscriptions: {
             return {
                 connections: [
@@ -673,6 +684,9 @@ const createDevMockClient = (): LunoraClient =>
                 total: 42,
             };
         },
+        // Scopes the admin-query cache per client (`use-admin-query`); a fixed id is
+        // all a single mock client needs.
+        clientIdentifier: (): string => "dev-mock-client",
         fetchArchitecture: async (): Promise<unknown> => {
             // A two-module sample so the Architecture tab renders lanes, a
             // cross-module call, a table write and one unresolved call site.

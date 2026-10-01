@@ -1,5 +1,4 @@
 import type { Edge, Node } from "@xyflow/react";
-import { Position } from "@xyflow/react";
 
 import type { ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, ArchitectureNodeKind } from "../../../../../shared/architecture-manifest";
 
@@ -8,6 +7,11 @@ const ASYNC_EDGES: ReadonlySet<ArchitectureEdgeKind> = new Set(["enqueue", "publ
 
 /** Top-to-bottom order of node kinds inside a lane: entry points first, storage last. */
 const KIND_ORDER: Readonly<Record<ArchitectureNodeKind, number>> = { cron: 1, function: 2, http: 0, queue: 4, table: 6, topic: 3, workflow: 5 };
+
+/** Edge styling in theme tokens; hoisted so every render reuses the same objects. */
+const EDGE_LINE = { stroke: "var(--muted-foreground)" } as const;
+const EDGE_LABEL = { fill: "var(--muted-foreground)", fontSize: 10 } as const;
+const EDGE_LABEL_BG = { fill: "var(--background)" } as const;
 
 /** The lane id for nodes outside every module. */
 const APP_LANE = "";
@@ -133,9 +137,8 @@ const laneNodes = (lane: string, label: string, column: number, members: Readonl
                 id: member.id,
                 parentId: laneId,
                 position: { x: NODE_INSET, y: LANE_HEADER + index * (NODE_HEIGHT + NODE_GAP) },
-                sourcePosition: Position.Right,
                 style: { height: NODE_HEIGHT, width: LANE_WIDTH - NODE_INSET * 2 },
-                targetPosition: Position.Left,
+                type: "member",
             };
         }),
     ];
@@ -186,8 +189,16 @@ const layoutArchitecture = (
                 animated: ASYNC_EDGES.has(edge.kind),
                 id: `${edge.from}|${edge.kind}|${edge.to}`,
                 label: edge.kind,
+                // React Flow's base stylesheet leaves the label box unfilled, which
+                // paints solid black; theme it like the canvas instead.
+                labelBgStyle: EDGE_LABEL_BG,
+                labelStyle: EDGE_LABEL,
                 source: edge.from,
+                style: EDGE_LINE,
                 target: edge.to,
+                // Routed around nodes, so an edge between two nodes in one lane
+                // does not loop back over them.
+                type: "smoothstep",
             });
         }
     }
