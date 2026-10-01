@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.164...@lunora/server@1.0.0-alpha.165) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
 ## @lunora/server [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.163...@lunora/server@1.0.0-alpha.164) (2026-10-01)
 
 
