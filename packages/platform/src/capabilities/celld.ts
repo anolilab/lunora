@@ -159,6 +159,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
+        services: {
+            level: "unsupported",
+            note: "celld documents wrangler services[] bindings between Workers in one deployment, but Lunora has not verified them (fetch or WorkerEntrypoint RPC) against a live celld, and `lunora deploy` does not deploy the service Workers there. Rated unsupported until both are in place",
+        },
         topics: {
             level: "emulated",
             note: "The same fan-out as on Cloudflare: each subscription is its own celld queue and a publish sends to every one. Inherits the `queues` row's limits per subscription (256 concurrent producer calls per queue owner, four-day retention)",

@@ -49,6 +49,24 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(true);
         });
 
+        it("runs each lunora.config service in the same `wrangler dev`, the app's config first", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }\n`);
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const { args } = planDevCommand({ cwd: workdir, logger: silentLogger() }).wrangler;
+
+            expect(args.slice(args.indexOf("--config"))).toStrictEqual([
+                "--config",
+                join(workdir, "wrangler.jsonc"),
+                "--config",
+                join(workdir, "services", "parser", "wrangler.jsonc"),
+            ]);
+        });
+
         it("plans an attached run with --no-worker, keeping codegen + studio", () => {
             expect.assertions(4);
 

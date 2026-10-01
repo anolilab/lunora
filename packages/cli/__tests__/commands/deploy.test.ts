@@ -280,6 +280,93 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("services", () => {
+            const declareParser = (): void => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`, "utf8");
+                mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+                writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`, "utf8");
+            };
+
+            it("deploys each service before the app, passing --env and --dry-run through", async () => {
+                expect.assertions(3);
+
+                declareParser();
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, dryRun: true, env: "production", logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+                expect(calls[0]?.descriptor.args.join(" ")).toContain(
+                    `deploy --config ${join(workdir, "services", "parser", "wrangler.jsonc")} --env production --dry-run`,
+                );
+                expect(calls.at(-1)?.descriptor.args.join(" ")).not.toContain("services/parser");
+            });
+
+            it("leaves wrangler.jsonc and package.json as they were after a dry run", async () => {
+                expect.assertions(2);
+
+                declareParser();
+                writeFileSync(join(workdir, "package.json"), `{ "name": "app" }\n`, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(readFileSync(join(workdir, "package.json"), "utf8")).toBe(`{ "name": "app" }\n`);
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+            });
+
+            it("refuses a target that rates services unsupported before deploying anything", async () => {
+                expect.assertions(2);
+
+                declareParser();
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+
+                expect(result.code).not.toBe(0);
+                expect(calls).toHaveLength(0);
+            });
+
+            it("stops before the app when a service fails", async () => {
+                expect.assertions(1);
+
+                declareParser();
+
+                const failing: Spawner = async () => {
+                    return { code: 1 };
+                };
+                const { logger } = silentLogger();
+                const failed = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner: failing });
+
+                expect(failed.error).toBe("service parser (parser): wrangler deploy --dry-run exited 1 — stopping before the app");
+            });
+
+            it.each([
+                ["--skip-services", { skipServices: true }, "--skip-services"],
+                ["--preview", { preview: true }, "--preview uploads the app version only"],
+                ["--temporary", { temporary: true }, "--temporary deploys the app to a throwaway account"],
+            ] as const)("deploys no service on %s, and says why", async (_label, extra, reason) => {
+                expect.assertions(2);
+
+                declareParser();
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, ...extra });
+
+                expect(calls.some((call) => call.descriptor.args.join(" ").includes("services/parser"))).toBe(false);
+                expect(warns).toContainEqual(expect.stringContaining(`services not deployed (${reason})`));
+            });
+        });
+
         it("--dry-run leaves the committed wrangler.jsonc byte-identical", async () => {
             expect.assertions(2);
 

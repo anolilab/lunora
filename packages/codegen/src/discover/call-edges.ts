@@ -105,7 +105,8 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
 /**
  * Discover the call-site edges of the architecture graph: every function →
  * function call (`ctx.run*`), scheduled dispatch (`ctx.scheduler.runAfter/runAt`),
- * enqueue (`ctx.queues.<q>.send`) and topic publish (`ctx.topics.<t>.publish`) in
+ * enqueue (`ctx.queues.<q>.send`), topic publish (`ctx.topics.<t>.publish`) and
+ * service use (`ctx.services.<s>.<member>`; a destructured `ctx.services` is not seen) in
  * `lunora/`, attributed to the exported declaration it sits in. Purely syntactic
  * — no type checker — so a reference held in a variable is recorded with a
  * `reason` instead of a `target`, and a call inside a non-exported helper carries
@@ -123,6 +124,17 @@ const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeI
 
             if (edge !== undefined) {
                 edges.push({ ...edge, exportName: enclosingExportName(call), file, line: call.getStartLineNumber() });
+            }
+        }
+
+        // `ctx.services.<name>.<member>`, called or not: an RPC method has an
+        // arbitrary name, and a fetch service is as often handed to a client
+        // (`fetch: ctx.services.parser.fetch`) as called in place.
+        for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+            const service = surfaceMemberOf(access, "services");
+
+            if (service !== undefined) {
+                edges.push({ exportName: enclosingExportName(access), file, kind: "invoke", line: access.getStartLineNumber(), target: service });
             }
         }
     }

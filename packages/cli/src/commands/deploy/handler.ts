@@ -1,5 +1,5 @@
 import type { CodegenResult } from "@lunora/codegen";
-import { runCodegen } from "@lunora/codegen";
+import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
 import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver } from "@lunora/config";
 import { describePreservedCrons, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config/cloudflare";
@@ -13,7 +13,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
-import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { detectPackageManager, execArgsFor, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -599,6 +599,77 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, target, validation };
 };
 
+/** Why this run deploys no services, or `undefined` when it deploys them. */
+const serviceDeploySkipReason = (options: DeployCommandOptions, target: string): string | undefined => {
+    if (options.skipServices === true) {
+        return "--skip-services";
+    }
+
+    if (options.preview === true) {
+        return "--preview uploads the app version only";
+    }
+
+    // A temporary account is the app's alone: services deployed with the real
+    // login would land elsewhere, and the bindings could never resolve.
+    if (options.temporary === true) {
+        return "--temporary deploys the app to a throwaway account";
+    }
+
+    return target === "cloudflare" ? undefined : `target "${target}"`;
+};
+
+/**
+ * Deploy each `lunora.config` service (plan 457) before the app, so the app's
+ * `services[]` bindings never point at a Worker that does not exist yet, or at
+ * an older one missing a method the app now calls. `--env` and `--dry-run` pass
+ * through. A preview uploads the app's version only: services deploy live, so
+ * they are left out of it. Returns the error that stops the deploy, if any.
+ */
+const deployServices = async (cwd: string, options: DeployCommandOptions, target: string, spawner: Spawner): Promise<string | undefined> => {
+    const { error, services } = readServiceBindings(cwd);
+
+    if (error !== undefined) {
+        return error;
+    }
+
+    if (services.length === 0) {
+        return undefined;
+    }
+
+    const skipped = serviceDeploySkipReason(options, target);
+
+    if (skipped !== undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    const manager = detectPackageManager(cwd);
+
+    for (const service of services) {
+        const exec = execArgsFor(manager, "wrangler", [
+            "deploy",
+            "--config",
+            service.wranglerPath,
+            ...(options.env === undefined ? [] : ["--env", options.env]),
+            ...(options.dryRun === true ? ["--dry-run"] : []),
+        ]);
+
+        options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
+
+        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        const result = await spawner({ args: exec.args, command: exec.command, cwd, stdoutToStderr: options.format === "json" });
+
+        if (result.code !== 0) {
+            return `service ${service.name} (${service.worker}): wrangler ${exec.args.includes("--dry-run") ? "deploy --dry-run" : "deploy"} exited ${String(result.code)} — stopping before the app`;
+        }
+    }
+
+    return undefined;
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -659,11 +730,17 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
+    const spawner = options.spawner ?? defaultSpawner;
+    const servicesError = await deployServices(cwd, options, pipeline.target, spawner);
+
+    if (servicesError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: servicesError, mintedSecretsFile, validation };
+    }
+
     const descriptor = buildDeploySpawn(cwd, options, driver);
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);
 
-    const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
     // Replay what was captured silently, so `--format json` still shows the
@@ -767,6 +844,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        skipServices: options.skipServices === true,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,

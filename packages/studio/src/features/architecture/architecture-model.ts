@@ -6,7 +6,7 @@ import type { ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, Arch
 const ASYNC_EDGES: ReadonlySet<ArchitectureEdgeKind> = new Set(["enqueue", "publish", "schedule", "start", "subscribe", "trigger"]);
 
 /** Top-to-bottom order of node kinds inside a lane: entry points first, storage last. */
-const KIND_ORDER: Readonly<Record<ArchitectureNodeKind, number>> = { cron: 1, function: 2, http: 0, queue: 4, table: 6, topic: 3, workflow: 5 };
+const KIND_ORDER: Readonly<Record<ArchitectureNodeKind, number>> = { cron: 1, function: 2, http: 0, queue: 4, service: 7, table: 6, topic: 3, workflow: 5 };
 
 /** Edge styling in theme tokens; hoisted so every render reuses the same objects. */
 const EDGE_LINE = { stroke: "var(--muted-foreground)" } as const;
@@ -59,6 +59,10 @@ const NODE_LINKS: Readonly<Record<ArchitectureNodeKind, (node: ArchitectureNode)
     },
     queue: () => {
         return { to: "/queues" };
+    },
+    // A service is a sibling Worker with no Studio page of its own; open the actions that call it.
+    service: () => {
+        return { to: "/functions" };
     },
     table: (node) => {
         return { search: { table: node.name }, to: "/data" };

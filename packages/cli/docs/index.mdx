@@ -380,6 +380,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `r2-lifecycle-unset`             | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                 |
 | `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.       |
 | `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.      |
+| `service-workers-dev`            | warn  | A `lunora.config` service is still public on `workers.dev` with no route.           |
 | `stale-lunora-json`              | warn  | `lunora.json` is present but no longer read (`lunora.config.*` replaced it).        |
 | `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.              |
 | `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                          |

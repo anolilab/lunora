@@ -66,6 +66,14 @@ interface ProjectConfigLiterals {
      */
     advisor?: { minSeverity?: string; unreadable?: boolean };
     remote?: boolean;
+
+    /**
+     * `services`: binding key → `{ dir, entrypoint? }` (plan 457). `unreadable`
+     * when declared but not an object of string literals, kept apart from the
+     * top-level `unreadable` like `advisor`: a service codegen cannot read must
+     * fail loudly, not vanish from `ctx.services`.
+     */
+    services?: { declared?: Record<string, ServiceLiteral>; unreadable?: boolean };
     target?: string;
 
     /**
@@ -75,6 +83,12 @@ interface ProjectConfigLiterals {
      * declared `target` becomes the default in silence.
      */
     unreadable?: boolean;
+}
+
+/** One `services.<key>` entry as written: the Worker's folder and, for RPC, its `WorkerEntrypoint` export. */
+interface ServiceLiteral {
+    dir: string;
+    entrypoint?: string;
 }
 
 /** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
@@ -203,16 +217,23 @@ const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignm
     return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
 };
 
+/** `value` with any `satisfies` / `as` / parentheses around it peeled off. */
+const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
+    let inner = value;
+
+    while (inner !== undefined && (TsNode.isSatisfiesExpression(inner) || TsNode.isAsExpression(inner) || TsNode.isParenthesizedExpression(inner))) {
+        inner = inner.getExpression();
+    }
+
+    return inner;
+};
+
 /**
  * `advisor.minSeverity` from the `advisor` object literal, or `unreadable` when
  * the object or the key is not something the parser can read as a literal.
  */
 const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
-    let value = declared;
-
-    while (value !== undefined && (TsNode.isSatisfiesExpression(value) || TsNode.isAsExpression(value) || TsNode.isParenthesizedExpression(value))) {
-        value = value.getExpression();
-    }
+    const value = unwrapLiteral(declared);
 
     if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
         return { advisor: { unreadable: true } };
@@ -252,6 +273,53 @@ const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map(
     ["target", { unreadable: true }],
 ]);
 
+/** A string-literal member's value, `undefined` when absent, or `false` when present but not a literal. */
+const stringMember = (object: ObjectLiteralExpression, name: string): string | false | undefined => {
+    const member = object.getProperty(name);
+
+    if (member === undefined) {
+        return undefined;
+    }
+
+    const value = TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined;
+
+    return value !== undefined && (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) ? value.getLiteralValue() : false;
+};
+
+/** `services: { key: { dir: "…", entrypoint?: "…" } }`, all literals, or `unreadable`. */
+const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
+    const value = unwrapLiteral(wrapped);
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return { services: { unreadable: true } };
+    }
+
+    const declared: Record<string, ServiceLiteral> = {};
+
+    for (const entry of value.getProperties()) {
+        if (!TsNode.isPropertyAssignment(entry)) {
+            return { services: { unreadable: true } };
+        }
+
+        const initializer = unwrapLiteral(entry.getInitializer());
+
+        if (initializer === undefined || !TsNode.isObjectLiteralExpression(initializer)) {
+            return { services: { unreadable: true } };
+        }
+
+        const directory = stringMember(initializer, "dir");
+        const entrypoint = stringMember(initializer, "entrypoint");
+
+        if (typeof directory !== "string" || entrypoint === false) {
+            return { services: { unreadable: true } };
+        }
+
+        declared[propertyKeyName(entry)] = entrypoint === undefined ? { dir: directory } : { dir: directory, entrypoint };
+    }
+
+    return { services: { declared } };
+};
+
 /**
  * What one property of the config object contributes.
  *
@@ -274,6 +342,10 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 
     if (key === "advisor") {
         return readAdvisor(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
+    if (key === "services") {
+        return readServices(propertyLiteral(property, sourceFile));
     }
 
     if (key !== "target" && key !== "remote") {
@@ -339,9 +411,14 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     // declared `advisor`, whose own warning is what tells the user the floor
     // was not applied: dropping it here left that warning silent.
     if (object.getProperties().some((property) => TsNode.isSpreadAssignment(property))) {
-        const declaresAdvisor = object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === "advisor");
+        const declares = (key: string): boolean =>
+            object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === key);
 
-        return declaresAdvisor ? { advisor: { unreadable: true }, unreadable: true } : { unreadable: true };
+        return {
+            ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
+            ...(declares("services") ? { services: { unreadable: true } } : {}),
+            unreadable: true,
+        };
     }
 
     let literals: ProjectConfigLiterals = {};
@@ -353,6 +430,6 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     return literals;
 };
 
-export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals };
+export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
 export { loadProjectConfig, readProjectConfigLiterals };

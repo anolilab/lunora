@@ -114,6 +114,8 @@ export type {
     VectorizeOptions,
 } from "./schema";
 export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema } from "./schema";
+export type { ServiceBindingSpec, ServiceFetcher, ServiceRpc } from "./services";
+export { createServices } from "./services";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";

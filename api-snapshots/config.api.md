@@ -622,6 +622,7 @@ interface InferredBindings {
     flagshipBinding?: string;
     needsD1: boolean;
     queues: InferredQueue[];
+    services: ServiceBindingIR[] | undefined;
     signals: string[];
     usesAi: boolean;
     usesAnalytics: boolean;

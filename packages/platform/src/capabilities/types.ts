@@ -34,7 +34,7 @@
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
- * `scheduler`, `secrets`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
+ * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
@@ -83,7 +83,7 @@
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `topics`, `vectorStore`, `workflowRollback`,
+ * `relationGraph`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
@@ -489,6 +489,14 @@ export interface PlatformCapabilities {
          * rather than interleaving.
          */
         serverReactors?: Capability;
+
+        /**
+         * Service bindings to sibling Workers — `lunora.config.*` `services` →
+         * `ctx.services.<name>` on actions (plan 457): a fetch `Fetcher`, or an
+         * RPC stub for a `WorkerEntrypoint`. Gate-bearing: codegen sets the
+         * `services` `PlatformSignals` flag on a declared service.
+         */
+        services?: Capability;
         /** Alarms / scheduled wakeup inside a shard. */
         shardAlarms?: Capability;
         /** Durable Object-style sharded state. */

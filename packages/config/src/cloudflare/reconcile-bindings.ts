@@ -24,9 +24,12 @@ import { containerBuildTag } from "@lunora/container";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
+import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
+import type { OwnedServices } from "./reconcile-services";
+import { readOwnedServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
@@ -747,12 +750,15 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     const manifest = readManifest(projectRoot);
     const ownedTuning = readOwnedTuning(manifest, warnings);
     const ownedScopes: Record<string, OwnedTuning> = {};
+    const ownedServicesRecord = readOwnedServices(manifest);
+    let ownedServices: OwnedServices | undefined;
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs exports + workflows). A future step that depends on a key an
+    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (ai/browser/images/analytics) auto-write here;
     // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
@@ -777,6 +783,19 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
                 const step = reconcileQueues(text, parsed, inferred.queues, ownedTuning.queues ?? {});
 
                 ownedScopes.queues = step.owned;
+
+                return step;
+            },
+        },
+        {
+            // Also runs with nothing declared, so an owned entry goes once its declaration does.
+            // Skipped when the declaration is unreadable: reconciling against "none"
+            // would strip every owned entry over a typo.
+            enabled: inferred.services !== undefined && (inferred.services.length > 0 || Object.keys(ownedServicesRecord).length > 0),
+            run: (text) => {
+                const step = reconcileServices(text, parsed, inferred.services ?? [], ownedServicesRecord);
+
+                ownedServices = step.owned;
 
                 return step;
             },
@@ -819,18 +838,50 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // before: a record ahead of the file would let the next pass remove a field
     // this one never managed to write.
     const recordOwnership = (wranglerWritten: boolean): void => {
-        if (manifest === undefined || Object.keys(ownedScopes).length === 0) {
+        if (manifest === undefined) {
             return;
         }
 
-        // Its own failure, not the caller's "binding inference skipped": the
-        // config change it describes may already be on disk.
-        try {
-            recordOwnedTuning(manifest, ownedTuning, ownedScopes);
-        } catch (error: unknown) {
-            warnings.push(
-                `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the queue tuning reconcile owns in ${manifest.path} (lunora.queueTuning) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, an option removed from defineQueue stays deployed.`,
-            );
+        const servicesOwned = ownedServices;
+        const records = [
+            ...(Object.keys(ownedScopes).length > 0
+                ? [
+                      {
+                          consequence: "an option removed from defineQueue stays deployed",
+                          key: "queueTuning",
+                          label: "queue tuning",
+                          write: (current: Manifest) => {
+                              recordOwnedTuning(current, ownedTuning, ownedScopes);
+                          },
+                      },
+                  ]
+                : []),
+            ...(servicesOwned === undefined
+                ? []
+                : [
+                      {
+                          consequence: "a service removed from lunora.config stays bound",
+                          key: "services",
+                          label: "service bindings",
+                          write: (current: Manifest) => {
+                              recordOwnedServices(current, servicesOwned);
+                          },
+                      },
+                  ]),
+        ];
+
+        for (const record of records) {
+            // Its own failure, not the caller's "binding inference skipped": the
+            // config change it describes may already be on disk.
+            try {
+                // Re-read per record: each write starts from the file as the last
+                // one left it, or the second would drop the key the first wrote.
+                record.write(readManifest(projectRoot) ?? manifest);
+            } catch (error: unknown) {
+                warnings.push(
+                    `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the ${record.label} reconcile owns in ${manifest.path} (lunora.${record.key}) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, ${record.consequence}.`,
+                );
+            }
         }
     };
 

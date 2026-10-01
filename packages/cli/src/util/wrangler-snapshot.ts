@@ -14,23 +14,29 @@
  * how a rollback once fired between them and produced a document saying
  * `"crons": []` for an app with a nightly cron.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { findWranglerFile } from "@lunora/config/cloudflare";
 
 /**
- * Read the project's wrangler config and return the callback that restores it.
+ * Read the project's wrangler config — and `package.json`, whose `lunora.*`
+ * ownership records describe that config — and return the callback that
+ * restores both. Restoring the config alone would leave a record claiming
+ * entries the restored config no longer has.
  *
- * The callback is a no-op when the project has no wrangler config (nothing to
- * roll back) and is safe to call once at the end of a `finally`.
+ * The callback skips a file that was absent and is safe to call once at the
+ * end of a `finally`.
  */
 const snapshotWranglerConfig = (projectRoot: string): (() => void) => {
-    const wranglerPath = findWranglerFile(projectRoot);
-    const before = wranglerPath === undefined ? undefined : readFileSync(wranglerPath, "utf8");
+    const paths = [findWranglerFile(projectRoot), join(projectRoot, "package.json")].filter((path): path is string => path !== undefined && existsSync(path));
+    const before = paths.map((path) => [path, readFileSync(path, "utf8")] as const);
 
     return () => {
-        if (wranglerPath !== undefined && before !== undefined) {
-            writeFileSync(wranglerPath, before, "utf8");
+        for (const [path, text] of before) {
+            if (readFileSync(path, "utf8") !== text) {
+                writeFileSync(path, text, "utf8");
+            }
         }
     };
 };

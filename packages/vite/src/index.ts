@@ -16,6 +16,7 @@ import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-p
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { remoteBindingsPlugin } from "./remote-bindings-plugin";
+import withServiceWorkers from "./service-workers";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
@@ -190,7 +191,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 
     // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
     // the remote plugin reports the materialized config instead of injecting it.
-    const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
+    const cloudflareOptions = resolved.cloudflare === false ? undefined : withServiceWorkers({ ...resolved.cloudflare }, resolved.projectRoot);
 
     // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.config.*` `remote`) on the
     // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler

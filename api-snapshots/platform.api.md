@@ -311,6 +311,7 @@ interface PlatformCapabilities {
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;
+        services?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
         shardPlacement?: Capability;

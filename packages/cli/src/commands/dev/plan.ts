@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
 import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -65,6 +66,24 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     }
 
     return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
+};
+
+/**
+ * Extra `--config` args that run each `lunora.config` service (plan 457) in the
+ * same `wrangler dev` session, so the app's `services[]` bindings resolve to
+ * the local Workers. wrangler treats the first `--config` as the primary
+ * Worker, so the app's own config leads when no remote temp config already
+ * does. A declaration codegen rejects adds nothing here; codegen reports it.
+ */
+const resolveServiceArgs = (cwd: string, remoteArgs: ReadonlyArray<string>): string[] => {
+    const { services } = readServiceBindings(cwd);
+    const primary = findWranglerFile(cwd);
+
+    if (services.length === 0 || primary === undefined) {
+        return [];
+    }
+
+    return [...(remoteArgs.length > 0 ? [] : ["--config", primary]), ...services.flatMap((service) => ["--config", service.wranglerPath])];
 };
 
 /** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */
@@ -375,6 +394,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         "--var",
         "WORKER_ENV:development",
         ...remote.args,
+        ...resolveServiceArgs(cwd, remote.args),
     ]);
 
     return {
