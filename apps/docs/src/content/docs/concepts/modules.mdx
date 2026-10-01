@@ -78,3 +78,20 @@ rejects either mistake. A module that declares no `tables` opts out of the lint.
 
 The OpenAPI and OpenRPC specs tag each operation with its module (falling back
 to its file namespace), so generated API docs group by module too.
+
+## Installed components
+
+Every installed [component](/docs/concepts/components) (a schema extension
+merged with `.extend(...)`) counts as a module named after its key, with no
+`module.ts` needed. It owns its prefixed tables (`voting_votes`) and the
+`lunora/<key>/` folder a registry item copies its code into, so:
+
+- the Architecture view gives it its own lane, marked as a component;
+- `cross_module_table_write` warns when your code inserts straight into a
+  component's table instead of calling the function the component exports.
+
+This applies whether or not you declare any modules yourself. Code inside the
+component's own folder may write its tables freely. To take over a component's
+tables, declare a module with the same name, or list the table in your own
+module's `tables`; a declared claim wins. The component's code in `node_modules`
+is not scanned, so its internal calls and writes are not drawn.

@@ -1363,6 +1363,8 @@ const MESSAGE_IDS: readonly [
     "No modules declared",
     "{count} call sites could not be drawn",
     "{count} edges shown",
+    "Component",
+    "Installed component — owns its tables and lunora/{key}/",
     "Send this link to the invitee. It is shown once and cannot be recovered.",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
     "Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.",

@@ -425,6 +425,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
@@ -444,7 +445,6 @@ interface LintSchemaOptions {
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
-    modules?: ReadonlyArray<ModuleIR>;
     shapes?: ReadonlyArray<ShapeIR>;
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>;
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
@@ -2221,6 +2221,7 @@ interface ModelNullPaths {
 ```ts
 interface ModuleIR {
     description?: string;
+    installed?: true;
     name: string;
     tables: ReadonlyArray<string>;
 }

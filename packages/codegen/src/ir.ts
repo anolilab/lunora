@@ -794,6 +794,13 @@ export const subscriptionsOf = (queues: ReadonlyArray<QueueIR>, topic: string): 
 export interface ModuleIR {
     /** One-line description from `defineModule({ description })`. */
     description?: string;
+
+    /**
+     * `true` for an installed component (a `defineSchemaExtension` key merged with
+     * `.extend(...)`) treated as a module: it owns its prefixed tables and the
+     * `lunora/<key>/` folder its copy-in code lives in. Absent for a declared module.
+     */
+    installed?: true;
     /** The folder path relative to `lunora/`, e.g. `billing` — also the module's name. */
     name: string;
     /** Tables the module declares it owns (`defineModule({ tables })`); empty when it declares none. */

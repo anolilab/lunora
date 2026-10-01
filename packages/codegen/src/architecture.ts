@@ -125,24 +125,28 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
     }),
 ];
 
-/** Which module owns each table, rejecting a claim on an unknown table or one claimed twice. */
+/**
+ * Which module owns each table, rejecting a claim on an unknown table or one two
+ * declared modules make. An installed component's tables reach here already
+ * filtered to the ones no declared module claimed (see `withInstalledComponents`).
+ */
 const tableOwners = (modules: ReadonlyArray<ModuleIR>, schema: SchemaIR): Map<string, string> => {
     const known = new Set(schema.tables.map((table) => table.name));
     const owners = new Map<string, string>();
 
-    for (const module of modules) {
-        for (const table of module.tables) {
+    for (const entry of modules) {
+        for (const table of entry.tables) {
             if (!known.has(table)) {
-                throw new Error(`@lunora/codegen: module "${module.name}" declares table "${table}", which lunora/schema.ts does not define`);
+                throw new Error(`@lunora/codegen: module "${entry.name}" declares table "${table}", which lunora/schema.ts does not define`);
             }
 
             const prior = owners.get(table);
 
             if (prior !== undefined) {
-                throw new Error(`@lunora/codegen: table "${table}" is claimed by both module "${prior}" and module "${module.name}" — a table has one owner`);
+                throw new Error(`@lunora/codegen: table "${table}" is claimed by both module "${prior}" and module "${entry.name}" — a table has one owner`);
             }
 
-            owners.set(table, module.name);
+            owners.set(table, entry.name);
         }
     }
 
@@ -245,8 +249,13 @@ const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
     return {
         edges: [...edges.values()].toSorted((a, b) => edgeKey(a).localeCompare(edgeKey(b))),
         nodes: [...nodes.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
-        modules: input.modules.map((module) => {
-            return { ...(module.description === undefined ? {} : { description: module.description }), name: module.name, tables: [...module.tables] };
+        modules: input.modules.map((entry) => {
+            return {
+                ...(entry.description === undefined ? {} : { description: entry.description }),
+                ...(entry.installed === true ? { installed: true as const } : {}),
+                name: entry.name,
+                tables: [...entry.tables],
+            };
         }),
         unresolved: unresolved.toSorted((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
         version: 1,

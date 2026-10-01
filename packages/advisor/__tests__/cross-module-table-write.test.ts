@@ -63,4 +63,15 @@ describe("cross_module_table_write", () => {
 
         expect(crossModuleTableWrite.run(context({ inserts: [insert("billing")], modules: MODULES }))[0]?.detail).toContain("outside every module");
     });
+
+    it("flags app code inserting straight into an installed component's table, but not the component's own folder", () => {
+        expect.assertions(3);
+
+        const modules = [...MODULES, { installed: true as const, name: "voting", tables: ["voting_votes"] }];
+        const findings = crossModuleTableWrite.run(context({ inserts: [insert("posts", "voting_votes"), insert("voting/cast", "voting_votes")], modules }));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).toContain("the installed component `voting`");
+        expect(findings[0]?.metadata).toMatchObject({ installed: true, owner: "voting" });
+    });
 });

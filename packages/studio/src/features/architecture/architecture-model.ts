@@ -74,10 +74,18 @@ const visibleNodeIds = (manifest: ArchitectureManifest, module: string | undefin
  */
 const layoutArchitecture = (
     manifest: ArchitectureManifest,
-    options: { appLaneLabel: string; kinds: ReadonlySet<ArchitectureEdgeKind>; module?: string },
+    options: { appLaneLabel: string; componentLabel: string; kinds: ReadonlySet<ArchitectureEdgeKind>; module?: string },
 ): { edges: Edge[]; nodes: Node[] } => {
     const visible = visibleNodeIds(manifest, options.module, options.kinds);
     const lanes = [...manifest.modules.map((module) => module.name), APP_LANE];
+    const installed = new Set(manifest.modules.filter((module) => module.installed === true).map((module) => module.name));
+    const laneLabel = (lane: string): string => {
+        if (lane === APP_LANE) {
+            return options.appLaneLabel;
+        }
+
+        return installed.has(lane) ? `${lane} · ${options.componentLabel}` : lane;
+    };
     const nodes: Node[] = [];
     let column = 0;
 
@@ -93,7 +101,7 @@ const layoutArchitecture = (
         const laneId = `lane:${lane}`;
 
         nodes.push({
-            data: { label: lane === APP_LANE ? options.appLaneLabel : lane },
+            data: { label: laneLabel(lane) },
             id: laneId,
             position: { x: column * (LANE_WIDTH + LANE_GAP), y: 0 },
             selectable: false,

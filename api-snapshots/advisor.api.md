@@ -387,6 +387,7 @@ interface AdvisorMaskStrategy {
 
 ```ts
 interface AdvisorModule {
+    installed?: true;
     name: string;
     tables: ReadonlyArray<string>;
 }

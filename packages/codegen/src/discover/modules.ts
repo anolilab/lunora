@@ -5,7 +5,7 @@ import { Node } from "ts-morph";
 
 import { moduleOf } from "../../../../shared/architecture-manifest";
 import { diagnosticAt } from "../diagnostics";
-import type { ModuleIR } from "../ir";
+import type { ModuleIR, SchemaIR } from "../ir";
 import sanitizeNamespace from "../paths";
 import { defaultExportExpression, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, unwrapToCallExpression } from "./ast";
 
@@ -135,9 +135,41 @@ const discoverModules = (project: Project, lunoraDirectory: string): ModuleIR[] 
 };
 
 /**
+ * The declared modules plus one implicit module per installed component — each
+ * `defineSchemaExtension` key the schema merged — owning that component's tables
+ * (`voting_*`) and the `lunora/<key>/` folder a registry item copies its code
+ * into. A declared module of the same name absorbs the component instead, and a
+ * table a declared module claims stays with that module.
+ */
+const withInstalledComponents = (modules: ReadonlyArray<ModuleIR>, schema: SchemaIR): ModuleIR[] => {
+    const declared = new Map(modules.map((entry) => [entry.name, entry]));
+    const claimed = new Set(modules.flatMap((entry) => entry.tables));
+    const components = new Map<string, string[]>();
+
+    for (const table of schema.tables) {
+        if (table.extensionKey !== undefined && !claimed.has(table.name)) {
+            components.set(table.extensionKey, [...(components.get(table.extensionKey) ?? []), table.name]);
+        }
+    }
+
+    const merged = modules.map((entry) => {
+        const absorbed = components.get(entry.name);
+
+        return absorbed === undefined ? entry : { ...entry, tables: [...entry.tables, ...absorbed] };
+    });
+    const installed = [...components]
+        .filter(([key]) => !declared.has(key))
+        .map(([key, tables]): ModuleIR => {
+            return { installed: true, name: key, tables };
+        });
+
+    return [...merged, ...installed].toSorted((a, b) => a.name.localeCompare(b.name));
+};
+
+/**
  * The OpenAPI / OpenRPC tag for an operation declared in `filePath`: its module,
  * or its file namespace outside every module.
  */
 const moduleTagOf = (modules: ReadonlyArray<ModuleIR>, filePath: string): string => moduleOf(modules, filePath) ?? sanitizeNamespace(filePath);
 
-export { discoverModules, MODULE_FILENAME, moduleTagOf };
+export { discoverModules, MODULE_FILENAME, moduleTagOf, withInstalledComponents };

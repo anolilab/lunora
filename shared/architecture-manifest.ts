@@ -42,6 +42,8 @@ export interface UnresolvedEdge {
 
 export interface ArchitectureModule {
     description?: string;
+    /** `true` for an installed component (a schema extension) shown as a module. */
+    installed?: true;
     name: string;
     tables: string[];
 }

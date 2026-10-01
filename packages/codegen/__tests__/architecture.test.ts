@@ -223,4 +223,44 @@ export const viaHelper = query({ args: {}, handler: async (ctx) => loadAll(ctx) 
         expect(manifest().edges).toContainEqual({ from: "function:chat_feed:default", kind: "read", to: "table:users" });
         expect(manifest().unresolved).toContainEqual(expect.objectContaining({ file: "chat/feed", kind: "read", reason: "inside a non-exported helper" }));
     });
+
+    it("treats an installed component as a module: its own lane, and a warning for app code writing its table", () => {
+        expect.assertions(4);
+
+        write(
+            "schema.ts",
+            `import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+export default defineSchema({ posts: defineTable({ title: v.string() }) }).extend(
+    defineSchemaExtension("voting", { tables: { votes: defineTable({ subject: v.string() }) } }),
+);
+`,
+        );
+        write("content/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ tables: ["posts"] });\n`);
+        write(
+            "content/posts.ts",
+            `import { mutation, v } from "@lunora/server";
+
+export const upvote = mutation({ args: { subject: v.string() }, handler: async (ctx, args) => ctx.db.insert("voting_votes", args) });
+`,
+        );
+        // Copy-in component code (a registry item) lives in lunora/<key>/ and may write its own tables.
+        write(
+            "voting/cast.ts",
+            `import { mutation, v } from "@lunora/server";
+
+export const cast = mutation({ args: { subject: v.string() }, handler: async (ctx, args) => ctx.db.insert("voting_votes", args) });
+`,
+        );
+
+        const result = runCodegen({ projectRoot: workdir });
+        const { modules, nodes } = manifest();
+
+        expect(modules).toContainEqual({ installed: true, name: "voting", tables: ["voting_votes"] });
+        expect(nodes.find((node) => node.id === "table:voting_votes")?.module).toBe("voting");
+        expect(nodes.find((node) => node.id === "function:voting_cast:cast")?.module).toBe("voting");
+        expect(result.advisories.filter((finding) => finding.name === "cross_module_table_write").map((finding) => finding.metadata["file"])).toStrictEqual([
+            "content/posts",
+        ]);
+    });
 });

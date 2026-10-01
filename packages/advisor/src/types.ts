@@ -121,6 +121,8 @@ export interface Finding {
 
 /** A `defineModule` folder and the tables it claims — the `cross_module_table_write` input. */
 export interface AdvisorModule {
+    /** `true` for an installed component (a schema extension key) treated as a module. */
+    installed?: true;
     /** The folder path relative to `lunora/`, e.g. `billing`. */
     name: string;
     /** Tables the module declares it owns; empty when it declares none. */

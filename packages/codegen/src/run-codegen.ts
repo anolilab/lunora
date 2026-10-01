@@ -53,7 +53,7 @@ import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-
 import discoverMaskMetadata from "./discover/mask-procedures/metadata";
 import discoverMaskStrategies from "./discover/mask-procedures/strategies";
 import discoverMigrations from "./discover/migrations";
-import { discoverModules } from "./discover/modules";
+import { discoverModules, withInstalledComponents } from "./discover/modules";
 import discoverMutatorWrites from "./discover/mutator-writes";
 import { discoverMutators } from "./discover/mutators";
 import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
@@ -706,6 +706,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // architecture manifest, the OpenAPI tags and the cross-module advisor lint,
     // so they are discovered before all three.
     const modules = discoverModules(project, lunoraDirectory);
+    // Installed components count as modules for ownership: the lint warns when app
+    // code writes a component's tables directly, and the diagram gives each its own
+    // lane. Only the declared `modules` gate emission and retag the specs, so an
+    // app that declares none keeps byte-identical output.
+    const ownershipModules = withInstalledComponents(modules, schema);
 
     // The query/insert/workflow-call walks feed both the advisor and the
     // architecture manifest, so they run once when either needs them — and not
@@ -783,7 +788,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   rlsProcedures: discoverRlsProcedures(project, lunoraDirectory),
                   schema,
                   secretLiterals: discoverSecrets(project, lunoraDirectory),
-                  modules,
+                  modules: ownershipModules,
                   shapes,
                   softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
                   sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
@@ -1105,7 +1110,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const architectureDocument =
         callSites === undefined || modules.length === 0
             ? undefined
-            : buildArchitecture({ ...callSites, crons, functions, httpRoutes, queues, schema, modules, topics, workflows });
+            : buildArchitecture({ ...callSites, crons, functions, httpRoutes, modules: ownershipModules, queues, schema, topics, workflows });
     const openApiModuleContent = emitOpenApiModule(openApiDocument);
     const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 

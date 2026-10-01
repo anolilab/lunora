@@ -22,10 +22,12 @@ const MANIFEST: ArchitectureManifest = {
         { id: "function:legacy:sync", kind: "function", name: "legacy.sync" },
         { id: "table:messages", kind: "table", name: "messages", module: "chat" },
         { id: "table:users", kind: "table", name: "users", module: "accounts" },
+        { id: "table:voting_votes", kind: "table", name: "voting_votes", module: "voting" },
     ],
     modules: [
         { name: "accounts", tables: ["users"] },
         { description: "Channels and messages", name: "chat", tables: ["messages"] },
+        { installed: true, name: "voting", tables: ["voting_votes"] },
     ],
     unresolved: [{ file: "chat/posts", kind: "call", line: 9, reason: "the function reference is not a static api.* / internal.* chain" }],
     version: 1,
@@ -41,11 +43,12 @@ const renderPanel = (mock: MockClientHooks, manifest?: unknown): ReactElement =>
 
 describe("layoutArchitecture", () => {
     it("puts each module in its own lane and nodes outside every module in the app lane", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
-        const { edges, nodes } = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: ALL_KINDS });
+        const { edges, nodes } = layoutArchitecture(MANIFEST, { appLaneLabel: "App", componentLabel: "component", kinds: ALL_KINDS });
 
-        expect(nodes.filter((node) => node.type === "lane").map((node) => node.id)).toStrictEqual(["lane:accounts", "lane:chat", "lane:"]);
+        expect(nodes.filter((node) => node.type === "lane").map((node) => node.id)).toStrictEqual(["lane:accounts", "lane:chat", "lane:voting", "lane:"]);
+        expect(nodes.find((node) => node.id === "lane:voting")?.data.label).toBe("voting · component");
         expect(nodes.find((node) => node.id === "table:messages")?.parentId).toBe("lane:chat");
         expect(edges).toHaveLength(3);
     });
@@ -53,8 +56,13 @@ describe("layoutArchitecture", () => {
     it("keeps a filtered module's neighbours one edge away, and drops hidden edge kinds", () => {
         expect.assertions(2);
 
-        const filtered = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: ALL_KINDS, module: "chat" });
-        const noCalls = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: new Set(["read", "write"] as const), module: "chat" });
+        const filtered = layoutArchitecture(MANIFEST, { appLaneLabel: "App", componentLabel: "component", kinds: ALL_KINDS, module: "chat" });
+        const noCalls = layoutArchitecture(MANIFEST, {
+            appLaneLabel: "App",
+            componentLabel: "component",
+            kinds: new Set(["read", "write"] as const),
+            module: "chat",
+        });
 
         expect(filtered.nodes.map((node) => node.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
             ["function:accounts_users:me", "function:chat_posts:post", "lane:accounts", "lane:chat", "table:messages"].toSorted((a, b) => a.localeCompare(b)),
@@ -73,8 +81,8 @@ describe("parseArchitecture", () => {
 });
 
 describe("architecturePanel", () => {
-    it("renders the catalog and the unresolved list from the fetched manifest", async () => {
-        expect.assertions(3);
+    it("renders the catalog, a component badge and the unresolved list from the fetched manifest", async () => {
+        expect.assertions(4);
 
         const mock = createMockClient({ fetchArchitecture: () => MANIFEST as unknown as Record<string, unknown> });
 
@@ -83,6 +91,7 @@ describe("architecturePanel", () => {
         await expect(screen.findByTestId("architecture-catalog")).resolves.toBeDefined();
         expect(screen.getByTestId("architecture-module-chat").textContent).toContain("Channels and messages");
         expect(screen.getByTestId("architecture-unresolved").textContent).toContain("chat/posts:9");
+        expect(screen.getByTestId("architecture-component-voting")).toBeDefined();
     });
 
     it("shows how to opt in when the app declares no module", async () => {

@@ -68,8 +68,18 @@ const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }
                     <TableBody>
                         {manifest.modules.map((module) => (
                             <TableRow data-testid={`architecture-module-${module.name}`} key={module.name}>
-                                <TableCell className="font-mono text-xs">{module.name}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground">{module.description ?? "—"}</TableCell>
+                                <TableCell className="font-mono text-xs">
+                                    {module.name}
+                                    {module.installed === true && (
+                                        <Badge className="ml-2" data-testid={`architecture-component-${module.name}`} variant="outline">
+                                            {t("Component")}
+                                        </Badge>
+                                    )}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                    {module.description ??
+                                        (module.installed === true ? t("Installed component — owns its tables and lunora/{key}/", { key: module.name }) : "—")}
+                                </TableCell>
                                 <TableCell className="font-mono text-xs text-muted-foreground">
                                     {module.tables.length === 0 ? "—" : module.tables.join(", ")}
                                 </TableCell>
@@ -98,11 +108,12 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
     const [kinds, setKinds] = useState<ReadonlySet<ArchitectureEdgeKind>>(() => new Set(EDGE_KINDS));
     const present = EDGE_KINDS.filter((kind) => manifest.edges.some((edge) => edge.kind === kind));
     const appLaneLabel = t("Outside any module");
+    const componentLabel = t("Component");
     // Memoized so ReactFlow is handed the same arrays until a filter changes.
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: ReactFlow re-seeds on new node/edge arrays
     const { edges, nodes } = useMemo(
-        () => layoutArchitecture(manifest, { appLaneLabel, kinds, ...(module === ALL_MODULES ? {} : { module }) }),
-        [manifest, appLaneLabel, kinds, module],
+        () => layoutArchitecture(manifest, { appLaneLabel, componentLabel, kinds, ...(module === ALL_MODULES ? {} : { module }) }),
+        [manifest, appLaneLabel, componentLabel, kinds, module],
     );
 
     const onModuleChange = (event: ChangeEvent<HTMLSelectElement>): void => {

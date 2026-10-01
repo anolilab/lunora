@@ -38,6 +38,15 @@
       diagram's depth layout (lanes fit this graph better).
 - **The fan-out lint now names topics in its wording.** Its detector already
   covered `ctx.topics.*.publish` (plan 455).
+- **Installed components are modules too.** Each `defineSchemaExtension` key
+  becomes an implicit module that owns its prefixed tables and the `lunora/<key>/`
+  folder (where registry items copy their code). It gets its own Studio lane, and
+  `cross_module_table_write` flags app code inserting into a component's table.
+    - This runs even for apps with no declared module. Swept across all 13 examples:
+      no new findings, and generated output unchanged.
+    - A declared module of the same name, or a declared `tables` claim, takes
+      precedence over the component.
+    - The component's own `node_modules` code is not scanned.
 - **Not done:** the `lunora-functions` skill section, and per-service
   `queues.ts`/`topics.ts` discovery (§9 Q2).
 
