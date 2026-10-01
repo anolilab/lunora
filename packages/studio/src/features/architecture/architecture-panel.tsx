@@ -254,9 +254,9 @@ const ArchitecturePanel = ({ manifest: inlineManifest }: ArchitecturePanelProps)
                         <Badge variant="outline">{manifest.unresolved.length}</Badge>
                     </summary>
                     <ul className="mt-2 flex flex-col gap-1 font-mono text-xs">
-                        {manifest.unresolved.map((entry, index) => (
-                            // Two unresolved calls of one kind can share a line, so the index disambiguates.
-                            <li key={`${entry.file}:${String(entry.line)}:${entry.kind}:${String(index)}`}>
+                        {manifest.unresolved.map((entry) => (
+                            // Codegen reports each file/line/kind/reason once, so this is unique.
+                            <li key={`${entry.file}:${String(entry.line)}:${entry.kind}:${entry.reason}`}>
                                 {entry.file}:{entry.line} · {entry.kind} · {entry.reason}
                             </li>
                         ))}
