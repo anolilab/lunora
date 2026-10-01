@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.167...@lunora/runtime@1.0.0-alpha.168) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
 ## @lunora/runtime [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.166...@lunora/runtime@1.0.0-alpha.167) (2026-10-01)
 
 
