@@ -1,3 +1,17 @@
+## @lunora/codegen [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.243...@lunora/codegen@1.0.0-alpha.244) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.176
+* **@lunora/agent:** upgraded to 1.0.0-alpha.158
+* **@lunora/queue:** upgraded to 1.0.0-alpha.83
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/codegen [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.242...@lunora/codegen@1.0.0-alpha.243) (2026-10-01)
 
 ### Features
