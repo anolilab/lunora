@@ -44,6 +44,8 @@ export interface ArchitectureModule {
     description?: string;
     /** `true` for an installed component (a schema extension) shown as a module. */
     installed?: true;
+    /** `false` for a package component: it owns its tables but no `lunora/<name>/` folder (see {@link moduleOf}). */
+    ownsFolder?: false;
     name: string;
     tables: string[];
 }

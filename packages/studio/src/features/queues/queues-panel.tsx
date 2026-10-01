@@ -16,15 +16,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import type {
-    QueueMessageOutcome,
-    QueueMessageRow,
-    QueueMessagesResult,
-    QueueMetadata,
-    QueuesResult,
-    ReplayQueueMessageResult,
-    SendQueueMessageResult,
-} from "../../lib/admin";
+import type { QueueMessageOutcome, QueueMessageRow, QueueMessagesResult, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { computeQueueReliability } from "./reliability";
@@ -521,12 +513,25 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
             batchMode ? { batch: body as unknown[], delaySeconds, exportName: target } : { body, delaySeconds, exportName: target },
         );
 
-        try {
-            await Promise.all(requests.map(async (args) => (await client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))) as SendQueueMessageResult));
-            refetchMessages();
-        } catch (error_) {
-            setActionError(errorMessage(error_));
+        // Settled, not `all`: the sends are independent, so on a partial failure
+        // the error must name the subscriptions that did not get the message —
+        // a blind retry would duplicate it in the ones that did.
+        const results = await Promise.allSettled(requests.map(async (args) => client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))));
+        const failures = results.flatMap((result, index) =>
+            result.status === "rejected" ? [{ exportName: requests[index]?.exportName ?? "", message: errorMessage(result.reason) }] : [],
+        );
+
+        if (failures.length > 0) {
+            const [only] = failures;
+
+            setActionError(
+                requests.length === 1 && only !== undefined
+                    ? only.message
+                    : t("Not sent to {failed}", { failed: failures.map((failure) => `${failure.exportName}: ${failure.message}`).join("; ") }),
+            );
         }
+
+        refetchMessages();
 
         setSending(false);
     };

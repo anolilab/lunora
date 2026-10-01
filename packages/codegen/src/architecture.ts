@@ -252,6 +252,7 @@ const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
             return {
                 ...(entry.description === undefined ? {} : { description: entry.description }),
                 ...(entry.installed === true ? { installed: true as const } : {}),
+                ...(entry.ownsFolder === false ? { ownsFolder: false as const } : {}),
                 name: entry.name,
                 tables: [...entry.tables],
             };

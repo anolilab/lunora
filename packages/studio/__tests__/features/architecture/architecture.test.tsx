@@ -144,8 +144,8 @@ describe("architecture diagram interactions", () => {
 
         render(renderPanel(createMockClient({}), MANIFEST));
 
-        // The click lands on the node's label and bubbles to ReactFlow's node handler.
-        fireEvent.click(await screen.findByText("table · messages"));
+        // Each member node is a real button, so Enter / Space work from the keyboard too.
+        fireEvent.click(await screen.findByText("table · messages", { selector: "button" }));
 
         expect(navigateSpy).toHaveBeenCalledWith({ search: { table: "messages" }, to: "/data" });
     });
@@ -156,5 +156,19 @@ describe("architecture diagram interactions", () => {
         render(renderPanel(createMockClient({}), MANIFEST));
 
         await expect(screen.findByTestId("architecture-export-trigger")).resolves.toBeDefined();
+    });
+
+    it("shows an error when an image export fails", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createMockClient({}), MANIFEST));
+
+        fireEvent.click(await screen.findByTestId("architecture-export-trigger"));
+        fireEvent.click(await screen.findByTestId("architecture-export-png"));
+
+        const error = await screen.findByTestId("architecture-export-error");
+
+        // jsdom cannot rasterise, so the real export rejects — exactly the path under test.
+        expect(error.textContent).toMatch(/^Export failed: /u);
     });
 });

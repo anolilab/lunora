@@ -303,4 +303,34 @@ describe("queuesPanel", () => {
             expect(sentTo.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["audit", "welcome"]);
         });
     });
+
+    it("names the subscriptions a topic publish did not reach", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendQueueMessage) {
+                    if ((args as { exportName: string }).exportName === "audit") {
+                        throw new Error("binding missing");
+                    }
+
+                    return { sent: 1 };
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("queues-tab-send"));
+        fireEvent.change(await screen.findByTestId("queues-send-select"), { target: { value: "topic:signups" } });
+        fireEvent.click(screen.getByTestId("queues-send-button"));
+
+        await expect(screen.findByText(/Not sent to audit: binding missing/u)).resolves.toBeDefined();
+    });
 });

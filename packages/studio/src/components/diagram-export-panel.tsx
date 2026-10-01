@@ -8,7 +8,7 @@ import { useState } from "react";
 
 import { exportDiagramAsJson, exportDiagramAsPng, exportDiagramAsSvg } from "../features/schema/diagram-export";
 import { useT } from "../i18n/i18n-context";
-import { fireAndForget } from "../lib/internal";
+import { errorMessage, fireAndForget } from "../lib/internal";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 /**
@@ -31,6 +31,12 @@ const DiagramExportPanel = ({ containerRef, filenameBase, testIdPrefix }: Diagra
     const nodes = useNodes();
     const { getEdges } = useReactFlow();
     const [exporting, setExporting] = useState<"json" | "png" | "svg" | null>(null);
+    // A rejected PNG/SVG export (e.g. rasterisation returned no blob) would
+    // otherwise end with no download and no message.
+    const [exportError, setExportError] = useState<null | string>(null);
+    const onExportError = (error: unknown): void => {
+        setExportError(t("Export failed: {message}", { message: errorMessage(error) }));
+    };
 
     const handlePng = async (): Promise<void> => {
         const viewport = containerRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
@@ -78,11 +84,13 @@ const DiagramExportPanel = ({ containerRef, filenameBase, testIdPrefix }: Diagra
     };
 
     const onClickPng = (): void => {
-        fireAndForget(handlePng());
+        setExportError(null);
+        fireAndForget(handlePng(), onExportError);
     };
 
     const onClickSvg = (): void => {
-        fireAndForget(handleSvg());
+        setExportError(null);
+        fireAndForget(handleSvg(), onExportError);
     };
 
     return (
@@ -108,6 +116,11 @@ const DiagramExportPanel = ({ containerRef, filenameBase, testIdPrefix }: Diagra
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
+            {exportError !== null && (
+                <p className="mt-1 max-w-64 text-right text-xs text-destructive" data-testid={`${testIdPrefix}-export-error`} role="alert">
+                    {exportError}
+                </p>
+            )}
         </Panel>
     );
 };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { moduleOf } from "../../../../shared/architecture-manifest";
+import { buildArchitecture } from "../../src/architecture";
 import { resolveModules } from "../../src/discover/modules";
 import type { SchemaIR, TableIR } from "../../src/ir";
 
@@ -52,5 +53,29 @@ describe("resolveModules", () => {
                 [],
             ),
         ).toThrow(/claimed by both/u);
+    });
+
+    it("keeps a package component's ownsFolder: false in the manifest", () => {
+        expect.assertions(1);
+
+        const tables = schema(table("agent_runs", { extensionFromPackage: true, extensionKey: "agent" }));
+        const modules = resolveModules([], tables, []);
+        const manifest = buildArchitecture({
+            callEdges: [],
+            crons: [],
+            functions: [],
+            httpRoutes: [],
+            inserts: [],
+            modules,
+            queries: [],
+            queues: [],
+            schema: tables,
+            tableWrites: [],
+            topics: [],
+            workflowCalls: [],
+            workflows: [],
+        });
+
+        expect(manifest.modules).toStrictEqual([{ installed: true, name: "agent", ownsFolder: false, tables: ["agent_runs"] }]);
     });
 });

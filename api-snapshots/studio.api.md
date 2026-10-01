@@ -1363,6 +1363,8 @@ const MESSAGE_IDS: readonly [
     "No modules declared",
     "{count} call sites could not be drawn",
     "{count} edges shown",
+    "Export failed: {message}",
+    "Not sent to {failed}",
     "Topic {topic} · {count} subscriptions",
     "{topic} (topic → {count} subscriptions)",
     "Component",

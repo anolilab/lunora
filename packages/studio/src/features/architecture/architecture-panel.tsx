@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
-import type { Node, NodeMouseHandler, NodeProps, NodeTypes } from "@xyflow/react";
+import type { NodeProps, NodeTypes } from "@xyflow/react";
 import { Background, Controls, Handle, Position, ReactFlow } from "@xyflow/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useMemo, useRef, useState } from "react";
@@ -39,14 +39,29 @@ const LaneNode = ({ data }: NodeProps): ReactElement => (
 /** Edges attach to a node's handles; the diagram is read-only, so they are invisible. */
 const HIDDEN_HANDLE = { opacity: 0 } as const;
 
-/** A function, table, queue, … inside a lane: its label, with edges entering left and leaving right. */
-const MemberNode = ({ data }: NodeProps): ReactElement => (
-    <>
-        <Handle isConnectable={false} position={Position.Left} style={HIDDEN_HANDLE} type="target" />
-        <span className="truncate">{String(data.label)}</span>
-        <Handle isConnectable={false} position={Position.Right} style={HIDDEN_HANDLE} type="source" />
-    </>
-);
+/**
+ * A function, table, queue, … inside a lane: a button that opens the node's page
+ * (a real button, so Enter and Space work from the keyboard), with edges
+ * entering left and leaving right.
+ */
+const MemberNode = ({ data }: NodeProps): ReactElement => {
+    const navigate = useNavigate();
+    const { label, link } = data as { label: string; link: StudioLink };
+
+    const open = (): void => {
+        fireAndForget(navigate(link));
+    };
+
+    return (
+        <>
+            <Handle isConnectable={false} position={Position.Left} style={HIDDEN_HANDLE} type="target" />
+            <button className="size-full cursor-pointer truncate text-left focus-visible:outline-none" onClick={open} type="button">
+                {label}
+            </button>
+            <Handle isConnectable={false} position={Position.Right} style={HIDDEN_HANDLE} type="source" />
+        </>
+    );
+};
 
 // Registered once: a narrow custom-node component can't be assigned to React
 // Flow's broad `NodeTypes` map without widening, so cast at the single seam.
@@ -124,7 +139,7 @@ const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }
     );
 };
 
-/** The module lanes and their edges, filterable by lane and edge kind. Clicking a node opens its page; the canvas exports to PNG, SVG or JSON. */
+/** The module lanes and their edges, filterable by lane and edge kind. Each node is a button that opens its page; the canvas exports to PNG, SVG or JSON. */
 const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureManifest }): ReactElement => {
     const t = useT();
     const [lane, setLane] = useState<string>(ALL_LANES);
@@ -139,17 +154,8 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
         [manifest, appLaneLabel, componentLabel, kinds, lane],
     );
 
-    const navigate = useNavigate();
     // The PNG/SVG export finds the `.react-flow__viewport` through this wrapper.
     const canvasRef = useRef<HTMLDivElement>(null);
-    // A member node opens the page that shows it; a lane carries no link.
-    const onNodeClick: NodeMouseHandler = (_event, node: Node) => {
-        const { link } = node.data as { link?: StudioLink };
-
-        if (link !== undefined) {
-            fireAndForget(navigate(link));
-        }
-    };
 
     const onLaneChange = (event: ChangeEvent<HTMLSelectElement>): void => {
         setLane(event.target.value);
@@ -215,7 +221,6 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
                     nodesConnectable={false}
                     nodesDraggable={false}
                     nodeTypes={NODE_TYPES}
-                    onNodeClick={onNodeClick}
                 >
                     <Background />
                     <Controls showInteractive={false} />
