@@ -34,8 +34,10 @@
     - One lane per module, filterable by module (neighbours one edge away stay
       visible) and by edge kind.
     - The catalog table sits on the same page instead of in the Functions page (E).
-    - Not built: click-to-deep-link, PNG/SVG export, and reuse of the schema
-      diagram's depth layout (lanes fit this graph better).
+    - Clicking a node opens its page (a table opens `/data?table=…`, the rest
+      their listing tab), and the canvas exports to PNG/SVG/JSON through the
+      export menu the schema diagram now shares (`components/diagram-export-panel`).
+    - Not reused: the schema diagram's depth layout (lanes fit this graph better).
 - **The fan-out lint now names topics in its wording.** Its detector already
   covered `ctx.topics.*.publish` (plan 455).
 - **Installed components are modules too.** Each `defineSchemaExtension` key

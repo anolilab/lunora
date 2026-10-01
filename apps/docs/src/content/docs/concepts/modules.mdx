@@ -52,7 +52,9 @@ the module each belongs to, and the edges between them:
 
 The Studio's **Functions → Architecture** page renders it: a catalog of modules
 with their descriptions, owned tables and function counts, and a diagram with one
-lane per module that you can filter by module and edge kind. The worker serves
+lane per module that you can filter by module and edge kind. Click a node to
+open it: a table opens its rows in the data browser, a function the Functions
+page, a queue or topic the Queues page. The canvas exports to PNG, SVG or JSON. The worker serves
 the manifest at the admin-gated `GET /_lunora/admin/architecture`.
 
 The graph is static, read from source by codegen, so it is complete before the

@@ -1,11 +1,13 @@
 import { useLunora } from "@lunora/react";
-import type { NodeProps, NodeTypes } from "@xyflow/react";
+import { useNavigate } from "@tanstack/react-router";
+import type { Node, NodeMouseHandler, NodeProps, NodeTypes } from "@xyflow/react";
 import { Background, Controls, ReactFlow } from "@xyflow/react";
 import type { ChangeEvent, ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { ArchitectureEdgeKind, ArchitectureManifest } from "../../../../../shared/architecture-manifest";
 import { EDGE_KINDS } from "../../../../../shared/architecture-manifest";
+import DiagramExportPanel from "../../components/diagram-export-panel";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -14,7 +16,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
 import { useT } from "../../i18n/i18n-context";
+import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
+import type { StudioLink } from "./architecture-model";
 import { APP_LANE, laneOf, layoutArchitecture, parseArchitecture } from "./architecture-model";
 
 interface ArchitecturePanelProps {
@@ -108,7 +112,7 @@ const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }
     );
 };
 
-/** The module lanes and their edges, filterable by module and edge kind. Read-only. */
+/** The module lanes and their edges, filterable by lane and edge kind. Clicking a node opens its page; the canvas exports to PNG, SVG or JSON. */
 const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureManifest }): ReactElement => {
     const t = useT();
     const [lane, setLane] = useState<string>(ALL_LANES);
@@ -122,6 +126,18 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
         () => layoutArchitecture(manifest, { appLaneLabel, componentLabel, kinds, ...(lane === ALL_LANES ? {} : { lane }) }),
         [manifest, appLaneLabel, componentLabel, kinds, lane],
     );
+
+    const navigate = useNavigate();
+    // The PNG/SVG export finds the `.react-flow__viewport` through this wrapper.
+    const canvasRef = useRef<HTMLDivElement>(null);
+    // A member node opens the page that shows it; a lane carries no link.
+    const onNodeClick: NodeMouseHandler = (_event, node: Node) => {
+        const { link } = node.data as { link?: StudioLink };
+
+        if (link !== undefined) {
+            fireAndForget(navigate(link));
+        }
+    };
 
     const onLaneChange = (event: ChangeEvent<HTMLSelectElement>): void => {
         setLane(event.target.value);
@@ -177,7 +193,7 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
                     </button>
                 ))}
             </div>
-            <div className="h-[600px] w-full overflow-hidden border border-border bg-muted/20" data-testid="architecture-canvas">
+            <div className="h-[600px] w-full overflow-hidden border border-border bg-muted/20" data-testid="architecture-canvas" ref={canvasRef}>
                 <ReactFlow
                     edges={edges}
                     edgesFocusable={false}
@@ -187,9 +203,11 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
                     nodesConnectable={false}
                     nodesDraggable={false}
                     nodeTypes={NODE_TYPES}
+                    onNodeClick={onNodeClick}
                 >
                     <Background />
                     <Controls showInteractive={false} />
+                    <DiagramExportPanel containerRef={canvasRef} filenameBase="architecture" testIdPrefix="architecture" />
                 </ReactFlow>
             </div>
         </section>

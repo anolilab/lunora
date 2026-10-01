@@ -1,11 +1,11 @@
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ArchitectureManifest } from "../../../../../shared/architecture-manifest";
 import { EDGE_KINDS } from "../../../../../shared/architecture-manifest";
-import { layoutArchitecture, parseArchitecture } from "../../../src/features/architecture/architecture-model";
+import { layoutArchitecture, linkFor, parseArchitecture } from "../../../src/features/architecture/architecture-model";
 import ArchitecturePanel from "../../../src/features/architecture/architecture-panel";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
@@ -32,6 +32,14 @@ const MANIFEST: ArchitectureManifest = {
     unresolved: [{ file: "chat/posts", kind: "call", line: 9, reason: "the function reference is not a static api.* / internal.* chain" }],
     version: 1,
 };
+
+// Node clicks navigate via TanStack Router; stub `useNavigate` with a spy
+// (hoisted so it exists when vi.mock's factory runs).
+const { navigateSpy } = vi.hoisted(() => {
+    return { navigateSpy: vi.fn<(link: unknown) => Promise<void>>(async () => {}) };
+});
+
+vi.mock(import("@tanstack/react-router"), () => ({ useNavigate: () => navigateSpy }) as never);
 
 const ALL_KINDS = new Set(EDGE_KINDS);
 
@@ -116,5 +124,37 @@ describe("architecturePanel", () => {
 
         expect(toggle.getAttribute("aria-pressed")).toBe("false");
         expect(screen.getByTestId("architecture-edge-count").textContent).toBe("2 edges shown");
+    });
+});
+
+describe("linkFor", () => {
+    it("opens a table's rows and every other kind's listing tab", () => {
+        expect.assertions(4);
+
+        expect(linkFor({ id: "table:messages", kind: "table", name: "messages" })).toStrictEqual({ search: { table: "messages" }, to: "/data" });
+        expect(linkFor({ id: "function:chat_posts:post", kind: "function", name: "chat_posts.post" })).toStrictEqual({ to: "/functions" });
+        expect(linkFor({ id: "topic:posted", kind: "topic", name: "posted" })).toStrictEqual({ to: "/queues" });
+        expect(linkFor({ id: "cron:nightly", kind: "cron", name: "nightly" })).toStrictEqual({ to: "/schedule" });
+    });
+});
+
+describe("architecture diagram interactions", () => {
+    it("navigates to a table's rows when its node is clicked", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createMockClient({}), MANIFEST));
+
+        // The click lands on the node's label and bubbles to ReactFlow's node handler.
+        fireEvent.click(await screen.findByText("table · messages"));
+
+        expect(navigateSpy).toHaveBeenCalledWith({ search: { table: "messages" }, to: "/data" });
+    });
+
+    it("offers PNG, SVG and JSON export", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createMockClient({}), MANIFEST));
+
+        await expect(screen.findByTestId("architecture-export-trigger")).resolves.toBeDefined();
     });
 });

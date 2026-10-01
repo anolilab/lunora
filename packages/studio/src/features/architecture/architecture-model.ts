@@ -36,6 +36,40 @@ const parseArchitecture = (value: unknown): ArchitectureManifest | undefined => 
         : undefined;
 };
 
+/** Where clicking a node goes in the studio: a tab, plus search params when it can be that precise. */
+interface StudioLink {
+    readonly search?: Readonly<Record<string, string>>;
+    readonly to: string;
+}
+
+/** The studio page each node kind opens: a table opens its rows, the rest open the tab that lists them. */
+const NODE_LINKS: Readonly<Record<ArchitectureNodeKind, (node: ArchitectureNode) => StudioLink>> = {
+    cron: () => {
+        return { to: "/schedule" };
+    },
+    function: () => {
+        return { to: "/functions" };
+    },
+    http: () => {
+        return { to: "/api" };
+    },
+    queue: () => {
+        return { to: "/queues" };
+    },
+    table: (node) => {
+        return { search: { table: node.name }, to: "/data" };
+    },
+    topic: () => {
+        return { to: "/queues" };
+    },
+    workflow: () => {
+        return { to: "/workflows" };
+    },
+};
+
+/** The studio page a diagram node opens when clicked. */
+const linkFor = (node: ArchitectureNode): StudioLink => NODE_LINKS[node.kind](node);
+
 /** The lane a node is drawn in: its module, or the app lane. */
 const laneOf = (node: ArchitectureNode): string => node.module ?? APP_LANE;
 
@@ -91,10 +125,10 @@ const laneNodes = (lane: string, label: string, column: number, members: Readonl
         },
         ...members.map((member, index): Node => {
             return {
-                className: "flex items-center truncate rounded-md border border-border bg-card px-2 text-xs text-foreground",
+                className: "flex cursor-pointer items-center truncate rounded-md border border-border bg-card px-2 text-xs text-foreground hover:border-ring",
                 // The qualifier leads (`query`, `subscription`, a cron schedule, else
                 // the kind) so a lane reads as a typed list without a colour key.
-                data: { label: `${member.detail ?? member.kind} · ${member.name}` },
+                data: { label: `${member.detail ?? member.kind} · ${member.name}`, link: linkFor(member) },
                 extent: "parent",
                 id: member.id,
                 parentId: laneId,
@@ -161,4 +195,5 @@ const layoutArchitecture = (
     return { edges, nodes };
 };
 
-export { APP_LANE, laneOf, layoutArchitecture, parseArchitecture, visibleNodeIds };
+export type { StudioLink };
+export { APP_LANE, laneOf, layoutArchitecture, linkFor, parseArchitecture, visibleNodeIds };
