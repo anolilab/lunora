@@ -297,13 +297,18 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
     const declared: Record<string, ServiceLiteral> = {};
 
     for (const entry of value.getProperties()) {
-        if (!TsNode.isPropertyAssignment(entry)) {
+        if (!TsNode.isPropertyAssignment(entry) || TsNode.isComputedPropertyName(entry.getNameNode())) {
             return { services: { unreadable: true } };
         }
 
         const initializer = unwrapLiteral(entry.getInitializer());
 
-        if (initializer === undefined || !TsNode.isObjectLiteralExpression(initializer)) {
+        // A spread inside an entry could shadow `entrypoint` with a value the reader never sees.
+        if (
+            initializer === undefined ||
+            !TsNode.isObjectLiteralExpression(initializer) ||
+            initializer.getProperties().some((member) => !TsNode.isPropertyAssignment(member))
+        ) {
             return { services: { unreadable: true } };
         }
 

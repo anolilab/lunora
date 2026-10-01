@@ -83,7 +83,10 @@ const resolveServiceArgs = (cwd: string, remoteArgs: ReadonlyArray<string>): str
         return [];
     }
 
-    return [...(remoteArgs.length > 0 ? [] : ["--config", primary]), ...services.flatMap((service) => ["--config", service.wranglerPath])];
+    return [
+        ...(remoteArgs.length > 0 ? [] : ["--config", primary]),
+        ...[...new Set(services.map((service) => service.wranglerPath))].flatMap((path) => ["--config", path]),
+    ];
 };
 
 /** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */

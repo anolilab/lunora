@@ -52,7 +52,7 @@ Each declared service is a typed `ctx.services.<key>` on **actions**:
 
 ```ts
 // lunora/documents.ts
-import { action, v } from "@lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const summarise = action({
     args: { url: v.string() },

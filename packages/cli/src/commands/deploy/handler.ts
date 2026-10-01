@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
@@ -648,7 +650,11 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, target
 
     const manager = detectPackageManager(cwd);
 
-    for (const service of services) {
+    // Two keys may bind two entrypoints of one Worker: it deploys once.
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+    const verb = options.dryRun === true ? "deploy --dry-run" : "deploy";
+
+    for (const service of workers) {
         const exec = execArgsFor(manager, "wrangler", [
             "deploy",
             "--config",
@@ -659,11 +665,12 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, target
 
         options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
 
+        // From the service's own folder, so a custom `build` command runs where the service lives.
         // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
-        const result = await spawner({ args: exec.args, command: exec.command, cwd, stdoutToStderr: options.format === "json" });
+        const result = await spawner({ args: exec.args, command: exec.command, cwd: dirname(service.wranglerPath), stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
-            return `service ${service.name} (${service.worker}): wrangler ${exec.args.includes("--dry-run") ? "deploy --dry-run" : "deploy"} exited ${String(result.code)} — stopping before the app`;
+            return `service ${service.name} (${service.worker}): wrangler ${verb} exited ${String(result.code)} — stopping before the app`;
         }
     }
 

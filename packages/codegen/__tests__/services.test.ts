@@ -154,6 +154,8 @@ export const parse = action({
         [`{ services: { parser: { dir: "./services/missing" } } }`, /has no wrangler\.jsonc/u],
         [`{ services: { parser: { dir: "./services/parser", entrypoint: "bad name" } } }`, /must name an exported WorkerEntrypoint/u],
         [`{ services: { ...shared } }`, /must be an inline object/u],
+        [`{ services: { ["par" + "ser"]: { dir: "./services/parser" } } }`, /must be an inline object/u],
+        [`{ services: { parser: { ...shared, dir: "./services/parser" } } }`, /must be an inline object/u],
         [`{ services: { docParser: { dir: "./services/parser" }, doc_parser: { dir: "./services/parser" } } }`, /both map to the binding SERVICE_DOC_PARSER/u],
     ])("rejects %s", (config, message) => {
         expect.assertions(1);

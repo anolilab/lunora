@@ -37,6 +37,17 @@ describe(withServiceWorkers, () => {
         ]);
     });
 
+    it("adds a Worker bound under two keys once", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "lunora.config.ts"),
+            `export default { services: { a: { dir: "./services/gateway", entrypoint: "A" }, b: { dir: "./services/gateway", entrypoint: "B" } } };\n`,
+        );
+
+        expect(withServiceWorkers({}, root).auxiliaryWorkers).toStrictEqual([{ configPath: join(root, "services", "gateway", "wrangler.jsonc") }]);
+    });
+
     it.each([
         ["no service is declared", ""],
         ["the declaration is unreadable", `const shared = {};\nexport default { services: { ...shared } };\n`],

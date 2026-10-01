@@ -20,10 +20,11 @@ const withServiceWorkers = (options: CloudflarePluginOptions, projectRoot: strin
 
     const existing = Array.isArray(options.auxiliaryWorkers) ? (options.auxiliaryWorkers as { configPath?: string }[]) : [];
     const listed = new Set(existing.map((worker) => (worker.configPath === undefined ? "" : resolve(projectRoot, worker.configPath))));
-    const added = services
-        .filter((service) => !listed.has(service.wranglerPath))
-        .map((service) => {
-            return { configPath: service.wranglerPath };
+    // Two keys may bind two entrypoints of one Worker: it runs once.
+    const added = [...new Set(services.map((service) => service.wranglerPath))]
+        .filter((path) => !listed.has(path))
+        .map((path) => {
+            return { configPath: path };
         });
 
     return added.length === 0 ? options : { ...options, auxiliaryWorkers: [...existing, ...added] };

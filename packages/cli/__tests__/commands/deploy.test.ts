@@ -289,7 +289,7 @@ describe("lunora deploy", () => {
             };
 
             it("deploys each service before the app, passing --env and --dry-run through", async () => {
-                expect.assertions(3);
+                expect.assertions(4);
 
                 declareParser();
                 writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
@@ -304,6 +304,8 @@ describe("lunora deploy", () => {
                     `deploy --config ${join(workdir, "services", "parser", "wrangler.jsonc")} --env production --dry-run`,
                 );
                 expect(calls.at(-1)?.descriptor.args.join(" ")).not.toContain("services/parser");
+                // From the service's folder, so its own build command runs there.
+                expect(calls[0]?.descriptor.cwd).toBe(join(workdir, "services", "parser"));
             });
 
             it("leaves wrangler.jsonc and package.json as they were after a dry run", async () => {
