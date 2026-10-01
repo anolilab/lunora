@@ -1,0 +1,80 @@
+---
+title: Modules
+description: Group lunora/ folders into modules and get a module catalog and an architecture diagram from codegen.
+related:
+    - to: /docs/concepts/advisors
+      note: "the `cross_module_table_write` lint"
+    - to: /docs/concepts/internal-functions
+      note: "calling another module's functions"
+---
+
+A **module** is a folder under `lunora/` that holds a `module.ts` whose
+default export is `defineModule(...)`. Every file beneath that folder belongs
+to the module, and the folder path is its name.
+
+```ts
+// lunora/billing/module.ts
+import { defineModule } from "@lunora/server";
+
+export default defineModule({
+    description: "Invoices, payments and dunning",
+    tables: ["invoices", "payments"], // optional: tables this module owns
+});
+```
+
+Modules are metadata. They change no `api.*` path and nothing at runtime, and the
+whole app still deploys as one Worker. `lunora/billing/invoices.ts` stays
+`api.billing_invoices.*` either way. Codegen reads `description` and `tables`
+without running the file, so write them inline.
+
+Modules do not nest: a `module.ts` inside another module's folder is a codegen
+error, because a file would then belong to two modules. Files outside every
+module folder are shown as "outside any module".
+
+## What you get
+
+Once the app declares a module, codegen writes `_generated/architecture.json`
+(and an inlined `architecture.ts` the generated app passes to the worker). The
+manifest lists every function, HTTP route, table, queue, topic, workflow and cron,
+the module each belongs to, and the edges between them:
+
+| Edge        | From → to                | Read from                                                                    |
+| ----------- | ------------------------ | ---------------------------------------------------------------------------- |
+| `call`      | function → function      | `ctx.runQuery/runMutation/runAction(api.x.y, …)`, a queue's `message.run(…)` |
+| `schedule`  | function → function      | `ctx.scheduler.runAfter/runAt(…, api.x.y)`                                   |
+| `read`      | function → table         | `ctx.db.query("table")`                                                      |
+| `write`     | function → table         | `ctx.db.insert("table", …)`                                                  |
+| `enqueue`   | function → queue         | `ctx.queues.<name>.send/sendBatch`                                           |
+| `publish`   | function → topic         | `ctx.topics.<name>.publish/publishBatch`                                     |
+| `subscribe` | topic → subscription     | `defineSubscription(topic, …)`                                               |
+| `start`     | function → workflow      | `ctx.workflows.get("name")`                                                  |
+| `trigger`   | cron → function/workflow | `cronJobs()`                                                                 |
+
+The Studio's **Functions → Architecture** page renders it: a catalog of modules
+with their descriptions, owned tables and function counts, and a diagram with one
+lane per module that you can filter by module and edge kind. The worker serves
+the manifest at the admin-gated `GET /_lunora/admin/architecture`.
+
+The graph is static, read from source by codegen, so it is complete before the
+first deploy and diffable in review. It does not guess: an edge whose target is
+held in a variable, or a call inside a non-exported helper, is listed under
+"call sites could not be drawn" instead. `ctx.db.patch/replace/delete` address a
+row by id, so their table is not drawn yet.
+
+## Table ownership
+
+`tables` declares which tables a module owns. A function in another module, or
+outside every module, that inserts into an owned table is reported by the
+`cross_module_table_write` advisor lint. Route the write through a function in
+the owning module instead:
+
+```ts
+// lunora/accounts/signup.ts — not the billing module
+await ctx.runMutation(internal.billing_invoices.open, { userId });
+```
+
+A table can have one owner, and it must exist in `lunora/schema.ts`; codegen
+rejects either mistake. A module that declares no `tables` opts out of the lint.
+
+The OpenAPI and OpenRPC specs tag each operation with its module (falling back
+to its file namespace), so generated API docs group by module too.

@@ -673,6 +673,31 @@ const createDevMockClient = (): LunoraClient =>
                 total: 42,
             };
         },
+        fetchArchitecture: async (): Promise<unknown> => {
+            // A two-module sample so the Architecture tab renders lanes, a
+            // cross-module call, a table write and one unresolved call site.
+            return {
+                edges: [
+                    { from: "function:chat_messages:send", kind: "call", to: "function:accounts_users:me" },
+                    { from: "function:chat_messages:send", kind: "write", to: "table:messages" },
+                    { from: "function:chat_messages:list", kind: "read", to: "table:messages" },
+                    { from: "function:accounts_users:me", kind: "read", to: "table:users" },
+                ],
+                nodes: [
+                    { detail: "query", id: "function:accounts_users:me", kind: "function", name: "accounts_users.me", module: "accounts" },
+                    { detail: "query", id: "function:chat_messages:list", kind: "function", name: "chat_messages.list", module: "chat" },
+                    { detail: "mutation", id: "function:chat_messages:send", kind: "function", name: "chat_messages.send", module: "chat" },
+                    { id: "table:messages", kind: "table", name: "messages", module: "chat" },
+                    { id: "table:users", kind: "table", name: "users", module: "accounts" },
+                ],
+                modules: [
+                    { name: "accounts", tables: ["users"] },
+                    { description: "Channels and messages", name: "chat", tables: ["messages"] },
+                ],
+                unresolved: [{ file: "chat/messages", kind: "call", line: 42, reason: "the function reference is not a static api.* / internal.* chain" }],
+                version: 1,
+            };
+        },
         fetchOpenApi: async (): Promise<unknown> => {
             return {
                 info: { title: "Lunora API (mock)", version: "0.0.0" },

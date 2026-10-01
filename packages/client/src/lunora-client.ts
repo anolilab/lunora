@@ -265,6 +265,7 @@ const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
+const ARCHITECTURE_PATH = "/_lunora/admin/architecture";
 const OPENAPI_PATH = "/_lunora/admin/openapi";
 const OPENRPC_PATH = "/_lunora/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_lunora/admin/global/tables";
@@ -3536,6 +3537,19 @@ class LunoraClient {
         this.assertOpen();
 
         return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
+    }
+
+    /**
+     * Fetch the generated architecture manifest (module catalog + static call
+     * graph). Hits the admin-gated `GET /_lunora/admin/architecture` endpoint.
+     * Codegen emits the manifest once the app declares a module
+     * (`lunora/<dir>/module.ts`); until then the endpoint answers an empty one
+     * (no modules, nodes or edges). Powers `@lunora/studio`'s Architecture view.
+     */
+    public async fetchArchitecture(): Promise<Record<string, unknown>> {
+        this.assertOpen();
+
+        return (await this.adminFetch(ARCHITECTURE_PATH, "GET")) as Record<string, unknown>;
     }
 
     /**

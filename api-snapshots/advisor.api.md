@@ -383,6 +383,15 @@ interface AdvisorMaskStrategy {
 }
 ```
 
+### `AdvisorModule` (interface)
+
+```ts
+interface AdvisorModule {
+    name: string;
+    tables: ReadonlyArray<string>;
+}
+```
+
 ### `AdvisorMutatorDeclaration` (interface)
 
 ```ts
@@ -967,6 +976,7 @@ interface LintContext {
     mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+    modules?: ReadonlyArray<AdvisorModule>;
     mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
@@ -1269,6 +1279,12 @@ const containerRuntimeEgressRelaxation: Lint;
 
 ```ts
 const containerStartEnableInternetOverride: Lint;
+```
+
+### `crossModuleTableWrite` (const)
+
+```ts
+const crossModuleTableWrite: Lint;
 ```
 
 ### `dedupeCacheKeys` (const)

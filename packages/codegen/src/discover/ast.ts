@@ -281,8 +281,9 @@ const collectSecurityCallRows = <Row>(
 
 /**
  * Export binding name of the exported, top-level function that lexically contains
- * the call (e.g. `export const send = mutation({ … })` → `"send"`), or `""` when
- * the call isn't inside an exported declaration. Walks out past any local
+ * the call (e.g. `export const send = mutation({ … })` → `"send"`, and
+ * `export default mutation({ … })` → `"default"`), or `""` when the call isn't
+ * inside an exported declaration. Walks out past any local
  * `const x = …` declarations to the exported one.
  *
  * Shared by the call-attribution discoverers (`discover/inserts`,
@@ -294,6 +295,11 @@ const enclosingExportName = (call: CallExpression): string => {
     for (const ancestor of call.getAncestors()) {
         if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
             return ancestor.getName();
+        }
+
+        // `export default query(...)` registers as `<namespace>:default`.
+        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
+            return "default";
         }
     }
 
@@ -716,6 +722,33 @@ const stringPropertyFor =
         );
     };
 
+/** The `FunctionReference` roots codegen emits (`api.<namespace>.<export>` / `internal.…`). */
+const FUNCTION_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["api", "internal"]);
+
+/** Context methods that call a Lunora function by reference (`ctx.runQuery(api.x.y, …)`, a queue's `message.run(…)`). */
+const RUN_METHODS: ReadonlySet<string> = new Set(["run", "runAction", "runMutation", "runQuery"]);
+
+/**
+ * The member path of a static `api.<…>.<export>` / `internal.<…>.<export>` chain,
+ * root excluded (`["messages", "send"]`), or `undefined` for anything else — a
+ * variable, a computed member, a call result.
+ */
+const functionReferenceSegments = (node: Node | undefined): string[] | undefined => {
+    if (node === undefined || !Node.isPropertyAccessExpression(node)) {
+        return undefined;
+    }
+
+    const segments: string[] = [];
+    let current: Node = node;
+
+    while (Node.isPropertyAccessExpression(current)) {
+        segments.unshift(current.getName());
+        current = current.getExpression();
+    }
+
+    return Node.isIdentifier(current) && FUNCTION_REFERENCE_ROOTS.has(current.getText()) && segments.length >= 2 ? segments : undefined;
+};
+
 export {
     bindingKeyName,
     collectCallRows,
@@ -723,6 +756,7 @@ export {
     defaultExportExpression,
     enclosingExportName,
     findObjectProperty,
+    functionReferenceSegments,
     handlerOf,
     isContextIdentifier,
     isDatabaseAccessor,
@@ -736,6 +770,7 @@ export {
     propertyKeyName,
     propertyNameText,
     readTargetOf,
+    RUN_METHODS,
     stringPropertyFor,
     stringPropertyOf,
     symbolConstInitializer,

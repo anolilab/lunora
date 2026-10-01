@@ -119,6 +119,14 @@ export interface Finding {
     title: string;
 }
 
+/** A `defineModule` folder and the tables it claims — the `cross_module_table_write` input. */
+export interface AdvisorModule {
+    /** The folder path relative to `lunora/`, e.g. `billing`. */
+    name: string;
+    /** Tables the module declares it owns; empty when it declares none. */
+    tables: ReadonlyArray<string>;
+}
+
 /**
  * Everything a lint may inspect. Static lints read only {@link LintContext.schema};
  * runtime lints will additionally read observed-signal fields added here later.
@@ -406,6 +414,13 @@ export interface LintContext {
      * nothing.
      */
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+
+    /**
+     * Modules declared via `lunora/<dir>/module.ts` (`defineModule`), each with
+     * the tables it claims — the `cross_module_table_write` input. Supplied by the
+     * codegen feeder; absent for runtime callers.
+     */
+    modules?: ReadonlyArray<AdvisorModule>;
 
     /**
      * Exported `defineMutator({ … })` declarations in `lunora/mutators.ts` — the

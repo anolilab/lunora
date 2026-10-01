@@ -268,6 +268,7 @@ interface EmitAppOptions {
         bindingName: string;
         exportName: string;
     }>;
+    wantsArchitecture: boolean;
     wantsOpenApi: boolean;
     wantsOpenRpc: boolean;
 }
@@ -443,6 +444,7 @@ interface LintSchemaOptions {
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     shapes?: ReadonlyArray<ShapeIR>;
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>;
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
@@ -550,6 +552,7 @@ const OPENRPC_VERSION = "1.3.2";
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -571,6 +574,7 @@ interface OpenRpcDocument {
 ```ts
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -2209,6 +2213,16 @@ interface MaskStrategyIR {
 interface ModelNullPaths {
     nullable: ReadonlyArray<SchemaPath>;
     optional: ReadonlyArray<SchemaPath>;
+}
+```
+
+### `ModuleIR` (interface)
+
+```ts
+interface ModuleIR {
+    description?: string;
+    name: string;
+    tables: ReadonlyArray<string>;
 }
 ```
 

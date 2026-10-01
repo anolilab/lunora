@@ -38,6 +38,7 @@ import type {
     MailRecipientAccessIR,
     MaskProcedureIR,
     MaskStrategyIR,
+    ModuleIR,
     MutatorIR,
     MutatorWriteIR,
     NondeterministicCallIR,
@@ -216,6 +217,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;

@@ -787,6 +787,38 @@ export const plainQueues = (queues: ReadonlyArray<QueueIR>): QueueIR[] => queues
 export const subscriptionsOf = (queues: ReadonlyArray<QueueIR>, topic: string): QueueIR[] => queues.filter((queue) => queue.topic === topic);
 
 /**
+ * A module: a folder under `lunora/` whose `module.ts` default-exports
+ * `defineModule(...)`. Metadata for the Studio catalog, the architecture
+ * manifest and the `cross_module_table_write` lint — it changes no `api.*` path.
+ */
+export interface ModuleIR {
+    /** One-line description from `defineModule({ description })`. */
+    description?: string;
+    /** The folder path relative to `lunora/`, e.g. `billing` — also the module's name. */
+    name: string;
+    /** Tables the module declares it owns (`defineModule({ tables })`); empty when it declares none. */
+    tables: ReadonlyArray<string>;
+}
+
+/**
+ * One call-site edge of the architecture graph, attributed to the exported
+ * declaration it sits in (`exportName` is `""` inside a non-exported helper).
+ * Exactly one of `target` / `reason` is set: `target` is a `namespace:export`
+ * function key (`call` / `schedule`) or a queue / topic export name (`enqueue` /
+ * `publish`); `reason` says why the target could not be read statically.
+ */
+export interface CallEdgeIR {
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    kind: "call" | "enqueue" | "publish" | "schedule";
+    /** 1-based line of the call. */
+    line: number;
+    reason?: string;
+    target?: string;
+}
+
+/**
  * The feature-flag provider declared by the default export of `lunora/flags.ts`
  * (`defineFlags({ provider, … })`). Discovery is **metadata-only** — codegen
  * imports the real module at runtime for the provider value; this IR exists so

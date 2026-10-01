@@ -1,7 +1,8 @@
 import type { JsonSchema } from "@lunora/values";
 
+import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
-import type { FunctionIR } from "./ir";
+import type { FunctionIR, ModuleIR } from "./ir";
 import renderJsonData from "./json-data";
 import sanitizeNamespace from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
@@ -41,7 +42,7 @@ const inferredResultSchema: JsonSchema = {
  * (OpenRPC has no first-class tag grouping), and the standard `LunoraError`
  * codes are enumerated under `errors` so clients can switch on `error.code`.
  */
-const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
+const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown> => {
     const namespace = sanitizeNamespace(definition.filePath);
     const functionPath = `${namespace}:${definition.exportName}`;
 
@@ -77,14 +78,16 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,
         // OpenRPC has no first-class tag grouping; surface the file namespace as
-        // an `x-tags` extension so tooling can group methods by source file.
-        "x-tags": [{ name: namespace }],
+        // an `x-tags` extension so tooling can group methods by module (or source file).
+        "x-tags": [{ name: tag }],
     };
 };
 
 /** Inputs the OpenRPC emitter needs from a codegen run. */
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    /** Declared modules; a method in a module folder is tagged with the module instead of its file namespace. */
+    modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
 }
@@ -114,7 +117,10 @@ const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> 
     // not invocable over the external RPC envelope.
     const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
 
-    const methods = rpcFunctions.map((definition) => rpcMethod(definition)).toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
+    const modules = input.modules ?? [];
+    const methods = rpcFunctions
+        .map((definition) => rpcMethod(definition, moduleTagOf(modules, definition.filePath)))
+        .toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
 
     const document = {
         info: {

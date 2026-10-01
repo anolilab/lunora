@@ -143,6 +143,7 @@ const appOptions = {
     hasX402: false,
     tables: [],
     useUmbrella: false,
+    wantsArchitecture: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,
 };

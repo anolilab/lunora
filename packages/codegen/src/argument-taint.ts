@@ -314,8 +314,8 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
 };
 
 /**
- * The export name of the nearest *exported* `const x = …` ancestor, or `"<module>"`
- * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
+ * The export name of the nearest *exported* `const x = …` ancestor (`"default"`
+ * inside `export default …`), or `"<module>"` when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
  * any local `const result = …` bindings to the exported declaration — matching
  * {@link import("./discover/ast").enclosingExportName} — so a sink nested in a
  * local `const` is still attributed to its exported handler, not the local.
@@ -324,6 +324,11 @@ export const enclosingExportName = (node: TsNode): string => {
     for (const ancestor of node.getAncestors()) {
         if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
             return ancestor.getName();
+        }
+
+        // `export default query(...)` registers as `<namespace>:default`.
+        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
+            return "default";
         }
     }
 

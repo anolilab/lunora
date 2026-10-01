@@ -14,6 +14,18 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
+    "Architecture",
+    "Your modules, and the calls, reads, writes and hand-offs between them, from codegen.",
+    "Module",
+    "Owned tables",
+    "Outside any module",
+    "All modules",
+    "Couldn't load the architecture manifest: {message}",
+    "Architecture unavailable",
+    "Add a lunora/<folder>/module.ts that default-exports defineModule(...) and run lunora codegen to map your modules here.",
+    "No modules declared",
+    "{count} call sites could not be drawn",
+    "{count} edges shown",
     "Send this link to the invitee. It is shown once and cannot be recovered.",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
     "Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.",

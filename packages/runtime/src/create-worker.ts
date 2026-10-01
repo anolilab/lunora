@@ -843,6 +843,15 @@ interface WorkerOptions {
     applyGlobals?: GlobalCdcApplyFunction;
 
     /**
+     * The generated architecture manifest (module catalog + static call graph).
+     * Codegen emits `_generated/architecture.ts` once the app declares a module
+     * (`lunora/<dir>/module.ts`) and the generated app passes it through. Served
+     * verbatim at the admin-gated `GET /_lunora/admin/architecture` for the
+     * studio's Architecture view; omitted, the route answers an empty manifest.
+     */
+    architecture?: unknown;
+
+    /**
      * The auth user-management plane backing the studio's users dashboard:
      * browse via `GET /_lunora/admin/auth/users` + `/sessions`, and (when the
      * implementation provides the optional mutations) create/ban/role/revoke/
@@ -3891,6 +3900,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             cronJobs: options.cronJobs,
             functions: options.functions,
             globalIntrospector: options.globalIntrospector,
+            architecture: options.architecture,
             openApiSpec: options.openApiSpec,
             openRpcSpec: options.openRpcSpec,
         },

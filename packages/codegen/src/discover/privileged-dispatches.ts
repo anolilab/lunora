@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { PrivilegedDispatchIR } from "../ir";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
 
 /**
  * The privileged-dispatch handler factories, mapped to the index of their config
@@ -18,12 +18,6 @@ const HANDLER_FACTORIES = new Map([
     ["defineSubscription", 1],
     ["defineWorkflow", 0],
 ]);
-
-/** The dispatch methods on the handler's context param that call back into a Lunora function. */
-const DISPATCH_METHODS = new Set(["run", "runAction", "runMutation", "runQuery"]);
-
-/** The `FunctionReference` root namespaces codegen emits (`api.<file>.<export>` / `internal.<file>.<export>`). */
-const REFERENCE_ROOTS = new Set(["api", "internal"]);
 
 type HandlerFunction = ArrowFunction | FunctionExpression;
 
@@ -230,25 +224,9 @@ const argumentsReferencePayload = (argsNode: TsNode, payload: { names: Set<strin
  * skipped fail-closed).
  */
 const resolveTarget = (node: TsNode | undefined): { exportName: string; file: string } | undefined => {
-    if (node === undefined || !Node.isPropertyAccessExpression(node)) {
-        return undefined;
-    }
+    const segments = functionReferenceSegments(node);
 
-    const segments: string[] = [];
-    let current: TsNode = node;
-
-    while (Node.isPropertyAccessExpression(current)) {
-        segments.unshift(current.getName());
-        current = current.getExpression();
-    }
-
-    const exportName = segments.at(-1);
-
-    if (exportName === undefined || !Node.isIdentifier(current) || !REFERENCE_ROOTS.has(current.getText()) || segments.length < 2) {
-        return undefined;
-    }
-
-    return { exportName, file: segments.slice(0, -1).join("/") };
+    return segments === undefined ? undefined : { exportName: String(segments.at(-1)), file: segments.slice(0, -1).join("/") };
 };
 
 /** Payload-derived privileged dispatches inside one handler. */
@@ -271,7 +249,7 @@ const dispatchesInHandler = (handler: HandlerFunction, kind: "queue" | "workflow
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         const receiver = call.getExpression();
 
-        if (!Node.isPropertyAccessExpression(receiver) || !DISPATCH_METHODS.has(receiver.getName()) || !receivers.has(receiver.getExpression().getText())) {
+        if (!Node.isPropertyAccessExpression(receiver) || !RUN_METHODS.has(receiver.getName()) || !receivers.has(receiver.getExpression().getText())) {
             continue;
         }
 

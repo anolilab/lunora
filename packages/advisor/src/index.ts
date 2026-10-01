@@ -35,6 +35,7 @@ import containerOversizedInstance from "./lints/static/container-oversized-insta
 import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
+import crossModuleTableWrite from "./lints/static/cross-module-table-write";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import errorWithoutCatalog from "./lints/static/error-without-catalog";
@@ -176,6 +177,7 @@ export { default as containerOversizedInstance } from "./lints/static/container-
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
+export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as errorWithoutCatalog } from "./lints/static/error-without-catalog";
@@ -291,7 +293,7 @@ export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
-export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorModule, Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 export type { AdvisorWranglerVariable } from "./wrangler-variables";
@@ -321,6 +323,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ttlFieldNotTimestamp,
     commitOrderedHardDelete,
     circularFk,
+    crossModuleTableWrite,
     unindexedForeignKey,
     unindexedRelationTarget,
     duplicateIndex,

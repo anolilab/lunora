@@ -1,0 +1,110 @@
+import { LunoraProvider } from "@lunora/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { describe, expect, it } from "vitest";
+
+import type { ArchitectureManifest } from "../../../../../shared/architecture-manifest";
+import { EDGE_KINDS } from "../../../../../shared/architecture-manifest";
+import { layoutArchitecture, parseArchitecture } from "../../../src/features/architecture/architecture-model";
+import ArchitecturePanel from "../../../src/features/architecture/architecture-panel";
+import type { MockClientHooks } from "../../mock-client";
+import { createMockClient } from "../../mock-client";
+
+const MANIFEST: ArchitectureManifest = {
+    edges: [
+        { from: "function:chat_posts:post", kind: "call", to: "function:accounts_users:me" },
+        { from: "function:chat_posts:post", kind: "write", to: "table:messages" },
+        { from: "function:legacy:sync", kind: "read", to: "table:users" },
+    ],
+    nodes: [
+        { id: "function:accounts_users:me", kind: "function", name: "accounts_users.me", module: "accounts" },
+        { id: "function:chat_posts:post", kind: "function", name: "chat_posts.post", module: "chat" },
+        { id: "function:legacy:sync", kind: "function", name: "legacy.sync" },
+        { id: "table:messages", kind: "table", name: "messages", module: "chat" },
+        { id: "table:users", kind: "table", name: "users", module: "accounts" },
+    ],
+    modules: [
+        { name: "accounts", tables: ["users"] },
+        { description: "Channels and messages", name: "chat", tables: ["messages"] },
+    ],
+    unresolved: [{ file: "chat/posts", kind: "call", line: 9, reason: "the function reference is not a static api.* / internal.* chain" }],
+    version: 1,
+};
+
+const ALL_KINDS = new Set(EDGE_KINDS);
+
+const renderPanel = (mock: MockClientHooks, manifest?: unknown): ReactElement => (
+    <LunoraProvider client={mock.asClient}>
+        <ArchitecturePanel manifest={manifest} />
+    </LunoraProvider>
+);
+
+describe("layoutArchitecture", () => {
+    it("puts each module in its own lane and nodes outside every module in the app lane", () => {
+        expect.assertions(3);
+
+        const { edges, nodes } = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: ALL_KINDS });
+
+        expect(nodes.filter((node) => node.type === "lane").map((node) => node.id)).toStrictEqual(["lane:accounts", "lane:chat", "lane:"]);
+        expect(nodes.find((node) => node.id === "table:messages")?.parentId).toBe("lane:chat");
+        expect(edges).toHaveLength(3);
+    });
+
+    it("keeps a filtered module's neighbours one edge away, and drops hidden edge kinds", () => {
+        expect.assertions(2);
+
+        const filtered = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: ALL_KINDS, module: "chat" });
+        const noCalls = layoutArchitecture(MANIFEST, { appLaneLabel: "App", kinds: new Set(["read", "write"] as const), module: "chat" });
+
+        expect(filtered.nodes.map((node) => node.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            ["function:accounts_users:me", "function:chat_posts:post", "lane:accounts", "lane:chat", "table:messages"].toSorted((a, b) => a.localeCompare(b)),
+        );
+        expect(noCalls.nodes.some((node) => node.id === "function:accounts_users:me")).toBe(false);
+    });
+});
+
+describe("parseArchitecture", () => {
+    it("accepts a manifest and rejects anything without its arrays", () => {
+        expect.assertions(2);
+
+        expect(parseArchitecture(MANIFEST)).toBe(MANIFEST);
+        expect(parseArchitecture({ nodes: [] })).toBeUndefined();
+    });
+});
+
+describe("architecturePanel", () => {
+    it("renders the catalog and the unresolved list from the fetched manifest", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ fetchArchitecture: () => MANIFEST as unknown as Record<string, unknown> });
+
+        render(renderPanel(mock));
+
+        await expect(screen.findByTestId("architecture-catalog")).resolves.toBeDefined();
+        expect(screen.getByTestId("architecture-module-chat").textContent).toContain("Channels and messages");
+        expect(screen.getByTestId("architecture-unresolved").textContent).toContain("chat/posts:9");
+    });
+
+    it("shows how to opt in when the app declares no module", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createMockClient({})));
+
+        await expect(screen.findByTestId("architecture-empty")).resolves.toBeDefined();
+    });
+
+    it("drops an edge kind from the diagram when it is toggled off", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createMockClient({}), MANIFEST));
+
+        const toggle = await screen.findByTestId("architecture-kind-call");
+
+        expect(screen.getByTestId("architecture-edge-count").textContent).toBe("3 edges shown");
+
+        fireEvent.click(toggle);
+
+        expect(toggle.getAttribute("aria-pressed")).toBe("false");
+        expect(screen.getByTestId("architecture-edge-count").textContent).toBe("2 edges shown");
+    });
+});

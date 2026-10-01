@@ -1317,6 +1317,23 @@ interface MigrationReader {
 type MigrationTransform = (document: MigrationDocument, ctx: MigrationCtx) => MigrationDocument | Promise<MigrationDocument | undefined | void> | undefined | void;
 ```
 
+### `ModuleConfig` (interface)
+
+```ts
+interface ModuleConfig {
+    description?: string;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ModuleDefinition` (interface)
+
+```ts
+interface ModuleDefinition extends ModuleConfig {
+    readonly isLunoraModule: true;
+}
+```
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -3123,6 +3140,12 @@ const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O 
 
 ```ts
 const defineMigration: (definition: MigrationDefinition) => RegisteredMigration;
+```
+
+### `defineModule` (const)
+
+```ts
+const defineModule: (config?: ModuleConfig) => ModuleDefinition;
 ```
 
 ### `defineMutator` (const)

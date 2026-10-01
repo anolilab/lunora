@@ -1,7 +1,45 @@
-# Plan 456 — Services: catalog, call graph, and an auto-drawn architecture diagram
+# Plan 456 — Modules (formerly "services"): catalog, call graph, and an auto-drawn architecture diagram
 
 **Baseline:** `30823cc90` (2026-10-01)
-**Status:** TODO
+**Status:** IN PROGRESS (core shipped on `feat/services-catalog`; see below for what remains)
+
+## What shipped, and where it differs from the design below
+
+- **Renamed to "modules"** (`defineModule`, `lunora/<dir>/module.ts`,
+  `cross_module_table_write`): they group code inside one Worker and are not
+  deployment units, so "services" promised Encore-style isolation they do not have.
+
+- **A, B, C, F, G, H shipped; D shipped in reduced form; E folded into D.**
+    - `defineService` in `@lunora/server`, `discover/services.ts`, `discover/call-edges.ts`.
+    - `src/architecture.ts` builds the manifest, which is served at
+      `/_lunora/admin/architecture` and read by the client's `fetchArchitecture()`.
+    - Studio has a **Functions → Architecture** tab, OpenAPI/OpenRPC are tagged by
+      service, the `cross_service_table_write` lint exists, and there is a
+      `concepts/services` docs page.
+- **The manifest is emitted only once an app declares a service** (§3). An app
+  without one keeps byte-identical `_generated/` output, and the route answers an
+  empty manifest.
+- **A service's name is its folder path relative to `lunora/`** (`billing`, or
+  `domains/billing`) rather than the last segment. That makes it unique by
+  construction (changes §4.1).
+- **Call edges are syntactic, with no type checker** (§8 STOP avoided). An edge
+  whose target is held in a variable, and a call inside a non-exported helper,
+  land in `unresolved`.
+    - `write` edges come from `ctx.db.insert` only. `patch`/`replace`/`delete`
+      address a row by id, whose table needs the checker.
+    - The lint inherits the same gap.
+- **HTTP routes are nodes, not `trigger` sources** (changes §4.3): a route is its
+  own handler, so its calls start from the route node.
+- **Studio (D/E):**
+    - One lane per service, filterable by service (neighbours one edge away stay
+      visible) and by edge kind.
+    - The catalog table sits on the same page instead of in the Functions page (E).
+    - Not built: click-to-deep-link, PNG/SVG export, and reuse of the schema
+      diagram's depth layout (lanes fit this graph better).
+- **The fan-out lint now names topics in its wording.** Its detector already
+  covered `ctx.topics.*.publish` (plan 455).
+- **Not done:** the `lunora-functions` skill section, and per-service
+  `queues.ts`/`topics.ts` discovery (§9 Q2).
 
 ## 0. Headline finding
 
