@@ -56,6 +56,8 @@ export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskR
 export { buildMaskRegistry, mask } from "./mask/index";
 export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
 export { defineMigration } from "./migration";
+export type { ModuleConfig, ModuleDefinition } from "./module";
+export { defineModule } from "./module";
 export type { MutatorDefinition, RegisteredMutator } from "./mutators";
 export { defineMutator } from "./mutators";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";

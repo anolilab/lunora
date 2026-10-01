@@ -1,7 +1,72 @@
-# Plan 456 — Services: catalog, call graph, and an auto-drawn architecture diagram
+# Plan 456 — Modules (formerly "services"): catalog, call graph, and an auto-drawn architecture diagram
 
 **Baseline:** `30823cc90` (2026-10-01)
-**Status:** TODO
+**Status:** IN PROGRESS (core shipped on `feat/services-catalog`; see below for what remains)
+
+## What shipped, and where it differs from the design below
+
+- **Renamed to "modules"** (`defineModule`, `lunora/<dir>/module.ts`,
+  `cross_module_table_write`): they group code inside one Worker and are not
+  deployment units, so "services" promised Encore-style isolation they do not have.
+
+- **A, B, C, F, G, H shipped; D shipped in reduced form; E folded into D.**
+    - `defineModule` in `@lunora/server`, `discover/modules.ts`, `discover/call-edges.ts`.
+    - `src/architecture.ts` builds the manifest, which is served at
+      `/_lunora/admin/architecture` and read by the client's `fetchArchitecture()`.
+    - Studio has a **Functions → Architecture** tab, OpenAPI/OpenRPC are tagged by
+      module, the `cross_module_table_write` lint exists, and there is a
+      `concepts/modules` docs page.
+- **The manifest is emitted only once an app declares a module** (§3). An app
+  without one keeps byte-identical `_generated/` output, and the route answers an
+  empty manifest.
+- **A module's name is its folder path relative to `lunora/`** (`billing`, or
+  `domains/billing`) rather than the last segment. That makes it unique by
+  construction (changes §4.1).
+- **Call edges are syntactic, with no type checker** (§8 STOP avoided). An edge
+  whose target is held in a variable, and a call inside a non-exported helper,
+  land in `unresolved`.
+    - The one exception is `write` edges from by-id writes
+      (`patch`/`replace`/`delete`/`hardDelete`/`restore`, `deleteMany`,
+      `patchMany`): `discover/table-writes.ts` reads the table off the id's
+      `Id<"table">` brand with the type checker. Batch-by-name and
+      `ctx.db.<table>.*` facade writes are read syntactically.
+    - Measured inside `runCodegen` (checker already warm from return-type
+      inference) the walk costs 1–4 ms on team-chat, chess and blog, against
+      ~800–900 ms of codegen — run-to-run noise is larger than the walk. A
+      standalone walk on a cold checker is 130–200 ms, almost all of it checker
+      start-up that codegen pays anyway.
+    - An untyped id lands in `unresolved`; none of the examples have one.
+- **HTTP routes are nodes, not `trigger` sources** (changes §4.3): a route is its
+  own handler, so its calls start from the route node.
+- **Studio (D/E):**
+    - One lane per module, filterable by module (neighbours one edge away stay
+      visible) and by edge kind.
+    - The catalog table sits on the same page instead of in the Functions page (E).
+    - Clicking a node opens its page (a table opens `/data?table=…`, the rest
+      their listing tab), and the canvas exports to PNG/SVG/JSON through the
+      export menu the schema diagram now shares (`components/diagram-export-panel`).
+    - Not reused: the schema diagram's depth layout (lanes fit this graph better).
+- **The fan-out lint now names topics in its wording.** Its detector already
+  covered `ctx.topics.*.publish` (plan 455).
+- **Installed components are modules too.** Each `defineSchemaExtension` key
+  becomes an implicit module that owns its prefixed tables and the `lunora/<key>/`
+  folder (where registry items copy their code). It gets its own Studio lane, and
+  `cross_module_table_write` flags app code inserting into a component's table.
+    - This runs even for apps with no declared module. Swept across all 13 examples:
+      no new findings, and generated output unchanged.
+    - A declared module of the same name, or a declared `tables` claim, takes
+      precedence over the component.
+    - The component's own `node_modules` code is not scanned.
+- **Ownership is resolved once, before any consumer** (`resolveModules`): it
+  merges in installed components and rejects nesting (components included), a
+  table claimed twice or unknown, and a file beside a module that shares its tag
+  (`lunora/billing.ts` next to `lunora/billing/`). A package component (code in
+  `node_modules`) owns its tables but no `lunora/<key>/` folder.
+- **Advisor `cacheKey`s for findings inside `export default …` change** from
+  `<module>` to `default` (call sites there are now attributed), so a dismissed
+  finding of that shape reappears once.
+- **Not done:** the `lunora-functions` skill section, and per-module
+  `queues.ts`/`topics.ts` discovery (§9 Q2).
 
 ## 0. Headline finding
 

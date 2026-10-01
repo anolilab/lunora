@@ -11,6 +11,8 @@ import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
 import { applyAdvisorFloor } from "./advisor-floor";
+import type { CallSites } from "./architecture";
+import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { buildDeclarationSurface } from "./declaration-surface";
 import discoverAdminRoutes from "./discover/admin-routes";
@@ -22,6 +24,7 @@ import { listLunoraSourceFiles } from "./discover/ast";
 import discoverAuthConfig from "./discover/auth-config";
 import discoverAuthApiCalls from "./discover/authapi-calls";
 import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
+import discoverCallEdges from "./discover/call-edges";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
@@ -50,6 +53,7 @@ import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-
 import discoverMaskMetadata from "./discover/mask-procedures/metadata";
 import discoverMaskStrategies from "./discover/mask-procedures/strategies";
 import discoverMigrations from "./discover/migrations";
+import { discoverModules, resolveModules } from "./discover/modules";
 import discoverMutatorWrites from "./discover/mutator-writes";
 import { discoverMutators } from "./discover/mutators";
 import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
@@ -76,6 +80,7 @@ import discoverStaleMigrationImports from "./discover/stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverTableWrites from "./discover/table-writes";
 import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
@@ -698,6 +703,31 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflows,
     });
 
+    // Modules (a `lunora/<dir>/module.ts`, plus every installed component) feed
+    // the cross-module advisor lint for every app. Only a DECLARED module turns on
+    // the architecture manifest and module-tagged specs, so an app that declares
+    // none keeps byte-identical output.
+    const declaredModules = discoverModules(project, lunoraDirectory);
+    const modules = resolveModules(
+        declaredModules,
+        schema,
+        [...functions, ...httpRoutes].map((entry) => entry.filePath),
+    );
+    const wantsArchitecture = declaredModules.length > 0;
+
+    // The query/insert/workflow-call walks feed both the advisor and the
+    // architecture manifest, so they run once when either needs them — and not
+    // at all on a `lint: false` run of an app with no declared module.
+    const callSites: CallSites | undefined =
+        options.lint === false && !wantsArchitecture
+            ? undefined
+            : {
+                  inserts: discoverInserts(project, lunoraDirectory),
+                  queries: discoverQueries(project, lunoraDirectory),
+                  tableWrites: discoverTableWrites(project, lunoraDirectory),
+                  workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
+              };
+
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
     // discovered query reads, and run here so a problem surfaces at codegen time
@@ -710,7 +740,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // never describe different evidence. Built lazily — the ternary keeps every
     // discover* call out of a `lint: false` run.
     const advisorContext =
-        options.lint === false
+        options.lint === false || callSites === undefined
             ? undefined
             : toAdvisorContext({
                   adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
@@ -736,7 +766,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   hyperdriveCalls: discoverHyperdriveCalls(project, lunoraDirectory),
                   identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
                   imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
-                  inserts: discoverInserts(project, lunoraDirectory),
+                  inserts: callSites.inserts,
                   kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory, functions),
                   mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
                   maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
@@ -752,7 +782,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
                   privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
                   procedureProtections: discoverProcedureMiddleware(project, lunoraDirectory),
-                  queries: discoverQueries(project, lunoraDirectory),
+                  queries: callSites.queries,
                   queues,
                   r2sqlCalls: discoverR2sqlCalls(project, lunoraDirectory),
                   ratelimitKeySelectors: discoverRatelimitKeySelectors(project, lunoraDirectory),
@@ -761,13 +791,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   rlsProcedures: discoverRlsProcedures(project, lunoraDirectory),
                   schema,
                   secretLiterals: discoverSecrets(project, lunoraDirectory),
+                  modules,
                   shapes,
                   softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
                   sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
                   storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),
                   storageUploads: discoverStorageUploads(project, lunoraDirectory),
+                  tableWrites: callSites.tableWrites,
                   vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
-                  workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
+                  workflowCalls: callSites.workflowCalls,
                   workflows,
                   wranglerVariables: options.wranglerVariables,
               });
@@ -1058,6 +1090,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             .map((agent) => {
                 return { bindingName: agent.voiceBindingName as string, exportName: agent.exportName };
             }),
+        wantsArchitecture,
         wantsOpenApi,
         wantsOpenRpc,
     });
@@ -1068,11 +1101,33 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
     // asked for; only the requested file(s) are written.
     const projectVersion = readProjectVersion(options.projectRoot);
-    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, version: projectVersion });
-    const openRpcDocument = buildOpenRpcDocument({ functions, version: projectVersion });
+    // Module-tagged specs only once the app opts in, matching the manifest.
+    const specModules = wantsArchitecture ? modules : [];
+    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, modules: specModules, version: projectVersion });
+    const openRpcDocument = buildOpenRpcDocument({ functions, modules: specModules, version: projectVersion });
 
     const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
+
     const openRpcContent = `${JSON.stringify(openRpcDocument, undefined, 2)}\n`;
+
+    // The architecture manifest (module catalog + call graph) is emitted only
+    // once the app declares a module, so an app without one keeps byte-identical
+    // output.
+    const architectureDocument =
+        wantsArchitecture && callSites !== undefined
+            ? buildArchitecture({
+                  ...callSites,
+                  callEdges: discoverCallEdges(project, lunoraDirectory),
+                  crons,
+                  functions,
+                  httpRoutes,
+                  modules,
+                  queues,
+                  schema,
+                  topics,
+                  workflows,
+              })
+            : undefined;
     const openApiModuleContent = emitOpenApiModule(openApiDocument);
     const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 
@@ -1148,6 +1203,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emitOptional("openapi.ts", wantsOpenApi ? openApiModuleContent : "");
         emitOptional("openrpc.json", wantsOpenRpc ? openRpcContent : "");
         emitOptional("openrpc.ts", wantsOpenRpc ? openRpcModuleContent : "");
+        // Same pairing as the specs: the `.json` for tooling, the `.ts` for
+        // `createWorker({ architecture })`, both removed when the last module goes.
+        emitOptional("architecture.json", architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`);
+        emitOptional("architecture.ts", architectureDocument === undefined ? "" : emitArchitectureModule(architectureDocument));
 
         // Bless the schema baseline on first capture (so a project gets a
         // committed snapshot the moment it runs codegen) or when explicitly

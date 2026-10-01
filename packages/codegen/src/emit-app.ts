@@ -122,6 +122,8 @@ interface EmitAppOptions {
      * output for voice-free (and agent-free) projects.
      */
     voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    /** An architecture manifest is emitted (`architecture.ts`, the app declares a module) → wire `architecture` into the worker. */
+    wantsArchitecture: boolean;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
     wantsOpenApi: boolean;
     /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
@@ -326,6 +328,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
               ]
             : []),
+        ...(options.wantsArchitecture ? [`import { architecture } from "./architecture.js";`] : []),
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
@@ -1084,6 +1087,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
+    ...(options.wantsArchitecture ? [`            architecture,`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
     // The push-consumer handler backing the worker's `queue(batch, …)` entry:

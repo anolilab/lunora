@@ -1,7 +1,7 @@
 # Plan 455 — Pub/Sub topics: one publish, N durable subscriptions
 
 **Baseline:** `30823cc90` (2026-10-01)
-**Status:** IN PROGRESS (core shipped on `feat/queue-topics`; Studio grouping, the >10-subscription lint, the publish bench and skill docs remain)
+**Status:** IN PROGRESS (core shipped in #916; Studio grouping, the topic send target and skill docs shipped in #917; the >10-subscription lint and the publish bench remain)
 
 ## What shipped, and where it differs from the design below
 

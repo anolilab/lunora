@@ -203,6 +203,13 @@ export interface TableIR {
     commitOrdered?: boolean;
 
     /**
+     * `true` when that extension was resolved from a package in `node_modules`
+     * rather than from source under `lunora/` (a registry copy-in). Decides
+     * whether the component's module owns a `lunora/<key>/` folder.
+     */
+    extensionFromPackage?: true;
+
+    /**
      * The `defineSchemaExtension` key that contributed this table, set when it
      * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
      * declared itself.
@@ -787,6 +794,53 @@ export const plainQueues = (queues: ReadonlyArray<QueueIR>): QueueIR[] => queues
 export const subscriptionsOf = (queues: ReadonlyArray<QueueIR>, topic: string): QueueIR[] => queues.filter((queue) => queue.topic === topic);
 
 /**
+ * A module: a folder under `lunora/` whose `module.ts` default-exports
+ * `defineModule(...)`. Metadata for the Studio catalog, the architecture
+ * manifest and the `cross_module_table_write` lint — it changes no `api.*` path.
+ */
+export interface ModuleIR {
+    /** One-line description from `defineModule({ description })`. */
+    description?: string;
+
+    /**
+     * `true` for an installed component (a `defineSchemaExtension` key merged with
+     * `.extend(...)`) treated as a module: it owns its prefixed tables and the
+     * `lunora/<key>/` folder its copy-in code lives in. Absent for a declared module.
+     */
+    installed?: true;
+
+    /** The folder path relative to `lunora/`, e.g. `billing` — also the module's name. */
+    name: string;
+
+    /**
+     * `false` for an installed component shipped as a package: its code is in
+     * `node_modules`, so it owns its tables but no `lunora/<key>/` folder (an app
+     * folder of that name stays the app's). Absent means the module owns its folder.
+     */
+    ownsFolder?: false;
+    /** Tables the module declares it owns (`defineModule({ tables })`); empty when it declares none. */
+    tables: ReadonlyArray<string>;
+}
+
+/**
+ * One call-site edge of the architecture graph, attributed to the exported
+ * declaration it sits in (`exportName` is `""` inside a non-exported helper).
+ * Exactly one of `target` / `reason` is set: `target` is a `namespace:export`
+ * function key (`call` / `schedule`) or a queue / topic export name (`enqueue` /
+ * `publish`); `reason` says why the target could not be read statically.
+ */
+export interface CallEdgeIR {
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    kind: "call" | "enqueue" | "publish" | "schedule";
+    /** 1-based line of the call. */
+    line: number;
+    reason?: string;
+    target?: string;
+}
+
+/**
  * The feature-flag provider declared by the default export of `lunora/flags.ts`
  * (`defineFlags({ provider, … })`). Discovery is **metadata-only** — codegen
  * imports the real module at runtime for the provider value; this IR exists so
@@ -893,6 +947,25 @@ export interface AuthApiCallIR {
     line: number;
     /** The better-auth method invoked (e.g. `banUser`); empty when not statically known. */
     method: string;
+}
+
+/**
+ * A table write other than a plain `ctx.db.insert(...)` (see {@link InsertWriteIR}):
+ * a by-id `patch`/`replace`/`delete`/`hardDelete`/`restore`, a batch write, or a
+ * `ctx.db.<table>.*` facade write. Feeds the architecture manifest's `write`
+ * edges and the `cross_module_table_write` lint.
+ */
+export interface TableWriteIR {
+    /** Export binding name of the function performing the write. */
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call. */
+    line: number;
+    /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
+    method: string;
+    /** Target table; `""` when it can't be read (an untyped id, a non-literal name). */
+    table: string;
 }
 
 /**

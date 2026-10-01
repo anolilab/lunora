@@ -21,7 +21,7 @@ import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
-import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorInsertWrite, AdvisorTableWrite } from "./inserts";
 import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
@@ -117,6 +117,22 @@ export interface Finding {
     remediation: string;
     /** Short headline for the finding. */
     title: string;
+}
+
+/** A `defineModule` folder and the tables it claims — the `cross_module_table_write` input. */
+export interface AdvisorModule {
+    /** `true` for an installed component (a schema extension key) treated as a module. */
+    installed?: true;
+    /** The folder path relative to `lunora/`, e.g. `billing`. */
+    name: string;
+
+    /**
+     * `false` for a package component, which owns its tables but no `lunora/` folder.
+     * Absent means the module owns `lunora/<name>/`.
+     */
+    ownsFolder?: false;
+    /** Tables the module declares it owns; empty when it declares none. */
+    tables: ReadonlyArray<string>;
 }
 
 /**
@@ -408,6 +424,15 @@ export interface LintContext {
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
+     * The app's modules — those declared via `lunora/<dir>/module.ts`
+     * (`defineModule`) plus one per installed component (see
+     * {@link AdvisorModule.installed}) — each with the tables it owns: the
+     * `cross_module_table_write` input. Supplied by the codegen feeder; absent for
+     * runtime callers.
+     */
+    modules?: ReadonlyArray<AdvisorModule>;
+
+    /**
      * Exported `defineMutator({ … })` declarations in `lunora/mutators.ts` — the
      * `mutator_without_owner_scope` input. A mutator is a client-callable write
      * endpoint, and `owner` is the declarative scope that ties each write to its
@@ -663,6 +688,13 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * Table writes other than a plain `ctx.db.insert` (see {@link LintContext.inserts}) — by
+     * id, batch, and the `ctx.db.<table>` facade. Supplied by the codegen feeder;
+     * absent for runtime callers.
+     */
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
 
     /**
      * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /

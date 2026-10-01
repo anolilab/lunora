@@ -505,6 +505,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ModuleConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ModuleDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -1202,6 +1210,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineMigration` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineModule` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5359,6 +5371,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ModuleConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ModuleDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -6056,6 +6076,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineMigration` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineModule` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

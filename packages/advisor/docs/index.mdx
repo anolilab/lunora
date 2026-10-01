@@ -178,6 +178,7 @@ Storage, AI, containers & payments:
 | `geo_index_field_not_geopoint`               | `ERROR` | A `.geoIndex(name, { field })` whose field is not a `v.geoPoint()`                                             |
 | `ttl_field_not_timestamp`                    | `ERROR` | A `.ttl(field)` pointing at a column that is not an epoch-millisecond timestamp                                |
 | `circular_fk`                                | `WARN`  | A circular foreign-key dependency between tables                                                               |
+| `cross_module_table_write`                   | `WARN`  | A function inserts into a table another module declares it owns                                                |
 | `empty_index`                                | `WARN`  | An index declared with no fields                                                                               |
 | `nondeterministic_query_mutation`            | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                                    |
 | `hyperdrive_outside_action`                  | `WARN`  | `ctx.sql` used outside an action                                                                               |

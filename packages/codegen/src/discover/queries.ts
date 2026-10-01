@@ -1,9 +1,8 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { QueryReadIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Chain methods that narrow a read so it is not a full scan.

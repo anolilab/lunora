@@ -268,6 +268,7 @@ interface EmitAppOptions {
         bindingName: string;
         exportName: string;
     }>;
+    wantsArchitecture: boolean;
     wantsOpenApi: boolean;
     wantsOpenRpc: boolean;
 }
@@ -424,6 +425,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
@@ -449,6 +451,7 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
@@ -550,6 +553,7 @@ const OPENRPC_VERSION = "1.3.2";
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -571,6 +575,7 @@ interface OpenRpcDocument {
 ```ts
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -931,6 +936,7 @@ interface StorageRulesMetadataIR {
 ```ts
 interface TableIR {
     commitOrdered?: boolean;
+    extensionFromPackage?: true;
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
@@ -2212,6 +2218,18 @@ interface ModelNullPaths {
 }
 ```
 
+### `ModuleIR` (interface)
+
+```ts
+interface ModuleIR {
+    description?: string;
+    installed?: true;
+    name: string;
+    ownsFolder?: false;
+    tables: ReadonlyArray<string>;
+}
+```
+
 ### `MutatorWriteIR` (interface)
 
 ```ts
@@ -2486,6 +2504,18 @@ interface StorageUploadIR {
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+}
+```
+
+### `TableWriteIR` (interface)
+
+```ts
+interface TableWriteIR {
+    exportName: string;
+    file: string;
+    line: number;
+    method: string;
+    table: string;
 }
 ```
 
