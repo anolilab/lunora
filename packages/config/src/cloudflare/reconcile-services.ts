@@ -9,11 +9,15 @@
  * hand-written and never touched — one that claims a declared service's
  * binding is reported, not overwritten.
  */
+import { existsSync, writeFileSync } from "node:fs";
+
 import type { ServiceBindingIR } from "@lunora/codegen";
 
 import { applyModify } from "../jsonc-edit";
+import join from "../path";
 import type { Manifest } from "./lunora-manifest";
 import { canonical, recordManifestKey } from "./lunora-manifest";
+import { readWranglerJsonc } from "./wrangler-path";
 import type { ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /** The `package.json` `lunora` key holding the binding names this reconciler wrote, per scope. */
@@ -22,7 +26,16 @@ const SERVICES_RECORD = "services";
 /** The top-level scope's key in the record; an env block's is `env.<name>.services`. */
 const TOP_LEVEL_SCOPE = "services";
 
-/** Scope (`services` / `env.<name>.services`) → the binding names Lunora wrote there. */
+/**
+ * The dev-only config the SvelteKit / Nuxt `wrangler dev` sidecar runs. Its
+ * worker owns the `ShardDO` the actions run in, so its `services[]` needs the
+ * same bindings; recorded under {@link DEV_CONFIG_SCOPE}.
+ */
+const DEV_CONFIG = "wrangler.dev.jsonc";
+
+const DEV_CONFIG_SCOPE = "dev:services";
+
+/** Scope (`services` / `env.<name>.services` / `dev:services`) → the binding names Lunora wrote there. */
 type OwnedServices = Record<string, string[]>;
 
 interface ServiceEntry {
@@ -137,10 +150,43 @@ const reconcileServices = (
     return step;
 };
 
+/**
+ * Bring the top-level `services[]` of the project's {@link DEV_CONFIG}, when it
+ * has one, in line with `declared`, writing the file itself. Returns the labels
+ * and the ownership to merge into the record (empty when there is no such file).
+ */
+const reconcileDevConfigServices = (
+    projectRoot: string,
+    declared: ReadonlyArray<ServiceBindingIR>,
+    recorded: OwnedServices,
+): Pick<ReconcileStep, "added" | "updated" | "warnings"> & { owned: OwnedServices } => {
+    const path = join(projectRoot, DEV_CONFIG);
+    const { parsed, text } = existsSync(path) ? readWranglerJsonc<ServicesShape>(path) : { parsed: undefined, text: "" };
+
+    if (parsed === undefined) {
+        return { added: [], owned: {}, updated: [], warnings: [] };
+    }
+
+    const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined);
+
+    if (step.text !== text) {
+        writeFileSync(path, step.text, "utf8");
+    }
+
+    const label = (entry: string): string => `${DEV_CONFIG} ${entry}`;
+
+    return {
+        added: step.added.map((entry) => label(entry)),
+        owned: step.owned.length > 0 ? { [DEV_CONFIG_SCOPE]: step.owned } : {},
+        updated: (step.updated ?? []).map((entry) => label(entry)),
+        warnings: (step.warnings ?? []).map((entry) => label(entry)),
+    };
+};
+
 /** Record `owned`, dropping the key once nothing is owned. */
 const recordOwnedServices = (manifest: Manifest, owned: OwnedServices): void => {
     recordManifestKey(manifest, SERVICES_RECORD, Object.keys(owned).length === 0 ? undefined : owned);
 };
 
 export type { OwnedServices };
-export { ownedServiceBindings, readOwnedServices, reconcileServices, recordOwnedServices };
+export { ownedServiceBindings, readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices };

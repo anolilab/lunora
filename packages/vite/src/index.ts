@@ -16,7 +16,7 @@ import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-p
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { remoteBindingsPlugin } from "./remote-bindings-plugin";
-import withServiceWorkers from "./service-workers";
+import serviceWorkersPlugin from "./service-workers";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
@@ -191,7 +191,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 
     // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
     // the remote plugin reports the materialized config instead of injecting it.
-    const cloudflareOptions = resolved.cloudflare === false ? undefined : withServiceWorkers({ ...resolved.cloudflare }, resolved.projectRoot);
+    const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
 
     // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.config.*` `remote`) on the
     // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
@@ -205,6 +205,10 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // binding short. That is also why the provisioning plugin cannot be gated on
     // `validateWrangler`: this copy would go a binding short whenever it was off.
     plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
+
+    if (cloudflareOptions !== undefined) {
+        plugins.push(serviceWorkersPlugin(cloudflareOptions, resolved.projectRoot));
+    }
 
     if (cloudflareOptions !== undefined) {
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation

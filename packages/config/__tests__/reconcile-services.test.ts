@@ -161,4 +161,21 @@ describe("reconcileServices", () => {
 
         expect(Object.keys(lunora() as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["queueTuning", "services"]);
     });
+
+    it("writes the bindings into the SvelteKit / Nuxt dev sidecar's wrangler.dev.jsonc too, and removes them with the declaration", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(root, "wrangler.dev.jsonc"), `{ "name": "app-dev", "main": "lunora/server.ts" }\n`, "utf8");
+
+        reconcileWranglerBindings(root, inferred([parser]));
+
+        const devConfig = (): Record<string, any> => parseJsonc(readFileSync(join(root, "wrangler.dev.jsonc"), "utf8")) as Record<string, any>;
+
+        expect(devConfig()["services"]).toStrictEqual([{ binding: "SERVICE_PARSER", service: "neore-parser" }]);
+        expect((lunora() as { services: Record<string, unknown> }).services["dev:services"]).toStrictEqual(["SERVICE_PARSER"]);
+
+        reconcileWranglerBindings(root, inferred([]));
+
+        expect(devConfig()["services"]).toBeUndefined();
+    });
 });

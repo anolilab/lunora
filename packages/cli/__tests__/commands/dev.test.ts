@@ -480,6 +480,32 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(false);
         });
 
+        it("runs each lunora.config service beside the SvelteKit / Nuxt sidecar, after its own config", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const args = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() }).sidecar?.args.join(" ") ?? "";
+
+            const service = `--config ${join(workdir, "services", "parser", "wrangler.jsonc")}`;
+
+            expect(args).toContain(service);
+            // The sidecar's own config stays first, so wrangler keeps it as the primary Worker.
+            expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
+        });
+
         it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
             expect.assertions(2);
 

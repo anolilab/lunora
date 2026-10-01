@@ -29,7 +29,7 @@ import { readManifest } from "./lunora-manifest";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
 import type { OwnedServices } from "./reconcile-services";
-import { readOwnedServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
+import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
@@ -885,6 +885,18 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         }
     };
 
+    // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
+    // worker hosts the actions, so it gets the same service bindings. Same
+    // skip-when-unreadable rule as the step above.
+    if (inferred.services !== undefined && (inferred.services.length > 0 || ownedServicesRecord["dev:services"] !== undefined)) {
+        const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
+
+        added.push(...devStep.added);
+        updated.push(...(devStep.updated ?? []));
+        warnings.push(...(devStep.warnings ?? []));
+        ownedServices = { ...ownedServices, ...devStep.owned };
+    }
+
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
     // would otherwise fail late on the literal placeholder). `reconcileD1` is the
@@ -898,7 +910,8 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     if (text === original) {
         recordOwnership(false);
 
-        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", updated: [], warnings, wranglerPath };
+        // `added`/`updated` can still hold the dev sidecar config's changes.
+        return { added, changed: false, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");

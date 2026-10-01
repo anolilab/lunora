@@ -161,7 +161,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         services: {
             level: "unsupported",
-            note: "celld documents wrangler services[] bindings between Workers in one deployment, but Lunora has not verified them (fetch or WorkerEntrypoint RPC) against a live celld, and `lunora deploy` does not deploy the service Workers there. Rated unsupported until both are in place",
+            note: "Verified against celld v0.6.0: a fetch service and a WorkerEntrypoint RPC service both work, but only once each service Worker is deployed into the same fleet (or `celld dev` state) as the app — celld resolves a binding from that Worker's deployment record. `lunora dev` and `lunora deploy` do not do that yet, so this stays unsupported until they do",
         },
         topics: {
             level: "emulated",

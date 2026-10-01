@@ -149,9 +149,10 @@ export default defineConfig({
 - **`lunora dev` / `vite dev`:** each declared service becomes an
   `auxiliaryWorkers` entry, or an extra `-c` on the wrangler path. All Workers run
   in one session with bindings resolved locally: one process and one inspector.
-- **`lunora deploy`:** deploys declared services first (`wrangler deploy -c
-      <dir>/wrangler.jsonc [--env]`), then the app, so a binding never points at a
-    Worker that doesn't exist yet. `--env <name>` is passed through to each.
+- **`lunora deploy`:** deploys declared services first
+  (`wrangler deploy -c <dir>/wrangler.jsonc [--env]`), then the app, so a
+  binding never points at a Worker that doesn't exist yet. `--env <name>` is
+  passed through to each.
 - **Alchemy users** (neore) keep `alchemy.run.ts`. The plan's deliverable for them
   is the binding wiring (`bindings: { DOCUMENT_PARSER: documentParser }`) plus
   removing secrets and URLs. Lunora's own deploy orchestration is for apps that
@@ -273,5 +274,19 @@ deploy` does not deploy services there either.
   information the diagram lacks).
 - **H:** `concepts/services` (with the URL/HMAC migration), the
   `lunora-functions` skill section, and the `invoke` row in `concepts/modules`.
-- **Not done here:** the neore-v2 migration itself (another repo), the Phase 2
-  `tests/` smoke test, and the workerd test of an action calling both services.
+- **Tests:** `@lunora/server` has a `workerd` project calling a fetch service
+  and a `WorkerEntrypoint` RPC service over real bindings (it also pinned why
+  `fetch` must be bound: a detached `Fetcher.fetch` throws `Illegal invocation`).
+  `examples/services` plus `tests/e2e/examples/services.spec.ts` call the same
+  action through a live `vite dev` session. The `wrangler dev` flavor was run by
+  hand with the same result.
+- **celld, verified on v0.6.0:** both kinds work once each service is deployed
+  into the same fleet / `celld dev` state as the app (celld resolves a binding
+  from the target's `deploy/<name>/current.json`). Still rated unsupported:
+  `lunora dev` and `lunora deploy` don't deploy services into celld yet.
+- **Limits lifted after review:** `vite build` no longer builds services (the
+  auxiliary Workers are added on `serve` only), and the SvelteKit / Nuxt sidecar
+  runs them (reconcile writes `wrangler.dev.jsonc`'s `services[]`, ownership
+  scope `dev:services`). Still open: an RPC service's sources join the app's
+  type check.
+- **Not done here:** the neore-v2 migration itself (another repo).

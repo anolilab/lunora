@@ -54,14 +54,17 @@ Each declared service is a typed `ctx.services.<key>` on **actions**:
 // lunora/documents.ts
 import { action, v } from "@/lunora/_generated/server";
 
-export const summarise = action({
-    args: { url: v.string() },
-    handler: async (ctx, { url }) => {
-        // Fetch service: the raw binding, so any fetch-based client works with it
-        const response = await ctx.services.documentParser.fetch("https://parser/parse", {
-            body: JSON.stringify({ url }),
-            method: "POST",
-        });
+export const summarise = action.input({ url: v.string() }).action(async ({ ctx, args }) => {
+    // Fetch service: `fetch` is bound to the binding, so any fetch-based client works with it
+    const response = await ctx.services.documentParser.fetch("https://parser/parse", {
+        body: JSON.stringify({ url: args.url }),
+        method: "POST",
+    });
+    const { text } = (await response.json()) as { text: string };
+
+    // RPC service: methods and return types come from the `Gateway` class
+    return ctx.services.llmGateway.complete(`Summarise: ${text}`);
+});
         const { text } = (await response.json()) as { text: string };
 
         // RPC service: methods and return types come from the `Gateway` class
@@ -90,14 +93,10 @@ an action or send a queue message. From an HTTP action, call an action with
 | `lunora doctor`     | `service-workers-dev` warns about a service still public on `workers.dev` with no route.                                                                                                           |
 | Studio Architecture | Each service is a node; every `ctx.services.<key>.…()` call is an `invoke` edge.                                                                                                                   |
 
-Two limits for now:
-
-- `vite build` builds each service too, because they are auxiliary Workers of
-  the Cloudflare plugin. `lunora deploy` deploys services from their own
-  folders, so that output goes unused; a service that only builds with its own
-  toolchain needs `lunora({ cloudflare: false })` and your own plugin setup.
-- The SvelteKit / Nuxt dev flavor (a framework dev server plus a `wrangler dev`
-  sidecar) does not start services yet. Calls there hit the "not bound" error.
+Services run only in dev sessions: `vite build` does not build them, since
+`lunora deploy` deploys each one from its own folder. The SvelteKit / Nuxt dev
+flavor gets them too: reconcile writes the bindings into `wrangler.dev.jsonc`,
+and the `wrangler dev` sidecar runs each service beside the app.
 
 Lunora records the `services[]` entries it wrote in `package.json`
 (`lunora.services`), so it updates and removes only its own. An entry you wrote
@@ -124,11 +123,11 @@ is the internal path only.
 
 ## Platforms
 
-| Target       | Support                                                                                                         |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `cloudflare` | Native.                                                                                                         |
-| `celld`      | Unsupported for now: not yet verified against a live celld, and `lunora deploy` does not deploy services there. |
-| `node`       | Unsupported: there is no sibling Worker to bind. Codegen omits `ctx.services`.                                  |
+| Target       | Support                                                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cloudflare` | Native.                                                                                                                                                                                          |
+| `celld`      | Unsupported for now. celld's runtime handles both kinds (verified on v0.6.0) once each service is deployed into the same fleet as the app, but `lunora dev` / `lunora deploy` don't do that yet. |
+| `node`       | Unsupported: there is no sibling Worker to bind. Codegen omits `ctx.services`.                                                                                                                   |
 
 ## Migrating from URLs and HMAC
 
