@@ -55,7 +55,11 @@ const MemberNode = ({ data }: NodeProps): ReactElement => {
     return (
         <>
             <Handle isConnectable={false} position={Position.Left} style={HIDDEN_HANDLE} type="target" />
-            <button className="size-full cursor-pointer truncate text-left focus-visible:outline-none" onClick={open} type="button">
+            <button
+                className="size-full cursor-pointer truncate rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                onClick={open}
+                type="button"
+            >
                 {label}
             </button>
             <Handle isConnectable={false} position={Position.Right} style={HIDDEN_HANDLE} type="source" />

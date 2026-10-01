@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { QueueMessageOutcome, QueueMessageRow, QueueMessagesResult, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -31,6 +32,32 @@ interface QueuesPanelProps {
 const DEFAULT_MESSAGE_LIMIT = 200;
 
 const SEND_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.sendQueueMessage);
+
+/**
+ * Send one test message per request and return the error to show, or `null`
+ * when every send landed. Settled, not `all`: a topic send's requests are
+ * independent, so a partial failure must name the subscriptions that did not
+ * get the message — a blind retry would duplicate it in the ones that did.
+ */
+const sendToTargets = async (
+    client: ReturnType<typeof useLunora>,
+    requests: ReadonlyArray<{ batch?: unknown[]; body?: unknown; delaySeconds?: number; exportName: string }>,
+    t: TFunction,
+): Promise<null | string> => {
+    const results = await Promise.allSettled(requests.map(async (args) => client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))));
+    const failures = results.flatMap((result, index) =>
+        result.status === "rejected" ? [{ exportName: requests[index]?.exportName ?? "", message: errorMessage(result.reason) }] : [],
+    );
+    const [only] = failures;
+
+    if (only === undefined) {
+        return null;
+    }
+
+    return requests.length === 1
+        ? only.message
+        : t("Not sent to {failed}", { failed: failures.map((failure) => `${failure.exportName}: ${failure.message}`).join("; ") });
+};
 const REPLAY_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.replayQueueMessage);
 const CLEAR_QUEUE_MESSAGES = adminRef(ADMIN_FUNCTIONS.clearQueueMessages);
 
@@ -513,25 +540,12 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
             batchMode ? { batch: body as unknown[], delaySeconds, exportName: target } : { body, delaySeconds, exportName: target },
         );
 
-        // Settled, not `all`: the sends are independent, so on a partial failure
-        // the error must name the subscriptions that did not get the message —
-        // a blind retry would duplicate it in the ones that did.
-        const results = await Promise.allSettled(requests.map(async (args) => client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))));
-        const failures = results.flatMap((result, index) =>
-            result.status === "rejected" ? [{ exportName: requests[index]?.exportName ?? "", message: errorMessage(result.reason) }] : [],
-        );
-
-        if (failures.length > 0) {
-            const [only] = failures;
-
-            setActionError(
-                requests.length === 1 && only !== undefined
-                    ? only.message
-                    : t("Not sent to {failed}", { failed: failures.map((failure) => `${failure.exportName}: ${failure.message}`).join("; ") }),
-            );
+        try {
+            setActionError(await sendToTargets(client, requests, t));
+            refetchMessages();
+        } catch (error_) {
+            setActionError(errorMessage(error_));
         }
-
-        refetchMessages();
 
         setSending(false);
     };
