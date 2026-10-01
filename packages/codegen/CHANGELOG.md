@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.242...@lunora/codegen@1.0.0-alpha.243) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.175
+* **@lunora/agent:** upgraded to 1.0.0-alpha.157
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+* **@lunora/queue:** upgraded to 1.0.0-alpha.82
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.101
+* **@lunora/do:** upgraded to 1.0.0-alpha.185
+* **@lunora/server:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+
 ## @lunora/codegen [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.241...@lunora/codegen@1.0.0-alpha.242) (2026-09-30)
 
 ### Features
