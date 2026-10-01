@@ -49,6 +49,7 @@ export const post = mutation({
         await ctx.runQuery(api.accounts_users.me, {});
         await ctx.scheduler.runAfter(1000, internal.accounts_users.touch, {});
         await ctx.topics.posted.publish({ text: args.text });
+        await ctx.queues.jobs.send({});
         const target = api.accounts_users.me;
         await ctx.runQuery(target, {});
         return ctx.db.insert("messages", { channelId: "c", text: args.text });
@@ -79,10 +80,11 @@ export const touch = internalMutation({
     );
     write(
         "queues.ts",
-        `import { defineSubscription, defineTopic } from "@lunora/queue";
+        `import { defineQueue, defineSubscription, defineTopic } from "@lunora/queue";
 
 export const posted = defineTopic<{ text: string }>();
 export const indexPost = defineSubscription(posted, { handler: async () => {} });
+export const jobs = defineQueue({ handler: async () => {} });
 `,
     );
 };
@@ -107,7 +109,7 @@ describe("architecture manifest", () => {
         expect(readFileSync(generated("app.ts"), "utf8")).not.toContain(`import { architecture } from "./architecture.js";`);
     });
 
-    it("groups nodes by module and draws every edge kind it can read", () => {
+    it("groups nodes by module and draws call, schedule, read, write, enqueue, publish and subscribe edges", () => {
         expect.assertions(4);
 
         writeModules();
@@ -130,6 +132,7 @@ describe("architecture manifest", () => {
                 { from: "function:chat_posts:post", kind: "call", to: "function:accounts_users:me" },
                 { from: "function:chat_posts:post", kind: "schedule", to: "function:accounts_users:touch" },
                 { from: "function:chat_posts:post", kind: "publish", to: "topic:posted" },
+                { from: "function:chat_posts:post", kind: "enqueue", to: "queue:jobs" },
                 { from: "function:chat_posts:post", kind: "write", to: "table:messages" },
                 { from: "function:accounts_users:touch", kind: "write", to: "table:messages" },
                 { from: "topic:posted", kind: "subscribe", to: "queue:indexPost" },
@@ -262,5 +265,65 @@ export const cast = mutation({ args: { subject: v.string() }, handler: async (ct
         expect(result.advisories.filter((finding) => finding.name === "cross_module_table_write").map((finding) => finding.metadata["file"])).toStrictEqual([
             "content/posts",
         ]);
+    });
+
+    /** A schema that installs a `voting` component next to the app's own `posts`. */
+    const writeVotingSchema = (): void => {
+        write(
+            "schema.ts",
+            `import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+export default defineSchema({ posts: defineTable({ title: v.string() }) }).extend(
+    defineSchemaExtension("voting", { tables: { votes: defineTable({ subject: v.string() }) } }),
+);
+`,
+        );
+    };
+
+    it("warns about a write into a component's table even when the app declares no module, and emits no manifest", () => {
+        expect.assertions(2);
+
+        writeVotingSchema();
+        write(
+            "posts.ts",
+            `import { mutation, v } from "@lunora/server";
+
+export const upvote = mutation({ args: { subject: v.string() }, handler: async (ctx, args) => ctx.db.insert("voting_votes", args) });
+`,
+        );
+
+        const result = runCodegen({ projectRoot: workdir });
+
+        expect(result.advisories.some((finding) => finding.name === "cross_module_table_write")).toBe(true);
+        expect(existsSync(generated("architecture.json"))).toBe(false);
+    });
+
+    it("lets a declared module of the component's name absorb it", () => {
+        expect.assertions(1);
+
+        writeVotingSchema();
+        write("voting/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ description: "Our votes" });\n`);
+        runCodegen({ projectRoot: workdir });
+
+        expect(manifest().modules).toStrictEqual([{ description: "Our votes", name: "voting", tables: ["voting_votes"] }]);
+    });
+
+    it("rejects a declared module nested inside an installed component's folder", () => {
+        expect.assertions(1);
+
+        writeVotingSchema();
+        write("voting/admin/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
+
+        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/"voting\/admin" is nested inside installed component "voting"/u);
+    });
+
+    it("rejects a file beside a module that shares its name", () => {
+        expect.assertions(1);
+
+        write("billing/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
+        write("billing/invoices.ts", `import { query } from "@lunora/server";\nexport const list = query({ args: {}, handler: async () => [] });\n`);
+        write("billing.ts", `import { query } from "@lunora/server";\nexport const summary = query({ args: {}, handler: async () => 0 });\n`);
+
+        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/lunora\/billing\.ts sits beside module "billing"/u);
     });
 });

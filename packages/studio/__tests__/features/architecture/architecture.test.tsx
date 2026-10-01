@@ -43,12 +43,13 @@ const renderPanel = (mock: MockClientHooks, manifest?: unknown): ReactElement =>
 
 describe("layoutArchitecture", () => {
     it("puts each module in its own lane and nodes outside every module in the app lane", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const { edges, nodes } = layoutArchitecture(MANIFEST, { appLaneLabel: "App", componentLabel: "component", kinds: ALL_KINDS });
 
         expect(nodes.filter((node) => node.type === "lane").map((node) => node.id)).toStrictEqual(["lane:accounts", "lane:chat", "lane:voting", "lane:"]);
         expect(nodes.find((node) => node.id === "lane:voting")?.data.label).toBe("voting · component");
+        expect(nodes.find((node) => node.id === "function:legacy:sync")?.parentId).toBe("lane:");
         expect(nodes.find((node) => node.id === "table:messages")?.parentId).toBe("lane:chat");
         expect(edges).toHaveLength(3);
     });
@@ -56,12 +57,12 @@ describe("layoutArchitecture", () => {
     it("keeps a filtered module's neighbours one edge away, and drops hidden edge kinds", () => {
         expect.assertions(2);
 
-        const filtered = layoutArchitecture(MANIFEST, { appLaneLabel: "App", componentLabel: "component", kinds: ALL_KINDS, module: "chat" });
+        const filtered = layoutArchitecture(MANIFEST, { appLaneLabel: "App", componentLabel: "component", kinds: ALL_KINDS, lane: "chat" });
         const noCalls = layoutArchitecture(MANIFEST, {
             appLaneLabel: "App",
             componentLabel: "component",
             kinds: new Set(["read", "write"] as const),
-            module: "chat",
+            lane: "chat",
         });
 
         expect(filtered.nodes.map((node) => node.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(

@@ -15,7 +15,7 @@ import type { Lint } from "../../types";
  * flagged the same way.
  *
  * Runs only when the codegen feeder supplies modules and insert evidence; an
- * app that declares no ownership sees nothing. Only `ctx.db.insert("table", …)`
+ * app with no declared module and no installed component sees nothing. Only `ctx.db.insert("table", …)`
  * is attributed today — a `patch`/`replace`/`delete` addresses a row by id, whose
  * table is not readable without the type checker.
  */

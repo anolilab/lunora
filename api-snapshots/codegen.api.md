@@ -935,6 +935,7 @@ interface StorageRulesMetadataIR {
 ```ts
 interface TableIR {
     commitOrdered?: boolean;
+    extensionFromPackage?: true;
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
@@ -2223,6 +2224,7 @@ interface ModuleIR {
     description?: string;
     installed?: true;
     name: string;
+    ownsFolder?: false;
     tables: ReadonlyArray<string>;
 }
 ```

@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { Position } from "@xyflow/react";
 
-import type { ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNodeKind } from "../../../../../shared/architecture-manifest";
+import type { ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, ArchitectureNodeKind } from "../../../../../shared/architecture-manifest";
 
 /** Edges that hand work off asynchronously — drawn animated. */
 const ASYNC_EDGES: ReadonlySet<ArchitectureEdgeKind> = new Set(["enqueue", "publish", "schedule", "start", "subscribe", "trigger"]);
@@ -36,17 +36,27 @@ const parseArchitecture = (value: unknown): ArchitectureManifest | undefined => 
         : undefined;
 };
 
+/** The lane a node is drawn in: its module, or the app lane. */
+const laneOf = (node: ArchitectureNode): string => node.module ?? APP_LANE;
+
 /**
- * The nodes shown for a module filter: the module's own nodes plus every node
- * one edge away, so a cross-module call stays visible with its other end.
+ * The nodes shown for a lane filter: the lane's own nodes plus every node one
+ * edge away, so a cross-module call stays visible with its other end.
  * `undefined` shows everything.
  */
-const visibleNodeIds = (manifest: ArchitectureManifest, module: string | undefined, kinds: ReadonlySet<ArchitectureEdgeKind>): Set<string> => {
-    if (module === undefined) {
-        return new Set(manifest.nodes.map((node) => node.id));
+const visibleNodeIds = (manifest: ArchitectureManifest, lane: string | undefined, kinds: ReadonlySet<ArchitectureEdgeKind>): Set<string> => {
+    const own = new Set<string>();
+
+    for (const node of manifest.nodes) {
+        if (lane === undefined || laneOf(node) === lane) {
+            own.add(node.id);
+        }
     }
 
-    const own = new Set(manifest.nodes.filter((node) => (node.module ?? APP_LANE) === module).map((node) => node.id));
+    if (lane === undefined) {
+        return own;
+    }
+
     const visible = new Set(own);
 
     for (const edge of manifest.edges) {
@@ -66,51 +76,21 @@ const visibleNodeIds = (manifest: ArchitectureManifest, module: string | undefin
     return visible;
 };
 
-/**
- * One ReactFlow node per lane (a module, or the app lane; custom `lane` type,
- * rendered by the panel) plus its member nodes stacked inside it. Positions are
- * deterministic: lanes left to right in module order, members top to bottom by
- * kind then name.
- */
-const layoutArchitecture = (
-    manifest: ArchitectureManifest,
-    options: { appLaneLabel: string; componentLabel: string; kinds: ReadonlySet<ArchitectureEdgeKind>; module?: string },
-): { edges: Edge[]; nodes: Node[] } => {
-    const visible = visibleNodeIds(manifest, options.module, options.kinds);
-    const lanes = [...manifest.modules.map((module) => module.name), APP_LANE];
-    const installed = new Set(manifest.modules.filter((module) => module.installed === true).map((module) => module.name));
-    const laneLabel = (lane: string): string => {
-        if (lane === APP_LANE) {
-            return options.appLaneLabel;
-        }
+/** The ReactFlow nodes for one lane: the labelled container, then its members stacked inside it. */
+const laneNodes = (lane: string, label: string, column: number, members: ReadonlyArray<ArchitectureNode>): Node[] => {
+    const laneId = `lane:${lane}`;
 
-        return installed.has(lane) ? `${lane} · ${options.componentLabel}` : lane;
-    };
-    const nodes: Node[] = [];
-    let column = 0;
-
-    for (const lane of lanes) {
-        const members = manifest.nodes
-            .filter((node) => (node.module ?? APP_LANE) === lane && visible.has(node.id))
-            .toSorted((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.name.localeCompare(b.name));
-
-        if (members.length === 0) {
-            continue;
-        }
-
-        const laneId = `lane:${lane}`;
-
-        nodes.push({
-            data: { label: laneLabel(lane) },
+    return [
+        {
+            data: { label },
             id: laneId,
             position: { x: column * (LANE_WIDTH + LANE_GAP), y: 0 },
             selectable: false,
             style: { height: LANE_HEADER + members.length * (NODE_HEIGHT + NODE_GAP) + NODE_INSET, width: LANE_WIDTH },
             type: "lane",
-        });
-
-        for (const [index, member] of members.entries()) {
-            nodes.push({
+        },
+        ...members.map((member, index): Node => {
+            return {
                 className: "flex items-center truncate rounded-md border border-border bg-card px-2 text-xs text-foreground",
                 // The qualifier leads (`query`, `subscription`, a cron schedule, else
                 // the kind) so a lane reads as a typed list without a colour key.
@@ -122,25 +102,63 @@ const layoutArchitecture = (
                 sourcePosition: Position.Right,
                 style: { height: NODE_HEIGHT, width: LANE_WIDTH - NODE_INSET * 2 },
                 targetPosition: Position.Left,
-            });
-        }
+            };
+        }),
+    ];
+};
 
-        column += 1;
+/**
+ * One ReactFlow node per lane (a module, or the app lane; custom `lane` type,
+ * rendered by the panel) plus its member nodes stacked inside it. Positions are
+ * deterministic: lanes left to right in module order, members top to bottom by
+ * kind then name.
+ */
+const layoutArchitecture = (
+    manifest: ArchitectureManifest,
+    options: { appLaneLabel: string; componentLabel: string; kinds: ReadonlySet<ArchitectureEdgeKind>; lane?: string },
+): { edges: Edge[]; nodes: Node[] } => {
+    const visible = visibleNodeIds(manifest, options.lane, options.kinds);
+    const members = new Map<string, ArchitectureNode[]>();
+
+    for (const node of manifest.nodes) {
+        if (visible.has(node.id)) {
+            members.set(laneOf(node), [...(members.get(laneOf(node)) ?? []), node]);
+        }
     }
 
-    const edges = manifest.edges
-        .filter((edge) => options.kinds.has(edge.kind) && visible.has(edge.from) && visible.has(edge.to))
-        .map((edge): Edge => {
-            return {
+    const lanes: { label: string; lane: string }[] = [
+        ...manifest.modules.map((entry) => {
+            return { label: entry.installed === true ? `${entry.name} · ${options.componentLabel}` : entry.name, lane: entry.name };
+        }),
+        { label: options.appLaneLabel, lane: APP_LANE },
+    ];
+    const nodes: Node[] = [];
+    let column = 0;
+
+    for (const { label, lane } of lanes) {
+        const sorted = (members.get(lane) ?? []).toSorted((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.name.localeCompare(b.name));
+
+        if (sorted.length > 0) {
+            nodes.push(...laneNodes(lane, label, column, sorted));
+            column += 1;
+        }
+    }
+
+    const edges: Edge[] = [];
+
+    for (const edge of manifest.edges) {
+        if (options.kinds.has(edge.kind) && visible.has(edge.from) && visible.has(edge.to)) {
+            edges.push({
                 animated: ASYNC_EDGES.has(edge.kind),
                 id: `${edge.from}|${edge.kind}|${edge.to}`,
                 label: edge.kind,
                 source: edge.from,
                 target: edge.to,
-            };
-        });
+            });
+        }
+    }
 
     return { edges, nodes };
 };
 
-export { APP_LANE, layoutArchitecture, parseArchitecture, visibleNodeIds };
+export { APP_LANE, laneOf, layoutArchitecture, parseArchitecture, visibleNodeIds };

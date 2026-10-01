@@ -53,7 +53,7 @@ import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-
 import discoverMaskMetadata from "./discover/mask-procedures/metadata";
 import discoverMaskStrategies from "./discover/mask-procedures/strategies";
 import discoverMigrations from "./discover/migrations";
-import { discoverModules, withInstalledComponents } from "./discover/modules";
+import { discoverModules, resolveModules } from "./discover/modules";
 import discoverMutatorWrites from "./discover/mutator-writes";
 import { discoverMutators } from "./discover/mutators";
 import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
@@ -702,24 +702,25 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflows,
     });
 
-    // Modules are opt-in metadata (a `lunora/<dir>/module.ts`). They feed the
-    // architecture manifest, the OpenAPI tags and the cross-module advisor lint,
-    // so they are discovered before all three.
-    const modules = discoverModules(project, lunoraDirectory);
-    // Installed components count as modules for ownership: the lint warns when app
-    // code writes a component's tables directly, and the diagram gives each its own
-    // lane. Only the declared `modules` gate emission and retag the specs, so an
-    // app that declares none keeps byte-identical output.
-    const ownershipModules = withInstalledComponents(modules, schema);
+    // Modules (a `lunora/<dir>/module.ts`, plus every installed component) feed
+    // the cross-module advisor lint for every app. Only a DECLARED module turns on
+    // the architecture manifest and module-tagged specs, so an app that declares
+    // none keeps byte-identical output.
+    const declaredModules = discoverModules(project, lunoraDirectory);
+    const modules = resolveModules(
+        declaredModules,
+        schema,
+        [...functions, ...httpRoutes].map((entry) => entry.filePath),
+    );
+    const wantsArchitecture = declaredModules.length > 0;
 
     // The query/insert/workflow-call walks feed both the advisor and the
     // architecture manifest, so they run once when either needs them — and not
-    // at all on a `lint: false` run of an app with no module.
+    // at all on a `lint: false` run of an app with no declared module.
     const callSites: CallSites | undefined =
-        options.lint === false && modules.length === 0
+        options.lint === false && !wantsArchitecture
             ? undefined
             : {
-                  callEdges: modules.length === 0 ? [] : discoverCallEdges(project, lunoraDirectory),
                   inserts: discoverInserts(project, lunoraDirectory),
                   queries: discoverQueries(project, lunoraDirectory),
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
@@ -788,7 +789,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   rlsProcedures: discoverRlsProcedures(project, lunoraDirectory),
                   schema,
                   secretLiterals: discoverSecrets(project, lunoraDirectory),
-                  modules: ownershipModules,
+                  modules,
                   shapes,
                   softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
                   sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
@@ -1086,7 +1087,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             .map((agent) => {
                 return { bindingName: agent.voiceBindingName as string, exportName: agent.exportName };
             }),
-        wantsArchitecture: modules.length > 0,
+        wantsArchitecture,
         wantsOpenApi,
         wantsOpenRpc,
     });
@@ -1097,8 +1098,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
     // asked for; only the requested file(s) are written.
     const projectVersion = readProjectVersion(options.projectRoot);
-    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, modules, version: projectVersion });
-    const openRpcDocument = buildOpenRpcDocument({ functions, modules, version: projectVersion });
+    // Module-tagged specs only once the app opts in, matching the manifest.
+    const specModules = wantsArchitecture ? modules : [];
+    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, modules: specModules, version: projectVersion });
+    const openRpcDocument = buildOpenRpcDocument({ functions, modules: specModules, version: projectVersion });
 
     const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
 
@@ -1108,9 +1111,20 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // once the app declares a module, so an app without one keeps byte-identical
     // output.
     const architectureDocument =
-        callSites === undefined || modules.length === 0
-            ? undefined
-            : buildArchitecture({ ...callSites, crons, functions, httpRoutes, modules: ownershipModules, queues, schema, topics, workflows });
+        wantsArchitecture && callSites !== undefined
+            ? buildArchitecture({
+                  ...callSites,
+                  callEdges: discoverCallEdges(project, lunoraDirectory),
+                  crons,
+                  functions,
+                  httpRoutes,
+                  modules,
+                  queues,
+                  schema,
+                  topics,
+                  workflows,
+              })
+            : undefined;
     const openApiModuleContent = emitOpenApiModule(openApiDocument);
     const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 

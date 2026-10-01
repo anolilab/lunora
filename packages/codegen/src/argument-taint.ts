@@ -1,7 +1,7 @@
 import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName } from "./discover/ast";
+import { bindingKeyName, enclosingExportName as enclosingExportNameOf } from "./discover/ast";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -314,23 +314,9 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
 };
 
 /**
- * The export name of the nearest *exported* `const x = …` ancestor (`"default"`
- * inside `export default …`), or `"<module>"` when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
- * any local `const result = …` bindings to the exported declaration — matching
- * {@link import("./discover/ast").enclosingExportName} — so a sink nested in a
- * local `const` is still attributed to its exported handler, not the local.
+ * The export name of the declaration enclosing `node` — the
+ * {@link import("./discover/ast").enclosingExportName} walk — with `"<module>"`
+ * instead of `""` when the node sits in no exported declaration (an inline-mounted
+ * handler) — the sentinel the taint feeders' IR documents.
  */
-export const enclosingExportName = (node: TsNode): string => {
-    for (const ancestor of node.getAncestors()) {
-        if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
-            return ancestor.getName();
-        }
-
-        // `export default query(...)` registers as `<namespace>:default`.
-        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
-            return "default";
-        }
-    }
-
-    return "<module>";
-};
+export const enclosingExportName = (node: TsNode): string => enclosingExportNameOf(node) || "<module>";

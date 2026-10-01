@@ -203,6 +203,13 @@ export interface TableIR {
     commitOrdered?: boolean;
 
     /**
+     * `true` when that extension was resolved from a package in `node_modules`
+     * rather than from source under `lunora/` (a registry copy-in). Decides
+     * whether the component's module owns a `lunora/<key>/` folder.
+     */
+    extensionFromPackage?: true;
+
+    /**
      * The `defineSchemaExtension` key that contributed this table, set when it
      * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
      * declared itself.
@@ -801,8 +808,16 @@ export interface ModuleIR {
      * `lunora/<key>/` folder its copy-in code lives in. Absent for a declared module.
      */
     installed?: true;
+
     /** The folder path relative to `lunora/`, e.g. `billing` — also the module's name. */
     name: string;
+
+    /**
+     * `false` for an installed component shipped as a package: its code is in
+     * `node_modules`, so it owns its tables but no `lunora/<key>/` folder (an app
+     * folder of that name stays the app's). Absent means the module owns its folder.
+     */
+    ownsFolder?: false;
     /** Tables the module declares it owns (`defineModule({ tables })`); empty when it declares none. */
     tables: ReadonlyArray<string>;
 }

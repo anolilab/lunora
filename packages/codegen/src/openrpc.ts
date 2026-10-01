@@ -86,7 +86,7 @@ const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown>
 /** Inputs the OpenRPC emitter needs from a codegen run. */
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
-    /** Declared modules; a method in a module folder is tagged with the module instead of its file namespace. */
+    /** The app's modules, passed only once it declares one; a method in a module folder is tagged with the module instead of its file namespace. */
     modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;

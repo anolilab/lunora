@@ -29,13 +29,13 @@ import sanitizeNamespace from "./paths";
 
 /** The call-site evidence, shared with the advisor so each walk runs once per codegen. */
 interface CallSites {
-    callEdges: ReadonlyArray<CallEdgeIR>;
     inserts: ReadonlyArray<InsertWriteIR>;
     queries: ReadonlyArray<QueryReadIR>;
     workflowCalls: ReadonlyArray<WorkflowCallIR>;
 }
 
 interface ArchitectureInput extends CallSites {
+    callEdges: ReadonlyArray<CallEdgeIR>;
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
@@ -46,39 +46,42 @@ interface ArchitectureInput extends CallSites {
     workflows: ReadonlyArray<WorkflowIR>;
 }
 
+/** Where an edge points: a node id, or why it could not be read. */
+type EdgeTarget = { reason: string } | { to: string };
+
 /**
  * One edge, normalised. A call site names its origin by `file` + `exportName`; a
  * declaration edge (a subscription, a cron target) names it directly in `from`.
- * Exactly one of `to` (a node id) / `reason` is set.
  */
-interface PendingEdge {
+type PendingEdge = EdgeTarget & {
     exportName: string;
     file: string;
     from?: string;
     kind: ArchitectureEdgeKind;
     line: number;
-    reason?: string;
-    to?: string;
-}
+};
 
 /** The node-id prefix a call-site edge's `target` names. */
 const CALL_TARGET_KIND: Readonly<Record<CallEdgeIR["kind"], string>> = { call: "function", enqueue: "queue", publish: "topic", schedule: "function" };
 
 /** The module paths call sites inside `lunora/queues.ts` / `lunora/workflows.ts` handlers carry. */
 const QUEUES_MODULE = QUEUES_FILENAME.replace(/\.ts$/u, "");
+/** `cronJobs()` is registered from `lunora/crons.ts`; a cron edge reports against it. */
+const CRONS_MODULE = "crons";
 const WORKFLOWS_MODULE = WORKFLOWS_FILENAME.replace(/\.ts$/u, "");
 
 /** The `namespace:export` key a call site's enclosing declaration resolves through. */
 const siteKey = (file: string, exportName: string): string => `${sanitizeNamespace(file)}:${exportName}`;
 
 /** A literal name read off a call site as a node id, or the reason it could not be. */
-const literalTarget = (prefix: string, name: string, what: string): Pick<PendingEdge, "reason" | "to"> =>
+const literalTarget = (prefix: string, name: string, what: string): EdgeTarget =>
     name === "" ? { reason: `the ${what} is not a string literal` } : { to: `${prefix}:${name}` };
 
 /** Every call-site input in the one {@link PendingEdge} shape. */
-const callSiteEdges = (input: CallSites): PendingEdge[] => [
+const callSiteEdges = (input: ArchitectureInput): PendingEdge[] => [
     ...input.callEdges.map((edge): PendingEdge => {
-        const target = edge.target === undefined ? { reason: edge.reason ?? "unreadable target" } : { to: `${CALL_TARGET_KIND[edge.kind]}:${edge.target}` };
+        const target: EdgeTarget =
+            edge.target === undefined ? { reason: edge.reason ?? "unreadable target" } : { to: `${CALL_TARGET_KIND[edge.kind]}:${edge.target}` };
 
         return { exportName: edge.exportName, file: edge.file, kind: edge.kind, line: edge.line, ...target };
     }),
@@ -116,7 +119,7 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
 
         return {
             exportName: cron.name,
-            file: "crons",
+            file: CRONS_MODULE,
             from: `cron:${cron.name}`,
             kind: "trigger",
             line: 0,
@@ -125,37 +128,13 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
     }),
 ];
 
-/**
- * Which module owns each table, rejecting a claim on an unknown table or one two
- * declared modules make. An installed component's tables reach here already
- * filtered to the ones no declared module claimed (see `withInstalledComponents`).
- */
-const tableOwners = (modules: ReadonlyArray<ModuleIR>, schema: SchemaIR): Map<string, string> => {
-    const known = new Set(schema.tables.map((table) => table.name));
-    const owners = new Map<string, string>();
-
-    for (const entry of modules) {
-        for (const table of entry.tables) {
-            if (!known.has(table)) {
-                throw new Error(`@lunora/codegen: module "${entry.name}" declares table "${table}", which lunora/schema.ts does not define`);
-            }
-
-            const prior = owners.get(table);
-
-            if (prior !== undefined) {
-                throw new Error(`@lunora/codegen: table "${table}" is claimed by both module "${prior}" and module "${entry.name}" — a table has one owner`);
-            }
-
-            owners.set(table, entry.name);
-        }
-    }
-
-    return owners;
-};
+/** Which module owns each table — already validated (one owner, known table) by `resolveModules`. */
+const tableOwners = (modules: ReadonlyArray<ModuleIR>): Map<string, string> =>
+    new Map(modules.flatMap((entry) => entry.tables.map((table) => [table, entry.name] as const)));
 
 /** A node, with `module` present only when it has one (the manifest omits the key otherwise). */
-const withModule = (fields: Omit<ArchitectureNode, "module">, module: string | undefined): ArchitectureNode =>
-    module === undefined ? fields : { ...fields, module };
+const withModule = (fields: Omit<ArchitectureNode, "module">, moduleName: string | undefined): ArchitectureNode =>
+    moduleName === undefined ? fields : { ...fields, module: moduleName };
 
 /**
  * Every node, plus the call sites that can originate an edge: `namespace:export`
@@ -164,7 +143,7 @@ const withModule = (fields: Omit<ArchitectureNode, "module">, module: string | u
 const buildNodes = (input: ArchitectureInput): { nodes: Map<string, ArchitectureNode>; sites: Map<string, string> } => {
     const nodes = new Map<string, ArchitectureNode>();
     const sites = new Map<string, string>();
-    const owners = tableOwners(input.modules, input.schema);
+    const owners = tableOwners(input.modules);
     const add = (entry: ArchitectureNode, site?: string): void => {
         nodes.set(entry.id, entry);
 
@@ -212,37 +191,54 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     return { nodes, sites };
 };
 
-/** Why an edge cannot be drawn, or `undefined` when both ends are known nodes. */
-const unresolvedReason = (edge: PendingEdge, from: string | undefined, nodes: ReadonlyMap<string, ArchitectureNode>): string | undefined => {
-    if (edge.reason !== undefined) {
-        return edge.reason;
+/** Why a call site has no source node: outside every export, or inside one that registers nothing. */
+const missingSourceReason = (exportName: string): string => {
+    if (exportName === "") {
+        return "inside a non-exported helper";
     }
+
+    return exportName === "default" ? "the default export is not a registered function" : `"${exportName}" is not a registered function`;
+};
+
+/** The drawn edge, or the reason it cannot be drawn. */
+const resolveEdge = (
+    edge: PendingEdge,
+    sites: ReadonlyMap<string, string>,
+    nodes: ReadonlyMap<string, ArchitectureNode>,
+): { drawn: ArchitectureEdge } | { reason: string } => {
+    if ("reason" in edge) {
+        return { reason: edge.reason };
+    }
+
+    const from = edge.from ?? sites.get(siteKey(edge.file, edge.exportName));
 
     if (from === undefined) {
-        // `""` / `"<module>"` are the two feeders' "not inside an exported declaration".
-        return edge.exportName === "" || edge.exportName === "<module>" ? "inside a non-exported helper" : `"${edge.exportName}" is not a registered function`;
+        return { reason: missingSourceReason(edge.exportName) };
     }
 
-    return edge.to !== undefined && nodes.has(edge.to) ? undefined : `${edge.to ?? "the target"} is not declared`;
+    return nodes.has(edge.to) ? { drawn: { from, kind: edge.kind, to: edge.to } } : { reason: `${edge.to} is not declared` };
 };
 
 const edgeKey = (edge: ArchitectureEdge): string => `${edge.from}|${edge.kind}|${edge.to}`;
 
+const unresolvedKey = (entry: UnresolvedEdge): string => `${entry.file}|${String(entry.line)}|${entry.kind}|${entry.reason}`;
+
 const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
     const { nodes, sites } = buildNodes(input);
     const edges = new Map<string, ArchitectureEdge>();
-    const unresolved: UnresolvedEdge[] = [];
+    // Keyed so two identical call sites on one line (`ctx.runQuery(a); ctx.runQuery(b)`
+    // with unreadable refs) report once — the studio keys its list rows on this.
+    const unresolved = new Map<string, UnresolvedEdge>();
 
     for (const edge of [...declarationEdges(input), ...callSiteEdges(input)]) {
-        const from = edge.from ?? sites.get(siteKey(edge.file, edge.exportName));
-        const reason = unresolvedReason(edge, from, nodes);
+        const result = resolveEdge(edge, sites, nodes);
 
-        if (reason === undefined && from !== undefined && edge.to !== undefined) {
-            const drawn = { from, kind: edge.kind, to: edge.to };
-
-            edges.set(edgeKey(drawn), drawn);
+        if ("drawn" in result) {
+            edges.set(edgeKey(result.drawn), result.drawn);
         } else {
-            unresolved.push({ file: edge.file, kind: edge.kind, line: edge.line, reason: reason ?? "unresolved" });
+            const entry = { file: edge.file, kind: edge.kind, line: edge.line, reason: result.reason };
+
+            unresolved.set(unresolvedKey(entry), entry);
         }
     }
 
@@ -257,7 +253,7 @@ const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
                 tables: [...entry.tables],
             };
         }),
-        unresolved: unresolved.toSorted((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
+        unresolved: [...unresolved.values()].toSorted((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
         version: 1,
     };
 };

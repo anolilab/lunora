@@ -125,6 +125,12 @@ export interface AdvisorModule {
     installed?: true;
     /** The folder path relative to `lunora/`, e.g. `billing`. */
     name: string;
+
+    /**
+     * `false` for a package component, which owns its tables but no `lunora/` folder.
+     * Absent means the module owns `lunora/<name>/`.
+     */
+    ownsFolder?: false;
     /** Tables the module declares it owns; empty when it declares none. */
     tables: ReadonlyArray<string>;
 }
@@ -418,9 +424,11 @@ export interface LintContext {
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
-     * Modules declared via `lunora/<dir>/module.ts` (`defineModule`), each with
-     * the tables it claims — the `cross_module_table_write` input. Supplied by the
-     * codegen feeder; absent for runtime callers.
+     * The app's modules — those declared via `lunora/<dir>/module.ts`
+     * (`defineModule`) plus one per installed component (see
+     * {@link AdvisorModule.installed}) — each with the tables it owns: the
+     * `cross_module_table_write` input. Supplied by the codegen feeder; absent for
+     * runtime callers.
      */
     modules?: ReadonlyArray<AdvisorModule>;
 

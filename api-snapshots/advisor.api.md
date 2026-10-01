@@ -389,6 +389,7 @@ interface AdvisorMaskStrategy {
 interface AdvisorModule {
     installed?: true;
     name: string;
+    ownsFolder?: false;
     tables: ReadonlyArray<string>;
 }
 ```

@@ -10,16 +10,16 @@
   deployment units, so "services" promised Encore-style isolation they do not have.
 
 - **A, B, C, F, G, H shipped; D shipped in reduced form; E folded into D.**
-    - `defineService` in `@lunora/server`, `discover/services.ts`, `discover/call-edges.ts`.
+    - `defineModule` in `@lunora/server`, `discover/modules.ts`, `discover/call-edges.ts`.
     - `src/architecture.ts` builds the manifest, which is served at
       `/_lunora/admin/architecture` and read by the client's `fetchArchitecture()`.
     - Studio has a **Functions → Architecture** tab, OpenAPI/OpenRPC are tagged by
-      service, the `cross_service_table_write` lint exists, and there is a
-      `concepts/services` docs page.
-- **The manifest is emitted only once an app declares a service** (§3). An app
+      module, the `cross_module_table_write` lint exists, and there is a
+      `concepts/modules` docs page.
+- **The manifest is emitted only once an app declares a module** (§3). An app
   without one keeps byte-identical `_generated/` output, and the route answers an
   empty manifest.
-- **A service's name is its folder path relative to `lunora/`** (`billing`, or
+- **A module's name is its folder path relative to `lunora/`** (`billing`, or
   `domains/billing`) rather than the last segment. That makes it unique by
   construction (changes §4.1).
 - **Call edges are syntactic, with no type checker** (§8 STOP avoided). An edge
@@ -31,7 +31,7 @@
 - **HTTP routes are nodes, not `trigger` sources** (changes §4.3): a route is its
   own handler, so its calls start from the route node.
 - **Studio (D/E):**
-    - One lane per service, filterable by service (neighbours one edge away stay
+    - One lane per module, filterable by module (neighbours one edge away stay
       visible) and by edge kind.
     - The catalog table sits on the same page instead of in the Functions page (E).
     - Not built: click-to-deep-link, PNG/SVG export, and reuse of the schema
@@ -47,7 +47,15 @@
     - A declared module of the same name, or a declared `tables` claim, takes
       precedence over the component.
     - The component's own `node_modules` code is not scanned.
-- **Not done:** the `lunora-functions` skill section, and per-service
+- **Ownership is resolved once, before any consumer** (`resolveModules`): it
+  merges in installed components and rejects nesting (components included), a
+  table claimed twice or unknown, and a file beside a module that shares its tag
+  (`lunora/billing.ts` next to `lunora/billing/`). A package component (code in
+  `node_modules`) owns its tables but no `lunora/<key>/` folder.
+- **Advisor `cacheKey`s for findings inside `export default …` change** from
+  `<module>` to `default` (call sites there are now attributed), so a dismissed
+  finding of that shape reappears once.
+- **Not done:** the `lunora-functions` skill section, and per-module
   `queues.ts`/`topics.ts` discovery (§9 Q2).
 
 ## 0. Headline finding

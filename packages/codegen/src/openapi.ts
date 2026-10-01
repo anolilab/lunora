@@ -303,7 +303,7 @@ const restOperation = (definition: FunctionIR, tag: string): { method: "get" | "
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
-    /** Declared modules; an operation in a module folder is tagged with the module instead of its file namespace. */
+    /** The app's modules, passed only once it declares one; an operation in a module folder is tagged with the module instead of its file namespace. */
     modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
@@ -332,7 +332,10 @@ interface OpenApiEmitInput {
  */
 const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
-    const paths: Record<string, Record<string, unknown>> = {};
+    // Null-prototype maps: route paths and methods come from app code, and a
+    // `__proto__` key must stay an ordinary entry, never reach Object.prototype.
+    const paths: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+    const pathItemFor = (path: string): Record<string, unknown> => paths[path] ?? (Object.create(null) as Record<string, unknown>);
     const tagNames = new Set<string>();
     const modules = input.modules ?? [];
     const tagOf = (filePath: string): string => moduleTagOf(modules, filePath);
@@ -341,7 +344,7 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     // same path-item object.
     for (const route of input.httpRoutes) {
         const openApiPath = toOpenApiPath(route.path);
-        const pathItem = paths[openApiPath] ?? {};
+        const pathItem = pathItemFor(openApiPath);
 
         pathItem[route.method.toLowerCase()] = httpRouteOperation(route, tagOf(route.filePath));
         paths[openApiPath] = pathItem;
@@ -374,7 +377,7 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
             continue;
         }
 
-        const pathItem = paths[rest.path] ?? {};
+        const pathItem = pathItemFor(rest.path);
 
         pathItem[rest.method] = rest.operation;
         paths[rest.path] = pathItem;
@@ -383,9 +386,9 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     const tags = [...tagNames]
         .toSorted((a, b) => a.localeCompare(b))
         .map((name) => {
-            const module = modules.find((candidate) => candidate.name === name);
+            const tagged = modules.find((candidate) => candidate.name === name);
 
-            return { description: module?.description ?? `Operations declared in \`lunora/${name}\`.`, name };
+            return { description: tagged?.description ?? `Operations declared in \`lunora/${name}\`.`, name };
         });
 
     const document = {
@@ -428,7 +431,9 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
             version,
         },
         openapi: "3.1.0",
-        paths,
+        // Plain objects again for the emitted document: `Object.fromEntries` and a
+        // spread both define data properties, so a `__proto__` key stays an entry.
+        paths: Object.fromEntries(Object.entries(paths).map(([path, item]) => [path, { ...item }])),
         tags,
     };
 

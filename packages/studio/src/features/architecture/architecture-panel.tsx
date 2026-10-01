@@ -15,15 +15,15 @@ import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
-import { APP_LANE, layoutArchitecture, parseArchitecture } from "./architecture-model";
+import { APP_LANE, laneOf, layoutArchitecture, parseArchitecture } from "./architecture-model";
 
 interface ArchitecturePanelProps {
     /** Inline manifest (the mock harness, or a host holding `_generated/architecture.json`); omitted, the panel fetches it. */
     readonly manifest?: unknown;
 }
 
-/** Sentinel `<select>` value for "every module". */
-const ALL_MODULES = "*";
+/** Sentinel `<select>` value for "every lane". */
+const ALL_LANES = "*";
 
 /** A module lane: a labelled, dashed container its member nodes sit inside. */
 const LaneNode = ({ data }: NodeProps): ReactElement => (
@@ -50,7 +50,15 @@ const classifyManifest = (value: unknown): SpecFetchState<ArchitectureManifest> 
 /** One row per module (plus the app lane when it has functions): what it is, what it owns, how big it is. */
 const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }): ReactElement => {
     const t = useT();
-    const functionsIn = (module: string): number => manifest.nodes.filter((node) => node.kind === "function" && (node.module ?? APP_LANE) === module).length;
+    const functionCounts = new Map<string, number>();
+
+    for (const node of manifest.nodes) {
+        if (node.kind === "function") {
+            functionCounts.set(laneOf(node), (functionCounts.get(laneOf(node)) ?? 0) + 1);
+        }
+    }
+
+    const functionsIn = (lane: string): number => functionCounts.get(lane) ?? 0;
     const appFunctions = functionsIn(APP_LANE);
 
     return (
@@ -66,24 +74,23 @@ const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {manifest.modules.map((module) => (
-                            <TableRow data-testid={`architecture-module-${module.name}`} key={module.name}>
+                        {manifest.modules.map((entry) => (
+                            <TableRow data-testid={`architecture-module-${entry.name}`} key={entry.name}>
                                 <TableCell className="font-mono text-xs">
-                                    {module.name}
-                                    {module.installed === true && (
-                                        <Badge className="ml-2" data-testid={`architecture-component-${module.name}`} variant="outline">
+                                    {entry.name}
+                                    {entry.installed === true && (
+                                        <Badge className="ml-2" data-testid={`architecture-component-${entry.name}`} variant="outline">
                                             {t("Component")}
                                         </Badge>
                                     )}
                                 </TableCell>
                                 <TableCell className="text-xs text-muted-foreground">
-                                    {module.description ??
-                                        (module.installed === true ? t("Installed component — owns its tables and lunora/{key}/", { key: module.name }) : "—")}
+                                    {entry.description ?? (entry.installed === true ? t("Installed component") : "—")}
                                 </TableCell>
                                 <TableCell className="font-mono text-xs text-muted-foreground">
-                                    {module.tables.length === 0 ? "—" : module.tables.join(", ")}
+                                    {entry.tables.length === 0 ? "—" : entry.tables.join(", ")}
                                 </TableCell>
-                                <TableCell className="text-xs">{functionsIn(module.name)}</TableCell>
+                                <TableCell className="text-xs">{functionsIn(entry.name)}</TableCell>
                             </TableRow>
                         ))}
                         {appFunctions > 0 && (
@@ -104,7 +111,7 @@ const ModuleCatalog = ({ manifest }: { readonly manifest: ArchitectureManifest }
 /** The module lanes and their edges, filterable by module and edge kind. Read-only. */
 const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureManifest }): ReactElement => {
     const t = useT();
-    const [module, setModule] = useState<string>(ALL_MODULES);
+    const [lane, setLane] = useState<string>(ALL_LANES);
     const [kinds, setKinds] = useState<ReadonlySet<ArchitectureEdgeKind>>(() => new Set(EDGE_KINDS));
     const present = EDGE_KINDS.filter((kind) => manifest.edges.some((edge) => edge.kind === kind));
     const appLaneLabel = t("Outside any module");
@@ -112,12 +119,12 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
     // Memoized so ReactFlow is handed the same arrays until a filter changes.
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: ReactFlow re-seeds on new node/edge arrays
     const { edges, nodes } = useMemo(
-        () => layoutArchitecture(manifest, { appLaneLabel, componentLabel, kinds, ...(module === ALL_MODULES ? {} : { module }) }),
-        [manifest, appLaneLabel, componentLabel, kinds, module],
+        () => layoutArchitecture(manifest, { appLaneLabel, componentLabel, kinds, ...(lane === ALL_LANES ? {} : { lane }) }),
+        [manifest, appLaneLabel, componentLabel, kinds, lane],
     );
 
-    const onModuleChange = (event: ChangeEvent<HTMLSelectElement>): void => {
-        setModule(event.target.value);
+    const onLaneChange = (event: ChangeEvent<HTMLSelectElement>): void => {
+        setLane(event.target.value);
     };
     const toggleKind = (kind: ArchitectureEdgeKind): void => {
         setKinds((previous) => {
@@ -138,10 +145,10 @@ const ArchitectureDiagram = ({ manifest }: { readonly manifest: ArchitectureMani
                     aria-label={t("Module")}
                     className="h-8 rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50"
                     data-testid="architecture-module-filter"
-                    onChange={onModuleChange}
-                    value={module}
+                    onChange={onLaneChange}
+                    value={lane}
                 >
-                    <option value={ALL_MODULES}>{t("All modules")}</option>
+                    <option value={ALL_LANES}>{t("All modules")}</option>
                     {manifest.modules.map((entry) => (
                         <option key={entry.name} value={entry.name}>
                             {entry.name}
@@ -225,7 +232,9 @@ const ArchitecturePanel = ({ manifest: inlineManifest }: ArchitecturePanelProps)
     if (state.kind === "empty") {
         return (
             <EmptyState
-                description={t("Add a lunora/<folder>/module.ts that default-exports defineModule(...) and run lunora codegen to map your modules here.")}
+                description={t(
+                    "Add a lunora/<folder>/module.ts that default-exports defineModule(...) and run lunora codegen to map your modules here. Installed components join the map once you declare one.",
+                )}
                 testId="architecture-empty"
                 title={t("No modules declared")}
             />

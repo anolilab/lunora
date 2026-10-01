@@ -83,15 +83,19 @@ to its file namespace), so generated API docs group by module too.
 
 Every installed [component](/docs/concepts/components) (a schema extension
 merged with `.extend(...)`) counts as a module named after its key, with no
-`module.ts` needed. It owns its prefixed tables (`voting_votes`) and the
-`lunora/<key>/` folder a registry item copies its code into, so:
+`module.ts` needed. It owns its prefixed tables (`voting_votes`). A component
+installed as a [registry item](/docs/concepts/registry-items) also owns the
+`lunora/<key>/` folder its code is copied into; one installed from npm owns no
+folder, since its code lives in `node_modules`. So:
 
 - the Architecture view gives it its own lane, marked as a component;
 - `cross_module_table_write` warns when your code inserts straight into a
   component's table instead of calling the function the component exports.
 
-This applies whether or not you declare any modules yourself. Code inside the
-component's own folder may write its tables freely. To take over a component's
+The lint applies whether or not you declare any modules yourself; the
+Architecture view appears once you declare one. Code inside a copied-in
+component's folder may write its tables freely. A module you declare inside a
+component's folder is a codegen error, as with any nested module. To take over a component's
 tables, declare a module with the same name, or list the table in your own
 module's `tables`; a declared claim wins. The component's code in `node_modules`
 is not scanned, so its internal calls and writes are not drawn.

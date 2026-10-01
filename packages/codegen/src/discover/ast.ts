@@ -291,8 +291,8 @@ const collectSecurityCallRows = <Row>(
  * `discover/sql-interpolation` variant has divergent semantics (no export-keyword
  * check, `"<module>"` fallback) and is intentionally NOT this helper.
  */
-const enclosingExportName = (call: CallExpression): string => {
-    for (const ancestor of call.getAncestors()) {
+const enclosingExportName = (node: Node): string => {
+    for (const ancestor of node.getAncestors()) {
         if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
             return ancestor.getName();
         }

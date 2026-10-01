@@ -13,21 +13,21 @@ import { defaultExportExpression, findObjectProperty, listLunoraSourceFiles, lun
 const MODULE_FILENAME = "module.ts";
 
 /** A static string literal's value, or a located diagnostic naming the property. */
-const literalString = (expression: Expression, module: string, property: string): string => {
+const literalString = (expression: Expression, moduleName: string, property: string): string => {
     if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
         return expression.getLiteralValue();
     }
 
-    throw diagnosticAt(expression, `module "${module}": \`${property}\` must be a static string literal — codegen reads it without running the file`);
+    throw diagnosticAt(expression, `module "${moduleName}": \`${property}\` must be a static string literal — codegen reads it without running the file`);
 };
 
 /** A `[ "a", "b" ]` literal of static strings, or a located diagnostic. */
-const literalStringArray = (expression: Expression, module: string, property: string): string[] => {
+const literalStringArray = (expression: Expression, moduleName: string, property: string): string[] => {
     if (!Node.isArrayLiteralExpression(expression)) {
-        throw diagnosticAt(expression, `module "${module}": \`${property}\` must be an inline array of table names`);
+        throw diagnosticAt(expression, `module "${moduleName}": \`${property}\` must be an inline array of table names`);
     }
 
-    return expression.getElements().map((element) => literalString(element, module, property));
+    return expression.getElements().map((element) => literalString(element, moduleName, property));
 };
 
 /**
@@ -35,7 +35,7 @@ const literalStringArray = (expression: Expression, module: string, property: st
  * A shorthand (`{ tables }`) or spread is rejected rather than skipped: skipping
  * it would silently drop the ownership the app declared.
  */
-const propertyValue = (config: ObjectLiteralExpression, key: string, module: string): Expression | undefined => {
+const propertyValue = (config: ObjectLiteralExpression, key: string, moduleName: string): Expression | undefined => {
     const property = findObjectProperty(config, key);
 
     if (property === undefined) {
@@ -43,7 +43,7 @@ const propertyValue = (config: ObjectLiteralExpression, key: string, module: str
     }
 
     if (!Node.isPropertyAssignment(property)) {
-        throw diagnosticAt(property, `module "${module}": write \`${key}\` inline as \`${key}: …\` — codegen reads it without running the file`);
+        throw diagnosticAt(property, `module "${moduleName}": write \`${key}\` inline as \`${key}: …\` — codegen reads it without running the file`);
     }
 
     return property.getInitializerOrThrow();
@@ -97,11 +97,10 @@ const moduleFromFile = (project: Project, path: string, name: string): ModuleIR 
 };
 
 /**
- * Discover every module: a folder under `lunora/` whose `module.ts` default-
- * exports `defineModule(...)`. The module's name is its folder path relative to
- * `lunora/` (`billing`, or `domains/billing` for a nested folder). Modules do not
- * nest — a module folder inside another is an error, because a file would then
- * belong to two of them.
+ * Discover every declared module: a folder under `lunora/` whose `module.ts`
+ * default-exports `defineModule(...)`. The module's name is its folder path
+ * relative to `lunora/` (`billing`, or `domains/billing` for a nested folder).
+ * Validation happens in {@link resolveModules}, once installed components join.
  */
 const discoverModules = (project: Project, lunoraDirectory: string): ModuleIR[] => {
     const modules: ModuleIR[] = [];
@@ -112,64 +111,125 @@ const discoverModules = (project: Project, lunoraDirectory: string): ModuleIR[] 
         }
 
         const relative = lunoraRelativePath(lunoraDirectory, path);
-        const module = moduleFromFile(project, path, relative === "module" ? "" : relative.slice(0, -"/module".length));
+        const discovered = moduleFromFile(project, path, relative === "module" ? "" : relative.slice(0, -"/module".length));
 
-        if (module) {
-            modules.push(module);
+        if (discovered) {
+            modules.push(discovered);
         }
     }
 
-    modules.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const outer of modules) {
-        const inner = modules.find((candidate) => candidate.name.startsWith(`${outer.name}/`));
-
-        if (inner) {
-            throw new Error(
-                `@lunora/codegen: module "${inner.name}" is nested inside module "${outer.name}" — a file can belong to one module only, so move one of the two module.ts files`,
-            );
-        }
-    }
-
-    return modules;
+    return modules.toSorted((a, b) => a.name.localeCompare(b.name));
 };
 
 /**
- * The declared modules plus one implicit module per installed component — each
- * `defineSchemaExtension` key the schema merged — owning that component's tables
- * (`voting_*`) and the `lunora/<key>/` folder a registry item copies its code
- * into. A declared module of the same name absorbs the component instead, and a
- * table a declared module claims stays with that module.
+ * The declared modules with each installed component merged in. Precedence, so
+ * every table and folder has one owner: a declared module of the component's
+ * name absorbs the component's tables; a table a declared module lists stays
+ * with it; otherwise the component owns its prefixed tables (`voting_*`), plus
+ * the `lunora/<key>/` folder when it is a registry copy-in. A package
+ * component's code is in `node_modules`, so an app folder of its name stays the
+ * app's.
  */
-const withInstalledComponents = (modules: ReadonlyArray<ModuleIR>, schema: SchemaIR): ModuleIR[] => {
-    const declared = new Map(modules.map((entry) => [entry.name, entry]));
-    const claimed = new Set(modules.flatMap((entry) => entry.tables));
-    const components = new Map<string, string[]>();
+const mergeInstalledComponents = (declared: ReadonlyArray<ModuleIR>, schema: SchemaIR): ModuleIR[] => {
+    const names = new Set(declared.map((entry) => entry.name));
+    const claimed = new Set(declared.flatMap((entry) => entry.tables));
+    const unclaimed = schema.tables.filter((table) => table.extensionKey !== undefined && !claimed.has(table.name));
+    const components = Map.groupBy(unclaimed, (table) => String(table.extensionKey));
 
-    for (const table of schema.tables) {
-        if (table.extensionKey !== undefined && !claimed.has(table.name)) {
-            components.set(table.extensionKey, [...(components.get(table.extensionKey) ?? []), table.name]);
-        }
-    }
-
-    const merged = modules.map((entry) => {
+    const merged = declared.map((entry) => {
         const absorbed = components.get(entry.name);
 
-        return absorbed === undefined ? entry : { ...entry, tables: [...entry.tables, ...absorbed] };
+        return absorbed === undefined ? entry : { ...entry, tables: [...entry.tables, ...absorbed.map((table) => table.name)] };
     });
     const installed = [...components]
-        .filter(([key]) => !declared.has(key))
+        .filter(([key]) => !names.has(key))
         .map(([key, tables]): ModuleIR => {
-            return { installed: true, name: key, tables };
+            const fromPackage = tables.every((table) => table.extensionFromPackage === true);
+
+            return { installed: true, name: key, ...(fromPackage ? { ownsFolder: false as const } : {}), tables: tables.map((table) => table.name) };
         });
 
     return [...merged, ...installed].toSorted((a, b) => a.name.localeCompare(b.name));
 };
 
+/** Reject a module nested inside another (a component counts): a file belongs to one module. */
+const assertNoNesting = (modules: ReadonlyArray<ModuleIR>): void => {
+    for (const outer of modules) {
+        const inner = modules.find((candidate) => candidate.name.startsWith(`${outer.name}/`));
+
+        if (inner) {
+            throw new Error(
+                `@lunora/codegen: module "${inner.name}" is nested inside ${outer.installed === true ? "installed component" : "module"} "${outer.name}" — a file can belong to one module only, so move one of the two`,
+            );
+        }
+    }
+};
+
+/** Reject a table two modules claim, or one the schema does not define. */
+const assertTableClaims = (modules: ReadonlyArray<ModuleIR>, schema: SchemaIR): void => {
+    const known = new Set(schema.tables.map((table) => table.name));
+    const owners = new Map<string, string>();
+
+    for (const entry of modules) {
+        for (const table of entry.tables) {
+            if (!known.has(table)) {
+                throw new Error(`@lunora/codegen: module "${entry.name}" declares table "${table}", which lunora/schema.ts does not define`);
+            }
+
+            const prior = owners.get(table);
+
+            if (prior !== undefined) {
+                throw new Error(`@lunora/codegen: table "${table}" is claimed by both module "${prior}" and module "${entry.name}" — a table has one owner`);
+            }
+
+            owners.set(table, entry.name);
+        }
+    }
+};
+
+/**
+ * Reject a file outside a module whose api namespace equals that module's name
+ * (`lunora/billing.ts` beside `lunora/billing/`). Only once the app declares a
+ * module do the specs tag by module, so only then would the two share a tag.
+ */
+const assertNoTagCollision = (declared: ReadonlyArray<ModuleIR>, modules: ReadonlyArray<ModuleIR>, sourceFiles: ReadonlyArray<string>): void => {
+    if (declared.length === 0) {
+        return;
+    }
+
+    const tagged = new Set(modules.map((entry) => entry.name));
+
+    for (const file of sourceFiles) {
+        const namespace = sanitizeNamespace(file);
+
+        if (moduleOf(modules, file) === undefined && tagged.has(namespace)) {
+            throw new Error(
+                `@lunora/codegen: lunora/${file}.ts sits beside module "${namespace}" and shares its name — move it into lunora/${namespace}/ or rename one of them`,
+            );
+        }
+    }
+};
+
+/**
+ * Every module the app has — the declared ones plus one per installed component
+ * (see {@link mergeInstalledComponents}) — validated together before any
+ * consumer reads them, so ownership is never ambiguous downstream.
+ */
+const resolveModules = (declared: ReadonlyArray<ModuleIR>, schema: SchemaIR, sourceFiles: ReadonlyArray<string>): ModuleIR[] => {
+    const modules = mergeInstalledComponents(declared, schema);
+
+    assertNoNesting(modules);
+    assertTableClaims(modules, schema);
+    assertNoTagCollision(declared, modules, sourceFiles);
+
+    return modules;
+};
+
 /**
  * The OpenAPI / OpenRPC tag for an operation declared in `filePath`: its module,
- * or its file namespace outside every module.
+ * or its file namespace outside every module ({@link resolveModules} keeps the
+ * two from colliding).
  */
 const moduleTagOf = (modules: ReadonlyArray<ModuleIR>, filePath: string): string => moduleOf(modules, filePath) ?? sanitizeNamespace(filePath);
 
-export { discoverModules, MODULE_FILENAME, moduleTagOf, withInstalledComponents };
+export { discoverModules, MODULE_FILENAME, moduleTagOf, resolveModules };

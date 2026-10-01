@@ -66,7 +66,7 @@ export const EMPTY_ARCHITECTURE: Readonly<ArchitectureManifest> = Object.freeze(
  * The module a `lunora/`-relative module path (`billing/invoices`, no extension)
  * belongs to, or `undefined` outside every module. Membership is "inside the
  * folder": `lunora/billing.ts` (path `billing`) sits beside the `billing` folder
- * and is not part of it.
+ * and is not part of it. A package component (`ownsFolder: false`) owns no folder.
  */
-export const moduleOf = (modules: ReadonlyArray<{ name: string }>, file: string): string | undefined =>
-    modules.find((module) => file.startsWith(`${module.name}/`))?.name;
+export const moduleOf = (modules: ReadonlyArray<{ name: string; ownsFolder?: false }>, file: string): string | undefined =>
+    modules.find((entry) => entry.ownsFolder !== false && file.startsWith(`${entry.name}/`))?.name;
