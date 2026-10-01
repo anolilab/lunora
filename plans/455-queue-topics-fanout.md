@@ -11,8 +11,9 @@
 - **Topics live in `lunora/queues.ts`, not a new `lunora/topics.ts`** (changes §4.3).
   A subscription is a `defineQueue`-shaped export of that file, so the existing
   discovery, `LUNORA_QUEUE_REGISTRY` import, config reconcile, `platform-node`
-  queue host and Studio list pick it up with no new wiring. `discoverTopics`
-  re-reads the same file.
+  queue host and Studio list pick it up with no new wiring. One
+  `discoverQueueDeclarations` parse returns queues and topics; a subscription's
+  `QueueIR.topic` is the only record of the link.
 - **A subscription is named like a queue** (changes §4.3). Queue `<export-kebab>`,
   binding `QUEUE_<EXPORT>`, from the existing `queueDefaultName`/`queueBindingName`,
   not `<topic>--<sub>` / `TOPIC_<T>__<S>`. The runtime (`platform-node`) derives
@@ -23,8 +24,13 @@
   are typed by generic only, matching `defineQueue`. Cloudflare's `send` takes no
   caller-supplied id, so a shared id would mean wrapping the body. Handlers dedupe
   on their own payload keys.
-- **A missing subscription binding rejects the publish** rather than skipping that
-  subscription, because skipping would silently lose its copy.
+- **A missing subscription binding rejects the publish before anything is sent**,
+  rather than skipping that subscription (which would silently lose its copy) or
+  sending to the rest (which would duplicate on every retry of a config error).
+- **The security lints cover topics**: `privileged_dispatch_unvalidated_payload`
+  reads `defineSubscription` handlers (and now `message.run`, which it missed for
+  plain queues too), and `privileged_fanout_from_public_procedure` sees
+  `ctx.topics.*.publish`. Node round trip is in `platform-node`'s queue host test.
 - **Cloudflare rating is `emulated`, not `native`** (changes §6): the fan-out is
   Lunora's, the same reasoning as `crossShardFanout`.
 

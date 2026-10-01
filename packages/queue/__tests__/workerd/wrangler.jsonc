@@ -13,6 +13,9 @@
         "producers": [
             { "binding": "QUEUE_SMOKE_QUEUE", "queue": "smoke-queue" },
             { "binding": "QUEUE_DECLINE_QUEUE", "queue": "decline-queue" },
+            // Two subscriptions of one topic — each its own queue, as codegen deploys them.
+            { "binding": "QUEUE_SIGNUP_AUDIT", "queue": "signup-audit" },
+            { "binding": "QUEUE_SIGNUP_WELCOME", "queue": "signup-welcome" },
         ],
         // `max_batch_timeout: 0` so a produced message is delivered to the
         // worker's `queue()` consumer immediately instead of after the default
@@ -23,6 +26,8 @@
             // delay — the shape codegen writes for `defineQueue({ maxRetries: 2 })`
             // — so the broker's own attempt counting is what the decline test sees.
             { "queue": "decline-queue", "max_batch_size": 1, "max_batch_timeout": 0, "max_retries": 2 },
+            { "queue": "signup-audit", "max_batch_size": 5, "max_batch_timeout": 0 },
+            { "queue": "signup-welcome", "max_batch_size": 5, "max_batch_timeout": 0 },
         ],
     },
 }

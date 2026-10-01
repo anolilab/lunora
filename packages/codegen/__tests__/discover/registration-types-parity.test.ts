@@ -96,11 +96,11 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
     it("covers the `*Definition` types the `define*` APIs return", () => {
         expect.assertions(1);
 
-        // These four do not follow the `Registered*` naming the scrape above
-        // keys on, so they are pinned by name: `defineWorkflow`, `defineQueue`,
-        // `defineAgent` and `defineContainer` each return one.
+        // These do not follow the `Registered*` naming the scrape above keys on,
+        // so they are pinned by name: `defineWorkflow`, `defineQueue`,
+        // `defineSubscription`, `defineAgent` and `defineContainer` each return one.
         const source = readFileSync(discoverer, "utf8");
-        const expected = ["AgentDefinition", "ContainerDefinition", "QueueDefinition", "WorkflowDefinition"];
+        const expected = ["AgentDefinition", "ContainerDefinition", "QueueDefinition", "SubscriptionDefinition", "WorkflowDefinition"];
 
         expect(expected.filter((name) => !source.includes(`"${name}"`))).toStrictEqual([]);
     });

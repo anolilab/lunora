@@ -16,9 +16,10 @@ import type {
     SchemaIR,
     ShapeIR,
     StorageRulesMetadataIR,
+    TopicIR,
     WorkflowIR,
 } from "../ir";
-import { isShardByTable } from "../ir";
+import { isShardByTable, plainQueues } from "../ir";
 import renderJsonData from "../json-data";
 import ADMIN_WRITE_METHODS from "./shard-admin";
 import {
@@ -49,6 +50,7 @@ import {
     emitPaymentFragments,
     emitQueueFragments,
     emitQueuesMetadataFragments,
+    emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
     emitX402Fragments,
@@ -105,7 +107,7 @@ interface EmitShardOptions {
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
-    /** Queues declared via `defineQueue` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
+    /** Queues declared via `defineQueue` / `defineSubscription` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
@@ -122,6 +124,8 @@ interface EmitShardOptions {
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;
+    /** Topics declared via `defineTopic` exports in `lunora/queues.ts` — wires `ctx.topics` to each subscription's queue binding. */
+    topics?: ReadonlyArray<TopicIR>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
@@ -158,6 +162,7 @@ const emitShard = ({
     shapes = [],
     storageRules,
     studioFeatures,
+    topics = [],
     useUmbrella = false,
     workflows = [],
 }: EmitShardOptions): string => {
@@ -198,7 +203,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     const browserFragments = emitBrowserFragments(hasBrowser);
     const r2sqlFragments = emitR2sqlFragments(hasR2sql);
     const pipelinesFragments = emitPipelinesFragments(hasPipelines);
-    const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(queues);
+    const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(plainQueues(queues));
+    const { build: topicsBuild, contextField: topicsContextField, importLines: topicImportLines, specs: topicSpecs } = emitTopicFragments(topics, queues);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -412,6 +418,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...containerImportLines,
         ...workflowImportLines,
         ...queueImportLines,
+        ...topicImportLines,
         ...agentImportLines,
         ...paymentsImports,
         ...x402Imports,
@@ -816,7 +823,7 @@ const LUNORA_STORAGE_RULES = ${renderJsonData(storageRulesData, "StorageRulesRes
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderJsonData(studioFeaturesData, "StudioFeaturesResult")};
-${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
+${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -972,7 +979,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };

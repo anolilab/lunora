@@ -120,6 +120,7 @@ const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueM
                                     <TableHead>{t("Mode")}</TableHead>
                                     <TableHead>{t("Binding")}</TableHead>
                                     <TableHead>{t("Dead-letter")}</TableHead>
+                                    <TableHead>{t("Topic")}</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -130,6 +131,7 @@ const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueM
                                         <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.topic ?? "—"}</TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>

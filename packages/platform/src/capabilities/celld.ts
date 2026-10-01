@@ -159,6 +159,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
+        topics: {
+            level: "emulated",
+            note: "The same fan-out as on Cloudflare: each subscription is its own celld queue and a publish sends to every one. Inherits the `queues` row's limits per subscription (256 concurrent producer calls per queue owner, four-day retention)",
+        },
         serverReactors: {
             level: "emulated",
             note: "Reactors ride the existing post-write refresh drain, exactly as on Cloudflare. celld supplies the two properties that make that correct — one event at a time per cell, and `waitUntil` to keep the drain alive past the response — and has no notion of a server-side subscription of its own",

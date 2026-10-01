@@ -227,6 +227,16 @@ describe("gatePlatformFeatures", () => {
         expect(result.signals.workflowSchedules).toBe(!refused);
     });
 
+    it.each(["celld", "node", "cloudflare"])("lets topics through on every target, since each rates them emulated (%s)", async (target) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { queues: true, topics: true });
+
+        expect(result.signals.topics).toBe(true);
+        expect(result.diagnostics.filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toStrictEqual([]);
+    });
+
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
         expect.assertions(7);
 

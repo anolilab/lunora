@@ -46,13 +46,13 @@ import { discoverFeatureUsage } from "./discover/feature-usage";
 import { discoverIdentity } from "./discover/identity";
 import readPackageDependencies from "./discover/package-dependencies";
 import { discoverPlatformSignals } from "./discover/platform-signals";
-import { discoverQueues } from "./discover/queues";
+import { discoverQueueDeclarations } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
-import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
+import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, TopicIR, WorkflowIR } from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
@@ -165,6 +165,7 @@ interface DeclarationSurface {
     /** `_generated/server.ts`, rendered. Not written — see the module docblock. */
     serverContent: string;
     storageRulesMetadata: StorageRulesMetadataIR;
+    topics: ReadonlyArray<TopicIR>;
     /** Either sandbox tool registers the `sandbox:invoke` dispatcher via `emitFunctions`. */
     usesSandbox: boolean;
     /** The project depends on the `lunorash` umbrella, so generated files import through its subpaths. */
@@ -201,7 +202,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Workflows before agents before the collision guard: each discoverer dedups
     // only within its own kind, but both land in one wrangler `workflows[]`.
     const workflows = discoverWorkflows(project, lunoraDirectory);
-    const queues = discoverQueues(project, lunoraDirectory);
+    const { queues, topics } = discoverQueueDeclarations(project, lunoraDirectory);
     const agents = discoverAgents(project, lunoraDirectory);
 
     assertNoWorkflowAgentCollision(workflows, agents);
@@ -282,6 +283,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // that cannot serve the traversal only refuses apps that would use one.
         relationGraph: schemaDeclaresRelationGraph(schema),
         secrets: codeSignals.secrets,
+        topics: topics.length > 0,
         // Read off the schema for the same reason `globalTables` is — and it has
         // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`
         // while the `vectors` capability only flips on an import or a literal
@@ -371,10 +373,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             queues,
             schema,
             storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
+            topics,
             useUmbrella,
             workflows,
         }),
         storageRulesMetadata,
+        topics,
         // ANY sandbox tool needs the `sandbox:invoke` dispatcher registered — the
         // receiver's `fs` arm is as unreachable without it as the browser one.
         usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer || sandboxUsage.usesSandboxFs,
