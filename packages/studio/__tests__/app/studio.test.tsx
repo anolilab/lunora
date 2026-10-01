@@ -122,9 +122,9 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
  * way as `StudioFeaturesResult`. The studio `QueuesPanel` reads these fields off
  * the wire, so a field added on one side and not the other would surface as a
  * silent `undefined` cell rather than a type error; this guard fails the build on
- * drift instead. `deadLetterQueue` is optional (push-only), so it's in the set.
+ * drift instead. `deadLetterQueue` (push-only) and `topic` (subscriptions only) are optional, so both are in the set.
  */
-const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
+const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
 
@@ -447,7 +447,7 @@ describe("studio", () => {
         expect.assertions(2);
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
-        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"]);
     });
 
     it("keeps the studio's getTraces mirrors in lockstep with @lunora/do's contract", () => {

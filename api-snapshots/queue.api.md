@@ -240,6 +240,63 @@ interface RunFunctionOptions {
 }
 ```
 
+### `SubscriptionConfig` (interface)
+
+```ts
+interface SubscriptionConfig<Payload = unknown> extends QueueConsumerTuning {
+    handler: QueueHandler<Payload>;
+    name?: string;
+}
+```
+
+### `SubscriptionDefinition` (interface)
+
+```ts
+interface SubscriptionDefinition<Payload = unknown> extends QueueDefinition<Payload> {
+    handler: QueueHandler<Payload>;
+    mode: "push";
+    topic: TopicDefinition<Payload>;
+}
+```
+
+### `TopicBindingSpec` (interface)
+
+```ts
+interface TopicBindingSpec {
+    exportName: string;
+    subscriptions: ReadonlyArray<{
+        binding: string;
+        exportName: string;
+    }>;
+}
+```
+
+### `TopicDefinition` (interface)
+
+```ts
+interface TopicDefinition<Payload = unknown> {
+    readonly __lunoraBody?: Payload;
+    isLunoraTopic: true;
+}
+```
+
+### `TopicPublisher` (interface)
+
+```ts
+interface TopicPublisher<Payload = unknown> {
+    publish: (payload: Payload, options?: QueueSendOptions) => Promise<void>;
+    publishBatch: (messages: Iterable<MessageSendRequestLike<Payload>>, options?: QueueSendBatchOptions) => Promise<void>;
+}
+```
+
+### `Topics` (interface)
+
+```ts
+interface Topics {
+    [exportName: string]: TopicPublisher;
+}
+```
+
 ### `createQueueCaptureSink` (const)
 
 ```ts
@@ -264,10 +321,28 @@ const createQueueRunContext: (options: RunContextOptions) => QueueRunContext;
 const createQueues: (options: LunoraQueuesOptions) => Queues;
 ```
 
+### `createTopicContext` (const)
+
+```ts
+const createTopicContext: (env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec>) => Topics;
+```
+
 ### `defineQueue` (const)
 
 ```ts
 const defineQueue: <Body = unknown>(config: QueueConfig<Body>) => QueueDefinition<Body>;
+```
+
+### `defineSubscription` (const)
+
+```ts
+const defineSubscription: <Payload>(topic: TopicDefinition<Payload>, config: SubscriptionConfig<Payload>) => SubscriptionDefinition<Payload>;
+```
+
+### `defineTopic` (const)
+
+```ts
+const defineTopic: <Payload = unknown>() => TopicDefinition<Payload>;
 ```
 
 ### `dispatchQueueBatch` (const)

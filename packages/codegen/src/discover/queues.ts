@@ -7,23 +7,29 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, P
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { QueueIR } from "../ir";
+import type { QueueIR, TopicIR } from "../ir";
 import { findObjectProperty, stringPropertyFor } from "./ast";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
 const QUEUES_FILENAME = "queues.ts";
 
+/** The `@lunora/queue` factories `lunora/queues.ts` declares with. */
+type QueueFactory = "defineQueue" | "defineSubscription" | "defineTopic";
+
 /**
- * Decide whether a callee identifier refers to `defineQueue` from
- * `@lunora/queue`. Mirrors `isDefineWorkflow`: trust the import declaration when
- * the checker has a symbol (so aliasing survives), and fall back to the surface
- * text when no symbol is available.
+ * Decide which `@lunora/queue` factory a callee identifier refers to, if any.
+ * Mirrors `isDefineWorkflow`: trust the import declaration when the checker has
+ * a symbol (so aliasing survives), and fall back to the surface text when no
+ * symbol is available.
  */
-const isDefineQueue = (identifier: Identifier): boolean => {
+const queueFactoryOf = (identifier: Identifier): QueueFactory | undefined => {
+    const isFactory = (name: string): name is QueueFactory => name === "defineQueue" || name === "defineSubscription" || name === "defineTopic";
     const symbol = identifier.getSymbol();
 
     if (!symbol) {
-        return identifier.getText() === "defineQueue";
+        const text = identifier.getText();
+
+        return isFactory(text) ? text : undefined;
     }
 
     for (const declaration of symbol.getDeclarations()) {
@@ -32,13 +38,15 @@ const isDefineQueue = (identifier: Identifier): boolean => {
         }
 
         if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/queue") {
-            return false;
+            return undefined;
         }
 
-        return declaration.getNameNode().getText() === "defineQueue";
+        const imported = declaration.getNameNode().getText();
+
+        return isFactory(imported) ? imported : undefined;
     }
 
-    return false;
+    return undefined;
 };
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
@@ -78,25 +86,28 @@ const queueNameOverride = (argument: ObjectLiteralExpression, exportName: string
     return name;
 };
 
-/** Lift one exported `defineQueue({...})` declaration into {@link QueueIR}. */
-const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
-    const argument = call.getArguments()[0];
-
-    if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        throw diagnosticAt(call, `queue "${exportName}": defineQueue must be passed an inline object literal`);
-    }
-
+/**
+ * Lift a queue's config object literal into {@link QueueIR} — the second argument
+ * of `defineSubscription(topic, {...})` is the same shape as `defineQueue({...})`
+ * minus `mode` (a subscription is always a push consumer).
+ */
+const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, topic: string | undefined): QueueIR => {
     const ir: QueueIR = {
         bindingName: queueBindingName(exportName),
         exportName,
         mode: "push",
         name: queueNameOverride(argument, exportName) ?? queueDefaultName(exportName),
+        ...(topic === undefined ? {} : { topic }),
         tuning: {},
     };
 
     const modeProperty = findObjectProperty(argument, "mode");
 
     if (modeProperty && Node.isPropertyAssignment(modeProperty)) {
+        if (topic !== undefined) {
+            throw diagnosticAt(modeProperty, `subscription "${exportName}": \`mode\` is not allowed — a subscription is always a push consumer`);
+        }
+
         const mode = stringProperty(modeProperty.getInitializerOrThrow(), exportName, "mode");
 
         if (mode !== "push" && mode !== "pull") {
@@ -123,9 +134,47 @@ const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
     return ir;
 };
 
-/** Collect exported `defineQueue` declarations from one source file. */
-const queuesFromSource = (source: SourceFile): QueueIR[] => {
-    const queues: QueueIR[] = [];
+/** Lift one exported `defineQueue({...})` declaration into {@link QueueIR}. */
+const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
+    const argument = call.getArguments()[0];
+
+    if (!argument || !Node.isObjectLiteralExpression(argument)) {
+        throw diagnosticAt(call, `queue "${exportName}": defineQueue must be passed an inline object literal`);
+    }
+
+    return queueFromConfig(argument, exportName, undefined);
+};
+
+/**
+ * Lift one exported `defineSubscription(topic, {...})` into the push {@link QueueIR}
+ * it deploys as. The topic must be an identifier naming a `defineTopic` export of
+ * the same file — that is what lets codegen wire `ctx.topics.<topic>` to this
+ * subscription's binding without evaluating anything.
+ */
+const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlySet<string>): QueueIR => {
+    const [topicArgument, configArgument] = call.getArguments();
+
+    if (!topicArgument || !Node.isIdentifier(topicArgument) || !topics.has(topicArgument.getText())) {
+        throw diagnosticAt(topicArgument ?? call, `subscription "${exportName}": the first argument must name a \`defineTopic()\` export of lunora/queues.ts`);
+    }
+
+    if (!configArgument || !Node.isObjectLiteralExpression(configArgument)) {
+        throw diagnosticAt(call, `subscription "${exportName}": defineSubscription must be passed an inline object literal`);
+    }
+
+    return queueFromConfig(configArgument, exportName, topicArgument.getText());
+};
+
+/** One exported `define*(...)` call in `lunora/queues.ts`. */
+interface FactoryExport {
+    call: CallExpression;
+    exportName: string;
+    factory: QueueFactory;
+}
+
+/** Every exported `@lunora/queue` factory call in one source file, in source order. */
+const factoryExports = (source: SourceFile): FactoryExport[] => {
+    const found: FactoryExport[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
         if (!declaration.isExported()) {
@@ -140,21 +189,43 @@ const queuesFromSource = (source: SourceFile): QueueIR[] => {
 
         const call = initializer as CallExpression;
         const callee = call.getExpression();
+        const factory = Node.isIdentifier(callee) ? queueFactoryOf(callee) : undefined;
 
-        if (!Node.isIdentifier(callee) || !isDefineQueue(callee)) {
+        if (factory === undefined) {
             continue;
         }
 
         const nameNode = declaration.getNameNode();
 
         if (!Node.isIdentifier(nameNode)) {
-            throw diagnosticAt(nameNode, "defineQueue exports must be plain named exports (no destructuring)");
+            throw diagnosticAt(nameNode, `${factory} exports must be plain named exports (no destructuring)`);
         }
 
-        queues.push(queueFromCall(call, nameNode.getText()));
+        found.push({ call, exportName: nameNode.getText(), factory });
     }
 
-    return queues;
+    return found;
+};
+
+/** Collect the queues (subscriptions included) and topics one source file declares. */
+const queuesFromSource = (source: SourceFile): { queues: QueueIR[]; topics: TopicIR[] } => {
+    const exports = factoryExports(source);
+    const topicNames = new Set(exports.filter((entry) => entry.factory === "defineTopic").map((entry) => entry.exportName));
+    const queues: QueueIR[] = [];
+
+    for (const entry of exports) {
+        if (entry.factory === "defineQueue") {
+            queues.push(queueFromCall(entry.call, entry.exportName));
+        } else if (entry.factory === "defineSubscription") {
+            queues.push(subscriptionFromCall(entry.call, entry.exportName, topicNames));
+        }
+    }
+
+    const topics = [...topicNames].map((exportName) => {
+        return { exportName };
+    });
+
+    return { queues, topics };
 };
 
 /**
@@ -197,25 +268,29 @@ const assertUniqueNames = (queues: ReadonlyArray<QueueIR>): void => {
 };
 
 /**
- * Discover every queue the project declares: exported `defineQueue()` calls in
- * `lunora/queues.ts`. Returns `[]` when the file doesn't exist. Only the
- * wrangler-relevant literals (`name`/`mode`/batch tuning) are read; the handler
- * body is runtime-only, so codegen never evaluates it.
+ * Discover what `lunora/queues.ts` declares, in one parse: the queues
+ * (`defineQueue` and `defineSubscription` exports — a subscription deploys as a
+ * push queue carrying `topic`) and the `defineTopic` exports. Both are `[]` when
+ * the file doesn't exist. Only the wrangler-relevant literals (`name`/`mode`/batch
+ * tuning) are read; handler bodies are runtime-only, so codegen never evaluates them.
  */
-const discoverQueues = (project: Project, lunoraDirectory: string): QueueIR[] => {
+const discoverQueueDeclarations = (project: Project, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
     const queuesPath = join(lunoraDirectory, QUEUES_FILENAME);
 
     if (!existsSync(queuesPath)) {
-        return [];
+        return { queues: [], topics: [] };
     }
 
     const source = project.getSourceFile(queuesPath) ?? project.addSourceFileAtPath(queuesPath);
-    const queues = queuesFromSource(source);
+    const { queues, topics } = queuesFromSource(source);
+    const sortedQueues = queues.toSorted((a, b) => a.exportName.localeCompare(b.exportName));
 
-    queues.sort((a, b) => a.exportName.localeCompare(b.exportName));
-    assertUniqueNames(queues);
+    assertUniqueNames(sortedQueues);
 
-    return queues;
+    return { queues: sortedQueues, topics: topics.toSorted((a, b) => a.exportName.localeCompare(b.exportName)) };
 };
 
-export { discoverQueues, QUEUES_FILENAME };
+/** The queues half of {@link discoverQueueDeclarations} — what the config layer reconciles into wrangler. */
+const discoverQueues = (project: Project, lunoraDirectory: string): QueueIR[] => discoverQueueDeclarations(project, lunoraDirectory).queues;
+
+export { discoverQueueDeclarations, discoverQueues, QUEUES_FILENAME };

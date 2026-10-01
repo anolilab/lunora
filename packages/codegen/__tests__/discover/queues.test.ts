@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverQueues } from "../../src/discover/queues";
+import { discoverQueueDeclarations, discoverQueues } from "../../src/discover/queues";
 
 let workdir: string;
 
@@ -98,5 +98,97 @@ describe("discover/queues", () => {
         `);
 
         expect(() => discoverQueues(newProject(), workdir)).toThrow(/Duplicate queue binding "QUEUE_MY_QUEUE"/u);
+    });
+
+    it("discovers topics and lifts each subscription into a push queue carrying its topic", () => {
+        expect.assertions(2);
+
+        writeQueues(`
+            import { defineQueue, defineSubscription, defineTopic } from "@lunora/queue";
+
+            export const signups = defineTopic<{ userId: string }>();
+            export const orders = defineTopic();
+
+            export const welcome = defineSubscription(signups, { handler: async () => {}, maxRetries: 5, deadLetterQueue: "welcome-dlq" });
+            export const audit = defineSubscription(signups, { name: "signup-audit", handler: async () => {} });
+            export const emailQueue = defineQueue({ handler: async () => {} });
+        `);
+
+        expect(discoverQueues(newProject(), workdir)).toEqual([
+            { bindingName: "QUEUE_AUDIT", exportName: "audit", mode: "push", name: "signup-audit", topic: "signups", tuning: {} },
+            { bindingName: "QUEUE_EMAIL_QUEUE", exportName: "emailQueue", mode: "push", name: "email-queue", tuning: {} },
+            {
+                bindingName: "QUEUE_WELCOME",
+                exportName: "welcome",
+                mode: "push",
+                name: "welcome",
+                topic: "signups",
+                tuning: { deadLetterQueue: "welcome-dlq", maxRetries: 5 },
+            },
+        ]);
+        expect(discoverQueueDeclarations(newProject(), workdir).topics).toEqual([{ exportName: "orders" }, { exportName: "signups" }]);
+    });
+
+    it("rejects a subscription whose topic is not a defineTopic export of the file", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineSubscription } from "@lunora/queue";
+            import { signups } from "./elsewhere";
+
+            export const welcome = defineSubscription(signups, { handler: async () => {} });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(/must name a `defineTopic\(\)` export/u);
+    });
+
+    it("rejects `mode` on a subscription", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineSubscription, defineTopic } from "@lunora/queue";
+
+            export const signups = defineTopic();
+            export const welcome = defineSubscription(signups, { mode: "pull", handler: async () => {} });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(/always a push consumer/u);
+    });
+
+    it("returns no queues or topics when lunora/queues.ts does not exist", () => {
+        expect.assertions(1);
+
+        expect(discoverQueueDeclarations(newProject(), workdir)).toEqual({ queues: [], topics: [] });
+    });
+
+    it("rejects two subscriptions that deploy under the same name, across topics", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineSubscription, defineTopic } from "@lunora/queue";
+
+            export const signups = defineTopic();
+            export const orders = defineTopic();
+            export const a = defineSubscription(signups, { name: "audit", handler: async () => {} });
+            export const b = defineSubscription(orders, { name: "audit", handler: async () => {} });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(/Duplicate queue name "audit"/u);
+    });
+
+    it("follows an aliased defineTopic / defineSubscription import", () => {
+        expect.assertions(2);
+
+        writeQueues(`
+            import { defineSubscription as subscribe, defineTopic as topic } from "@lunora/queue";
+
+            export const signups = topic();
+            export const welcome = subscribe(signups, { handler: async () => {} });
+        `);
+
+        const { queues, topics } = discoverQueueDeclarations(newProject(), workdir);
+
+        expect(topics).toEqual([{ exportName: "signups" }]);
+        expect(queues[0]?.topic).toBe("signups");
     });
 });

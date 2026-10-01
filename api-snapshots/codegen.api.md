@@ -667,6 +667,7 @@ interface QueueIR {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    topic?: string;
     tuning: {
         deadLetterQueue?: string;
         maxBatchSize?: number;
@@ -966,6 +967,14 @@ interface TableSnapshot {
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;
+}
+```
+
+### `TopicIR` (interface)
+
+```ts
+interface TopicIR {
+    exportName: string;
 }
 ```
 
@@ -1331,13 +1340,13 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1948,6 +1957,7 @@ interface EmitServerOptions {
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
+    topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
@@ -1989,6 +1999,7 @@ interface EmitShardOptions {
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;
+    topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }

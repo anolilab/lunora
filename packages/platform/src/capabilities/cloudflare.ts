@@ -132,6 +132,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
+        topics: {
+            level: "emulated",
+            note: "Lunora's fan-out over Cloudflare Queues — a queue allows one consumer, so each subscription is its own queue (own retries and dead-letter queue) and a publish sends to every one in parallel. Not atomic: a failed send rejects the publish and a retry re-delivers to the subscriptions that already got it. No ordering key",
+        },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
         httpCache: {
             level: "native",

@@ -25,6 +25,8 @@ interface BuildContextParts {
     paymentsContextField: string;
     queuesBuild: string;
     queuesContextField: string;
+    topicsBuild: string;
+    topicsContextField: string;
     vectorsBuild: string;
     vectorsContextField: string;
     workflowsBuild: string;
@@ -50,6 +52,8 @@ const renderBuildContext = ({
     paymentsContextField,
     queuesBuild,
     queuesContextField,
+    topicsBuild,
+    topicsContextField,
     vectorsBuild,
     vectorsContextField,
     workflowsBuild,
@@ -90,7 +94,7 @@ ${actionOnlyBuild}${actionOnlyFields.map((field) => `                ctx.${field
                 userId: this.getCurrentUserId(),
             };
             const { identity, ip, userId } = caller;
-${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
+${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${topicsBuild}${agentsBuild}
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the \`ctx.run*\` caller guard; a ctx built for an
             // admin/lifecycle path has no registered function, and so no kind. An
@@ -260,7 +264,7 @@ ${notifyBuild}
                 scheduler,
                 span,
                 storage: contextStorage,
-                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
+                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}
             const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {

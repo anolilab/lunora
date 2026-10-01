@@ -84,6 +84,27 @@ describe("discoverPrivilegedDispatches", () => {
         expect(found[0]).toMatchObject({ dispatchKind: "queue", handlerExport: "emailQueue", targetExport: "send", targetFile: "email" });
     });
 
+    it("flags a topic subscription dispatch forwarding a message body field", () => {
+        expect.assertions(2);
+
+        write(
+            "queues.ts",
+            `export const signups = defineTopic();
+export const welcome = defineSubscription(signups, {
+    handler: async (ctx, batch) => {
+        for (const message of batch.messages) {
+            await message.run(api.admin.deleteUser, { id: message.body.id });
+        }
+    },
+});`,
+        );
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "queue", handlerExport: "welcome", targetExport: "deleteUser", targetFile: "admin" });
+    });
+
     it("resolves an internal.<dir>.<file>.<export> target to a nested file path", () => {
         expect.assertions(1);
 

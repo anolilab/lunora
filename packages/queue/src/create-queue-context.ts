@@ -8,7 +8,7 @@
  * Node-safe (structural binding types only) so it's unit-testable with
  * plain-object env doubles.
  */
-import createQueues from "./create-queues";
+import { createQueues, resolveQueueBinding } from "./create-queues";
 import type { QueueBindingLike, QueueBindingSpec, Queues } from "./types";
 
 /**
@@ -23,9 +23,9 @@ export const createQueueContext = (env: Record<string, unknown>, specs: Readonly
     const bindings: Record<string, QueueBindingLike> = {};
 
     for (const spec of specs) {
-        const binding = env[spec.binding] as QueueBindingLike | undefined;
+        const binding = resolveQueueBinding(env, spec.binding);
 
-        if (binding && typeof binding.send === "function" && typeof binding.sendBatch === "function") {
+        if (binding) {
             bindings[spec.exportName] = binding;
         }
     }

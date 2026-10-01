@@ -642,6 +642,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         queues,
         serverContent,
         storageRulesMetadata,
+        topics,
         usesSandbox,
         useUmbrella,
         workflows,
@@ -936,6 +937,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         shapes,
         storageRules: storageRulesMetadata,
         studioFeatures,
+        topics,
         useUmbrella,
         workflows,
     });

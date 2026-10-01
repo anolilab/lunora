@@ -11,6 +11,7 @@ import { LunoraError, toErrorBody } from "@lunora/errors";
 import { defineQueue, queueDefaultName } from "../../src/define-queue";
 import type { QueueRegistry } from "../../src/dispatch";
 import { dispatchQueueBatch } from "../../src/dispatch";
+import { defineSubscription, defineTopic } from "../../src/topics";
 import type { QueueDefinition } from "../../src/types";
 
 interface SmokeBody {
@@ -19,6 +20,8 @@ interface SmokeBody {
 
 interface Env {
     QUEUE_DECLINE_QUEUE: Queue<SmokeBody>;
+    QUEUE_SIGNUP_AUDIT: Queue<SmokeBody>;
+    QUEUE_SIGNUP_WELCOME: Queue<SmokeBody>;
     QUEUE_SMOKE_QUEUE: Queue<SmokeBody>;
 }
 
@@ -96,9 +99,28 @@ const declineFetch = async (_url: RequestInfo | URL, init?: RequestInit): Promis
     return Response.json({ error: body }, { headers: { "x-lunora-dispatch-declined": "1" }, status });
 };
 
+/** A topic with two subscriptions, as `lunora/queues.ts` declares them. */
+const signups = defineTopic<SmokeBody>();
+
+/** Every message a `signups` subscription consumed, tagged with the queue it arrived on. */
+const subscriptionDeliveries: { body: SmokeBody; queue: string }[] = [];
+
+const signupAudit = defineSubscription(signups, {
+    handler: (_context, batch) => {
+        for (const message of batch.messages) {
+            subscriptionDeliveries.push({ body: message.body, queue: batch.queue });
+            message.ack();
+        }
+    },
+});
+
+const signupWelcome = defineSubscription(signups, { handler: signupAudit.handler });
+
 /** Stable wrangler queue name → registry entry, exactly as codegen builds it. */
 const registry: QueueRegistry = {
     [queueDefaultName("declineQueue")]: { binding: "QUEUE_DECLINE_QUEUE", definition: declineQueue, exportName: "declineQueue" },
+    [queueDefaultName("signupAudit")]: { definition: signupAudit, exportName: "signupAudit" },
+    [queueDefaultName("signupWelcome")]: { definition: signupWelcome, exportName: "signupWelcome" },
     [queueDefaultName("smokeQueue")]: { definition: smokeQueue, exportName: "smokeQueue" },
 };
 
@@ -127,5 +149,5 @@ const testWorker = {
 };
 
 export default testWorker;
-export { declineDeliveries, declineOrigin, deliveries, registry, requeuedSends, smokeQueue };
+export { declineDeliveries, declineOrigin, deliveries, registry, requeuedSends, smokeQueue, subscriptionDeliveries };
 export type { DeliveredMessage, Env, SmokeBody };

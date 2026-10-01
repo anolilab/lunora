@@ -1,6 +1,7 @@
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, TopicIR, WorkflowIR } from "../ir";
+import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { emitAiFragments, renderThrowingStub } from "./shard-bindings";
 import { assertIdentifier, GENERATED_HEADER } from "./shared";
@@ -337,11 +338,12 @@ ${specEntries}
 
 /**
  * The `ctx.queues` producer fragments, mirroring {@link emitWorkflowFragments}.
- * Every declared queue (push or pull) gets a producer binding, so all of them
- * land in `LUNORA_QUEUES` and are resolved off `env` by `createQueueContext`.
- * `ctx.queues` rides Mutation + Action contexts (enqueue is a side effect — the
- * type omits it from QueryCtx), but at runtime it is woven onto the shared ctx
- * literal exactly like `ctx.workflows`.
+ * Every queue passed here (push or pull) gets a producer binding, so all of them
+ * land in `LUNORA_QUEUES` and are resolved off `env` by `createQueueContext`. The
+ * caller passes `plainQueues(queues)`: a topic subscription is published to only
+ * through `ctx.topics` ({@link emitTopicFragments}). `ctx.queues` rides Mutation +
+ * Action contexts (enqueue is a side effect — the type omits it from QueryCtx),
+ * but at runtime it is woven onto the shared ctx literal exactly like `ctx.workflows`.
  */
 const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (queues.length === 0) {
@@ -367,6 +369,47 @@ const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; co
         specs: `
 /** Wiring specs for \`ctx.queues\` (codegen-derived from \`lunora/queues.ts\`). */
 const LUNORA_QUEUES: ReadonlyArray<QueueBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
+ * The `ctx.topics` publisher fragments, mirroring {@link emitQueueFragments}: one
+ * `LUNORA_TOPICS` spec per topic, listing the binding of every subscription queue
+ * a publish fans out to. Same contexts as `ctx.queues`.
+ */
+const emitTopicFragments = (
+    topics: ReadonlyArray<TopicIR>,
+    queues: ReadonlyArray<QueueIR>,
+): { build: string; contextField: string; importLines: string[]; specs: string } => {
+    if (topics.length === 0) {
+        return { build: "", contextField: "", importLines: [], specs: "" };
+    }
+
+    const specEntries = topics
+        .map((topic) => {
+            assertIdentifier(topic.exportName, `topic export "${topic.exportName}"`);
+
+            const subscriptions = subscriptionsOf(queues, topic.exportName)
+                .map((queue) => `{ binding: "${queue.bindingName}", exportName: "${queue.exportName}" }`)
+                .join(", ");
+
+            return `    { exportName: "${topic.exportName}", subscriptions: [${subscriptions}] },`;
+        })
+        .join("\n");
+
+    return {
+        build: `
+            const topics = createTopicContext(env, LUNORA_TOPICS);
+`,
+        contextField: `\n                topics,`,
+        importLines: [`import type { TopicBindingSpec } from "@lunora/queue";`, `import { createTopicContext } from "@lunora/queue";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.topics\` (codegen-derived from \`lunora/queues.ts\`): each topic's subscription queues. */
+const LUNORA_TOPICS: ReadonlyArray<TopicBindingSpec> = [
 ${specEntries}
 ];
 `,
@@ -483,6 +526,7 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
                 exportName: queue.exportName,
                 mode: queue.mode,
                 name: queue.name,
+                ...(queue.topic === undefined ? {} : { topic: queue.topic }),
             };
         }),
     };
@@ -642,6 +686,7 @@ export {
     emitQueueFragments,
     emitQueues,
     emitQueuesMetadataFragments,
+    emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,

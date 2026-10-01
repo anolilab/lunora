@@ -101,6 +101,7 @@ export type {
     StorageRuleIR,
     StorageRulesMetadataIR,
     TableIR,
+    TopicIR,
     ValidatorIR,
     VectorIndexIR,
     WorkflowIR,

@@ -1662,6 +1662,7 @@ interface QueueMetadata {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    topic?: string;
 }
 ```
 

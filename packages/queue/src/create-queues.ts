@@ -51,45 +51,90 @@ const assertNoRequeueKey = (body: unknown, where: string): void => {
     }
 };
 
+/**
+ * Validate a single send before it reaches any binding: the delay ceiling and the
+ * reserved requeue key. Shared with topic publishes, which check once and then
+ * send to every subscription.
+ */
+const assertSendable = (body: unknown, options: QueueSendOptions | undefined, where: string): void => {
+    assertDelay(options?.delaySeconds, where);
+    assertNoRequeueKey(body, where);
+};
+
+/**
+ * Validate a batch and return it materialized, so it can both be counted against
+ * the cap and forwarded unchanged (an Iterable can only be consumed once).
+ */
+const prepareBatch = (messages: Iterable<MessageSendRequestLike>, options: QueueSendBatchOptions | undefined, where: string): MessageSendRequestLike[] => {
+    assertDelay(options?.delaySeconds, where);
+
+    const batch = [...messages];
+
+    if (batch.length > MAX_QUEUE_BATCH) {
+        // `VALIDATION_ERROR` rather than a bare `Error` so it carries a code and a
+        // 400: the caller passed too many messages, which is not a server fault.
+        // The mirrored guard in `@lunora/scheduler` throws the same way.
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/queue: ${where} exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`,
+        );
+    }
+
+    for (const [index, message] of batch.entries()) {
+        assertSendable(message.body, message, `${where} message ${String(index)}`);
+    }
+
+    return batch;
+};
+
 /** Wrap a single Cloudflare `Queue` binding in the {@link QueueProducer} surface. */
 const producerFor = (binding: QueueBindingLike): QueueProducer => {
     return {
+        // Both are `async`, so a guard's `throw` surfaces as a rejection (never a
+        // synchronous throw), matching a real producer's async surface.
         send: async (body: unknown, options?: QueueSendOptions): Promise<void> => {
-            assertDelay(options?.delaySeconds, "send");
-            assertNoRequeueKey(body, "send");
+            assertSendable(body, options, "send");
 
             await binding.send(body, options);
         },
         sendBatch: async (messages: Iterable<MessageSendRequestLike>, options?: QueueSendBatchOptions): Promise<void> => {
-            assertDelay(options?.delaySeconds, "sendBatch");
-
-            // Materialize so the array can both be counted against the cap and
-            // forwarded unchanged to the binding (an Iterable can only be
-            // consumed once).
-            const batch = [...messages];
-
-            if (batch.length > MAX_QUEUE_BATCH) {
-                // A `throw` inside this `async` function still surfaces to the
-                // caller as an async rejection (never a synchronous throw) —
-                // matching the `missing` producer's convention below and a real
-                // producer's async surface. `VALIDATION_ERROR` rather than a
-                // bare `Error` so it carries a code and a 400: the caller passed
-                // too many messages, which is not a server fault. The mirrored
-                // guard in `@lunora/scheduler` throws the same way.
-                throw new LunoraError(
-                    "VALIDATION_ERROR",
-                    `@lunora/queue: sendBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`,
-                );
-            }
-
-            for (const [index, message] of batch.entries()) {
-                assertDelay(message.delaySeconds, `sendBatch message ${String(index)}`);
-                assertNoRequeueKey(message.body, `sendBatch message ${String(index)}`);
-            }
-
-            await binding.sendBatch(batch, options);
+            await binding.sendBatch(prepareBatch(messages, options, "sendBatch"), options);
         },
     };
+};
+
+/** `env[name]` when it is a usable `Queue` producer binding, else `undefined`. */
+const resolveQueueBinding = (env: Record<string, unknown>, name: string): QueueBindingLike | undefined => {
+    const binding = env[name] as QueueBindingLike | undefined;
+
+    return binding && typeof binding.send === "function" && typeof binding.sendBatch === "function" ? binding : undefined;
+};
+
+/**
+ * A by-name lookup where an unknown name resolves to `missing(reject)` instead of
+ * `undefined`, so `ctx.queues.typo.send(...)` rejects with a directed error naming
+ * what IS declared. Null-prototype, so a name like `constructor` can't resolve to
+ * an inherited Object member.
+ */
+const namedLookup = <T>(entries: Record<string, T>, noun: string, missing: (reject: () => Promise<never>) => T): Record<string, T> => {
+    const target: Record<string, T> = Object.assign(Object.create(null) as Record<string, T>, entries);
+    const known = Object.keys(target);
+    const suffix = known.length === 0 ? `no ${noun}s are declared` : `known ${noun}s: ${known.join(", ")}`;
+
+    return new Proxy(target, {
+        get(lookup, property): T | undefined {
+            if (typeof property !== "string") {
+                // Symbol access (e.g. `Symbol.toPrimitive`) is not a lookup.
+                return undefined;
+            }
+
+            if (Object.hasOwn(lookup, property)) {
+                return lookup[property];
+            }
+
+            return missing(() => Promise.reject(new Error(`@lunora/queue: no ${noun} named "${property}" (${suffix})`)));
+        },
+    });
 };
 
 /**
@@ -101,34 +146,15 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
 const createQueues = (options: LunoraQueuesOptions): Queues => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     const bindings = options.bindings ?? {};
-    // Null-prototype map so a queue named `constructor` / `toString` / `hasOwnProperty`
-    // can't resolve to an inherited Object member instead of the directed error.
-    const producers: Record<string, QueueProducer> = Object.create(null) as Record<string, QueueProducer>;
+    const producers: Record<string, QueueProducer> = {};
 
     for (const [exportName, binding] of Object.entries(bindings)) {
         producers[exportName] = producerFor(binding);
     }
 
-    const known = Object.keys(producers);
-    const missing = (name: string): QueueProducer => {
-        const suffix = known.length === 0 ? "no queues are declared" : `known queues: ${known.join(", ")}`;
-        // Reject (don't throw synchronously) so `ctx.queues.<name>.send(...)` is a
-        // normal awaitable that rejects, matching a real producer's async surface.
-        const error = (): Promise<never> => Promise.reject(new Error(`@lunora/queue: no queue named "${name}" (${suffix})`));
-
-        return { send: error, sendBatch: error };
-    };
-
-    return new Proxy(producers, {
-        get(target, property): QueueProducer | undefined {
-            if (typeof property !== "string") {
-                // Symbol access (e.g. `Symbol.toPrimitive`) is not a queue lookup.
-                return undefined;
-            }
-
-            return Object.hasOwn(target, property) ? target[property] : missing(property);
-        },
+    return namedLookup(producers, "queue", (reject) => {
+        return { send: reject, sendBatch: reject };
     });
 };
 
-export default createQueues;
+export { assertSendable, createQueues, namedLookup, prepareBatch, resolveQueueBinding };

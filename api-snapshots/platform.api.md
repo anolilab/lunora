@@ -315,6 +315,7 @@ interface PlatformCapabilities {
         shardedState?: Capability;
         shardPlacement?: Capability;
         shardReadReplicas?: Capability;
+        topics?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
         workerLoaders?: Capability;

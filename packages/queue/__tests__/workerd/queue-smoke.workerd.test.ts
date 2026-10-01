@@ -13,11 +13,12 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
-import createQueues from "../../src/create-queues";
+import { createQueues } from "../../src/create-queues";
 import { sealRequeue } from "../../src/requeue-envelope";
+import { createTopicContext } from "../../src/topics";
 import type { QueueBindingLike } from "../../src/types";
 import type { SmokeBody } from "./test-worker";
-import testWorker, { declineDeliveries, deliveries, requeuedSends } from "./test-worker";
+import testWorker, { declineDeliveries, deliveries, requeuedSends, subscriptionDeliveries } from "./test-worker";
 
 describe("@lunora/queue (workerd)", () => {
     it("ctx.queues producer sends through a real Queue binding", async () => {
@@ -56,6 +57,35 @@ describe("@lunora/queue (workerd)", () => {
         const consumed = deliveries.slice(before);
 
         expect(consumed).toEqual([{ attempts: 1, body: { text: "hello" }, id: "smoke-msg-1", queue: "smoke-queue" }]);
+    });
+
+    it("one topic publish is delivered to every subscription's consumer", async () => {
+        expect.hasAssertions();
+
+        const before = subscriptionDeliveries.length;
+        const topics = createTopicContext(env as unknown as Record<string, unknown>, [
+            {
+                exportName: "signups",
+                subscriptions: [
+                    { binding: "QUEUE_SIGNUP_AUDIT", exportName: "signupAudit" },
+                    { binding: "QUEUE_SIGNUP_WELCOME", exportName: "signupWelcome" },
+                ],
+            },
+        ]);
+
+        await topics.signups!.publish({ text: "fan-out" });
+
+        await vi.waitFor(
+            () => {
+                expect(
+                    subscriptionDeliveries
+                        .slice(before)
+                        .map((delivery) => delivery.queue)
+                        .toSorted((a, b) => a.localeCompare(b)),
+                ).toEqual(["signup-audit", "signup-welcome"]);
+            },
+            { interval: 50, timeout: 5000 },
+        );
     });
 
     it("a produced message is delivered end-to-end to the push consumer", async () => {

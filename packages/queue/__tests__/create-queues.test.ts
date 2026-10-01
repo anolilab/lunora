@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createQueueContext } from "../src/create-queue-context";
-import createQueues from "../src/create-queues";
+import { createQueues } from "../src/create-queues";
 import type { QueueBindingLike } from "../src/types";
 
 const fakeBinding = (): QueueBindingLike & { batches: unknown[]; sends: unknown[] } => {

@@ -696,6 +696,20 @@ describe("discoverProcedureMiddleware", () => {
         expect(found[0]).not.toMatchObject({ fanOut: false });
     });
 
+    it("records a public topic publish as a fan-out", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "enqueue.ts"),
+            FANOUT.replace('ctx.scheduler.runAfter(1000, "internal.sendReminder", {})', "ctx.topics.signups.publish({})"),
+            "utf8",
+        );
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "enqueue", fanOut: true, usesRateLimit: false, visibility: "public" });
+    });
+
     it("records a public `insertManyUnsafe` bulk write", () => {
         expect.assertions(1);
 

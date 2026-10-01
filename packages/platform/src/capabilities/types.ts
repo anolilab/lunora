@@ -34,7 +34,7 @@
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
- * `scheduler`, `secrets`, `vectorStore`, `workerLoaders`, `workflowRollback`,
+ * `scheduler`, `secrets`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
  * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
@@ -83,7 +83,7 @@
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `vectorStore`, `workflowRollback`,
+ * `relationGraph`, `secrets`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
@@ -497,6 +497,15 @@ export interface PlatformCapabilities {
         shardPlacement?: Capability;
         /** Region-local read replicas of a shard, for one-shot queries. */
         shardReadReplicas?: Capability;
+
+        /**
+         * Pub/Sub topics — `defineTopic` / `defineSubscription` → `ctx.topics`.
+         * Each subscription deploys as its own queue and a publish sends to all
+         * of them, so this is never better than `queues` on the same host.
+         * Gate-bearing: codegen sets the `topics` `PlatformSignals` flag on a
+         * `defineTopic` export.
+         */
+        topics?: Capability;
         /** Vector database (Vectorize / pgvector / Pinecone). */
         vectorStore?: Capability;
         /** Hibernated WebSocket subscriptions. */

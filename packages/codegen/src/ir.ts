@@ -753,6 +753,13 @@ export interface QueueIR {
      * `name:` literal in the definition overrides it.
      */
     name: string;
+
+    /**
+     * Set for a `defineSubscription(topic, …)` export: the `defineTopic` export it
+     * consumes. A subscription is an ordinary push queue everywhere except
+     * `ctx.*` — it is published to through `ctx.topics.<topic>`, never `ctx.queues`.
+     */
+    topic?: string;
     /** Push-consumer batch/retry tuning, mirrored onto the wrangler `queues.consumers[]` entry. */
     tuning: {
         deadLetterQueue?: string;
@@ -762,6 +769,22 @@ export interface QueueIR {
         retryDelay?: number;
     };
 }
+
+/**
+ * A `defineTopic()` export in `lunora/queues.ts`. A topic deploys nothing of its
+ * own: each subscription is a {@link QueueIR} whose `topic` names this export, and
+ * that is the only record of the link (see {@link subscriptionsOf}).
+ */
+export interface TopicIR {
+    /** The `lunora/queues.ts` export name, e.g. `signups`. */
+    exportName: string;
+}
+
+/** The queues published to through `ctx.queues` — every queue except a topic subscription. */
+export const plainQueues = (queues: ReadonlyArray<QueueIR>): QueueIR[] => queues.filter((queue) => queue.topic === undefined);
+
+/** The subscription queues consuming one topic. */
+export const subscriptionsOf = (queues: ReadonlyArray<QueueIR>, topic: string): QueueIR[] => queues.filter((queue) => queue.topic === topic);
 
 /**
  * The feature-flag provider declared by the default export of `lunora/flags.ts`

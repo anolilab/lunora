@@ -686,6 +686,8 @@ export interface QueueMetadata {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    /** Set for a `defineSubscription` queue: the topic export it consumes. */
+    topic?: string;
 }
 
 /** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
