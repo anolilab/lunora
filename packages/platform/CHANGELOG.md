@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.46...@lunora/platform@1.0.0-alpha.47) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
 ## @lunora/platform [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.45...@lunora/platform@1.0.0-alpha.46) (2026-09-30)
 
 ### Features
