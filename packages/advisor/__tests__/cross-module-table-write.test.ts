@@ -74,4 +74,18 @@ describe("cross_module_table_write", () => {
         expect(findings[0]?.detail).toContain("the installed component `voting`");
         expect(findings[0]?.metadata).toMatchObject({ installed: true, owner: "voting" });
     });
+
+    it("counts by-id and facade writes, and reports a function once per table", () => {
+        expect.assertions(2);
+
+        const tableWrites = [
+            { exportName: "create", file: "accounts/signup", line: 4, method: "patch", table: "invoices" },
+            { exportName: "create", file: "accounts/signup", line: 5, method: "delete", table: "invoices" },
+            { exportName: "close", file: "accounts/close", line: 2, method: "upsert", table: "invoices" },
+        ];
+        const findings = crossModuleTableWrite.run(context({ modules: MODULES, tableWrites }));
+
+        expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["create", "close"]);
+        expect(findings[0]?.detail).toContain("writes to `invoices`");
+    });
 });

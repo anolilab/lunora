@@ -780,6 +780,14 @@ interface AdvisorTableScan {
 }
 ```
 
+### `AdvisorTableWrite` (interface)
+
+```ts
+interface AdvisorTableWrite extends AdvisorInsertWrite {
+    method: string;
+}
+```
+
 ### `AdvisorVectorNamespaceAccess` (interface)
 
 ```ts
@@ -1006,6 +1014,7 @@ interface LintContext {
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;

@@ -950,6 +950,25 @@ export interface AuthApiCallIR {
 }
 
 /**
+ * A table write other than a plain `ctx.db.insert(...)` (see {@link InsertWriteIR}):
+ * a by-id `patch`/`replace`/`delete`/`hardDelete`/`restore`, a batch write, or a
+ * `ctx.db.<table>.*` facade write. Feeds the architecture manifest's `write`
+ * edges and the `cross_module_table_write` lint.
+ */
+export interface TableWriteIR {
+    /** Export binding name of the function performing the write. */
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call. */
+    line: number;
+    /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
+    method: string;
+    /** Target table; `""` when it can't be read (an untyped id, a non-literal name). */
+    table: string;
+}
+
+/**
  * A `ctx.db.insert("table", …)` write discovered in a function body, attributed
  * to the exported function (and its file = api namespace) that performs it — the
  * write-side analog of {@link QueryReadIR}. Lets tooling wire a table's write

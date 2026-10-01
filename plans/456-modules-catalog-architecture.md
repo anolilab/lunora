@@ -25,9 +25,17 @@
 - **Call edges are syntactic, with no type checker** (§8 STOP avoided). An edge
   whose target is held in a variable, and a call inside a non-exported helper,
   land in `unresolved`.
-    - `write` edges come from `ctx.db.insert` only. `patch`/`replace`/`delete`
-      address a row by id, whose table needs the checker.
-    - The lint inherits the same gap.
+    - The one exception is `write` edges from by-id writes
+      (`patch`/`replace`/`delete`/`hardDelete`/`restore`, `deleteMany`,
+      `patchMany`): `discover/table-writes.ts` reads the table off the id's
+      `Id<"table">` brand with the type checker. Batch-by-name and
+      `ctx.db.<table>.*` facade writes are read syntactically.
+    - Measured inside `runCodegen` (checker already warm from return-type
+      inference) the walk costs 1–4 ms on team-chat, chess and blog, against
+      ~800–900 ms of codegen — run-to-run noise is larger than the walk. A
+      standalone walk on a cold checker is 130–200 ms, almost all of it checker
+      start-up that codegen pays anyway.
+    - An untyped id lands in `unresolved`; none of the examples have one.
 - **HTTP routes are nodes, not `trigger` sources** (changes §4.3): a route is its
   own handler, so its calls start from the route node.
 - **Studio (D/E):**

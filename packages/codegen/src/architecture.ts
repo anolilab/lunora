@@ -20,6 +20,7 @@ import type {
     QueryReadIR,
     QueueIR,
     SchemaIR,
+    TableWriteIR,
     TopicIR,
     WorkflowCallIR,
     WorkflowIR,
@@ -31,6 +32,8 @@ import sanitizeNamespace from "./paths";
 interface CallSites {
     inserts: ReadonlyArray<InsertWriteIR>;
     queries: ReadonlyArray<QueryReadIR>;
+    /** Writes other than a plain `ctx.db.insert` — by id, batch, and the `ctx.db.<table>` facade. */
+    tableWrites: ReadonlyArray<TableWriteIR>;
     workflowCalls: ReadonlyArray<WorkflowCallIR>;
 }
 
@@ -88,8 +91,8 @@ const callSiteEdges = (input: ArchitectureInput): PendingEdge[] => [
     ...input.queries.map((read): PendingEdge => {
         return { exportName: read.exportName, file: read.file, kind: "read", line: read.line, ...literalTarget("table", read.table, "table name") };
     }),
-    ...input.inserts.map((insert): PendingEdge => {
-        return { exportName: insert.exportName, file: insert.file, kind: "write", line: insert.line, ...literalTarget("table", insert.table, "table name") };
+    ...[...input.inserts, ...input.tableWrites].map((write): PendingEdge => {
+        return { exportName: write.exportName, file: write.file, kind: "write", line: write.line, ...literalTarget("table", write.table, "written table") };
     }),
     ...input.workflowCalls.map((call): PendingEdge => {
         return { exportName: call.exportName, file: call.file, kind: "start", line: call.line, ...literalTarget("workflow", call.workflow, "workflow name") };

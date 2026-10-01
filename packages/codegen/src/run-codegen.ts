@@ -80,6 +80,7 @@ import discoverStaleMigrationImports from "./discover/stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverTableWrites from "./discover/table-writes";
 import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
@@ -723,6 +724,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             : {
                   inserts: discoverInserts(project, lunoraDirectory),
                   queries: discoverQueries(project, lunoraDirectory),
+                  tableWrites: discoverTableWrites(project, lunoraDirectory),
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
 
@@ -795,6 +797,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
                   storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),
                   storageUploads: discoverStorageUploads(project, lunoraDirectory),
+                  tableWrites: callSites.tableWrites,
                   vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
                   workflowCalls: callSites.workflowCalls,
                   workflows,

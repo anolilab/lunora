@@ -148,7 +148,7 @@ export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
-export type { AdvisorInsertWrite } from "./inserts";
+export type { AdvisorInsertWrite, AdvisorTableWrite } from "./inserts";
 export type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 export { default as fanOutBreadth } from "./lints/runtime/fan-out-breadth";
 export { default as hotShard } from "./lints/runtime/hot-shard";

@@ -3,7 +3,7 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags a function that inserts into a table another module declares it owns
+ * Flags a function that writes to a table another module declares it owns
  * (`defineModule({ tables })`). Ownership is a boundary the app opted into: a
  * table written from outside its module couples the two, so a change to its
  * shape or invariants now has callers its owner does not know about. A file
@@ -14,15 +14,16 @@ import type { Lint } from "../../types";
  * into a component's table — bypassing the functions the component exposes — is
  * flagged the same way.
  *
- * Runs only when the codegen feeder supplies modules and insert evidence; an
- * app with no declared module and no installed component sees nothing. Only `ctx.db.insert("table", …)`
- * is attributed today — a `patch`/`replace`/`delete` addresses a row by id, whose
- * table is not readable without the type checker.
+ * Runs only when the codegen feeder supplies modules and write evidence; an
+ * app with no declared module and no installed component sees nothing. Inserts,
+ * by-id writes (`patch`/`replace`/`delete`, the table read off the id's type),
+ * batch writes and facade writes all count; a write whose table is unreadable
+ * (an untyped id) is skipped.
  */
 const crossModuleTableWrite: Lint = {
     categories: ["SCHEMA"],
     description:
-        "A function inserts into a table that a different module declares it owns (`defineModule({ tables })`), or into an installed component's table from outside the component. The write couples the two modules: the owner can no longer change the table's shape or invariants without breaking a caller it does not know about.",
+        "A function writes to a table that a different module declares it owns (`defineModule({ tables })`), or to an installed component's table from outside the component. The write couples the two modules: the owner can no longer change the table's shape or invariants without breaking a caller it does not know about.",
     facing: "INTERNAL",
     level: "WARN",
     name: "cross_module_table_write",
@@ -32,29 +33,38 @@ const crossModuleTableWrite: Lint = {
         const modules = context.modules ?? [];
         const owners = new Map(modules.flatMap((entry) => entry.tables.map((table) => [table, entry] as const)));
 
-        if (owners.size === 0 || context.inserts === undefined) {
+        const writes = [...(context.inserts ?? []), ...(context.tableWrites ?? [])];
+
+        if (owners.size === 0 || writes.length === 0) {
             return [];
         }
 
-        return context.inserts.flatMap((insert) => {
-            const owner = owners.get(insert.table);
-            const writer = moduleOf(modules, insert.file);
+        // One finding per function and table, however many writes it makes.
+        const seen = new Set<string>();
 
-            if (owner === undefined || owner.name === writer) {
+        return writes.flatMap((write) => {
+            const owner = owners.get(write.table);
+            const writer = moduleOf(modules, write.file);
+
+            const cacheKey = `cross_module_table_write:${write.file}:${write.exportName}:${write.table}`;
+
+            if (owner === undefined || owner.name === writer || seen.has(cacheKey)) {
                 return [];
             }
+
+            seen.add(cacheKey);
 
             const ownedBy = owner.installed === true ? `the installed component \`${owner.name}\`` : `module \`${owner.name}\``;
 
             return [
                 emit(crossModuleTableWrite, {
-                    cacheKey: `cross_module_table_write:${insert.file}:${insert.exportName}:${insert.table}`,
-                    detail: `\`${insert.exportName}\` (${insert.file}) inserts into \`${insert.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
+                    cacheKey,
+                    detail: `\`${write.exportName}\` (${write.file}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
                     metadata: {
-                        exportName: insert.exportName,
-                        file: insert.file,
+                        exportName: write.exportName,
+                        file: write.file,
                         owner: owner.name,
-                        table: insert.table,
+                        table: write.table,
                         ...(owner.installed === true ? { installed: true } : {}),
                         ...(writer === undefined ? {} : { writer }),
                     },

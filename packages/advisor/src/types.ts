@@ -21,7 +21,7 @@ import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
-import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorInsertWrite, AdvisorTableWrite } from "./inserts";
 import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
@@ -688,6 +688,13 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * Table writes other than a plain `ctx.db.insert` (see {@link LintContext.inserts}) — by
+     * id, batch, and the `ctx.db.<table>` facade. Supplied by the codegen feeder;
+     * absent for runtime callers.
+     */
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
 
     /**
      * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /

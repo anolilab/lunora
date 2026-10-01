@@ -62,6 +62,7 @@ import type {
     StorageKeyAccessIR,
     StorageUploadIR,
     TableIR,
+    TableWriteIR,
     UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
@@ -243,6 +244,7 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;

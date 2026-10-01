@@ -451,6 +451,7 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
@@ -2503,6 +2504,18 @@ interface StorageUploadIR {
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+}
+```
+
+### `TableWriteIR` (interface)
+
+```ts
+interface TableWriteIR {
+    exportName: string;
+    file: string;
+    line: number;
+    method: string;
+    table: string;
 }
 ```
 

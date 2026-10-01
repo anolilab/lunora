@@ -38,17 +38,17 @@ Once the app declares a module, codegen writes `_generated/architecture.json`
 manifest lists every function, HTTP route, table, queue, topic, workflow and cron,
 the module each belongs to, and the edges between them:
 
-| Edge        | From → to                | Read from                                                                    |
-| ----------- | ------------------------ | ---------------------------------------------------------------------------- |
-| `call`      | function → function      | `ctx.runQuery/runMutation/runAction(api.x.y, …)`, a queue's `message.run(…)` |
-| `schedule`  | function → function      | `ctx.scheduler.runAfter/runAt(…, api.x.y)`                                   |
-| `read`      | function → table         | `ctx.db.query("table")`                                                      |
-| `write`     | function → table         | `ctx.db.insert("table", …)`                                                  |
-| `enqueue`   | function → queue         | `ctx.queues.<name>.send/sendBatch`                                           |
-| `publish`   | function → topic         | `ctx.topics.<name>.publish/publishBatch`                                     |
-| `subscribe` | topic → subscription     | `defineSubscription(topic, …)`                                               |
-| `start`     | function → workflow      | `ctx.workflows.get("name")`                                                  |
-| `trigger`   | cron → function/workflow | `cronJobs()`                                                                 |
+| Edge        | From → to                | Read from                                                                                                                                                      |
+| ----------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `call`      | function → function      | `ctx.runQuery/runMutation/runAction(api.x.y, …)`, a queue's `message.run(…)`                                                                                   |
+| `schedule`  | function → function      | `ctx.scheduler.runAfter/runAt(…, api.x.y)`                                                                                                                     |
+| `read`      | function → table         | `ctx.db.query("table")`                                                                                                                                        |
+| `write`     | function → table         | `ctx.db.insert("table", …)`, `ctx.db.patch/replace/delete(id, …)` (table read off the id's `Id<"table">` type), batch writes, `ctx.db.<table>.*` facade writes |
+| `enqueue`   | function → queue         | `ctx.queues.<name>.send/sendBatch`                                                                                                                             |
+| `publish`   | function → topic         | `ctx.topics.<name>.publish/publishBatch`                                                                                                                       |
+| `subscribe` | topic → subscription     | `defineSubscription(topic, …)`                                                                                                                                 |
+| `start`     | function → workflow      | `ctx.workflows.get("name")`                                                                                                                                    |
+| `trigger`   | cron → function/workflow | `cronJobs()`                                                                                                                                                   |
 
 The Studio's **Functions → Architecture** page renders it: a catalog of modules
 with their descriptions, owned tables and function counts, and a diagram with one
@@ -60,8 +60,8 @@ the manifest at the admin-gated `GET /_lunora/admin/architecture`.
 The graph is static, read from source by codegen, so it is complete before the
 first deploy and diffable in review. It does not guess: an edge whose target is
 held in a variable, or a call inside a non-exported helper, is listed under
-"call sites could not be drawn" instead. `ctx.db.patch/replace/delete` address a
-row by id, so their table is not drawn yet.
+"call sites could not be drawn" instead, as is a write through an untyped id
+(a plain `string` rather than `Id<"table">`).
 
 ## Table ownership
 
