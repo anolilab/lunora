@@ -87,9 +87,9 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 /**
  * Canonical key set of `QueueMetadata`, duplicated by `@lunora/studio`'s hand
  * mirror the same way as `StudioFeaturesResult`. Forces both packages' copies of
- * the `listQueues` wire shape to move together. `deadLetterQueue` is optional.
+ * the `listQueues` wire shape to move together. `deadLetterQueue` and `topic` are optional.
  */
-const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
+const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
 
@@ -749,7 +749,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
-        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"]);
     });
 
     it("keeps the getTraces wire shapes in lockstep with the studio's hand-mirror", () => {
