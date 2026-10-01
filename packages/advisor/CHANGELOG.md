@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.175...@lunora/advisor@1.0.0-alpha.176) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/advisor [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.174...@lunora/advisor@1.0.0-alpha.175) (2026-10-01)
 
 
