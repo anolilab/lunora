@@ -11,3 +11,12 @@
 
 /** True when a key may authorize a deploy/admin action (i.e. it is NOT an ingest-only key). */
 export const isDeployCapable = (row: { capability?: "deploy" | "ingest" }): boolean => row.capability !== "ingest";
+
+/**
+ * True when a key may authorize anything at all at `now`: not revoked, and not
+ * past its `expiresAt` deadline (set only on platform-minted release keys). Every
+ * path that resolves a key by hash calls this, so revocation and expiry can never
+ * be honoured on one path and missed on another.
+ */
+export const isKeyLive = (row: { expiresAt?: number; revokedAt?: number }, now: number): boolean =>
+    row.revokedAt == null && (row.expiresAt == null || row.expiresAt > now);

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { isDeployCapable } from "../src/deploy/capability";
+import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -253,7 +253,7 @@ export const verify = mutation
             // would still be able to deploy. `authorizeDeployKey` blocks it on the
             // per-mutation paths; this blocks it at the deploy entrypoint (same
             // predicate, so they can't disagree).
-            if (!row || row.revokedAt != null || !isDeployCapable(row)) {
+            if (!row || !isKeyLive(row, context.now) || !isDeployCapable(row)) {
                 return null;
             }
 
@@ -355,6 +355,13 @@ export const recordIngestKey = internalMutation
         return encryptedSecret;
     });
 
+/**
+ * How long a release key lives if nothing removes it: the 30-minute build lease
+ * plus slack. A release normally deletes its key when it ends; this deadline is
+ * what bounds a release whose Worker dies first.
+ */
+const RELEASE_KEY_TTL_MS = 35 * 60 * 1000;
+
 /** The name a release key carries, so the org's key list says what it is while it exists. */
 const releaseKeyName = (buildId: string): string => `Git build release (${buildId})`;
 
@@ -392,6 +399,7 @@ export const recordReleaseKey = internalMutation
 
         return context.db.insert("deployKeys", {
             createdAt: context.now,
+            expiresAt: context.now + RELEASE_KEY_TTL_MS,
             hashedKey,
             name: releaseKeyName(buildId),
             organizationId,

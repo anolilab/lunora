@@ -142,6 +142,7 @@ export const deployKeys = sqliteTable("deployKeys", {
     capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
     createdAt: real("createdAt").notNull(),
     encryptedSecret: text("encryptedSecret", { mode: "json" }).$type<{ ciphertext: string; iv: string }>(),
+    expiresAt: real("expiresAt"),
     hashedKey: text("hashedKey").notNull(),
     lastUsedAt: real("lastUsedAt"),
     name: text("name").notNull(),

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { isDeployCapable } from "../src/deploy/capability";
+import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
 import type { Id, TableName } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
@@ -64,7 +64,7 @@ const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organiza
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
     const row = page[0];
 
-    if (!row || row.revokedAt != null || row.organizationId !== organizationId) {
+    if (!row || !isKeyLive(row, context.now) || row.organizationId !== organizationId) {
         throw new LunoraError("FORBIDDEN", "invalid key for this organization");
     }
 
@@ -134,7 +134,7 @@ export const resolveDeployKeyOrg = async (context: QueryContext, key: string): P
     const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
     const row = page[0];
 
-    return row && row.revokedAt == null ? row.organizationId : null;
+    return row && isKeyLive(row, context.now) ? row.organizationId : null;
 };
 
 /**

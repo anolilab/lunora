@@ -64,6 +64,16 @@ describe("deploy_keys release keys", () => {
         });
     });
 
+    it("gives the key a hard deadline past the build lease, so a dead release leaves nothing live", async () => {
+        const { ctx, ops } = makeCtx(world());
+
+        await recordReleaseKey.handler(ctx, args);
+
+        const insert = ops.find((op) => op.kind === "insert" && op.table === "deployKeys");
+
+        expect(insert).toMatchObject({ document: { createdAt: ctx.now, expiresAt: ctx.now + 35 * 60 * 1000 } });
+    });
+
     it("refuses a key aimed at any other project", async () => {
         const { ctx, ops } = makeCtx(world());
 

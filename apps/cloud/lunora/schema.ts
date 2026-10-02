@@ -313,6 +313,10 @@ export default defineSchema({
         // `otlpSink` on every deploy without re-minting. User deploy keys never
         // store this — their plaintext is shown once and is unrecoverable.
         encryptedSecret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })),
+        // A hard deadline, after which the key authorizes nothing — set only on
+        // platform-minted git-build release keys, so a release whose Worker dies
+        // before `removeReleaseKey` runs cannot leave a live key behind.
+        expiresAt: v.optional(v.number()),
         // Only the hash is stored; the plaintext key is shown once at creation.
         hashedKey: v.string(),
         lastUsedAt: v.optional(v.number()),
