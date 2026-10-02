@@ -394,12 +394,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
         // handshake, which carries no body: `readScreenedBody` refuses a POST it
         // could not parse, so this module never has to guess whether an
         // unreadable body targeted a priced tool.
-        const dispatch = (): Promise<Response> =>
-            serveStateless(
-                buildServer(),
-                request,
-                parsedBody === undefined ? { maxRequestBytes: config.maxRequestBytes } : { maxRequestBytes: config.maxRequestBytes, parsedBody },
-            );
+        const dispatch = (): Promise<Response> => serveStateless(buildServer(), request, { maxRequestBytes: config.maxRequestBytes, parsedBody });
 
         if (Array.isArray(parsedBody)) {
             return parsedBody.some((message) => prices.has(callToolName(message) ?? "")) ? refuseBatch() : dispatch();

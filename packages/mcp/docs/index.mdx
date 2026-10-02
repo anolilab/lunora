@@ -404,7 +404,9 @@ serves them for you: it derives exactly those two paths from the auth options
 (the `resource` of `mcp()`, the issuer's base path) and answers them only when
 an `mcp()` or `oauthProvider()` plugin is configured. Use `mcp` from
 `@lunora/auth/plugins` rather than `@better-auth/mcp`: Lunora's records its
-`resource`, which is how the worker knows the first path.
+`resource`, which is how the worker knows the first path. Without that record,
+the worker falls back to the provider's only resource, and `createAuth` throws
+`AUTH_MCP_RESOURCE_AMBIGUOUS` when there are several to choose from.
 
 The documents are the worker's **last** matcher, reached only by a `GET`/`HEAD`
 that the explicit routes and your `httpRouter` left unanswered (a 404). An app
@@ -449,14 +451,16 @@ retry.
 
 ### Step-up for writes
 
-Hiding the write tools suits a client that can never get the write scope (a
-`client_credentials` agent). An interactive client can instead re-authorize for
-more scope when it needs it, if the server tells it which. Set `writeScope` and
-`challenge` together, and a read-only token still sees the write tools; a
-`tools/call` to one is answered with HTTP 403 and an RFC 6750 challenge,
-`WWW-Authenticate: Bearer error="insufficient_scope", scope="lunora:write",
-resource_metadata="…"`, which the client's auth layer turns into a new
-authorization for that scope:
+Hiding the side-effecting tools suits a client that can never get the write
+scope (a `client_credentials` agent). An interactive client can instead
+re-authorize for more scope when it needs it, if the server tells it which.
+Set `stepUp`, and a read-only token still sees the write tools
+(`lunora_run_mutation`, `lunora_run_action`) and the agent tools (`agent_<name>`
+or its `toolName`, and `lunora_agent_status`: starting a durable run is a side
+effect too). A `tools/call` to one is answered with HTTP 403 and an RFC 6750
+challenge, `WWW-Authenticate: Bearer error="insufficient_scope",
+scope="lunora:write", resource_metadata="…"`, which the client's auth layer
+turns into a new authorization for that scope:
 
 ```ts
 import { createInsufficientScopeError, requireMcpAuth } from "@lunora/auth/plugins";
@@ -465,22 +469,24 @@ import { createAuthedMcpFetchHandler } from "@lunora/mcp";
 import { auth, mcpResource } from "./auth";
 
 export const handleMcp = createAuthedMcpFetchHandler({
-    // better-auth only turns an error this factory created into the challenge.
-    challenge: createInsufficientScopeError,
     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: mcpResource }),
     // The scope gate decides writes now, so the server always offers them.
     server: { allowWrites: true, token: env.LUNORA_ADMIN_TOKEN, url: env.LUNORA_URL },
-    writeScope: "lunora:write",
+    stepUp: {
+        // better-auth only turns an error this factory created into the challenge.
+        challenge: createInsufficientScopeError,
+        scope: "lunora:write",
+    },
 });
 ```
 
-The two options are one switch: `writeScope` without `challenge` is a type
-error, and throws at construction for a caller the type cannot see, because a
-scope with no way to raise its challenge would let every write through. The
-handler reads the JSON-RPC message through the same bounded parse the
-transport uses before it decides, so a body too large or not JSON is refused,
-and a batch carrying a write call is challenged like a single one. Without
-`writeScope`, nothing changes: tools follow `allowWrites` alone.
+`stepUp` needs both fields; an empty `scope` or a missing `challenge` throws at
+construction, because a scope with no way to raise its challenge would let
+every write through. The handler reads the JSON-RPC message through the same
+bounded parse the transport uses before it decides, so a body too large or not
+JSON is refused, and a batch carrying a side-effecting call is challenged like a
+single one. Without `stepUp`, nothing changes: tools follow `allowWrites` and
+`allowAgents` alone.
 
 <Callout type="info">
     `protect` is a lambda rather than an `auth` instance because `@lunora/mcp` does not depend on better-auth — and the same seam takes either better-auth entry

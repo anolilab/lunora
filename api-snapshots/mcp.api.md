@@ -21,28 +21,24 @@ const AGENT_RUN_INPUT_SCHEMA: ToolInputSchema;
 const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 ```
 
-### `AuthedMcpFetchHandlerOptions` (type)
+### `AuthedMcpFetchHandlerOptions` (interface)
 
 ```ts
-type AuthedMcpFetchHandlerOptions = AuthedMcpFetchHandlerBaseOptions & AuthedMcpStepUpOptions;
+interface AuthedMcpFetchHandlerOptions {
+    maxRequestBytes?: number;
+    protect: McpAuthProtect;
+    server: AuthedMcpServerOptions;
+    stepUp?: {
+        challenge: (scopes: string[]) => unknown;
+        scope: string;
+    };
+}
 ```
 
 ### `AuthedMcpServerOptions` (type)
 
 ```ts
 type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
-```
-
-### `AuthedMcpStepUpOptions` (type)
-
-```ts
-type AuthedMcpStepUpOptions = {
-    challenge: (scopes: string[]) => unknown;
-    writeScope: string;
-} | {
-    challenge?: never;
-    writeScope?: never;
-};
 ```
 
 ### `CallAgentToolOptions` (interface)
@@ -620,16 +616,6 @@ const toDocsUri: (url: string) => string;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
-
-### `AuthedMcpFetchHandlerBaseOptions` (interface)
-
-```ts
-interface AuthedMcpFetchHandlerBaseOptions {
-    maxRequestBytes?: number;
-    protect: McpAuthProtect;
-    server: AuthedMcpServerOptions;
-}
-```
 
 ### `ToolAnnotations` (interface)
 
