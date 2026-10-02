@@ -185,6 +185,7 @@ export interface InternalApiTypes {
     boxes: {
         enrol: FunctionReference<"mutation", { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }, { boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
         identity: FunctionReference<"query", { boxId: Id<"boxes"> }, { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
+        ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
         recordDns: FunctionReference<"mutation", { boxId: Id<"boxes">; dnsError: null | unknown }, void>;
     };
     builds: {

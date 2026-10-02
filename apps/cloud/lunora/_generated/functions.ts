@@ -108,6 +108,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "boxes:get": lunora_boxes_3.get as unknown as RegisteredLunoraFunction,
     "boxes:identity": lunora_boxes_3.identity as unknown as RegisteredLunoraFunction,
     "boxes:list": lunora_boxes_3.list as unknown as RegisteredLunoraFunction,
+    "boxes:ownsDeployment": lunora_boxes_3.ownsDeployment as unknown as RegisteredLunoraFunction,
     "boxes:recordDns": lunora_boxes_3.recordDns as unknown as RegisteredLunoraFunction,
     "boxes:rename": lunora_boxes_3.rename as unknown as RegisteredLunoraFunction,
     "boxes:revoke": lunora_boxes_3.revoke as unknown as RegisteredLunoraFunction,
@@ -310,6 +311,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_boxes_3.ownsDeployment.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["boxId"] !== "string") return DEFER;
+if (typeof source["deploymentId"] !== "string") return DEFER;
+return { "boxId": source["boxId"], "deploymentId": source["deploymentId"] };
 });
 installCompiledValidatorMap(lunora_boxes_3.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -899,6 +907,7 @@ export interface Caller {
         get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }>;
         identity: (args: { boxId: Id<"boxes"> }) => Promise<{ organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
+        ownsDeployment: (args: { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }) => Promise<boolean>;
         recordDns: (args: { boxId: Id<"boxes">; dnsError: null | unknown }) => Promise<void>;
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         revoke: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ ipv4?: string; ipv6?: string; slug: string; }>;
@@ -1151,6 +1160,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         get: (args) => callRegistered(context, "boxes:get", args),
         identity: (args) => callRegistered(context, "boxes:identity", args),
         list: (args) => callRegistered(context, "boxes:list", args),
+        ownsDeployment: (args) => callRegistered(context, "boxes:ownsDeployment", args),
         recordDns: (args) => callRegistered(context, "boxes:recordDns", args),
         rename: (args) => callRegistered(context, "boxes:rename", args),
         revoke: (args) => callRegistered(context, "boxes:revoke", args),

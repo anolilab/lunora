@@ -426,3 +426,31 @@ export const identity = internalQuery
             return row ? { organizationId: row.organizationId, publicKey: row.publicKey, revoked: row.status === "revoked", slug: row.slug } : null;
         },
     );
+
+/**
+ * Whether box `boxId` may download deployment `deploymentId`'s release (SYSTEM
+ * — the box-signed `GET /v1/boxes/releases/:deploymentId`): only a `celld-vps`
+ * deployment of a project placed on THAT box, in the box's own organization.
+ */
+export const ownsDeployment = internalQuery
+    .input({ boxId: v.id("boxes"), deploymentId: v.id("deployments") })
+    .query(async ({ ctx: context, args: { boxId, deploymentId } }): Promise<boolean> => {
+        const deployment = (await context.db.get(deploymentId)) as null | { organizationId: string; projectId: Id<"projects">; target?: null | string };
+
+        if (deployment?.target !== "celld-vps") {
+            return false;
+        }
+
+        const [box, project] = await Promise.all([
+            context.db.get(boxId) as Promise<BoxRow | null>,
+            context.db.get(deployment.projectId) as Promise<null | { boxId?: null | string; organizationId: string }>,
+        ]);
+
+        return (
+            box !== null &&
+            box.status !== "revoked" &&
+            project?.boxId === boxId &&
+            project.organizationId === box.organizationId &&
+            deployment.organizationId === box.organizationId
+        );
+    });

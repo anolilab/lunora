@@ -7,13 +7,19 @@
  *   forwarded untouched to the box's `BoxSessionDO`, which authenticates the
  *   socket with a challenge before it accepts anything else.
  * - `POST /v1/boxes/revoke` — `session`: revoke a box, then close its session.
+ * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
+ *   release, with a request signed by its key (plan 458 D6).
  */
 import { api, internal } from "../../../lunora/_generated/api.js";
 import type { EnrolResult } from "../../../lunora/boxes";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";
 import type { BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession } from "../../boxes/session-client";
+import type { VerifiedBoxRequest } from "../../boxes/signed-request";
+import { verifyBoxRequest } from "../../boxes/signed-request";
 import { sha256Hex } from "../keys";
+import { createReleaseStore } from "../release-store";
+import { matchRoutePath } from "../route-path";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 
@@ -153,4 +159,69 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
         : false;
 
     return Response.json({ ok: true, sessionClosed: closed });
+};
+
+/**
+ * Verify a box-signed request against the box's enrolled key, with its nonce
+ * claimed in the box's own session object. `null` for anything that does not
+ * verify — the caller answers one 401 for all of it.
+ */
+export const verifiedBoxRequest = async (request: Request, environment: BoxRouterEnv): Promise<null | VerifiedBoxRequest> => {
+    const context = requireContext(environment);
+    const namespace = environment.BOX_SESSION;
+
+    if (!namespace) {
+        return null;
+    }
+
+    return verifyBoxRequest(request, {
+        claimNonce: (boxId, nonce, expiresAt) => boxSession(namespace, boxId).claimNonce(nonce, expiresAt),
+        loadBox: async (boxId) => {
+            // A malformed id fails the query's own validator: the same unknown box.
+            const box = await context
+                .runQuery<null | { organizationId: string; publicKey: string; revoked: boolean }>(internal.boxes.identity, { boxId })
+                .catch(() => null);
+
+            return box === null ? null : { organizationId: box.organizationId, publicKey: box.publicKey, revoked: box.revoked };
+        },
+        now: Date.now(),
+    });
+};
+
+/** The release-download path; `:deploymentId` is a deployment's id. */
+export const BOX_RELEASE_PATH = "/v1/boxes/releases/:deploymentId";
+
+/**
+ * `GET /v1/boxes/releases/:deploymentId` — a box fetches the stored release it
+ * was told to run (plan 458 D6): the same `{bundle, manifest, assets}` JSON
+ * every target converges from, streamed out of the private `RELEASES` bucket.
+ *
+ * Signed by the box (`boxKey`), and served only for a `celld-vps` deployment of
+ * a project placed on that very box — any other answers 404, so a box cannot
+ * probe for, or read, another tenant's code.
+ */
+export const handleBoxReleaseRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+    const deploymentId = matchRoutePath(BOX_RELEASE_PATH, new URL(request.url).pathname)?.["deploymentId"];
+
+    if (!environment.RELEASES || !environment.BOX_SESSION) {
+        return jsonError(503, "this control plane does not serve box releases");
+    }
+
+    const verified = await verifiedBoxRequest(request, environment);
+
+    if (verified === null) {
+        return jsonError(401, "invalid box signature");
+    }
+
+    const allowed =
+        deploymentId !== undefined &&
+        (await context.runQuery<boolean>(internal.boxes.ownsDeployment, { boxId: verified.boxId, deploymentId }).catch(() => false));
+    const release = allowed ? await createReleaseStore(environment.RELEASES).open(deploymentId) : null;
+
+    if (release === null) {
+        return jsonError(404, "no such release for this box");
+    }
+
+    return new Response(release, { headers: { "cache-control": "no-store", "content-type": "application/json" }, status: 200 });
 };

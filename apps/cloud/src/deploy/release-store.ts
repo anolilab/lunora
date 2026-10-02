@@ -21,7 +21,8 @@ export interface StoredRelease {
 /** The slice of an R2 bucket binding the store uses. */
 export interface ReleaseBucket {
     delete: (key: string) => Promise<void>;
-    get: (key: string) => Promise<null | { text: () => Promise<string> }>;
+    /** An R2 object body: `body` streams it, `text` buffers it. */
+    get: (key: string) => Promise<null | { body?: ReadableStream<Uint8Array>; text: () => Promise<string> }>;
     put: (key: string, value: string) => Promise<unknown>;
 }
 
@@ -29,6 +30,13 @@ export interface ReleaseStore {
     delete: (deploymentId: string) => Promise<void>;
     /** The stored release, or `null` once it has been pruned. */
     get: (deploymentId: string) => Promise<null | StoredRelease>;
+
+    /**
+     * The stored release's JSON, streamed rather than parsed — for handing a
+     * release (up to 100 MiB) on to a box without buffering it in the Worker
+     * (plan 458 D6). `null` once it has been pruned.
+     */
+    open: (deploymentId: string) => Promise<null | ReadableStream<Uint8Array>>;
     put: (deploymentId: string, release: StoredRelease) => Promise<void>;
 }
 
@@ -41,6 +49,15 @@ export const createReleaseStore = (bucket: ReleaseBucket): ReleaseStore => {
             const object = await bucket.get(releaseKey(deploymentId));
 
             return object === null ? null : (JSON.parse(await object.text()) as StoredRelease);
+        },
+        open: async (deploymentId) => {
+            const object = await bucket.get(releaseKey(deploymentId));
+
+            if (object === null) {
+                return null;
+            }
+
+            return object.body ?? new Response(await object.text()).body;
         },
         put: async (deploymentId, release) => {
             await bucket.put(releaseKey(deploymentId), JSON.stringify(release));

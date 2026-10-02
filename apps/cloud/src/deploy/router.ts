@@ -35,9 +35,10 @@ import { handleDeployRequest } from "./handler";
 import type { ReleaseDeps } from "./release";
 import { rollbackRelease } from "./release";
 import { createReleaseStore } from "./release-store";
+import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { BOX_RELEASE_PATH, handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
@@ -1130,6 +1131,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxEnrolRoute, method: "POST", path: "/v1/boxes/enrol", spec: { auth: "enrolmentToken" } },
         // boxKey — the BoxSessionDO admits the socket only after a signed challenge.
         { handler: handleBoxConnectRoute, method: "GET", path: "/v1/boxes/connect", spec: { auth: "boxKey" } },
+        // boxKey — the request is Ed25519-signed by the box, nonce replay-protected (plan 458 D6).
+        { handler: handleBoxReleaseRoute, method: "GET", path: BOX_RELEASE_PATH, spec: { auth: "boxKey" } },
         // session — the revoke mutation asserts owner/admin of the box's org.
         { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
     ];
@@ -1140,8 +1143,15 @@ export const createDeployRouter = (): HttpRouterLike => {
     // `withContext` at the table, once, rather than a null check opening every
     // handler — see `requireContext`. Wrapping here also means a new route cannot
     // forget it.
-    const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, withContext(route.handler)]));
-    const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, withContext(route.handler)]));
+    const exactRoutes = routes.filter((route) => !isRoutePattern(route.path));
+    const postRoutes = new Map(exactRoutes.filter((route) => route.method === "POST").map((route) => [route.path, withContext(route.handler)]));
+    const getRoutes = new Map(exactRoutes.filter((route) => route.method === "GET").map((route) => [route.path, withContext(route.handler)]));
+    // Routes with a `:parameter` segment, tried only when no exact path matched.
+    const patternRoutes = routes
+        .filter((route) => isRoutePattern(route.path))
+        .map((route) => {
+            return { handler: withContext(route.handler), method: route.method, path: route.path };
+        });
     /** The route table for a request method, or `undefined` for a method this router serves no routes for. */
     const methodTable = (method: string): typeof getRoutes | undefined => {
         if (method === "GET") {
@@ -1213,7 +1223,9 @@ export const createDeployRouter = (): HttpRouterLike => {
 
             const routerEnv: RouterEnv = { ...(environment as RouterEnv | undefined), ...(context === undefined ? {} : { __executionCtx: context }) };
             const table = methodTable(request.method);
-            const handler = table?.get(url.pathname);
+            const handler =
+                table?.get(url.pathname) ??
+                patternRoutes.find((route) => route.method === request.method && matchRoutePath(route.path, url.pathname) !== null)?.handler;
 
             return handler ? handler(request, routerEnv) : jsonError(404, "not found");
         },
