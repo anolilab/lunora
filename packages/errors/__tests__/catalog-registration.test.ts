@@ -91,9 +91,18 @@ const CODE_PATTERNS: ReadonlyArray<RegExp> = [
  * original site is edited or removed.
  */
 const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
+    // `verifyArtifact`'s result codes — returned as `{ ok: false, error }`
+    // values by the hostd release verifier, never a `LunoraError` construction.
+    ["HASH_MISMATCH", "apps/hostd/src/release-verify.ts"],
+    ["INVALID_EXPECTATION", "apps/hostd/src/release-verify.ts"],
+    // The hostd wire protocol's `error` frame code for a version mismatch — a
+    // frame on the box ↔ control-plane socket, never a `LunoraError`.
+    ["PROTOCOL_UNSUPPORTED", "apps/hostd/src/wire/constants.ts"],
+    ["READ_FAILED", "apps/hostd/src/release-verify.ts"],
     // A hand-rolled `Response.json(...)` error body for an oversized upload,
     // never a `LunoraError` construction.
     ["REQUEST_ENTITY_TOO_LARGE", "packages/storage/src/upload-handler.ts"],
+    ["SIZE_MISMATCH", "apps/hostd/src/release-verify.ts"],
     // `SqlRejectionCode` rejection *values* returned by the read-only SQL
     // classifier — the module docstring is explicit that it returns a
     // rejection value rather than throwing; callers add their own error type.
@@ -232,7 +241,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(5);
+        expect.assertions(10);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
