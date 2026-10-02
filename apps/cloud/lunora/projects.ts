@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
+import { productionAliasCandidates } from "../src/deploy/production-alias";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, isAccountTarget, isBoxTarget, storedTarget } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
@@ -9,6 +10,7 @@ import { revokedBoxError } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { claimFirstFreeAlias } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
@@ -21,6 +23,7 @@ const MIN_PREVIEW_PASSWORD_LENGTH = 8;
 interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: string;
+    activeScriptName?: null | string;
     /** `.global()` rows answer SQL NULL for an unset column. */
     boxId?: Id<"boxes"> | null;
     cloudflareAccountId?: Id<"cloudflareAccounts"> | null;
@@ -31,6 +34,7 @@ interface ProjectRow {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    productionAlias?: null | string;
     rootDirectory?: string;
     slug: string;
     target?: null | string;
@@ -62,6 +66,13 @@ export interface ProjectView {
     organizationId: Id<"organizations">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
+
+    /**
+     * The alias production deploys as: the one it serves on once it has, else the
+     * one reserved for it when it was created. Absent on a project that predates
+     * reservations and has never gone live (its first release picks one).
+     */
+    productionAlias?: string;
     /** Repo-relative directory builds run in; absent means the repository root. */
     rootDirectory?: string;
     slug: string;
@@ -78,6 +89,8 @@ export interface ProjectView {
 
 /** Project one stored row onto the public view, dropping the protection secrets. */
 export const toProjectView = (row: ProjectRow): ProjectView => {
+    const productionAlias = row.activeScriptName ?? row.productionAlias;
+
     return {
         _id: row._id,
         createdAt: row.createdAt,
@@ -92,6 +105,7 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
         ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),
+        ...(productionAlias == null ? {} : { productionAlias }),
         ...(row.rootDirectory === undefined ? {} : { rootDirectory: row.rootDirectory }),
         ...(row.watchPaths === undefined ? {} : { watchPaths: row.watchPaths }),
     };
@@ -203,7 +217,7 @@ export const create = mutation
 
         await assertWithinQuota(context, arguments_.organizationId, "projects", page.length);
 
-        return context.db.insert("projects", {
+        const projectId = await context.db.insert("projects", {
             createdAt: context.now,
             framework: arguments_.framework,
             githubRepo: arguments_.githubRepo,
@@ -211,6 +225,18 @@ export const create = mutation
             organizationId: arguments_.organizationId,
             slug: arguments_.slug,
         });
+
+        // Reserved now, so the first production release cannot collide with another organization's alias.
+        const productionAlias = await claimFirstFreeAlias(
+            context,
+            productionAliasCandidates(arguments_.slug, arguments_.organizationId),
+            arguments_.organizationId,
+            projectId,
+        );
+
+        await context.db.patch(projectId, { productionAlias });
+
+        return projectId;
     });
 
 /** What a target needs the project to name: its box, its connected account, or neither. */

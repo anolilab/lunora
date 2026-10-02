@@ -73,6 +73,7 @@ export interface Doc_projects {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    productionAlias?: string;
     rootDirectory?: string;
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -904,6 +905,7 @@ export interface Insert_projects {
     organizationId: Id<"organizations">;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
+    productionAlias?: string;
     rootDirectory?: string;
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";

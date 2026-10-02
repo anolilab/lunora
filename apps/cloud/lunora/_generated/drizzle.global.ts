@@ -62,6 +62,7 @@ export const projects = sqliteTable("projects", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     previewPasswordHash: text("previewPasswordHash"),
     previewPasswordSalt: text("previewPasswordSalt"),
+    productionAlias: text("productionAlias"),
     rootDirectory: text("rootDirectory"),
     slug: text("slug").notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),

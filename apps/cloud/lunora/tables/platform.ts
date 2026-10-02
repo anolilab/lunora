@@ -108,6 +108,12 @@ export const platformTables = {
         // browser that set it.
         previewPasswordHash: v.optional(v.string()),
         previewPasswordSalt: v.optional(v.string()),
+        // The alias the project's first production release takes, claimed in
+        // `aliasOwnership` when the project was created
+        // (`src/deploy/production-alias.ts`), so it cannot collide with another
+        // organization's. Absent on projects that predate it, which keep the
+        // alias they deploy to (`activeScriptName`).
+        productionAlias: v.optional(v.string()),
         // Monorepo support: the directory the build runs in, repo-relative and
         // normalized (absent = repo root), and the globs a push must touch to
         // rebuild (absent = everything under rootDirectory). See src/builds/paths.ts.

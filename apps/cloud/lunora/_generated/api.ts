@@ -127,7 +127,7 @@ export interface ApiTypes {
     };
     projects: {
         create: FunctionReference<"mutation", { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }, Id<"projects">>;
-        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
+        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
         remove: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations"> }, { destroyed: number; }>;
         rename: FunctionReference<"mutation", { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }, void>;
         setPreviewProtection: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }, { protected: boolean; }>;

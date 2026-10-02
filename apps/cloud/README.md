@@ -635,8 +635,14 @@ A connected repository deploys without the CLI. The flow, end to end:
 4. **Release.** `src/builds/release.ts` hands it to `startRelease`, the same
    deploy core `POST /v1/deploy` runs: validation, the stored release in
    `RELEASES`, provisioning, the health check with automatic revert, and
-   activation. A push releases to **production** on the project's existing alias
-   (or its wrangler `name`, then its slug); a pull request to a **preview**,
+   activation. A push releases to **production** on the project's existing alias,
+   or — for its first release — the **production alias** reserved when the
+   project was created (`projects.productionAlias`: the slug, or
+   `<slug>-<first 8 characters of the org id>` when another organization owns
+   the slug, claimed in `aliasOwnership` so the release cannot collide; the
+   projects list shows it, and a CLI deploy whose wrangler `name` someone else
+   owns is told to deploy as it). Only a project created before reservations
+   falls back to its wrangler `name`, then its slug. A pull request releases to a **preview**,
    `<alias>-pr-<branch>`, with the usual 5-day TTL. The core authorizes by deploy
    key, so each release gets one: minted for that build's project with the
    release's kind as its ceiling, and deleted when the release ends. A pull

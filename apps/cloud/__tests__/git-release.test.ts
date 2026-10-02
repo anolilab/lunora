@@ -131,7 +131,13 @@ describe(releaseRoute, () => {
         expect(releaseRoute({ ...pushTarget, activeScriptName: "acme-web" }, execution)).toStrictEqual({ kind: "production", scriptName: "acme-web" });
     });
 
-    it("falls back to the wrangler name, then the project slug, for a first production release", () => {
+    it("releases a first production release on the alias reserved when the project was created, not the wrangler name", () => {
+        expect(releaseRoute({ ...pushTarget, productionAlias: "web-0f9a1c2e" }, execution)).toStrictEqual({ kind: "production", scriptName: "web-0f9a1c2e" });
+        // A project that already serves keeps its alias.
+        expect(releaseRoute({ ...pushTarget, activeScriptName: "acme-web", productionAlias: "web-0f9a1c2e" }, execution).scriptName).toBe("acme-web");
+    });
+
+    it("falls back to the wrangler name, then the project slug, for a project that predates reserved aliases", () => {
         expect(releaseRoute(pushTarget, execution)).toStrictEqual({ kind: "production", scriptName: "from-wrangler" });
         expect(releaseRoute(pushTarget, {})).toStrictEqual({ kind: "production", scriptName: "web" });
     });

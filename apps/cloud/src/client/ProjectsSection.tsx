@@ -216,6 +216,11 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                                     >
                                         <span className="shrink-0 font-medium">{project.name}</span>
                                         <span className="text-muted-foreground">/{project.slug}</span>
+                                        {project.productionAlias ? (
+                                            <span className="truncate text-xs text-muted-foreground" title="The alias production deploys as">
+                                                production: <code className="font-mono">{project.productionAlias}</code>
+                                            </span>
+                                        ) : null}
                                         {project.githubRepo ? (
                                             <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
                                                 <HugeiconsIcon

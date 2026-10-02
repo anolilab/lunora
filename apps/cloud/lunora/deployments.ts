@@ -110,6 +110,63 @@ export const claimAlias = async (context: MutationContext, alias: string, organi
     }
 };
 
+/** Whether `error` is {@link claimAlias}'s refusal of an alias another project owns. */
+const isAliasTaken = (error: unknown): boolean => error instanceof LunoraError && error.code === "FORBIDDEN";
+
+/**
+ * Claim the first of `candidates` no other project owns, for `projectId`, and
+ * answer it — a new project's production alias (`src/deploy/production-alias.ts`).
+ * @throws {LunoraError} `CONFLICT` when every candidate is taken.
+ */
+export const claimFirstFreeAlias = async (
+    context: MutationContext,
+    candidates: ReadonlyArray<string>,
+    organizationId: Id<"organizations">,
+    projectId: Id<"projects">,
+): Promise<string> => {
+    for (const alias of candidates) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- candidates are tried in order; the first free one wins
+            await claimAlias(context, alias, organizationId, projectId);
+
+            return alias;
+        } catch (error) {
+            if (!isAliasTaken(error)) {
+                throw error;
+            }
+        }
+    }
+
+    throw new LunoraError("CONFLICT", "every production alias tried for this project is taken; create it with another slug");
+};
+
+/**
+ * Claim a deployment's alias for `project` ({@link claimAlias}). A refusal names the alias the
+ * project reserved when it was created, so a CLI deploy whose wrangler `name`
+ * someone else owns says what to deploy as instead.
+ */
+const claimDeploymentAlias = async (
+    context: MutationContext,
+    alias: string,
+    organizationId: Id<"organizations">,
+    project: { _id: Id<"projects">; productionAlias?: null | string },
+): Promise<void> => {
+    try {
+        await claimAlias(context, alias, organizationId, project._id);
+    } catch (error) {
+        const reserved = project.productionAlias;
+
+        if (isAliasTaken(error) && reserved != null && reserved !== alias) {
+            throw new LunoraError(
+                "FORBIDDEN",
+                `deployment alias "${alias}" is already in use by another project; this project's production alias is "${reserved}" — deploy as it: lunora cloud deploy --name ${reserved}`,
+            );
+        }
+
+        throw error;
+    }
+};
+
 /** The `${status}At` timestamp column stamped on each phase transition (GAPS.md A2). */
 const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "liveAt" | "provisioningAt" | "queuedAt" | "supersededAt" | "verifyingAt" | null> =
     {
@@ -357,7 +414,7 @@ export const create = mutation
         // the alias through the `aliasOwnership` ledger, whose `by_alias` unique index
         // makes the claim atomic (closing the check-then-insert race): a concurrent
         // first claim by a different project loses on the unique constraint.
-        await claimAlias(context, arguments_.scriptName, arguments_.organizationId, arguments_.projectId);
+        await claimDeploymentAlias(context, arguments_.scriptName, arguments_.organizationId, project);
 
         // One Worker per alias: the script name IS the alias, and every release
         // updates it in place so its Durable Object data persists. `version`

@@ -29,6 +29,8 @@ export interface BuildReleaseTarget {
     /** The build is a fork's pull request — built, never released. */
     fromFork?: boolean;
     organizationId: string;
+    /** The alias reserved for the project's production when it was created (`projects.productionAlias`). */
+    productionAlias?: string;
     projectId: string; // secret-scanner:allow -- domain field name
     projectSlug: string;
     /** The pull request number, on `pull_request` builds that recorded one. */
@@ -62,7 +64,9 @@ export interface BuildReleasePorts {
  * or a row older than the `trigger` column — is a preview, which can never move
  * the project's stable URL. Production reuses the project's existing alias, so
  * a git release updates the same Worker a CLI deploy did; a project with none
- * yet takes the wrangler `name`, then its slug. Either way the alias is claimed
+ * yet takes the alias reserved for it at creation — free of every other
+ * organization's by construction — and only a project that predates
+ * reservations falls back to the wrangler `name`, then its slug. Either way the alias is claimed
  * through the ownership ledger when the deployment is recorded, so a name in a
  * tenant's config can only reach a Worker the project owns or a new one.
  * Previews are per branch on top of that alias (`acme-pr-feat-x`, TTL'd by
@@ -72,7 +76,7 @@ export interface BuildReleasePorts {
  * never releases one at all.
  */
 export const releaseRoute = (target: BuildReleaseTarget, execution: Pick<BuildExecution, "scriptName">): { kind: BuildRelease["kind"]; scriptName: string } => {
-    const alias = target.activeScriptName ?? execution.scriptName ?? target.projectSlug;
+    const alias = target.activeScriptName ?? target.productionAlias ?? execution.scriptName ?? target.projectSlug;
 
     if (target.trigger === "push" && target.fromFork !== true) {
         return { kind: "production", scriptName: alias };

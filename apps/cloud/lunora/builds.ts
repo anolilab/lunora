@@ -53,6 +53,7 @@ interface ProjectRow {
     activeScriptName?: string;
     githubRepo?: string;
     organizationId: Id<"organizations">;
+    productionAlias?: null | string;
     slug: string;
 }
 
@@ -409,6 +410,7 @@ export const releaseTarget = internalQuery
 
         return {
             ...(project.activeScriptName === undefined ? {} : { activeScriptName: project.activeScriptName }),
+            ...(project.productionAlias == null ? {} : { productionAlias: project.productionAlias }),
             branch: build.branch,
             ...(build.fromFork === true ? { fromFork: true } : {}),
             organizationId: build.organizationId,
