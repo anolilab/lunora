@@ -41,7 +41,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run` and their `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
         authJurisdictionMove: {

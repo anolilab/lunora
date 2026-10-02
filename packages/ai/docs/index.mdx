@@ -157,6 +157,25 @@ const { text } = await generateText({
 await ctx.ai.run("@cf/meta/m2m100-1.2b", inputs, { rejectIfBusy: true });
 ```
 
+## Web search
+
+`ctx.ai.websearch(query, options?)` calls the Cloudflare Web Search API (beta)
+over the same `AI` binding, so a response can be grounded in live results. The
+providers are `"ceramic"` (the default), `"exa"` and `"linkup"`, all under Zero
+Data Retention. Searches are billed to AI Gateway credits on the gateway
+inference already routes through (`LUNORA_AI_GATEWAY_ID`), else the account's
+`default` gateway; pass `gatewayId` to pick another, or `byokAlias` to bill a
+provider key stored on the gateway.
+
+```ts
+const { items } = await ctx.ai.websearch("cloudflare durable objects pricing", { limit: 5, provider: "exa" });
+// items: [{ url, title, description? }, …]
+```
+
+A rejected request throws a `LunoraError` with code `BAD_REQUEST`, a throttled
+one `RATE_LIMITED`, and a provider or gateway failure `SERVICE_UNAVAILABLE`.
+For agents, `webSearchTool()` from `@lunora/agent` wraps this as a tool.
+
 ## RAG — `defineRag` (`@lunora/ai/rag`)
 
 `defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a

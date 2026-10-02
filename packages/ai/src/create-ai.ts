@@ -22,6 +22,8 @@ import type {
     AiGatewayOptions,
     AiModelOptions,
     AiRunOptions,
+    AiWebSearchOptions,
+    AiWebSearchResult,
     EmbeddingModelInput,
     LunoraAi,
     LunoraAiOptions,
@@ -70,6 +72,18 @@ const CAPACITY_EXCEEDED_MESSAGE = /^(?:[A-Z]\w*:\s*)?3040\s*:/iu;
 
 const isCapacityExceeded = (error: unknown): boolean =>
     (error as { code?: unknown } | null)?.code === CAPACITY_EXCEEDED_CODE || (error instanceof Error && CAPACITY_EXCEEDED_MESSAGE.test(error.message));
+
+/** The AI Gateway every Cloudflare account has, which `workers-ai-provider` also falls back to for catalog slugs. */
+const DEFAULT_GATEWAY_ID = "default";
+
+/** 4xx is the caller's request (bad query, unknown provider, gateway missing); 429 and 5xx are retryable. */
+const websearchErrorCode = (status: number): "BAD_REQUEST" | "RATE_LIMITED" | "SERVICE_UNAVAILABLE" => {
+    if (status === 429) {
+        return "RATE_LIMITED";
+    }
+
+    return status >= 400 && status < 500 ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE";
+};
 
 /** A proxy host a bearer token may reach over plain HTTP: this machine only. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
@@ -330,7 +344,51 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         }
     };
 
-    return { embeddingModel, model, run, workersai };
+    const websearch = async (query: string, searchOptions?: AiWebSearchOptions): Promise<AiWebSearchResult> => {
+        if (!binding) {
+            return bindingRequired("ai.websearch");
+        }
+
+        if (typeof binding.websearch !== "function") {
+            throw new LunoraError(
+                "NOT_IMPLEMENTED",
+                "@lunora/ai: this Workers runtime's `AI` binding has no websearch() — update wrangler / @cloudflare/vite-plugin to a release that ships the Web Search API",
+            );
+        }
+
+        // The search is brokered and billed by an AI Gateway, which the binding
+        // requires by id. The gateway inference already routes through is the
+        // natural default, then the account's `default` gateway — the same one an
+        // unconfigured catalog slug lands on.
+        const response = await binding.websearch({
+            ...(searchOptions?.byokAlias === undefined ? {} : { byokAlias: searchOptions.byokAlias }),
+            gatewayId: searchOptions?.gatewayId ?? resolvedGateway?.id ?? DEFAULT_GATEWAY_ID,
+            ...(searchOptions?.limit === undefined ? {} : { limit: searchOptions.limit }),
+            ...(searchOptions?.provider === undefined ? {} : { provider: searchOptions.provider }),
+            query,
+        });
+
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+
+            throw new LunoraError(
+                websearchErrorCode(response.status),
+                `@lunora/ai: web search failed with HTTP ${String(response.status)}${detail === "" ? "" : `: ${detail}`}`,
+            );
+        }
+
+        const body = (await response.json()) as Partial<AiWebSearchResult> | null;
+
+        // Fail loudly on a shape change during the beta rather than hand the
+        // caller a result whose `items` is not there.
+        if (!Array.isArray(body?.items)) {
+            throw new LunoraError("INTERNAL", "@lunora/ai: web search returned a body without an `items` array");
+        }
+
+        return body as AiWebSearchResult;
+    };
+
+    return { embeddingModel, model, run, websearch, workersai };
 };
 
 export default createAi;
