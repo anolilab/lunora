@@ -198,8 +198,9 @@ export const publish = action.input({ repo: v.string() }).action(async ({ ctx, a
     // https://x:<secret>@host/… — the `?expires=` suffix is stripped.
     const pushRemote = ctx.artifacts.authenticatedRemote(remote, token.plaintext);
 
-    // … hand `pushRemote` to the Git client through an environment variable (the container
-    // recipe below does exactly this), then revoke the token. Return at most its id.
+    // … hand `pushRemote` to the Git client through its environment, never its arguments
+    // (the container recipe below passes the token as a remote-scoped `http.extraHeader`
+    // instead), then revoke the token. Return at most its id.
     return { tokenId: token.id };
 });
 ```

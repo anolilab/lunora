@@ -885,9 +885,13 @@ A container's disk is ephemeral. When what it produces is a tree of files you
 want history and diffs for (an agent's workspace, a generated site, a build
 output), push it to a [Cloudflare Artifacts](/docs/packages/bindings#artifacts--lunorabindingsartifacts)
 repo. The Artifacts binding can't write files, so the push comes from `git` inside
-the container, authenticated with short-lived tokens the action mints. The build
-runs code the container fetched (`pnpm run build`, its dependencies' scripts), so
-no token is in reach while it runs:
+the container, authenticated with short-lived tokens the action mints.
+
+The build runs code the container fetched (`pnpm install`, `pnpm run build`, and
+every dependency's scripts). The recipe keeps tokens out of the build's
+environment and out of the checkout, which stops a careless build from picking
+one up. It does **not** isolate the push from a build that is trying to: see
+[the rules below](#keeping-the-token-contained) before you run code you don't trust.
 
 ```ts
 import { internalAction } from "@/lunora/_generated/server";
@@ -896,53 +900,76 @@ import { v } from "@lunora/values";
 // Single-quoted: `exec` runs the command unshelled, so `sh -c` expands the
 // variables inside the container. `core.hooksPath=/dev/null` and `--no-verify`
 // keep hooks the build may have written from running.
-const CHECKOUT = 'if [ "$EMPTY" = 1 ]; then git init -b "$BRANCH" /work; else git -c core.hooksPath=/dev/null clone --branch "$BRANCH" "$REMOTE" /work; fi';
+const CHECKOUT =
+    'rm -rf /work && if [ "$EMPTY" = 1 ]; then git init -b "$BRANCH" /work; else git -c core.hooksPath=/dev/null clone --branch "$BRANCH" "$REMOTE" /work; fi';
+const BUILD = "pnpm install --frozen-lockfile && pnpm run build";
+// Prints `unchanged` instead of committing when the build changed nothing.
 const COMMIT =
-    'git -C /work add -A && git -C /work -c core.hooksPath=/dev/null -c user.name=lunora -c user.email=bot@example.com commit --no-verify -m "$MESSAGE"';
+    'git -C /work add -A && if git -C /work diff --cached --quiet; then echo unchanged; else git -C /work -c core.hooksPath=/dev/null -c user.name=lunora -c user.email=bot@example.com commit --no-verify -q -m "$MESSAGE"; fi';
 const PUSH = 'git -C /work -c core.hooksPath=/dev/null push "$REMOTE" "HEAD:$BRANCH"';
 
 /**
- * Hand a token to one `git` process as an `http.extraHeader` through git's
- * `GIT_CONFIG_*` environment, so it is in neither the command line nor
- * `/work/.git/config`. The `?expires=` suffix is not part of the secret.
+ * Hand a token to one `git` process as an `http.<remote>.extraHeader` through
+ * git's `GIT_CONFIG_*` environment: it is in neither the command line nor
+ * `/work/.git/config`, and it is sent only to `remote`, so a `url.*.insteadOf`
+ * rewrite can't redirect it to another host. The `?expires=` suffix is not part
+ * of the secret.
  */
-const gitAuthEnv = (plaintext: string): Record<string, string> => {
+const gitAuthEnv = (remote: string, plaintext: string): Record<string, string> => {
     return {
         GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "http.extraHeader",
+        GIT_CONFIG_KEY_0: `http.${remote}.extraHeader`,
         GIT_CONFIG_VALUE_0: `Authorization: Basic ${btoa(`x:${plaintext.split("?expires=")[0] ?? ""}`)}`,
     };
 };
 
 // Internal: only your own code decides who may push to which repo.
 export const buildAndPush = internalAction.input({ repo: v.string(), sessionId: v.string() }).action(async ({ ctx, args }) => {
-    const { defaultBranch, lastPushAt, remote } = await ctx.artifacts.info(args.repo);
+    const { defaultBranch, remote } = await ctx.artifacts.info(args.repo);
+    // A freshly created repo has no commit, so no branch to clone yet.
+    const empty = (await ctx.artifacts.withRepo(args.repo, (repo) => repo.log({ limit: 1 }))).length === 0;
     const box = ctx.containers.workspace.get(args.sessionId);
     const base = { BRANCH: defaultBranch, MESSAGE: `build ${args.sessionId}`, REMOTE: remote };
-    const tokenIds: string[] = [];
-    const mint = async (scope: "read" | "write"): Promise<string> => {
+    const live = new Set<string>();
+
+    const mint = async (scope: "read" | "write") => {
         const token = await ctx.artifacts.withRepo(args.repo, (repo) => repo.createToken(scope, 600));
 
-        tokenIds.push(token.id);
+        live.add(token.id);
 
-        return token.plaintext;
+        return token;
+    };
+    // A failed revoke must not mask the result; the token still expires on its own.
+    const revoke = async (id: string): Promise<void> => {
+        live.delete(id);
+
+        try {
+            await ctx.artifacts.withRepo(args.repo, (repo) => repo.revokeToken(id));
+        } catch (error: unknown) {
+            ctx.log.warn("artifacts token revoke failed", { error, tokenId: id });
+        }
     };
 
     try {
-        // A freshly created repo has no branch to clone yet (`lastPushAt === null`): start one.
-        const empty = lastPushAt === null;
+        const readToken = empty ? undefined : await mint("read");
         const checkout = await box.exec("sh", {
             args: ["-c", CHECKOUT],
-            env: { ...base, EMPTY: empty ? "1" : "0", ...(empty ? {} : gitAuthEnv(await mint("read"))) },
+            env: { ...base, EMPTY: empty ? "1" : "0", ...(readToken === undefined ? {} : gitAuthEnv(remote, readToken.plaintext)) },
             timeoutMs: 120_000,
         });
+
+        // The read token's job is done before any of the repo's code runs.
+        if (readToken !== undefined) {
+            await revoke(readToken.id);
+        }
 
         if (checkout.code !== 0) {
             throw new Error(`checkout failed (exit ${String(checkout.code)})`);
         }
 
-        // No token in this env, and none left in the checkout.
-        const build = await box.exec("pnpm", { args: ["run", "build"], cwd: "/work", timeoutMs: 300_000 });
+        // No token in this env. Install and build logs routinely pass exec's 1MB
+        // output default, so raise the cap (or have the build write less).
+        const build = await box.exec("sh", { args: ["-c", BUILD], cwd: "/work", maxOutputBytes: 16 * 1024 * 1024, timeoutMs: 600_000 });
 
         if (build.code !== 0) {
             throw new Error(`build failed (exit ${String(build.code)})`);
@@ -954,43 +981,57 @@ export const buildAndPush = internalAction.input({ repo: v.string(), sessionId: 
             throw new Error(`commit failed (exit ${String(commit.code)})`);
         }
 
-        // The write token exists only now, and only in the push's environment.
-        const push = await box.exec("sh", { args: ["-c", PUSH], env: { ...base, ...gitAuthEnv(await mint("write")) }, timeoutMs: 120_000 });
+        if (commit.stdout.trim() === "unchanged") {
+            return { changed: false, pushed: false };
+        }
 
-        return { pushed: push.code === 0 };
+        // The write token exists only now, and only in the push's environment.
+        const writeToken = await mint("write");
+        const push = await box.exec("sh", { args: ["-c", PUSH], env: { ...base, ...gitAuthEnv(remote, writeToken.plaintext) }, timeoutMs: 120_000 });
+
+        return { changed: true, pushed: push.code === 0 };
     } finally {
-        // Revoke by id whatever happened. A failed revoke must not mask the result
-        // above; the token still expires on its own.
-        for (const id of tokenIds) {
-            try {
-                await ctx.artifacts.withRepo(args.repo, (repo) => repo.revokeToken(id));
-            } catch (error: unknown) {
-                ctx.log.warn("artifacts token revoke failed", { error, tokenId: id });
-            }
+        // Revoke by id whatever happened — the write token, and the read token if the checkout threw.
+        for (const id of [...live]) {
+            await revoke(id);
         }
     }
 });
 ```
 
 After the push, `ctx.artifacts.withRepo(repo, (r) => r.readFile({ ref: defaultBranch, path }))`
-reads the pushed files back from any action, with no container running.
+reads the pushed files back from any action, with no container running. The
+checkout starts from `rm -rf /work`, so calling the action again on the same
+session starts clean.
 
-A few rules keep the tokens contained:
+### Keeping the token contained
 
-- **Mint after the build, and only for the step that needs it.** The clone gets
-  a read token, the push a write token, and the build and commit get neither.
-  Hooks are disabled for every `git` step, so a `.git/hooks` or
-  `core.hooksPath` the build wrote doesn't run with the token in its
-  environment.
+- **Mint late, and only for the step that needs it.** The clone gets a read
+  token that is revoked as soon as the checkout ends. The write token is minted
+  after the build and only exists in the push's environment. The install, build
+  and commit run with neither. Hooks are disabled on every `git` step, so a
+  `.git/hooks` or `core.hooksPath` the build wrote doesn't run with a token in
+  its environment.
 - **Pass the token through `GIT_CONFIG_*`, never through `args`, a URL or a log
-  line.** It never lands in `/work/.git/config` or in a process's arguments.
-  Don't print it, don't return it from the action, and don't leave `set -x` on
-  in a script that uses it.
-- **Treat the push as running next to the build's output.** Disabling hooks
-  doesn't stop a build that rewrites `/work/.git/config` (a
-  `url.<base>.insteadOf` that redirects the push, a `core.fsmonitor` command).
-  If the build runs code you don't trust, push from a fresh clone in a separate
-  container session instead of from `/work`.
+  line.** It never lands in `/work/.git/config` or in a process's arguments, and
+  the header is scoped to the repo's remote. Don't print it, don't return it from
+  the action, and don't leave `set -x` on in a script that uses it.
+- **If the build runs code you don't trust, push from a separate container
+  session.** Everything above shares one container with the build, and a build
+  that wants the token can still reach the push:
+    - a process it leaves running reads the push's environment from
+      `/proc/<pid>/environ`;
+    - it writes `~/.gitconfig` or `/etc/gitconfig` (a proxy, a credential
+      helper, its own `http.*.extraHeader`), which the push's `-c` flags don't
+      override;
+    - it rewrites `/work/.git/config`, for example a `core.fsmonitor` command;
+    - it puts its own `git` earlier on `PATH`.
+
+    So for untrusted code, build in one session, move the output out (for
+    example to R2 with [`@lunora/storage`](/docs/packages/storage)), and clone,
+    commit and push from a fresh session the build never ran in. The hardening
+    above is for builds you trust; it is not a sandbox.
+
 - **The image needs `git`.** `node:22-slim` doesn't include it, so add
   `RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates`
   to the Dockerfile.

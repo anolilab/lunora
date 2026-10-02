@@ -279,6 +279,23 @@ the pre-rebase one. Fixed from review:
   binding; delegating needs a bespoke emitter for one pure helper, so the docs
   point at importing `authenticatedRemote` directly instead.
 
+Second review round:
+
+- `ArtifactsRepoClient` is a declared interface and `ArtifactsRepoLike` extends
+  it with `Partial<Disposable>`: an `Omit<…, typeof Symbol.dispose>` collapsed
+  to `{}` in an app on `lib: ["ES2024"]` + workers-types. A bindings test
+  compiles a consumer under exactly that tsconfig.
+- The container recipe scopes the header to the remote
+  (`http.<remote>.extraHeader`), starts from `rm -rf /work`, runs
+  `pnpm install`, raises `maxOutputBytes`, skips an unchanged commit, detects
+  an empty repo via `log({ limit: 1 })`, and revokes the read token right after
+  checkout. Its docs no longer claim isolation from the build: pushing from a
+  separate session is the stated requirement for untrusted builds, with the
+  `/proc/<pid>/environ`, global gitconfig, `.git/config` and `PATH` vectors.
+- Reconcile gives the full setup hint only with no `artifacts[]` entry; other
+  names get a reminder that `.artifacts()` must point at one of them. The
+  stub's message points at `defineApp().artifacts(...)`.
+
 **B. Event types (S, independent of A's codegen half).**
 Add `ArtifactsEvent = ArtifactsRepoLifecycleEvent | ArtifactsRepoActivityEvent`
 in `@lunora/bindings/artifacts/types.ts`, shaped from the nine documented
