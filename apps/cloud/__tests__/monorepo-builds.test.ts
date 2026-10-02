@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { recordPush } from "../lunora/builds";
+import { recordPush, releaseTarget } from "../lunora/builds";
 import { updateBuildSettings } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -103,6 +103,44 @@ describe("builds.recordPush path filter", () => {
         await recordPush.handler(ctx, { ...push, branch: "feat/x", changes: { unknown: "forced push" }, trigger: "pull_request" });
 
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { branch: "feat/x", trigger: "pull_request" } });
+    });
+
+    it("records a fork's pull request as a fork, and hands the fork-ness to the release", async () => {
+        const { ctx, ops } = makeCtx(world(project()));
+
+        await recordPush.handler(ctx, {
+            ...push,
+            branch: "feat/x",
+            changes: { unknown: "forced push" },
+            fromFork: true,
+            pullRequest: 9,
+            trigger: "pull_request",
+        });
+
+        const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds") as { document: Row } | undefined;
+
+        expect(inserted).toMatchObject({ document: { fromFork: true, pullRequest: 9, trigger: "pull_request" } });
+
+        const { ctx: readCtx } = makeCtx(world(project(), [{ ...inserted?.document, _id: "bld_fork" }]));
+
+        await expect(releaseTarget.handler(readCtx, { buildId: "bld_fork" as never })).resolves.toMatchObject({ fromFork: true, pullRequest: 9 });
+    });
+
+    it("does not let a fork's unreleased build stand in for a same-repository pull request of the same commit", async () => {
+        const previous = {
+            _id: "bld_fork",
+            bundleHash: "h",
+            commitSha: "abc123",
+            fromFork: true,
+            projectId: "prj_1",
+            status: "successful",
+            trigger: "pull_request",
+        };
+        const { ctx } = makeCtx(world(project(), [previous]));
+
+        await expect(
+            recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, fromFork: false, pullRequest: 9, trigger: "pull_request" }),
+        ).resolves.toStrictEqual({ buildId: "builds_new", reused: false });
     });
 
     it("does not let a pull request's preview build stand in for the production push of the same commit", async () => {

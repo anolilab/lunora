@@ -601,11 +601,17 @@ export default defineSchema({
         // The deployment this build fed, once deployed.
         deploymentId: v.optional(v.string()),
         error: v.optional(v.string()),
+        // A pull request whose head is a fork's. Built, never released: a
+        // preview release resolves the project's secrets and mints its ingest
+        // key, which opening a pull request must never reach.
+        fromFork: v.optional(v.boolean()),
         organizationId: v.id("organizations"),
         // Work lease: which runner is on it and since when (stale after 30 min).
         processingBy: v.optional(v.string()),
         processingStartedAt: v.optional(v.number()),
         projectId: v.id("projects"),
+        // The pull request number, for `pull_request` builds.
+        pullRequest: v.optional(v.number()),
         // The project's rootDirectory when the push was recorded, so a settings
         // change mid-queue cannot build a commit from a directory it was not
         // pushed for, and dedup never reuses a bundle built from another root.

@@ -29,13 +29,49 @@ describe(verifyGitHubSignature, () => {
 
 describe(parsePullRequestEvent, () => {
     const payload = (action: string) => {
-        return { action, number: 7, pull_request: { head: { ref: "feat/x" } }, repository: { full_name: "acme/app" } };
+        return { action, number: 7, pull_request: { head: { ref: "feat/x", repo: { full_name: "acme/app" } } }, repository: { full_name: "acme/app" } };
     };
 
     it("maps opened/synchronize/reopened to upsert", () => {
         for (const action of ["opened", "synchronize", "reopened"]) {
-            expect(parsePullRequestEvent(payload(action))).toMatchObject({ action: "upsert", branch: "feat/x", number: 7, repository: "acme/app" });
+            expect(parsePullRequestEvent(payload(action))).toMatchObject({
+                action: "upsert",
+                branch: "feat/x",
+                fromFork: false,
+                number: 7,
+                repository: "acme/app",
+            });
         }
+    });
+
+    it("marks a pull request whose head is another repository's as a fork", () => {
+        const fork = {
+            action: "opened",
+            number: 7,
+            pull_request: { head: { ref: "main", repo: { full_name: "mallory/app" } } },
+            repository: { full_name: "acme/app" },
+        };
+
+        expect(parsePullRequestEvent(fork)).toMatchObject({ action: "upsert", fromFork: true });
+    });
+
+    it("fails closed: a deleted or missing head repository counts as a fork", () => {
+        const deleted = { action: "synchronize", number: 7, pull_request: { head: { ref: "x", repo: null } }, repository: { full_name: "acme/app" } };
+        const missing = { action: "synchronize", number: 7, pull_request: { head: { ref: "x" } }, repository: { full_name: "acme/app" } };
+
+        expect(parsePullRequestEvent(deleted)).toMatchObject({ fromFork: true });
+        expect(parsePullRequestEvent(missing)).toMatchObject({ fromFork: true });
+    });
+
+    it("treats a head repository differing only in case as the same repository", () => {
+        const same = {
+            action: "opened",
+            number: 7,
+            pull_request: { head: { ref: "x", repo: { full_name: "Acme/App" } } },
+            repository: { full_name: "acme/app" },
+        };
+
+        expect(parsePullRequestEvent(same)).toMatchObject({ fromFork: false });
     });
 
     it("maps closed to remove", () => {
@@ -51,7 +87,12 @@ describe(parsePullRequestEvent, () => {
 
 describe(handleGitHubWebhook, () => {
     const secret = "whsec";
-    const prBody = JSON.stringify({ action: "opened", number: 7, pull_request: { head: { ref: "feat/x" } }, repository: { full_name: "acme/app" } });
+    const prBody = JSON.stringify({
+        action: "opened",
+        number: 7,
+        pull_request: { head: { ref: "feat/x", repo: { full_name: "acme/app" } } },
+        repository: { full_name: "acme/app" },
+    });
     const resolveProject = (found: boolean) => () => Promise.resolve(found ? { organizationId: "org_1", projectId: "proj_1", slug: "app" } : null);
 
     const signedRequest = async (body: string): Promise<Request> =>
@@ -70,10 +111,58 @@ describe(handleGitHubWebhook, () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toStrictEqual({
             accepted: true,
-            intent: { action: "upsert", branch: "feat/x", number: 7, repository: "acme/app" },
+            intent: { action: "upsert", branch: "feat/x", fromFork: false, number: 7, repository: "acme/app" },
             previewScriptName: "app-pr-feat-x",
             projectId: "proj_1",
         });
+    });
+
+    it("records a fork's pull request as a fork build, named by its number rather than its branch", async () => {
+        const recorded: unknown[] = [];
+        const body = JSON.stringify({
+            action: "opened",
+            installation: { id: 42 },
+            number: 9,
+            // A fork branch named like the team's own preview branch.
+            pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", repo: { full_name: "mallory/app" }, sha: "evil1" } },
+            repository: { full_name: "acme/app" },
+        });
+
+        const response = await handleGitHubWebhook(await signedRequest(body), {
+            onPreviewBuild: (intent) => {
+                recorded.push(intent);
+
+                return Promise.resolve({ buildId: "b1", reused: false });
+            },
+            resolveProject: resolveProject(true),
+            secret,
+        });
+
+        expect(recorded).toStrictEqual([expect.objectContaining({ branch: "feat/x", commitSha: "evil1", fromFork: true, pullRequest: 9 })]);
+        await expect(response.json()).resolves.toMatchObject({ previewScriptName: "app-fork-9" });
+    });
+
+    it("records a same-repository pull request as an ordinary preview build", async () => {
+        const recorded: unknown[] = [];
+        const body = JSON.stringify({
+            action: "opened",
+            installation: { id: 42 },
+            number: 9,
+            pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", repo: { full_name: "acme/app" }, sha: "head1" } },
+            repository: { full_name: "acme/app" },
+        });
+
+        await handleGitHubWebhook(await signedRequest(body), {
+            onPreviewBuild: (intent) => {
+                recorded.push(intent);
+
+                return Promise.resolve({ buildId: "b1", reused: false });
+            },
+            resolveProject: resolveProject(true),
+            secret,
+        });
+
+        expect(recorded).toStrictEqual([expect.objectContaining({ fromFork: false, pullRequest: 9 })]);
     });
 
     it("202s when the repository is not connected to a project", async () => {
@@ -124,7 +213,7 @@ describe("preview path filter", () => {
         action: "synchronize",
         installation: { id: 42 },
         number: 7,
-        pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", sha: "head1" } },
+        pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", repo: { full_name: "acme/app" }, sha: "head1" } },
         repository: { full_name: "acme/app" },
     });
     const resolveProject = () => Promise.resolve({ organizationId: "org_1", projectId: "proj_1", slug: "app" });

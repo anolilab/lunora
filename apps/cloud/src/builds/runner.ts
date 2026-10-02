@@ -51,6 +51,11 @@ export interface BuildRelease {
     url?: string;
 }
 
+/** The release port declined to release the build, and why (a fork's pull request). */
+export interface BuildReleaseSkipped {
+    skipped: string;
+}
+
 export interface BuildRunnerPorts {
     /** Stream one output line into `buildLogs` (lease-checked upstream). */
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
@@ -69,9 +74,10 @@ export interface BuildRunnerPorts {
      * still holds its lease, so the release's progress lands in `buildLogs`. A
      * release failure fails the *deploy*, never the completed build — it either
      * throws (nothing was recorded) or answers with `error` (a deployment was
-     * recorded and failed). Omit for build-only runs.
+     * recorded and failed), or answers `skipped` when the build must not be
+     * released at all. Omit for build-only runs.
      */
-    release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<BuildRelease>;
+    release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<BuildRelease | BuildReleaseSkipped>;
 
     /**
      * Report the build's state back to the commit that triggered it (GAPS.md A4)
@@ -168,7 +174,7 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
         // progress lines are written under it. The build is done regardless of what
         // happens next — a failed release is reported, never turned into a failed
         // build, and the artifact stays reusable (dedup).
-        let released: BuildRelease;
+        let released: BuildRelease | BuildReleaseSkipped;
 
         try {
             released = await ports.release(build, result);
@@ -178,6 +184,14 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
             await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
             await ports.complete(build.buildId, result.bundleHash);
             await reportReleaseFailure(ports, build, message);
+
+            return { bundleHash: result.bundleHash, status: "successful" };
+        }
+
+        if ("skipped" in released) {
+            await ports.appendLog(build.buildId, "info", `release skipped: ${released.skipped}`).catch(() => {});
+            await ports.complete(build.buildId, result.bundleHash);
+            await report(ports, build, "success", `Built on Lunora Cloud; ${released.skipped}.`);
 
             return { bundleHash: result.bundleHash, status: "successful" };
         }

@@ -159,6 +159,23 @@ describe(runBuild, () => {
         expect(statuses.at(-1)).toBe("success:Deployed to production on Lunora Cloud.:https://app.lunora.app");
     });
 
+    it("completes a build the release port declined, saying why in the log and on the commit", async () => {
+        const statuses: string[] = [];
+        const { logs, ports, terminal } = portsWith({
+            release: () => Promise.resolve({ skipped: "fork pull requests are built but not deployed" }),
+            reportStatus: (_build, state, description) => {
+                statuses.push(`${state}:${description}`);
+
+                return Promise.resolve();
+            },
+        });
+
+        await expect(runBuild(build, ports)).resolves.toStrictEqual({ bundleHash: "hash-1", status: "successful" });
+        expect(terminal).toStrictEqual(["complete:hash-1"]);
+        expect(logs).toContain("info:release skipped: fork pull requests are built but not deployed");
+        expect(statuses.at(-1)).toBe("success:Built on Lunora Cloud; fork pull requests are built but not deployed.");
+    });
+
     it("keeps the build successful when the release throws — the artifact stays reusable", async () => {
         const statuses: string[] = [];
         const { logs, ports, terminal } = portsWith({

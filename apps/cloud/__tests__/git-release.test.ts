@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BuildReleasePorts, BuildReleaseTarget } from "../src/builds/release";
-import { describeReleaseFrame, releaseBuild, releaseRoute } from "../src/builds/release";
+import { describeReleaseFrame, FORK_RELEASE_SKIP_REASON, releaseBuild, releaseRoute } from "../src/builds/release";
 import type { BuildExecution } from "../src/builds/runner";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/handler";
 import { startRelease } from "../src/deploy/handler";
@@ -130,6 +130,24 @@ describe(releaseRoute, () => {
         });
     });
 
+    it("names a fork's preview by its pull request number, so it cannot land on a team branch's preview", () => {
+        const fork: BuildReleaseTarget = {
+            ...pushTarget,
+            activeScriptName: "acme-web",
+            branch: "feat/login",
+            fromFork: true,
+            pullRequest: 12,
+            trigger: "pull_request",
+        };
+
+        expect(releaseRoute(fork, execution)).toStrictEqual({ kind: "preview", scriptName: "acme-web-fork-12" });
+        expect(releaseRoute({ ...fork, fromFork: undefined }, execution).scriptName).toBe("acme-web-pr-feat-login");
+    });
+
+    it("never takes a fork's build to production, whatever its trigger says", () => {
+        expect(releaseRoute({ ...pushTarget, fromFork: true, pullRequest: 3 }, execution).kind).toBe("preview");
+    });
+
     it("never takes a build without a recorded trigger to production", () => {
         const legacy: BuildReleaseTarget = { branch: "main", organizationId: "org_1", projectId: "prj_1", projectSlug: "web" };
 
@@ -187,7 +205,7 @@ describe(releaseBuild, () => {
 
         const released = await releaseBuild(build, execution, ports);
 
-        expect(released.kind).toBe("preview");
+        expect(released).toMatchObject({ kind: "preview" });
         expect(created[0]).toMatchObject({ branch: "feat/x", kind: "preview", scriptName: "from-wrangler-pr-feat-x" });
         expect(keys.minted[0]?.kind).toBe("preview");
     });
@@ -219,6 +237,26 @@ describe(releaseBuild, () => {
 
         await expect(releaseBuild(build, bundleOnly, ports)).rejects.toThrow(/no binding manifest/u);
         expect(keys.minted).toStrictEqual([]);
+    });
+
+    it("never releases a fork's pull request: no key minted, the deploy core (and so its secrets) never reached", async () => {
+        const { created, keys, ports } = harness({ target: { ...pushTarget, branch: "feat/x", fromFork: true, pullRequest: 9, trigger: "pull_request" } });
+        let started = 0;
+        const { start } = ports;
+
+        const released = await releaseBuild(build, execution, {
+            ...ports,
+            start: (request, caller) => {
+                started += 1;
+
+                return start(request, caller);
+            },
+        });
+
+        expect(released).toStrictEqual({ skipped: FORK_RELEASE_SKIP_REASON });
+        expect(started).toBe(0);
+        expect(keys).toStrictEqual({ minted: [], revoked: 0 });
+        expect(created).toStrictEqual([]);
     });
 
     it("refuses a build whose project is gone", async () => {

@@ -28,10 +28,12 @@ interface BuildRow {
     bundleHash?: string;
     commitSha: string;
     createdAt: number;
+    fromFork?: boolean;
     organizationId: Id<"organizations">;
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
+    pullRequest?: number;
     rootDirectory?: string;
     skipReason?: string;
     status: BuildStatus;
@@ -73,7 +75,8 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * trigger) is returned as-is (`reused: true`) instead of queuing a rebuild. The
  * trigger is part of the key because it decides the release: a pull request's
  * preview build must not swallow the production release of the same commit
- * once it is merged fast-forward.
+ * once it is merged fast-forward. Fork-ness is part of it for the same reason:
+ * a fork's build is never released, so it must not stand in for a release.
  *
  * Path filter: a push whose changed files match none of the project's watch
  * paths is recorded as a `skipped` build carrying the reason, so the Builds tab
@@ -86,84 +89,99 @@ export const recordPush = internalMutation
         branch: boundedString(LIMITS.gitRef),
         changes: pushChangesValidator,
         commitSha: boundedString(LIMITS.id),
+        // A pull request whose head is a fork's: built, never released.
+        fromFork: v.optional(v.boolean()),
         installationId: v.number(),
+        pullRequest: v.optional(v.number()),
         repository: boundedString(LIMITS.token),
         trigger: v.union(v.literal("push"), v.literal("pull_request")),
     })
-    .mutation(async ({ ctx: context, args: { branch, changes, commitSha, installationId, repository, trigger } }): Promise<RecordPushResult> => {
-        const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
-        const project = page[0];
+    .mutation(
+        async ({
+            ctx: context,
+            args: { branch, changes, commitSha, fromFork, installationId, pullRequest, repository, trigger },
+        }): Promise<RecordPushResult> => {
+            const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
+            const project = page[0];
 
-        if (!project) {
-            return null;
-        }
+            if (!project) {
+                return null;
+            }
 
-        // Only pushes from an installation the project's org has *claimed*
-        // build (staged-claim model, github-installations.ts). A spoofed RPC
-        // call must present a valid (org, installation) pair.
-        const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
-        const installation = installationPage[0];
+            // Only pushes from an installation the project's org has *claimed*
+            // build (staged-claim model, github-installations.ts). A spoofed RPC
+            // call must present a valid (org, installation) pair.
+            const { page: installationPage } = await context.db.githubInstallations.findMany({ where: { installationId } });
+            const installation = installationPage[0];
 
-        if (installation?.organizationId !== project.organizationId) {
-            return null;
-        }
+            if (installation?.organizationId !== project.organizationId) {
+                return null;
+            }
 
-        const { rootDirectory, watchPaths } = project;
-        const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const successful = existingPage.find(
-            (build) => build.status === "successful" && build.bundleHash && build.rootDirectory === rootDirectory && build.trigger === trigger,
-        );
+            const { rootDirectory, watchPaths } = project;
+            const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
+            const successful = existingPage.find(
+                (build) =>
+                    build.status === "successful" &&
+                    build.bundleHash &&
+                    build.rootDirectory === rootDirectory &&
+                    build.trigger === trigger &&
+                    (build.fromFork === true) === (fromFork === true),
+            );
 
-        if (successful) {
-            return { buildId: successful._id, reused: true };
-        }
+            if (successful) {
+                return { buildId: successful._id, reused: true };
+            }
 
-        const { now } = context;
-        const bounded: PushChanges =
-            "files" in changes && changes.files.length > MAX_CHANGED_FILES
-                ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
-                : changes;
-        const decision = decideBuild(bounded, rootDirectory, watchPaths);
-        const common = {
-            branch,
-            commitSha,
-            createdAt: now,
-            organizationId: project.organizationId,
-            projectId: project._id, // secret-scanner:allow -- domain field name
-            ...(rootDirectory === undefined ? {} : { rootDirectory }),
-            trigger,
-            updatedAt: now,
-        };
+            const { now } = context;
+            const bounded: PushChanges =
+                "files" in changes && changes.files.length > MAX_CHANGED_FILES
+                    ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
+                    : changes;
+            const decision = decideBuild(bounded, rootDirectory, watchPaths);
+            const common = {
+                branch,
+                commitSha,
+                createdAt: now,
+                ...(fromFork === true ? { fromFork: true } : {}),
+                organizationId: project.organizationId,
+                projectId: project._id, // secret-scanner:allow -- domain field name
+                ...(pullRequest === undefined ? {} : { pullRequest }),
+                ...(rootDirectory === undefined ? {} : { rootDirectory }),
+                trigger,
+                updatedAt: now,
+            };
 
-        if (!decision.build) {
-            const buildId = await context.db.insert("builds", { ...common, skipReason: decision.reason, status: "skipped" });
+            if (!decision.build) {
+                const buildId = await context.db.insert("builds", { ...common, skipReason: decision.reason, status: "skipped" });
 
-            return { buildId, reused: false, skipped: decision.reason };
-        }
+                return { buildId, reused: false, skipped: decision.reason };
+            }
 
-        // Backpressure: cap unfinished builds per project so a webhook storm
-        // (or spoofed spam) can't flood the queue.
-        const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
+            // Backpressure: cap unfinished builds per project so a webhook storm
+            // (or spoofed spam) can't flood the queue.
+            const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
+            const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
 
-        if (inFlight >= 5) {
-            throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
-        }
+            if (inFlight >= 5) {
+                throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
+            }
 
-        const buildId = await context.db.insert("builds", { ...common, status: "pending" });
+            const buildId = await context.db.insert("builds", { ...common, status: "pending" });
 
-        // The first line of the build's log says why it ran, so a build that a
-        // monorepo filter should have skipped is diagnosable from the log alone.
-        await context.db.insert("buildLogs", {
-            buildId,
-            createdAt: now,
-            level: "info",
-            line: `path filter: ${decision.reason}`,
-            organizationId: project.organizationId,
-        });
+            // The first line of the build's log says why it ran, so a build that a
+            // monorepo filter should have skipped is diagnosable from the log alone.
+            await context.db.insert("buildLogs", {
+                buildId,
+                createdAt: now,
+                level: "info",
+                line: `path filter: ${decision.reason}`,
+                organizationId: project.organizationId,
+            });
 
-        return { buildId, reused: false };
-    });
+            return { buildId, reused: false };
+        },
+    );
 
 /**
  * Rows scanned per status when looking for claimable work.
@@ -368,9 +386,11 @@ export const releaseTarget = internalQuery
         return {
             ...(project.activeScriptName === undefined ? {} : { activeScriptName: project.activeScriptName }),
             branch: build.branch,
+            ...(build.fromFork === true ? { fromFork: true } : {}),
             organizationId: build.organizationId,
             projectId: build.projectId, // secret-scanner:allow -- domain field name
             projectSlug: project.slug,
+            ...(build.pullRequest === undefined ? {} : { pullRequest: build.pullRequest }),
             ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
         };
     });

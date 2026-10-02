@@ -534,7 +534,10 @@ A connected repository deploys without the CLI. The flow, end to end:
    (or its wrangler `name`, then its slug); a pull request to a **preview**,
    `<alias>-pr-<branch>`, with the usual 5-day TTL. The core authorizes by deploy
    key, so each release gets one: minted for that build's project with the
-   release's kind as its ceiling, and deleted when the release ends.
+   release's kind as its ceiling, and deleted when the release ends. A pull
+   request from a **fork** is built but never released — a release resolves the
+   project's secrets and its ingest key — and its build log and commit status
+   say so ("fork pull requests are built but not deployed").
 5. **Record.** Release progress streams into the build's log; the build is
    completed with `deploymentId` linked; the commit status says whether it went
    live, linking the URL. A failed release never fails the build.

@@ -34,7 +34,7 @@ export interface ApiTypes {
         setProjectTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }, void>;
     };
     builds: {
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
     cells: {
@@ -196,7 +196,7 @@ export interface InternalApiTypes {
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
         expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
-        recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
         releaseTarget: FunctionReference<"query", { buildId: Id<"builds"> }, null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: FunctionReference<"query", { buildId: Id<"builds"> }, { commitSha: string; installationId: number; repository: string; } | null>;
     };

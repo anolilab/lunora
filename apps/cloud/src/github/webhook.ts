@@ -6,7 +6,7 @@
 
 import type { PushChanges } from "../builds/paths";
 import { MAX_CHANGED_FILES } from "../builds/paths";
-import { previewScriptName } from "../deploy/preview";
+import { forkPreviewScriptName, previewScriptName } from "../deploy/preview";
 import { constantTimeEqual } from "../security/constant-time-equal";
 
 const encoder = new TextEncoder();
@@ -36,6 +36,14 @@ export interface PreviewIntent {
     branch: string;
     /** PR head commit — the server-side preview build target (GAPS.md A3). */
     commitSha?: string;
+
+    /**
+     * The PR's head lives in another repository (a fork). Set on `upsert` only.
+     * A fork's code is built but never released: a preview release resolves the
+     * project's preview secrets and mints its ingest key, which an outside
+     * contributor must never be able to reach by opening a pull request.
+     */
+    fromFork?: boolean;
     installationId?: number;
     number: number;
     repository: string;
@@ -45,9 +53,22 @@ interface PullRequestPayload {
     action?: string;
     installation?: { id?: number };
     number?: number;
-    pull_request?: { base?: { sha?: string }; head?: { ref?: string; sha?: string } };
+    pull_request?: { base?: { sha?: string }; head?: { ref?: string; repo?: null | { full_name?: string }; sha?: string } };
     repository?: { full_name?: string };
 }
+
+/**
+ * Does the PR's head live outside the base repository?
+ *
+ * Fails closed: GitHub sends `head.repo: null` when the fork was deleted, and a
+ * payload with no head repository at all proves nothing — both count as a fork.
+ * Compared case-insensitively, as GitHub resolves repository names.
+ */
+const isForkHead = (event: PullRequestPayload, repository: string): boolean => {
+    const headRepository = event.pull_request?.head?.repo?.full_name;
+
+    return typeof headRepository !== "string" || headRepository.toLowerCase() !== repository.toLowerCase();
+};
 
 /**
  * Map a `pull_request` webhook payload to a preview intent, or `null` if the
@@ -71,7 +92,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     }
 
     if (action === "opened" || action === "synchronize" || action === "reopened") {
-        return { action: "upsert", baseSha, branch, commitSha, installationId, number, repository };
+        return { action: "upsert", baseSha, branch, commitSha, fromFork: isForkHead(event, repository), installationId, number, repository };
     }
 
     if (action === "closed") {
@@ -247,7 +268,11 @@ export interface GitHubWebhookHooks {
         branch: string;
         changes: PushChanges;
         commitSha: string;
+        /** The head is a fork's: built, never released (see {@link PreviewIntent.fromFork}). */
+        fromFork: boolean;
         installationId: number;
+        /** The pull request number, which names a fork's preview. */
+        pullRequest: number;
         repository: string;
     }) => Promise<BuildRecordResult>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
@@ -299,7 +324,9 @@ const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWeb
             branch: intent.branch,
             changes: await previewChanges({ ...intent, commitSha: intent.commitSha, installationId: intent.installationId }, options),
             commitSha: intent.commitSha,
+            fromFork: intent.fromFork !== false,
             installationId: intent.installationId,
+            pullRequest: intent.number,
             repository: intent.repository,
         });
     }
@@ -309,7 +336,7 @@ const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWeb
             accepted: true,
             intent,
             ...(previewBuild ? { previewBuild } : {}),
-            previewScriptName: previewScriptName(project.slug, intent.branch),
+            previewScriptName: intent.fromFork === true ? forkPreviewScriptName(project.slug, intent.number) : previewScriptName(project.slug, intent.branch),
             projectId: project.projectId, // secret-scanner:allow -- domain field name
         },
         { status: 200 },

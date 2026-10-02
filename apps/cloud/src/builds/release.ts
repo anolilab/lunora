@@ -18,17 +18,21 @@
  * without a control plane.
  */
 import type { ReleaseCaller, ReleaseFrame, ReleaseRequest, StartedRelease } from "../deploy/handler";
-import { previewScriptName } from "../deploy/preview";
-import type { BuildExecution, BuildRelease, ClaimedBuild } from "./runner";
+import { forkPreviewScriptName, previewScriptName } from "../deploy/preview";
+import type { BuildExecution, BuildRelease, BuildReleaseSkipped, ClaimedBuild } from "./runner";
 
 /** What the release needs to know about a build beyond its claim. */
 export interface BuildReleaseTarget {
     /** The project's current production alias, once it has one. */
     activeScriptName?: string;
     branch: string;
+    /** The build is a fork's pull request — built, never released. */
+    fromFork?: boolean;
     organizationId: string;
     projectId: string; // secret-scanner:allow -- domain field name
     projectSlug: string;
+    /** The pull request number, on `pull_request` builds that recorded one. */
+    pullRequest?: number;
     /** What recorded the build. Absent on rows that predate it, which release as previews. */
     trigger?: "pull_request" | "push";
 }
@@ -63,12 +67,28 @@ export interface BuildReleasePorts {
  * tenant's config can only reach a Worker the project owns or a new one.
  * Previews are per branch on top of that alias (`acme-pr-feat-x`, TTL'd by
  * `deployments.create`), so repeated pushes to one pull request update one Worker.
+ * A fork's pull request is named by its number instead of its branch, which
+ * the fork chose ({@link forkPreviewScriptName}) — though {@link releaseBuild}
+ * never releases one at all.
  */
 export const releaseRoute = (target: BuildReleaseTarget, execution: Pick<BuildExecution, "scriptName">): { kind: BuildRelease["kind"]; scriptName: string } => {
     const alias = target.activeScriptName ?? execution.scriptName ?? target.projectSlug;
 
-    return target.trigger === "push" ? { kind: "production", scriptName: alias } : { kind: "preview", scriptName: previewScriptName(alias, target.branch) };
+    if (target.trigger === "push" && target.fromFork !== true) {
+        return { kind: "production", scriptName: alias };
+    }
+
+    return {
+        kind: "preview",
+        scriptName: target.fromFork === true ? forkPreviewScriptName(alias, target.pullRequest) : previewScriptName(alias, target.branch),
+    };
 };
+
+/**
+ * Why a fork's pull request is not released. Shown in the build log and on the
+ * commit status, so a contributor sees the build passed and why nothing deployed.
+ */
+export const FORK_RELEASE_SKIP_REASON = "fork pull requests are built but not deployed";
 
 const text = (frame: ReleaseFrame, key: string): string | undefined => {
     const value = frame[key];
@@ -108,16 +128,25 @@ export const describeReleaseFrame = (frame: ReleaseFrame): { level: "error" | "i
  * Release one successful build. Throws when nothing could be recorded (no
  * manifest, no project, a refused payload); answers with `error` when a
  * deployment was recorded and did not go live. Never leaves its key behind.
+ *
+ * A fork's pull request answers `skipped` before anything is minted or started:
+ * a release resolves the project's `preview` and `all` secrets and injects the
+ * org's ingest key into the Worker, so releasing a fork's code would hand both
+ * to whoever opened the pull request.
  */
-export const releaseBuild = async (build: ClaimedBuild, execution: BuildExecution, ports: BuildReleasePorts): Promise<BuildRelease> => {
-    if (execution.manifest === undefined) {
-        throw new Error("this build carries no binding manifest, so it cannot be released: the build box predates release payloads");
-    }
-
+export const releaseBuild = async (build: ClaimedBuild, execution: BuildExecution, ports: BuildReleasePorts): Promise<BuildRelease | BuildReleaseSkipped> => {
     const target = await ports.target(build.buildId);
 
     if (!target) {
         throw new Error("the build's project no longer exists");
+    }
+
+    if (target.fromFork === true) {
+        return { skipped: FORK_RELEASE_SKIP_REASON };
+    }
+
+    if (execution.manifest === undefined) {
+        throw new Error("this build carries no binding manifest, so it cannot be released: the build box predates release payloads");
     }
 
     const { kind, scriptName } = releaseRoute(target, execution);
