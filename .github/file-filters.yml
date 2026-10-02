@@ -47,6 +47,9 @@ packages: &packages
 # .d.ts surface, plus the snapshots and the tool itself.
 api_surface:
     - "packages/**"
+    # `@lunora/hostd` lives in `apps/` but its `./protocol` subpath is a covered
+    # contract (`APP_CONTRACTS` in scripts/api-snapshot.js).
+    - "apps/hostd/**"
     # Inlined, so it is part of the built surface: a `shared/` type that a package
     # re-exports lands in that package's .d.ts, and the dist bytes `dist-production`
     # weighs are the inlined copy. Neither job could see a `shared/`-only change.
