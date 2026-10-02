@@ -20,7 +20,7 @@ export interface ApiTypes {
     };
     billing: {
         checkout: FunctionReference<"action", { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }, { url: string; }>;
-        entitlements: FunctionReference<"query", { organizationId: Id<"organizations"> }, { features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
+        entitlements: FunctionReference<"query", { organizationId: Id<"organizations"> }, { features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
         portal: FunctionReference<"action", { organizationId: Id<"organizations">; returnUrl: unknown }, { url: string; }>;
         processWebhook: FunctionReference<"action", { body: unknown; signature: unknown }, { applied: boolean; status: number; }>;
         subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;

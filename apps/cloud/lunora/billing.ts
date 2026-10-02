@@ -23,7 +23,7 @@ import { boundedString, LIMITS } from "./validators";
  * subscription resolves to the free-plan baseline.
  */
 
-const QUOTA_RESOURCES: QuotaResource[] = ["projects", "members", "previewDeployments"];
+const QUOTA_RESOURCES: QuotaResource[] = ["projects", "members", "previewDeployments", "boxes"];
 
 interface SubscriptionRow {
     cancelAtPeriodEnd?: boolean;
@@ -86,7 +86,7 @@ export const entitlements = query
         async ({
             ctx: context,
             args: { organizationId },
-        }): Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[] }> => {
+        }): Promise<{ features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[] }> => {
             await assertMember(context, organizationId);
 
             const resolved = await orgEntitlements(context, organizationId);

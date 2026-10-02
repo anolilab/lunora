@@ -896,7 +896,7 @@ export interface Caller {
     billing: {
         checkout: (args: { cancelUrl: unknown; organizationId: Id<"organizations">; priceId: unknown; successUrl: unknown }) => Promise<{ url: string; }>;
         enforceDunning: (args?: {}) => Promise<{ graced: number; recovered: number; suspended: number; }>;
-        entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
+        entitlements: (args: { organizationId: Id<"organizations"> }) => Promise<{ features: string[]; limits: Record<"boxes" | "members" | "previewDeployments" | "projects", number>; plans: string[]; }>;
         portal: (args: { organizationId: Id<"organizations">; returnUrl: unknown }) => Promise<{ url: string; }>;
         processWebhook: (args: { body: unknown; signature: unknown }) => Promise<{ applied: boolean; status: number; }>;
         subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;

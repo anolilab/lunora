@@ -34,7 +34,7 @@ describe("billing plans + quota", () => {
     it("bounds every resource even with empty entitlements", () => {
         const none = entitlementsWith({});
 
-        for (const resource of ["projects", "members", "previewDeployments"] as const) {
+        for (const resource of ["projects", "members", "previewDeployments", "boxes"] as const) {
             expect(effectiveLimit(none, resource)).toBe(FREE_LIMITS[resource]);
         }
     });

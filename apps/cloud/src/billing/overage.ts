@@ -34,6 +34,16 @@ export const INCLUDED_USAGE: Record<string, PeriodUsage> = {
     pro: { cpuMs: 30_000_000, requests: 10_000_000 },
 };
 
+/**
+ * The monthly charge for one customer box (plan 458 D12, G16): $5.00, in
+ * credits. A box's compute is the customer's own; this prices what the
+ * platform runs for it — its session object, its DNS, its releases and
+ * upgrades. Charged for every box enrolled and not revoked before the period
+ * began, whole months (a box revoked mid-month is still that month's), so the
+ * amount owed only ever grows within a period, as the delta debit requires.
+ */
+export const BOX_CREDITS_PER_MONTH = 500;
+
 /** Overage rates in credits (cents) per million units — cost-plus over the WfP basis. */
 const REQUEST_CREDITS_PER_MILLION = 100; // $1.00 per 1M requests (~3.3x cost)
 const CPU_MS_CREDITS_PER_MILLION = 10; // $0.10 per 1M CPU-ms (~5x cost)
@@ -44,15 +54,16 @@ export const includedUsageFor = (plan: string): PeriodUsage => INCLUDED_USAGE[pl
 /**
  * Cumulative overage credits owed for the period so far: usage beyond the
  * plan's included quota, priced at the overage rates, floored at whole
- * credits. Monotonically non-decreasing within a period, which makes the
- * delta-debit below safe to re-run.
+ * credits, plus {@link BOX_CREDITS_PER_MONTH} for each box billed this period.
+ * Monotonically non-decreasing within a period, which makes the delta-debit
+ * below safe to re-run.
  */
-export const overageCreditsOwed = (plan: string, usage: PeriodUsage): number => {
+export const overageCreditsOwed = (plan: string, usage: PeriodUsage, boxes = 0): number => {
     const included = includedUsageFor(plan);
     const overRequests = Math.max(0, (usage.requests ?? 0) - (included.requests ?? 0));
     const overCpuMs = Math.max(0, (usage.cpuMs ?? 0) - (included.cpuMs ?? 0));
 
-    return Math.floor((overRequests * REQUEST_CREDITS_PER_MILLION + overCpuMs * CPU_MS_CREDITS_PER_MILLION) / 1_000_000);
+    return Math.floor((overRequests * REQUEST_CREDITS_PER_MILLION + overCpuMs * CPU_MS_CREDITS_PER_MILLION) / 1_000_000) + boxes * BOX_CREDITS_PER_MONTH;
 };
 
 export interface OverageDebitPlan {
@@ -75,12 +86,14 @@ export interface OverageDebitPlan {
  */
 export const planOverageDebit = (input: {
     alreadyDebitedCredits: number;
+    /** Boxes billed this period (plan 458 G16). */
+    boxes?: number;
     organizationId: string;
     periodStart: number;
     plan: string;
     usage: PeriodUsage;
 }): null | OverageDebitPlan => {
-    const owedCredits = overageCreditsOwed(input.plan, input.usage);
+    const owedCredits = overageCreditsOwed(input.plan, input.usage, input.boxes ?? 0);
     const debitCredits = owedCredits - input.alreadyDebitedCredits;
 
     if (debitCredits <= 0) {
@@ -121,7 +134,7 @@ export type OverageOutcome = { credits: number; status: "debited" } | { status: 
  * `reference` and defeat Creem's dedup, charging the customer twice.
  */
 export const reconcileOverage = async (
-    input: { alreadyDebitedCredits: number; organizationId: string; periodStart: number; plan: string; usage: PeriodUsage },
+    input: { alreadyDebitedCredits: number; boxes?: number; organizationId: string; periodStart: number; plan: string; usage: PeriodUsage },
     ledger: CreditsLedgerPort,
     commitWatermark?: (owedCredits: number) => Promise<void>,
 ): Promise<OverageOutcome> => {
@@ -145,6 +158,8 @@ export const reconcileOverage = async (
 
 export interface OverageOrgInput {
     alreadyDebitedCredits: number;
+    /** Boxes billed this period: enrolled, and not revoked before it began (plan 458 G16). */
+    boxes?: number;
     organizationId: string;
     periodStart: number;
     plan: string;

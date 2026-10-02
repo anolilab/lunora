@@ -5,8 +5,10 @@ import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
 import { sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
+import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -55,6 +57,13 @@ interface BoxRow {
     status: BoxStatus;
     versions?: BoxVersions | null;
 }
+
+/** An org's boxes that count against its `boxes` limit: every one not revoked. */
+const activeBoxCount = async (context: QueryContext, organizationId: Id<"organizations">): Promise<number> => {
+    const { page } = await context.db.boxes.findMany({ where: { organizationId } });
+
+    return (page as BoxRow[]).filter((row) => row.status !== "revoked").length;
+};
 
 /** A box as the studio sees it. Explicitly projected, so a column added to the row later is not exposed by default. */
 export interface BoxView {
@@ -118,6 +127,15 @@ export const createEnrolment = mutation
         if (name.trim() === "") {
             throw new LunoraError("BAD_REQUEST", "a box needs a name");
         }
+
+        // An unused, unexpired token is a box on its way: counting it stops an owner
+        // minting past the plan's limit and enrolling the boxes afterwards.
+        const { page: enrolments } = await context.db.boxEnrolments.findMany({ where: { organizationId } });
+        const pending = (enrolments as { expiresAt: number; usedAt?: null | number }[]).filter(
+            (row) => row.usedAt == null && row.expiresAt > context.now,
+        ).length;
+
+        await assertWithinQuota(context, organizationId, "boxes", (await activeBoxCount(context, organizationId)) + pending);
 
         const token = mintEnrolmentToken();
         const expiresAt = context.now + ENROLMENT_TTL_MS;
@@ -364,6 +382,13 @@ export const enrol = internalMutation
 
         if (enrolment.expiresAt <= context.now) {
             throw new LunoraError("FORBIDDEN", "invalid or expired enrolment token");
+        }
+
+        // Re-checked at consumption: the plan may have shrunk since the token was minted.
+        const limit = await orgLimit(context, enrolment.organizationId, "boxes");
+
+        if ((await activeBoxCount(context, enrolment.organizationId)) >= limit) {
+            throw new LunoraError("FORBIDDEN", `boxes quota reached for this plan (limit ${String(limit)})`);
         }
 
         const slug = mintBoxSlug();

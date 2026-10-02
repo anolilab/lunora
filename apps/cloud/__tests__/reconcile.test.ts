@@ -27,9 +27,23 @@ describe(buildOverageReconcileData, () => {
 
         const { accounts, inputs, suspension } = await buildOverageReconcileData(database, 500);
 
-        expect(inputs).toContainEqual({ alreadyDebitedCredits: 40, organizationId: "org_a", periodStart: 500, plan: "pro", usage: { cpuMs: 7, requests: 12 } });
+        expect(inputs).toContainEqual({
+            alreadyDebitedCredits: 40,
+            boxes: 0,
+            organizationId: "org_a",
+            periodStart: 500,
+            plan: "pro",
+            usage: { cpuMs: 7, requests: 12 },
+        });
         // org_b has no usage/debits → zeroed input.
-        expect(inputs).toContainEqual({ alreadyDebitedCredits: 0, organizationId: "org_b", periodStart: 500, plan: "free", usage: { cpuMs: 0, requests: 0 } });
+        expect(inputs).toContainEqual({
+            alreadyDebitedCredits: 0,
+            boxes: 0,
+            organizationId: "org_b",
+            periodStart: 500,
+            plan: "free",
+            usage: { cpuMs: 0, requests: 0 },
+        });
         expect(accounts.get("org_a")).toBe("acct_a");
         expect(accounts.get("org_b")).toBeNull();
         expect(suspension.get("org_a")).toBeUndefined();

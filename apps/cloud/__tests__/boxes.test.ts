@@ -20,6 +20,9 @@ const keyPair = async (): Promise<{ privateKey: CryptoKey; publicKey: string }> 
 };
 
 const PUBLIC_KEY = toBase64Url(new Uint8Array(32).fill(7));
+
+/** An active pro subscription: 3 boxes (`src/billing/plans.ts`). */
+const PRO = [{ _id: "sub_1", priceId: "price_pro_monthly", provider: "creem", referenceId: "org_1", state: "active" }];
 const VERSIONS = { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" };
 
 const enrolArgs = (hashedToken: string, overrides: Record<string, unknown> = {}) => {
@@ -110,7 +113,7 @@ describe("box addresses", () => {
 
 describe("boxes.createEnrolment", () => {
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
-        const { ctx, ops } = makeCtx({ members: [owner("org_1")] }, { now: NOW });
+        const { ctx, ops } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
 
         const result = await createEnrolment.handler(ctx, { name: " edge ", organizationId: "org_1" as never });
 
@@ -123,6 +126,23 @@ describe("boxes.createEnrolment", () => {
         expect(stored).toMatchObject({ document: { createdBy: "usr_1", hashedToken: await sha256Hex(result.token), name: "edge", organizationId: "org_1" } });
         expect(JSON.stringify(ops)).not.toContain(result.token);
         expect(ops.some((op) => op.kind === "insert" && op.table === "auditLog")).toBe(true);
+    });
+
+    it("counts live boxes and unused tokens against the plan's boxes limit", async () => {
+        const live = [box({ _id: "b1" }), box({ _id: "b2" }), box({ _id: "b3", status: "revoked" })];
+        const unused = { _id: "e1", expiresAt: NOW + 60_000, organizationId: "org_1" };
+        const expired = { _id: "e2", expiresAt: NOW - 1, organizationId: "org_1" };
+        const { ctx } = makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
+
+        await expect(createEnrolment.handler(ctx, { name: "fourth", organizationId: "org_1" as never })).rejects.toThrow(
+            "boxes quota reached for this plan (limit 3)",
+        );
+    });
+
+    it("gives the free plan no boxes", async () => {
+        const { ctx } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+
+        await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toThrow("(limit 0)");
     });
 
     it("refuses a plain member", async () => {
@@ -148,7 +168,7 @@ describe("boxes.enrol", () => {
 
     it("consumes a fresh token: creates a pending box in the token's org and marks the token used", async () => {
         const row = await enrolment();
-        const { ctx, ops } = makeCtx({ boxEnrolments: [row] }, { now: NOW });
+        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [], subscriptions: PRO }, { now: NOW });
 
         const result = await enrol.handler(ctx, enrolArgs(row.hashedToken as string));
 
@@ -173,6 +193,14 @@ describe("boxes.enrol", () => {
             code: "FORBIDDEN",
         });
         expect(ops.filter((op) => op.kind === "insert" && op.table === "boxes")).toStrictEqual([]);
+    });
+
+    it("re-checks the limit when the token is consumed", async () => {
+        const row = await enrolment();
+        const { ctx, ops } = makeCtx({ boxEnrolments: [row], boxes: [box({ _id: "b1" })], subscriptions: [] }, { now: NOW });
+
+        await expect(enrol.handler(ctx, enrolArgs(row.hashedToken as string))).rejects.toThrow("boxes quota reached");
+        expect(ops).toStrictEqual([]);
     });
 
     it("refuses an expired or unknown token without saying which", async () => {

@@ -27,6 +27,29 @@ interface UsageRow {
     quantity: number;
 }
 
+interface BoxRow {
+    enrolledAt?: null | number;
+    organizationId: string;
+    revokedAt?: null | number;
+}
+
+/**
+ * Boxes billed for the period starting `periodStart`, per org: every box
+ * enrolled and not revoked before the period began. A box revoked during the
+ * month still counts for it, so the count only grows within a period.
+ */
+export const billedBoxesByOrg = (boxes: ReadonlyArray<BoxRow>, periodStart: number): Map<string, number> => {
+    const counts = new Map<string, number>();
+
+    for (const box of boxes) {
+        if (box.enrolledAt != null && (box.revokedAt == null || box.revokedAt >= periodStart)) {
+            counts.set(box.organizationId, (counts.get(box.organizationId) ?? 0) + 1);
+        }
+    }
+
+    return counts;
+};
+
 interface DebitRow {
     debitedCredits: number;
     organizationId: string;
@@ -82,6 +105,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
     }
 
     const debitRows = await drainTable<DebitRow>(database, "overageDebits", { where: { periodStart } });
+    const boxesByOrg = billedBoxesByOrg(await drainTable<BoxRow>(database, "boxes"), periodStart);
     const debitedByOrg = new Map<string, number>();
 
     for (const row of debitRows) {
@@ -99,6 +123,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
         suspension.set(organization._id, organization.suspendedReason);
         inputs.push({
             alreadyDebitedCredits: debitedByOrg.get(organization._id) ?? 0,
+            boxes: boxesByOrg.get(organization._id) ?? 0,
             organizationId: organization._id,
             periodStart,
             plan: organization.plan,

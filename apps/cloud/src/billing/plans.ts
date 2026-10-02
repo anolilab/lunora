@@ -10,6 +10,14 @@ import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
  * `limits.backupRetention` is how many daily tenant data snapshots a project
  * keeps (`src/backup/tenant-policy.ts`) — a retention setting, not a quota.
  *
+ * `limits.boxes` caps the customer machines an org may enrol for `celld-vps`
+ * (plan 458 G16), each of which is also charged per month
+ * (`BOX_CREDITS_PER_MONTH`, `src/billing/overage.ts`). Free has none: a box is a
+ * paid add-on, and the free tier's single project fits Workers for Platforms.
+ * Pro's 3 cover a production box plus a staging or regional one for a team of
+ * ten; enterprise's 50 sits where its 1000-project ceiling would spread over
+ * dedicated machines, and is a support conversation past that.
+ *
  * `priceIds` are placeholders here; Creem is product-based, so these map to
  * real Creem product ids configured per environment when the provider (Creem
  * via `@lunora/payment/creem`) is wired.
@@ -18,17 +26,17 @@ export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
     plans: {
         enterprise: {
             features: ["customDomains", "logStreams", "sso", "dedicatedCell"],
-            limits: { backupRetention: 30, members: 1000, previewDeployments: 1000, projects: 1000 },
+            limits: { backupRetention: 30, boxes: 50, members: 1000, previewDeployments: 1000, projects: 1000 },
             priceIds: ["price_enterprise"],
         },
         free: {
             features: [],
-            limits: { backupRetention: 3, members: 1, previewDeployments: 1, projects: 1 },
+            limits: { backupRetention: 3, boxes: 0, members: 1, previewDeployments: 1, projects: 1 },
             priceIds: ["price_free"],
         },
         pro: {
             features: ["customDomains", "logStreams"],
-            limits: { backupRetention: 14, members: 10, previewDeployments: 50, projects: 20 },
+            limits: { backupRetention: 14, boxes: 3, members: 10, previewDeployments: 50, projects: 20 },
             priceIds: ["price_pro_monthly", "price_pro_yearly"],
         },
     },
@@ -37,7 +45,7 @@ export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
 /** Baseline limits for an org with no active subscription. */
 export const FREE_LIMITS: Record<string, number> = LUNORA_CLOUD_PLANS.plans["free"]?.limits ?? {};
 
-export type QuotaResource = "members" | "previewDeployments" | "projects";
+export type QuotaResource = "boxes" | "members" | "previewDeployments" | "projects";
 
 /**
  * Effective limit for a resource under the resolved entitlements — the granted
