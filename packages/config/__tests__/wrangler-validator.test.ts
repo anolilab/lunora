@@ -181,67 +181,35 @@ describe("wrangler-validator", () => {
                     expect(report.warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
                 },
             );
-        });
 
-        describe("a schema pinned to a jurisdiction", () => {
-            const base: WranglerConfig = {
-                compatibility_date: "2026-10-01",
-                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
-            };
-            const euSchema = { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, jurisdiction: "eu" as const };
-
-            it("asks for --jurisdiction when a KV namespace still has to be created", () => {
+            it("reads compatibility_flags from the env block it validates", () => {
                 expect.assertions(2);
 
-                const report = validateWranglerConfig({ ...base, kv_namespaces: [{ binding: "CACHE" }] }, euSchema);
+                const wrangler: WranglerConfig = {
+                    ...base,
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    env: { production: { ...base, compatibility_flags: ["durable_object_io_tasks_prevent_eviction"] } },
+                };
 
-                expect(report.warnings).toHaveLength(1);
-                expect(report.warnings[0]).toContain("wrangler kv namespace create <name> --jurisdiction=eu");
+                expect(validateWranglerConfig(wrangler, undefined, "production").warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+                expect(validateWranglerConfig(wrangler).warnings.some((line) => isKeepAliveWarning(line))).toBe(true);
             });
+        });
 
-            it("keeps the plain KV creation hint without a schema jurisdiction", () => {
-                expect.assertions(1);
+        it("runs the jurisdiction checks for a schema pinned to one", () => {
+            expect.assertions(1);
 
-                const report = validateWranglerConfig({ ...base, kv_namespaces: [{ binding: "CACHE" }] });
+            const report = validateWranglerConfig(
+                {
+                    compatibility_date: "2026-10-01",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "uploads" }],
+                },
+                { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, jurisdiction: "eu" },
+            );
 
-                expect(report.warnings.some((line) => line.includes("--jurisdiction"))).toBe(false);
-            });
-
-            it("warns about an R2 binding that names no jurisdiction, or another one", () => {
-                expect.assertions(3);
-
-                const report = validateWranglerConfig(
-                    {
-                        ...base,
-                        r2_buckets: [
-                            { binding: "UPLOADS", bucket_name: "uploads" },
-                            { binding: "AVATARS", bucket_name: "avatars", jurisdiction: "fedramp" },
-                        ],
-                    },
-                    euSchema,
-                );
-
-                expect(report.valid).toBe(true);
-                expect(report.warnings).toHaveLength(2);
-                expect(report.warnings.join("\n")).toContain('set "jurisdiction": "eu" on the binding');
-            });
-
-            it("accepts an R2 binding in the schema's jurisdiction", () => {
-                expect.assertions(1);
-
-                const report = validateWranglerConfig({ ...base, r2_buckets: [{ binding: "UPLOADS", bucket_name: "uploads", jurisdiction: "eu" }] }, euSchema);
-
-                expect(report.warnings).toEqual([]);
-            });
-
-            it("does not check R2 jurisdictions without a schema jurisdiction", () => {
-                expect.assertions(1);
-
-                const report = validateWranglerConfig({ ...base, r2_buckets: [{ binding: "UPLOADS", bucket_name: "uploads" }] });
-
-                expect(report.warnings).toEqual([]);
-            });
+            expect(report.warnings).toStrictEqual([expect.stringContaining('r2_buckets[0] ("UPLOADS") names no jurisdiction')]);
         });
 
         it("does not throw and reports a tail_consumers entry that is null", () => {

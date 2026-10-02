@@ -53,6 +53,7 @@ const NON_INHERITABLE_KEYS = [
 const INHERITABLE_KEYS = [
     "assets",
     "compatibility_date",
+    "compatibility_flags",
     "exports",
     "logpush",
     "main",
