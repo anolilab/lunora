@@ -35,6 +35,7 @@ const DOCTOR_CODES = [
     "ai-binding-missing",
     "ai-gateway-default",
     "ai-gateway-token-unused",
+    "cimd-fetch-not-strictly-public",
     "cli-shadowed",
     "cpu-limit-missing",
     "d1-placeholder-id",
@@ -337,6 +338,47 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
             fix: `wrangler ${createMetadataIndexArgs({ index: declaration.index, property: declaration.property, type }).join(" ")}`,
             level: "info",
             message: `vector index "${declaration.index}" filters on metadata "${declaration.property}" — that needs a Vectorize metadata index (\`lunora deploy\` creates it).`,
+        });
+    }
+};
+
+/** The compatibility flag `workersCimdFetch()` (from `@lunora/auth/cimd/workers`) requires. */
+const STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
+
+/**
+ * `@lunora/auth/cimd/workers` imported, but a deployable config lacks the
+ * `global_fetch_strictly_public` flag → WARN.
+ *
+ * Without the flag, `fetch` from the Worker can reach private addresses, so the
+ * CIMD transport refuses to build — every request that constructs the auth
+ * instance then fails at startup. Each `env.<name>` that declares its own
+ * `compatibility_flags` replaces the top-level list, so it is checked on its own.
+ * WARN rather than FAIL because usage is inferred from an import, which a
+ * type-only or unused import can trip.
+ */
+const checkCimdFetchFlag = (parsed: WranglerConfig | undefined, usesCimdWorkers: boolean, findings: Finding[]): void => {
+    if (parsed === undefined || !usesCimdWorkers) {
+        return;
+    }
+
+    const missing: string[] = [];
+
+    if (!(parsed.compatibility_flags ?? []).includes(STRICTLY_PUBLIC_FLAG)) {
+        missing.push("the top level");
+    }
+
+    for (const [name, environment] of Object.entries(parsed.env ?? {})) {
+        if (environment.compatibility_flags !== undefined && !environment.compatibility_flags.includes(STRICTLY_PUBLIC_FLAG)) {
+            missing.push(`env.${name}`);
+        }
+    }
+
+    if (missing.length > 0) {
+        findings.push({
+            code: "cimd-fetch-not-strictly-public",
+            fix: `Add "${STRICTLY_PUBLIC_FLAG}" to "compatibility_flags" in wrangler.jsonc.`,
+            level: "warn",
+            message: `@lunora/auth/cimd/workers is imported, but ${missing.join(", ")} of wrangler.jsonc lacks the ${STRICTLY_PUBLIC_FLAG} compatibility flag — workersCimdFetch() refuses to build without it.`,
         });
     }
 };
@@ -738,6 +780,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };
 

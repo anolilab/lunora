@@ -619,6 +619,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
         ["@lunora/x402/charge", "usesX402Charge", /hint: @lunora\/x402\/charge/u],
         ["@lunora/x402/pay", "usesX402Pay", /hint: @lunora\/x402\/pay/u],
+        ["@lunora/auth/cimd/workers", "usesCimdWorkers", /global_fetch_strictly_public/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 
