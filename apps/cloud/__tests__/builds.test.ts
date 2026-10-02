@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BuildRunnerPorts } from "../src/builds/runner";
-import { runBuild } from "../src/builds/runner";
+import { BUILD_EXECUTE_BUDGET_MS, runBuild, SCHEDULED_INVOCATION_LIMIT_MS, withinBudget } from "../src/builds/runner";
 import { parseInstallationEvent, parsePushEvent } from "../src/github/webhook";
 
 /** Server-side builds + push-to-deploy (GAPS.md A3/A4). */
@@ -66,6 +66,38 @@ describe(parseInstallationEvent, () => {
         expect(parseInstallationEvent({ ...payload, action: "deleted" })?.action).toBe("deleted");
         expect(parseInstallationEvent({ ...payload, action: "suspend" })).toBeNull();
         expect(parseInstallationEvent({ action: "created" })).toBeNull();
+    });
+});
+
+describe(withinBudget, () => {
+    it("answers the work when it finishes in time", async () => {
+        await expect(withinBudget(Promise.resolve("done"), 1000, "the build")).resolves.toBe("done");
+    });
+
+    it("fails the work that outruns its budget, naming the scheduled-invocation cap", async () => {
+        vi.useFakeTimers();
+
+        try {
+            const late = withinBudget(
+                new Promise<never>(() => {
+                    // Never settles: a build box that hangs.
+                }),
+                BUILD_EXECUTE_BUDGET_MS,
+                "the build",
+            ).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(BUILD_EXECUTE_BUDGET_MS + 1);
+
+            expect(String(await late)).toContain(
+                `the build ran past 9 minutes, the most one scheduled invocation leaves it (Cloudflare stops a Cron Trigger invocation after ${String(SCHEDULED_INVOCATION_LIMIT_MS / 60_000)} minutes)`,
+            );
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("fits the build budget inside the invocation with room for the release", () => {
+        expect(BUILD_EXECUTE_BUDGET_MS).toBeLessThan(SCHEDULED_INVOCATION_LIMIT_MS - 5 * 60 * 1000);
     });
 });
 

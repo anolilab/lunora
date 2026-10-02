@@ -92,6 +92,45 @@ export interface BuildRunnerPorts {
 }
 
 /**
+ * Cloudflare's wall-clock cap on one scheduled (Cron Trigger) invocation: the
+ * runtime waits for `scheduled()` "up to a maximum of 15 minutes", and
+ * `ctx.waitUntil` work must settle "before the invocation completes" — it buys
+ * no extra time. The build drain runs inside the every-minute tick, so a build
+ * AND its release have to fit in it.
+ * https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/
+ * https://developers.cloudflare.com/workers/platform/limits/ (Cron Triggers: 15 min duration)
+ */
+export const SCHEDULED_INVOCATION_LIMIT_MS = 15 * 60 * 1000;
+
+/**
+ * How long one build's execution may run, leaving the rest of the invocation
+ * for fetching the source before it and the release after it. A build past it
+ * fails with the reason instead of being cut off mid-flight, which would leave
+ * its row `building` until the stale-lease recovery rebuilt it, forever.
+ */
+export const BUILD_EXECUTE_BUDGET_MS = 9 * 60 * 1000;
+
+/** `work`, or a rejection naming the budget once `budgetMs` passes. The timer never outlives the work. */
+export const withinBudget = async <T>(work: Promise<T>, budgetMs: number, what: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(
+                new Error(
+                    `${what} ran past ${String(Math.round(budgetMs / 60_000))} minutes, the most one scheduled invocation leaves it (Cloudflare stops a Cron Trigger invocation after ${String(SCHEDULED_INVOCATION_LIMIT_MS / 60_000)} minutes); make the install or build faster`,
+                ),
+            );
+        }, budgetMs);
+    });
+
+    try {
+        return await Promise.race([work, expired]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/**
  * The marker the build dispatcher's `unconfigured()` ports (`control-plane.ts`) put in their message.
  *
  * Shared rather than duplicated as a string literal, because two places have to

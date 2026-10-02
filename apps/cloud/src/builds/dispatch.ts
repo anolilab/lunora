@@ -29,8 +29,14 @@ export interface BuildDispatchResult {
     outcomes: BuildOutcome[];
 }
 
-/** Default per-tick drain cap — bounds Cloudflare/container work in one scheduled invocation. */
-export const DEFAULT_MAX_BUILDS_PER_TICK = 5;
+/**
+ * Builds one tick runs. One: a build and its release take minutes, and a
+ * scheduled invocation gets 15 of them in all (`SCHEDULED_INVOCATION_LIMIT_MS`
+ * in `runner.ts`), so a second build in the same tick would start with no time
+ * left to finish. The queue still drains in parallel — every minute's tick is
+ * its own invocation and claims the next build.
+ */
+export const DEFAULT_MAX_BUILDS_PER_TICK = 1;
 
 /**
  * Claim and run up to `maxBuilds` builds in one tick, stopping as soon as the

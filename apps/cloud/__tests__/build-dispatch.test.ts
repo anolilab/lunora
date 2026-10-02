@@ -61,6 +61,7 @@ describe(runBuildDispatch, () => {
                     },
                 }),
             }),
+            2,
         );
 
         expect(completed).toStrictEqual(["a", "b"]);
@@ -116,11 +117,18 @@ describe(runBuildDispatch, () => {
                         }),
                 }),
             }),
+            2,
         );
 
         // Both builds were attempted; the first failed but did not abort the drain.
         expect(result.outcomes).toHaveLength(2);
         expect(result.outcomes.every((outcome) => outcome.status === "failed")).toBe(true);
+    });
+
+    it("runs one build per tick by default — a scheduled invocation has room for one build and its release", async () => {
+        const result = await runBuildDispatch(ports({ claimNext: queue([claimed("a"), claimed("b")]) }));
+
+        expect(result.outcomes).toHaveLength(1);
     });
 
     it("passes the runner id through to the lease", async () => {

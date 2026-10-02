@@ -25,7 +25,7 @@ import { runBuildDispatch } from "./dispatch";
 import type { BuildReleaseTarget } from "./release";
 import { releaseBuild } from "./release";
 import type { BuildRunnerPorts, ClaimedBuild } from "./runner";
-import { UNCONFIGURED_MARKER } from "./runner";
+import { BUILD_EXECUTE_BUDGET_MS, UNCONFIGURED_MARKER, withinBudget } from "./runner";
 
 /** The build box's Container DO namespace, the way `provisionBoxFrom` reaches the provision box. */
 const buildBoxFrom = (environment: Record<string, unknown>): ContainerAccessor =>
@@ -83,7 +83,10 @@ export const dispatchBuilds = async (input: {
         // while Cloudflare provisions) while letting a genuine 5xx from a
         // running box pass straight through. Retrying a real build failure
         // would just pay for the same install twice.
-        execute: async (source, rootDirectory, onLine) => await executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine),
+        // Bounded so the release still fits the scheduled invocation this runs in
+        // (`SCHEDULED_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
+        execute: async (source, rootDirectory, onLine) =>
+            await withinBudget(executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine), BUILD_EXECUTE_BUDGET_MS, "the build"),
         fail: async (buildId, error) => {
             await context.runMutation(internal.builds.fail, { buildId, error, runnerId });
         },

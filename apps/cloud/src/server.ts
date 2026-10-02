@@ -745,9 +745,15 @@ const BUILD_DISPATCH_URL = "https://control-plane.internal/v1/builds/dispatch";
  * a `scheduled()` invocation has no request. It used to be a Lunora cron action,
  * which has the context but not the Worker's bindings, and a release needs those.
  *
- * Handed to `waitUntil` rather than awaited: a build runs for minutes, and the
- * tenant cron fan-out below must not wait behind it. No-ops without the admin
- * token the route is gated on.
+ * Handed to `waitUntil` rather than awaited, so the tenant cron fan-out below
+ * does not wait behind a build. `waitUntil` buys no extra time: the work must
+ * settle before the invocation completes, and a scheduled invocation is capped
+ * at 15 minutes of wall time
+ * (https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/,
+ * https://developers.cloudflare.com/workers/platform/limits/). So the drain is
+ * sized to fit it: one build per tick (`DEFAULT_MAX_BUILDS_PER_TICK`), its
+ * execution bounded by `BUILD_EXECUTE_BUDGET_MS`, the rest left for its
+ * release. No-ops without the admin token the route is gated on.
  */
 const drainBuildQueue = async (env: Env, context: ExecutionContextLike, target: ReturnType<typeof createWorker>): Promise<void> => {
     if (!env.LUNORA_ADMIN_TOKEN) {
