@@ -2648,6 +2648,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260929.1(patch_hash=8826064a04260cfd167e39f9c13d884e77775106bf1d4ad63e2f99492818c2d5)
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../config
       '@lunora/server':
         specifier: workspace:*
         version: link:../server

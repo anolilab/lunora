@@ -24,7 +24,7 @@
  * through this same transport without consulting it. Add `jwks_uri` to cimd's
  * originBoundFields so it must share the allowlisted `client_id` origin.
  *
- * On Node, use `fetchClientMetadataResource` from `@lunora/auth/cimd/node`, which
+ * On Node, use the default export of `@lunora/auth/cimd/node`, which
  * does pin the connection.
  *
  * Kept off the package root (and out of `./plugins`) because it is Workers-only:

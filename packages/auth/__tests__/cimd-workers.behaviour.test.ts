@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import workersCimdFetch from "../src/cimd-workers";
@@ -52,6 +53,21 @@ describe(workersCimdFetch, () => {
         stubCompatibilityFlag(false);
 
         expect(() => workersCimdFetch()).toThrow("global_fetch_strictly_public");
+    });
+
+    // The transport keeps its own copy of the flag name (a runtime package cannot
+    // depend on @lunora/config); `lunora doctor` checks the config's. They must agree,
+    // or doctor passes a deploy whose transport then refuses to build.
+    it("probes the same flag lunora doctor checks for", () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("Cloudflare", { compatibilityFlags: { [GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG]: true } });
+
+        expect(() => workersCimdFetch()).not.toThrow();
+
+        vi.stubGlobal("Cloudflare", { compatibilityFlags: {} });
+
+        expect(() => workersCimdFetch()).toThrow(GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG);
     });
 
     // Every runtime that is not workerd lacks the `Cloudflare` global entirely. That

@@ -64,6 +64,22 @@
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { inviteOnly } from "./invite-only";
 
+// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`,
+// whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind
+// `requireMcpAuth`. better-auth 1.7 moved these out of its core barrel into
+// `@better-auth/mcp` and renamed `withMcpAuth` to `requireMcpAuth`.
+//
+// `requireMcpAuth(auth, handler, opts)` protects a route on the SAME deployment
+// as the authorization server: it reads issuer/JWKS defaults off the auth
+// instance. It is Lunora's wrapper, which makes `resource` required — better-auth's
+// `baseURL` default is an audience no `mcp()` token carries. `mcpDiscoveryPaths`
+// names the two `.well-known` paths to route to `auth.handler` next to it.
+// `createMcpProtectedRequestHandler(options, handler)` is the split-deployment
+// form — a resource server that only holds verification config, no auth
+// instance. It replaced 1.7.0-rc's `mcpHandler`, which the GA release dropped.
+export type { LunoraRequireMcpAuthOptions } from "./mcp-auth";
+export { mcpDiscoveryPaths, requireMcpAuth } from "./mcp-auth";
+
 /**
  * Publish which plugins and social providers this deployment enabled, at
  * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
@@ -84,21 +100,9 @@ export { apiKey } from "@better-auth/api-key";
 // `mcp()` server unassisted. Opt-in: nothing fetches until you add the plugin.
 // It needs a fetch transport that keeps those fetches on the public internet —
 // `workersCimdFetch()` from `@lunora/auth/cimd/workers` on Cloudflare Workers,
-// `@better-auth/cimd/node`'s `fetchClientMetadataResource` on Node.
+// the default export of `@lunora/auth/cimd/node` on Node.
 export { cimd } from "@better-auth/cimd";
-
-// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`,
-// whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind
-// `requireMcpAuth`. better-auth 1.7 moved these out of its core barrel into
-// `@better-auth/mcp` and renamed `withMcpAuth` to `requireMcpAuth`.
-//
-// `requireMcpAuth(auth, handler, opts)` protects a route on the SAME deployment
-// as the authorization server: it reads issuer/JWKS/resource defaults off the
-// auth instance. `createMcpProtectedRequestHandler(options, handler)` is the
-// split-deployment form — a resource server that only holds verification
-// config, no auth instance. It replaced 1.7.0-rc's `mcpHandler`, which the GA
-// release dropped.
-export { createMcpProtectedRequestHandler, mcp, requireMcpAuth } from "@better-auth/mcp";
+export { createMcpProtectedRequestHandler, mcp } from "@better-auth/mcp";
 
 // Turn your app into an OAuth/OpenID Connect provider other apps sign in with.
 // Replaces the `oidcProvider` plugin, which better-auth deprecated in 1.6 and

@@ -1216,6 +1216,12 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
+## `@lunora/auth/cimd/node`
+
+### `default` (const)
+
+Re-exported from `@better-auth/cimd` — signature tracked at its source.
+
 ## `@lunora/auth/cimd/workers`
 
 ### `default` (const)
@@ -1289,6 +1295,14 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 ### `IssuedSignUpInvitation` (interface)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `LunoraRequireMcpAuthOptions` (type)
+
+```ts
+type LunoraRequireMcpAuthOptions = {
+    resource: string;
+} & RequireMcpAuthOptions;
+```
 
 ### `SignUpInvitation` (interface)
 
@@ -1408,6 +1422,12 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `@better-auth/mcp` — signature tracked at its source.
 
+### `mcpDiscoveryPaths` (const)
+
+```ts
+const mcpDiscoveryPaths: (resource: string, authBasePath?: string) => ReadonlyArray<string>;
+```
+
 ### `multiSession` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
@@ -1446,7 +1466,9 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ### `requireMcpAuth` (const)
 
-Re-exported from `@better-auth/mcp` — signature tracked at its source.
+```ts
+const requireMcpAuth: (auth: McpAuthInstance, handler: McpProtectedHandler, options: LunoraRequireMcpAuthOptions) => ((request: Request) => Promise<Response>);
+```
 
 ### `scim` (function)
 
@@ -1807,6 +1829,18 @@ interface DoStorageLike {
     };
     transaction: <R>(closure: () => Promise<R>) => Promise<R>;
 }
+```
+
+### `McpAuthInstance` (type)
+
+```ts
+type McpAuthInstance = Parameters<typeof requireMcpAuth$1>[0];
+```
+
+### `McpProtectedHandler` (type)
+
+```ts
+type McpProtectedHandler = Parameters<typeof requireMcpAuth$1>[1];
 ```
 
 ### `MiddlewareNext` (interface)

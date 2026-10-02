@@ -37,6 +37,7 @@ const EXPECTED_EXPORTS = [
     "lastLoginMethod",
     "magicLink",
     "mcp",
+    "mcpDiscoveryPaths",
     "multiSession",
     "oAuthProxy",
     "oauthDeviceAuthorization",
