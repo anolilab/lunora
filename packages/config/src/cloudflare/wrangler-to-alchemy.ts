@@ -193,6 +193,7 @@ const UNSUPPORTED_FIELDS = [
     "ai_search_namespaces",
     "analytics",
     "analytics_engine_datasets",
+    "artifacts",
     "assets",
     "browser",
     "containers",
