@@ -27,6 +27,7 @@ import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { runBoxSweep } from "./boxes/reconcile";
+import { manifestUrlOf, resumeHostdRollouts, upgradeDispatch } from "./boxes/rollout";
 import { boxSession } from "./boxes/session-client";
 import { buildExec, controlPlaneDatabase } from "./d1-store";
 import { resolveAdminToken } from "./deploy/admin-token";
@@ -635,6 +636,31 @@ const sweepBoxes = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Resume `lunora-hostd` rollouts (plan 458 W7, `src/boxes/rollout.ts`): every
+ * release a box still desires is re-planned and run, canary first, skipping
+ * boxes already on it. `POST /v1/hostd/rollout` starts a run on its request's
+ * `waitUntil`, which the runtime cuts off ~30 s after the response; this is
+ * what carries a fleet the rest of the way. No-ops without the box bindings.
+ */
+const sweepHostdRollouts = async (env: Env): Promise<void> => {
+    const namespace = env.BOX_SESSION;
+    const origin = env.LUNORA_ORIGIN_URL;
+
+    if (!env.DB || namespace === undefined || origin === undefined) {
+        return;
+    }
+
+    const results = await resumeHostdRollouts({
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        dispatch: upgradeDispatch(namespace),
+        manifestUrlFor: (releaseId) => manifestUrlOf(origin, releaseId),
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[hostd-rollout]", JSON.stringify(results));
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -660,6 +686,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // a revoke or an org purge left behind, within the hour. It also runs ahead
     // of the six-hourly code crons — see scheduled().
     { cron: EVERY_HOUR, run: sweepBoxes },
+    // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
+    { cron: EVERY_HOUR, run: sweepHostdRollouts },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

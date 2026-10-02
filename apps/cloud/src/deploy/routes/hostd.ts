@@ -6,15 +6,17 @@
  * - `GET /v1/hostd/releases/:releaseId/manifest` — `boxKey`: a box fetches the
  *   envelope an `upgrade` job names, with a request signed by its key.
  * - `POST /v1/hostd/rollout` — `adminToken`: point boxes (named, or all) at a
- *   release and roll it out over their sessions, canary first.
+ *   release and roll it out over their sessions, canary first — 202, run after
+ *   the response.
  */
+import type { D1DatabaseLike } from "@lunora/d1";
+
 import { internal } from "../../../lunora/_generated/api.js";
 import type { RolloutBox } from "../../../lunora/boxes";
 import type { HostdReleaseView } from "../../../lunora/hostd-releases";
 import { verifyReleaseEnvelope, versionsOf } from "../../boxes/hostd-releases";
-import { rolloutHostdRelease } from "../../boxes/rollout";
-import { boxSession } from "../../boxes/session-client";
-import stripTrailingSlashes from "../../lib/strip-trailing-slashes";
+import { manifestUrlOf, planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
+import { controlPlaneDatabase } from "../../d1-store";
 import { matchRoutePath } from "../route-path";
 import type { BoxRouteEnvironment } from "./boxes";
 import { verifiedBoxRequest } from "./boxes";
@@ -23,9 +25,6 @@ import { jsonError, rejected, requireContext } from "./shared";
 import { requireAdminToken } from "./tenant-admin";
 
 type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: string };
-
-/** How long one box may take to download, verify and restart onto a release. */
-const UPGRADE_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** The manifest path; `:releaseId` is a release id (`[A-Za-z0-9_-]`, the protocol's id alphabet). */
 export const HOSTD_MANIFEST_PATH = "/v1/hostd/releases/:releaseId/manifest";
@@ -104,9 +103,11 @@ const positiveInteger = (value: unknown): number | undefined => (typeof value ==
 /**
  * `POST /v1/hostd/rollout` — body `{ releaseId, boxIds?, canarySize?, batchSize? }`.
  * Sets `desiredReleaseId` on the named boxes (or every box that is not
- * revoked), then upgrades the ones online now, canary first, halting on
- * failures; the rest upgrade when they reconnect. Holds the request for the
- * whole run — an operator action, not a hot path.
+ * revoked) — the durable intent — plans the upgrade of the ones online now,
+ * and answers 202 with the batches, canary first. The run starts on the
+ * request's `waitUntil`; the hourly sweep resumes whatever that run did not
+ * reach, and boxes that are offline upgrade when they reconnect
+ * (`src/boxes/rollout.ts`).
  */
 export const handleHostdRolloutRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
     const unauthorized = requireAdminToken(request, environment);
@@ -117,9 +118,10 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
 
     const context = requireContext(environment);
     const namespace = environment.BOX_SESSION;
+    const origin = environment.LUNORA_ORIGIN_URL;
 
-    if (!namespace || !environment.LUNORA_ORIGIN_URL) {
-        return jsonError(503, "rollouts need BOX_SESSION and LUNORA_ORIGIN_URL");
+    if (!namespace || !origin || environment.DB == null) {
+        return jsonError(503, "rollouts need BOX_SESSION, DB and LUNORA_ORIGIN_URL");
     }
 
     const body = (await request.json().catch(() => null)) as null | RolloutBody;
@@ -142,21 +144,38 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
         const boxes = await context.runMutation<RolloutBox[]>(internal.boxes.setDesiredRelease, { ...(boxIds === undefined ? {} : { boxIds }), releaseId });
         const canarySize = positiveInteger(body.canarySize);
         const batchSize = positiveInteger(body.batchSize);
-        const result = await rolloutHostdRelease({
+        const planned = planHostdRollout({
             ...(batchSize === undefined ? {} : { batchSize }),
             boxes,
             ...(canarySize === undefined ? {} : { canarySize }),
-            dispatch: (boxId, job) =>
-                boxSession(namespace, boxId)
-                    .dispatch(job, { timeoutMs: UPGRADE_TIMEOUT_MS })
-                    .catch((error: unknown) => {
-                        return { error: { code: "DISPATCH_FAILED", message: error instanceof Error ? error.message : String(error) }, ok: false };
-                    }),
-            manifestUrl: `${stripTrailingSlashes(environment.LUNORA_ORIGIN_URL)}/v1/hostd/releases/${encodeURIComponent(releaseId)}/manifest`,
+            manifestUrl: manifestUrlOf(origin, releaseId),
             release,
         });
+        const executionContext = environment.__executionCtx;
+        const waitUntil = planned.batches.length > 0 ? executionContext?.waitUntil?.bind(executionContext) : undefined;
+        const started = waitUntil !== undefined;
 
-        return Response.json({ releaseId, ...result });
+        if (waitUntil !== undefined) {
+            waitUntil(
+                runHostdRollout(planned, {
+                    dispatch: upgradeDispatch(namespace),
+                    withdraw: withdrawDesiredRelease(controlPlaneDatabase(environment.DB as D1DatabaseLike), releaseId),
+                }).then(
+                    (result) => {
+                        // eslint-disable-next-line no-console -- the run outlives the response; Workers Logs is its only record
+                        console.log("[hostd-rollout]", releaseId, JSON.stringify(result));
+
+                        return result;
+                    },
+                    (error: unknown) => {
+                        // eslint-disable-next-line no-console -- see above
+                        console.error("[hostd-rollout]", releaseId, error);
+                    },
+                ),
+            );
+        }
+
+        return Response.json({ batches: planned.batches, deferred: planned.deferred, releaseId, skipped: planned.skipped, started }, { status: 202 });
     } catch (error) {
         return rejected(error, "rollout failed");
     }
