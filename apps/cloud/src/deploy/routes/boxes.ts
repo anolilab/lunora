@@ -17,6 +17,8 @@ import type { BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
+import type { BoxDnsEnvironment } from "../../targets/celld-vps/dns";
+import { boxDnsFromEnv, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
 import { sha256Hex } from "../keys";
 import { createReleaseStore } from "../release-store";
 import { matchRoutePath } from "../route-path";
@@ -31,7 +33,46 @@ export type BoxRouteEnvironment = {
     LUNORA_BOX_DOMAIN?: string;
 };
 
-type BoxRouterEnv = BoxRouteEnvironment & RouterEnv;
+type BoxRouterEnv = BoxDnsEnvironment & BoxRouteEnvironment & RouterEnv;
+
+/** Longest DNS failure kept on a box row (`boxes.recordDns`'s bound). */
+const MAX_DNS_ERROR = 256;
+
+/**
+ * Converge (or remove) a box's records in the platform's box zone (plan 458
+ * G13). Answers `null` on success, or why not — which goes on the box row
+ * rather than failing the enrolment or revocation it belongs to.
+ */
+const applyBoxDns = async (
+    environment: BoxRouterEnv,
+    box: { ipv4?: string; ipv6?: string; slug: string },
+    action: "remove" | "sync",
+): Promise<null | string> => {
+    const dns = boxDnsFromEnv(environment);
+
+    if ("unavailable" in dns) {
+        return dns.unavailable;
+    }
+
+    try {
+        await (action === "sync"
+            ? syncBoxDns(dns.api, {
+                  domain: dns.domain,
+                  ...(box.ipv4 === undefined ? {} : { ipv4: box.ipv4 }),
+                  ...(box.ipv6 === undefined ? {} : { ipv6: box.ipv6 }),
+                  slug: box.slug,
+                  zoneId: dns.zoneId,
+              })
+            : removeBoxDns(dns.api, { domain: dns.domain, slug: box.slug, zoneId: dns.zoneId }));
+
+        return null;
+    } catch (error) {
+        return `could not ${action === "sync" ? "write" : "remove"} the box's DNS records: ${error instanceof Error ? error.message : String(error)}`.slice(
+            0,
+            MAX_DNS_ERROR,
+        );
+    }
+};
 
 /** The apex box hostnames live under. */
 export const boxDomainOf = (environment: BoxRouteEnvironment): string => environment.LUNORA_BOX_DOMAIN ?? "boxes.lunora.app";
@@ -84,8 +125,15 @@ export const handleBoxEnrolRoute = async (request: Request, environment: BoxRout
             versions: { caddy: versions.caddy, celld: versions.celld, hostd: versions.hostd },
         });
 
+        // Idempotent, so a retried enrolment re-converges the records too. A failure
+        // is recorded on the box, never a failed enrolment: the box is real either way.
+        const dnsError = await applyBoxDns(environment, result, "sync");
+
+        await context.runMutation(internal.boxes.recordDns, { boxId: result.boxId, dnsError }).catch(() => undefined);
+
         return Response.json({
             boxId: result.boxId,
+            ...(dnsError === null ? {} : { dnsError }),
             hostname: `${result.slug}.${boxDomainOf(environment)}`,
             organizationId: result.organizationId,
             slug: result.slug,
@@ -143,8 +191,13 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
         return jsonError(400, "id and organizationId are required");
     }
 
+    let revoked: { ipv4?: string; ipv6?: string; slug: string };
+
     try {
-        await context.runMutation<{ ipv4?: string; ipv6?: string; slug: string }>(api.boxes.revoke, { id: body.id, organizationId: body.organizationId });
+        revoked = await context.runMutation<{ ipv4?: string; ipv6?: string; slug: string }>(api.boxes.revoke, {
+            id: body.id,
+            organizationId: body.organizationId,
+        });
     } catch (error) {
         return rejected(error, "revoke failed");
     }
@@ -158,7 +211,12 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
               )
         : false;
 
-    return Response.json({ ok: true, sessionClosed: closed });
+    // The box's hostnames go with it, so nothing under the platform's zone keeps pointing at a machine we no longer manage.
+    const dnsError = await applyBoxDns(environment, revoked, "remove");
+
+    await context.runMutation(internal.boxes.recordDns, { boxId: body.id, dnsError }).catch(() => undefined);
+
+    return Response.json({ ok: true, sessionClosed: closed, ...(dnsError === null ? {} : { dnsError }) });
 };
 
 /**

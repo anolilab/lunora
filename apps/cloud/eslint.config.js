@@ -297,6 +297,9 @@ export default createConfig(
             // The registry is where drivers are built; each driver owns its own directory.
             "src/targets/registry.ts",
             "src/targets/cloudflare-wfp/**/*.ts",
+            // celld-vps box hostnames live in the platform's OWN zone (plan 458 G13): its
+            // DNS records, written at enrolment and removed at revocation — no tenant account.
+            "src/targets/celld-vps/dns.ts",
             // The data plane: separate Workers deployed beside the control plane,
             // Cloudflare-only by construction (dispatcher.wrangler.jsonc, tail.wrangler.jsonc).
             "src/dispatcher/**/*.ts",

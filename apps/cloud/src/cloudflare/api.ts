@@ -1,8 +1,9 @@
 /**
  * Cloudflare REST API port for the control plane's own account work: D1 export
- * for backups and Cloudflare-for-SaaS custom hostnames. Tenant provisioning is
- * not here — it runs through Alchemy in the provision box (the `cloudflare-wfp`
- * driver, `src/targets/cloudflare-wfp/`).
+ * for backups, Cloudflare-for-SaaS custom hostnames, and the DNS records of the
+ * platform's own box zone (`LUNORA_BOX_ZONE_ID`, plan 458 G13). Tenant
+ * provisioning is not here — it runs through Alchemy in the provision box (the
+ * `cloudflare-wfp` driver, `src/targets/cloudflare-wfp/`).
  *
  * The HTTP implementation ({@link createHttpCloudflareApi}) calls the
  * documented REST endpoints under `https://api.cloudflare.com/client/v4`.
@@ -10,15 +11,32 @@
 
 import stripTrailingSlashes from "../lib/strip-trailing-slashes";
 
+/** One DNS record of a zone, as the API lists it. */
+export interface DnsRecord {
+    content: string;
+    id: string;
+    name: string;
+    type: string;
+}
+
 export interface CloudflareApi {
     /** Create a Cloudflare-for-SaaS custom hostname for a tenant domain (§4). */
     createCustomHostname: (input: { hostname: string; zoneId: string }) => Promise<{ id: string }>;
+
+    /** Create one DNS-only (unproxied) record. */
+    createDnsRecord: (input: { content: string; name: string; type: "A" | "AAAA"; zoneId: string }) => Promise<{ id: string }>;
+
+    /** Delete one DNS record by id. */
+    deleteDnsRecord: (input: { id: string; zoneId: string }) => Promise<void>;
 
     /**
      * Start a full SQL export of a D1 database and poll it to completion, then
      * answer the presigned URL of the dump. The URL is valid for one hour.
      */
     exportD1Database: (databaseId: string) => Promise<{ signedUrl: string }>;
+
+    /** The records named exactly `name` (any type) — what makes the box DNS writes idempotent. */
+    listDnsRecords: (input: { name: string; zoneId: string }) => Promise<DnsRecord[]>;
 }
 
 export interface HttpCloudflareApiOptions {
@@ -61,9 +79,9 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
     const base = `${apiRoot}/accounts/${options.accountId}`;
     const authHeader = `Bearer ${options.apiToken}`;
 
-    const callAt = async (fullUrl: string, method: string, body: unknown): Promise<unknown> => {
+    const callAt = async (fullUrl: string, method: string, body?: unknown): Promise<unknown> => {
         const response = await fetchImpl(fullUrl, {
-            body: JSON.stringify(body),
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
             headers: { authorization: authHeader, "content-type": "application/json" },
             method,
         });
@@ -109,6 +127,22 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
 
             return { id: result.id };
         },
+        createDnsRecord: async ({ content, name, type, zoneId }) => {
+            // DNS-only: a box terminates its own TLS (Caddy), so the record must
+            // resolve to the box, not to a Cloudflare proxy in front of it.
+            const result = (await callAt(`${apiRoot}/zones/${zoneId}/dns_records`, "POST", { content, name, proxied: false, ttl: 300, type })) as {
+                id?: string;
+            };
+
+            if (!result.id) {
+                throw new Error("cloudflare DNS record create returned no id");
+            }
+
+            return { id: result.id };
+        },
+        deleteDnsRecord: async ({ id, zoneId }) => {
+            await callAt(`${apiRoot}/zones/${zoneId}/dns_records/${encodeURIComponent(id)}`, "DELETE");
+        },
         exportD1Database: async (databaseId) => {
             // Two-phase, per D1's REST contract: the first POST starts the export
             // and answers `status: "active"` with a bookmark, and each subsequent
@@ -148,6 +182,13 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             }
 
             throw new Error(`cloudflare D1 export did not complete within ${String(MAX_EXPORT_POLLS)} polls`);
+        },
+        listDnsRecords: async ({ name, zoneId }) => {
+            const result = (await callAt(`${apiRoot}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=100`, "GET")) as DnsRecord[];
+
+            return result.map((record) => {
+                return { content: record.content, id: record.id, name: record.name, type: record.type };
+            });
         },
     };
 };

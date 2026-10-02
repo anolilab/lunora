@@ -26,7 +26,7 @@ const contextRecording = (result: unknown = {}) => {
 
 const enrolRequest = (body: unknown): Request => new Request("https://cloud.test/v1/boxes/enrol", { body: JSON.stringify(body), method: "POST" });
 
-describe("pOST /v1/boxes/enrol", () => {
+describe("the enrol route, POST /v1/boxes/enrol", () => {
     const body = { ipv4: "203.0.113.9", publicKey: "k".repeat(43), token: TOKEN, versions: { caddy: "v2", celld: "v0.6.0", hostd: "1.0.0" } };
 
     it("hashes the token at the edge and answers the box's id and hostname", async () => {
@@ -37,6 +37,7 @@ describe("pOST /v1/boxes/enrol", () => {
         expect(response.status).toBe(200);
         await expect(readJson(response)).resolves.toStrictEqual({
             boxId: "box_1",
+            dnsError: "box DNS is not configured on this control plane (LUNORA_BOX_ZONE_ID is unset)",
             hostname: "bslug000001.boxes.test",
             organizationId: "org_1",
             slug: "bslug000001",
@@ -61,7 +62,7 @@ describe("pOST /v1/boxes/enrol", () => {
     });
 });
 
-describe("gET /v1/boxes/connect", () => {
+describe("the session upgrade, GET /v1/boxes/connect", () => {
     const forwarded: Request[] = [];
     const environment = {
         BOX_SESSION: {
@@ -106,7 +107,7 @@ describe("gET /v1/boxes/connect", () => {
     });
 });
 
-describe("pOST /v1/boxes/revoke", () => {
+describe("the revoke route, POST /v1/boxes/revoke", () => {
     it("revokes through the mutation, then closes the box's session", async () => {
         const { calls, context } = contextRecording({ slug: "bslug000001" });
         const closes: string[] = [];
@@ -129,7 +130,11 @@ describe("pOST /v1/boxes/revoke", () => {
             },
         );
 
-        await expect(readJson(response)).resolves.toStrictEqual({ ok: true, sessionClosed: true });
+        await expect(readJson(response)).resolves.toStrictEqual({
+            dnsError: "box DNS is not configured on this control plane (LUNORA_BOX_ZONE_ID is unset)",
+            ok: true,
+            sessionClosed: true,
+        });
         expect(calls[0]?.args).toStrictEqual({ id: "box_1", organizationId: "org_1" });
         expect(closes[0]).toContain("/close");
         expect(closes[0]).toContain("BOX_REVOKED");

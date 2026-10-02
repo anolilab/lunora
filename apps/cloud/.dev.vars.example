@@ -16,6 +16,15 @@ AUTH_SECRET=replace-with-openssl-rand-hex-32
 # D1 backup export and Analytics Engine reads.
 CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 
+# ── Customer boxes (plan 458, celld-vps) ─────────────────────────────────────
+# Each enrolled box gets `*.<slug>.<LUNORA_BOX_DOMAIN>` and `<slug>.<LUNORA_BOX_DOMAIN>`
+# A/AAAA records in the platform's own box zone, written at enrolment and removed
+# at revocation. Set the zone id of LUNORA_BOX_DOMAIN (a wrangler var, default
+# boxes.lunora.app); CLOUDFLARE_API_TOKEN above then also needs Zone → DNS:Edit on
+# that zone. Unset → boxes still enrol, without hostnames, and each box row says so
+# in its `dnsError`.
+# LUNORA_BOX_ZONE_ID=replace-with-the-box-zone-id
+
 # Control-plane backups (GAPS.md D1). The export REST call addresses the database
 # by uuid, and a binding cannot answer its own id, so it is configured here.
 # Unset -> the six-hourly backup sweep no-ops. Pair with a PRIVATE R2 bucket

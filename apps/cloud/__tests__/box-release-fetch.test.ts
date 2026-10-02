@@ -160,7 +160,7 @@ describe("boxes.ownsDeployment", () => {
     });
 });
 
-describe("gET /v1/boxes/releases/:deploymentId", () => {
+describe("the release download, GET /v1/boxes/releases/:deploymentId", () => {
     const setup = async (owns = true) => {
         const key = await boxKey();
         const session = new TestBoxSession(fakeState(), memoryStore());

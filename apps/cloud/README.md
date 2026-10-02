@@ -695,7 +695,9 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The token needs Workers
   Scripts:Edit, Workers KV:Edit, D1:Edit, R2:Edit, Queues:Edit, Workers for
   Platforms:Edit, Account Analytics:Read, and Zone → Workers Routes:Edit for the
-  routed zone. Scoping them per environment is what lets production carry a
+  routed zone. The cell's own `CLOUDFLARE_API_TOKEN` secret additionally needs
+  Zone → DNS:Edit on the box zone (`LUNORA_BOX_ZONE_ID`) once boxes are enrolled
+  there: every box gets its A/AAAA records at enrolment (plan 458 G13). Scoping them per environment is what lets production carry a
   required reviewer.
 - The gates run as `lunora verify` (wrangler validation, codegen dry-run, the
   ERROR-advisory gate, the schema-drift gate, `tsc --noEmit`) before anything is
