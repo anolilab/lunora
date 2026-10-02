@@ -393,7 +393,10 @@ The node suite drives the session with fakes; a `workerd` vitest project boots
 the real object over a real socket:
 `LUNORA_WORKERD_TESTS=1 pnpm exec vitest run --project workerd --no-coverage`.
 CI runs it in the `Workerd integration (apps/cloud)` leg of `test.yml`, whose
-drift guard covers `apps/*` as well as `packages/*`.
+drift guard covers `apps/*` as well as `packages/*`. The session's hot paths —
+frame decode, `receiveFrame`, job correlation, a liveness tick over 1,000
+attachments — are benched in plain node (`__bench__/box-session.bench.ts`,
+`pnpm run test:bench`; CodSpeed runs it with every package's benches).
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 

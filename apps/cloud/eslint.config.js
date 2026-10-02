@@ -39,6 +39,7 @@ export default createConfig(
             "**/*.md",
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/vite.config.ts",
             "**/wrangler.jsonc",
             "**/package.json",
@@ -130,7 +131,7 @@ export default createConfig(
     },
     // Test files: relax rules that are noisy or inappropriate in test code.
     {
-        files: ["**/__tests__/**/*.ts", "**/*.test.ts", "**/*.spec.ts"],
+        files: ["**/__tests__/**/*.ts", "**/__bench__/**/*.ts", "**/*.test.ts", "**/*.spec.ts", "**/*.bench.ts"],
         rules: {
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-unnecessary-condition": "off",

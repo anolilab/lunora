@@ -298,6 +298,16 @@ describe("boxSessionDO", () => {
         expect(store.tables["boxes"]?.[0]?.["fleets"]).toHaveLength(500);
     });
 
+    it("keeps 1,000 hibernated sockets' attachments small: the memory a fleet of sessions holds (§8 perf watch)", () => {
+        const attachments = Array.from({ length: 1000 }, (_, index) => {
+            return { ...openSession(`box_${String(index).padStart(26, "0")}`, NOW), phase: "ready" as const };
+        });
+        const sizes = attachments.map((attachment) => new TextEncoder().encode(JSON.stringify(attachment)).length);
+
+        expect(Math.max(...sizes)).toBeLessThan(256);
+        expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThan(256 * 1024);
+    });
+
     it("moves the stored fleets on as deploy and destroy jobs succeed, and leaves them on a failure", async () => {
         const { key, session, state, store } = await setup();
         const socket = await handshake(session, state, key, "box_1", { hello: { fleets: [{ alias: "old", deploymentId: "dep_0", state: "running" }] } });

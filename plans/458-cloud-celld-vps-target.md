@@ -326,7 +326,9 @@ included). As built:
   revoke through the bare RPC mutation left the box's DNS records behind.
 - The liveness tick closes the session of a box whose row is gone (its
   organization was purged), as it does a revoked one.
-- Not yet: the `__bench__` for 1,000 hibernated sockets (§8 perf watch).
+- The `__bench__` for the session (§8 perf watch) landed on
+  `feat/cloud-followups`: `apps/cloud/__bench__/box-session.bench.ts`, run by
+  `pnpm --filter @lunora/cloud run test:bench` and by the CodSpeed job.
 
 ### W3 — Per-target binding support and celld config from a manifest (S–M)
 
@@ -764,7 +766,15 @@ the interface in two directions:
     - deploy latency from `accepted` to `released` for a 5 MiB release on a
       2 GB box, measured in `test:hostd`. Budget: under 30 s, matching WfP;
     - `BoxSessionDO` memory with 1,000 hibernated sockets. Add a `__bench__`
-      suite in W2.
+      suite in W2. _Landed (`feat/cloud-followups`):_ frame decode, `receiveFrame`
+      (decode + token bucket + effect), job correlation and a liveness tick over
+      1,000 attachments are benched in plain node; locally a `progress` frame
+      costs ~1.8 µs end to end, a 500-alias `report` ~150 µs to decode, a tick
+      over 1,000 sockets ~4 ms. Memory is held by a test: a ready attachment is
+      under 256 bytes (1,000 under 256 KiB). Measuring it found the `hello`
+      fleets riding the attachment — up to ~100 KB against workerd's 16 KiB
+      attachment cap — so they now wait in the session's memory between `hello`
+      and `auth` instead.
 
 ## 9. Open questions (answer during execution)
 
