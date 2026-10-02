@@ -360,4 +360,12 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
 };
 
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
+export {
+    createCleanup,
+    injectRemoteFlags,
+    isRemoteEnvEnabled,
+    materializeRemoteWranglerConfig,
+    planRemoteBindings,
+    REMOTE_ELIGIBLE_KEYS,
+    resolveRemoteEnabled,
+};

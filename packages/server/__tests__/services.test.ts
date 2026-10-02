@@ -16,12 +16,30 @@ class Gateway {
 }
 
 describe("createServices", () => {
-    it("resolves each declared service off env by its binding", () => {
+    it("resolves each declared service off env by its binding", async () => {
         expect.assertions(1);
 
         const gateway = { complete: async () => "done" };
+        const resolved = createServices({ SERVICE_GATEWAY: gateway }, [{ binding: "SERVICE_GATEWAY", name: "gateway", rpc: true }]).gateway as typeof gateway;
 
-        expect(createServices({ SERVICE_GATEWAY: gateway }, [{ binding: "SERVICE_GATEWAY", name: "gateway", rpc: true }]).gateway).toBe(gateway);
+        await expect(resolved.complete()).resolves.toBe("done");
+    });
+
+    it("binds an RPC service's fetch too, so it can be passed to a client detached", async () => {
+        expect.assertions(2);
+
+        const gateway = {
+            label: "gateway",
+            async fetch(this: { label: string }): Promise<Response> {
+                return new Response(this.label);
+            },
+        };
+        const resolved = createServices({ SERVICE_GATEWAY: gateway }, [{ binding: "SERVICE_GATEWAY", name: "gateway", rpc: true }]).gateway as ServiceFetcher;
+        const { fetch } = resolved;
+
+        await expect(fetch("https://gateway/").then(async (response) => response.text())).resolves.toBe("gateway");
+        // One bound function per service, not a fresh one per read.
+        expect(resolved.fetch).toBe(fetch);
     });
 
     it("hands a fetch service over with fetch bound, so it can be passed to a client detached", async () => {

@@ -36,6 +36,7 @@ lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawn
             [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--inspector-port n]
+            [--remote | --local]
             [--no-studio] [--no-codegen]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
             [--format <pretty|json>]
@@ -408,7 +409,15 @@ lunora dev --port 7000           # custom studio port
 lunora dev --worker-port 8790    # custom wrangler dev port
 lunora dev --inspector-port 9235 # pin wrangler's devtools inspector port
 lunora dev --no-studio           # Worker + codegen only
+lunora dev --local               # no remote proxy session (CI without Cloudflare credentials)
 ```
+
+A binding with no local mode (`ai`), in the app or in a `lunora.config`
+service, makes `wrangler dev` open a remote proxy session, and in a shell with
+no Cloudflare credentials that session fails and takes the whole dev session
+with it. `--local` starts it without the proxy; a call to such a binding then
+fails instead. It cannot be combined with `--remote`, and it overrides a remote
+default from `LUNORA_REMOTE` or `lunora.config`.
 
 When 8787 is taken, the worker lands on the next free port so two projects can
 run side by side. That silent move is refused when `.dev.vars` pins the worker

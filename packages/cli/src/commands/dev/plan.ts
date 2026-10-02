@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
-import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { findWranglerFile, materializeRemoteWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
@@ -73,17 +73,25 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
  * runs the sibling Workers in the same session and the app's `services[]`
  * bindings resolve to them locally. Two keys bound to one Worker add it once.
  * A declaration codegen rejects adds nothing; codegen reports it.
+ *
+ * A service with a custom build runs from a copy of its config whose
+ * `build.cwd` is absolute — the session's cwd is the app's folder, which is
+ * where wrangler would otherwise run the service's `build.command` (see
+ * `materializeServiceDevConfigs`). `cleanup` unlinks those copies.
  */
-const serviceConfigArgs = (cwd: string): string[] =>
-    [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))].flatMap((path) => ["--config", path]);
+const planServiceConfigs = (options: DevCommandOptions, cwd: string): { args: string[]; cleanup: () => void } => {
+    const paths = [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))];
+    const { cleanup, configPaths } = (options.materializeServiceConfigs ?? materializeServiceDevConfigs)(paths);
+
+    return { args: configPaths.flatMap((path) => ["--config", path]), cleanup };
+};
 
 /**
- * The wrangler flavor's {@link serviceConfigArgs}. wrangler treats the first
- * `--config` as the primary Worker, so the app's own config leads when no
+ * The wrangler flavor's {@link planServiceConfigs} args. wrangler treats the
+ * first `--config` as the primary Worker, so the app's own config leads when no
  * remote temp config already does.
  */
-const resolveServiceArgs = (cwd: string, remoteArgs: ReadonlyArray<string>): string[] => {
-    const services = serviceConfigArgs(cwd);
+const resolveServiceArgs = (cwd: string, services: ReadonlyArray<string>, remoteArgs: ReadonlyArray<string>): string[] => {
     const primary = findWranglerFile(cwd);
 
     if (services.length === 0 || primary === undefined) {
@@ -92,6 +100,14 @@ const resolveServiceArgs = (cwd: string, remoteArgs: ReadonlyArray<string>): str
 
     return [...(remoteArgs.length > 0 ? [] : ["--config", primary]), ...services];
 };
+
+/**
+ * `--local` when asked for: wrangler then starts no remote proxy session, so a
+ * binding with no local mode (`ai`) — in the app or in any service sharing the
+ * session — cannot take the whole session down in a shell with no Cloudflare
+ * credentials. That binding then fails when called instead.
+ */
+const localArgs = (options: DevCommandOptions): string[] => (options.local === true ? ["--local"] : []);
 
 /** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */
 const readDevIp = (wranglerPath: string): unknown => readWranglerJsonc<{ dev?: { ip?: unknown } }>(wranglerPath).parsed?.dev?.ip;
@@ -261,7 +277,11 @@ const resolveInspectorPort = (options: DevCommandOptions, cwd: string): number |
  * The `framework-worker` flavor's `wrangler dev` sidecar, run from the
  * committed `wrangler.dev.jsonc`.
  */
-const planWorkerSidecar = (options: DevCommandOptions, cwd: string, manager: ReturnType<typeof detectPackageManager>): SpawnDescriptor & { tag: string } => {
+const planWorkerSidecar = (
+    options: DevCommandOptions,
+    cwd: string,
+    manager: ReturnType<typeof detectPackageManager>,
+): { cleanup: () => void; sidecar: SpawnDescriptor & { tag: string } } => {
     // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
     // `wrangler.jsonc` — check its own `dev.ip` first.
     const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
@@ -276,15 +296,46 @@ const planWorkerSidecar = (options: DevCommandOptions, cwd: string, manager: Ret
         throw new Error(`deploy target "${driver.id}" has no dev server to run the worker sidecar`);
     }
 
+    // The sidecar's worker hosts the actions, so it runs the services beside it;
+    // reconcile writes their bindings into `wrangler.dev.jsonc`.
+    const services = planServiceConfigs(options, cwd);
     const devCommand = driver.toolchain.dev({
         configPath: DEV_WRANGLER_CONFIG,
-        // The sidecar's worker hosts the actions, so it runs the services beside it;
-        // reconcile writes their bindings into `wrangler.dev.jsonc`.
-        extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development", ...serviceConfigArgs(cwd)],
+        extraArgs: [...loopbackArgs, ...localArgs(options), "--var", "WORKER_ENV:development", ...services.args],
     });
     const exec = toolchainExecArgs(manager, devCommand);
 
-    return { args: exec.args, command: exec.command, cwd, tag: "worker" };
+    return { cleanup: services.cleanup, sidecar: { args: exec.args, command: exec.command, cwd, tag: "worker" } };
+};
+
+/**
+ * The vite / framework-worker flavors spawn no `wrangler dev` of their own (or
+ * only the sidecar), so a flag meant for it is named back with where its knob
+ * lives instead of being accepted and dropped.
+ */
+const warnWranglerOnlyFlags = (options: DevCommandOptions, flavor: "framework-worker" | "vite"): void => {
+    if (options.worker === false) {
+        options.logger.warn(
+            `--no-worker does not apply to the ${flavor} flavor: Vite owns the worker, codegen and studio in-process. Run your framework's dev script instead.`,
+        );
+    }
+
+    // `--inspector-port` is a `wrangler dev` flag and this branch spawns no
+    // `wrangler dev` of its own, so say where the knob actually lives rather
+    // than accepting the flag and dropping it.
+    if (options.inspectorPort !== undefined) {
+        options.logger.warn(
+            flavor === "framework-worker"
+                ? `--inspector-port does not apply to the ${flavor} flavor: pin \`dev.inspector_port\` in ${DEV_WRANGLER_CONFIG} — that is the config the worker sidecar runs.`
+                : `--inspector-port does not apply to the ${flavor} flavor: Vite owns the worker. Pin it in vite.config — \`lunora({ cloudflare: { inspectorPort: ${String(options.inspectorPort)} } })\`.`,
+        );
+    }
+
+    if (options.local === true && flavor === "vite") {
+        options.logger.warn(
+            "--local does not apply to the vite flavor: Vite owns the worker. Turn remote bindings off in vite.config — `lunora({ cloudflare: { remoteBindings: false } })`.",
+        );
+    }
 };
 
 /**
@@ -319,34 +370,17 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         // sidecar's RPC dispatch summaries to the terminal (mirrors the wrangler
         // flavor). One-shot codegen runs in `runDevCommand` before the sidecar
         // spawns, so `lunora/server.ts`'s `_generated` imports resolve.
-        let sidecar: (SpawnDescriptor & { tag: string }) | undefined;
+        const worker = flavor === "framework-worker" ? planWorkerSidecar(options, cwd, manager) : undefined;
+        const sidecar = worker?.sidecar;
 
-        if (flavor === "framework-worker") {
-            sidecar = planWorkerSidecar(options, cwd, manager);
-        }
-
-        if (options.worker === false) {
-            options.logger.warn(
-                `--no-worker does not apply to the ${flavor} flavor: Vite owns the worker, codegen and studio in-process. Run your framework's dev script instead.`,
-            );
-        }
-
-        // `--inspector-port` is a `wrangler dev` flag and this branch spawns no
-        // `wrangler dev` of its own, so say where the knob actually lives rather
-        // than accepting the flag and dropping it.
-        if (options.inspectorPort !== undefined) {
-            options.logger.warn(
-                flavor === "framework-worker"
-                    ? `--inspector-port does not apply to the ${flavor} flavor: pin \`dev.inspector_port\` in ${DEV_WRANGLER_CONFIG} — that is the config the worker sidecar runs.`
-                    : `--inspector-port does not apply to the ${flavor} flavor: Vite owns the worker. Pin it in vite.config — \`lunora({ cloudflare: { inspectorPort: ${String(options.inspectorPort)} } })\`.`,
-            );
-        }
+        warnWranglerOnlyFlags(options, flavor);
 
         return {
             runsCodegenWatch: false,
             flavor,
             ipv4LoopbackForced: false,
             remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
+            ...(worker ? { serviceConfigCleanup: worker.cleanup } : {}),
             ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
@@ -394,16 +428,18 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     // default here would pin 9229 for every project — including the ones relying
     // on wrangler walking off it — which is the opposite of what #689 needs.
     const inspectorArgs = options.inspectorPort === undefined ? [] : ["--inspector-port", String(options.inspectorPort)];
+    const services = planServiceConfigs(options, cwd);
     const exec = execArgsFor(manager, "wrangler", [
         "dev",
         "--port",
         String(workerPort),
         ...inspectorArgs,
         ...loopbackArgs,
+        ...localArgs(options),
         "--var",
         "WORKER_ENV:development",
         ...remote.args,
-        ...resolveServiceArgs(cwd, remote.args),
+        ...resolveServiceArgs(cwd, services.args, remote.args),
     ]);
 
     return {
@@ -412,6 +448,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         frameworkHint,
         ipv4LoopbackForced: loopbackArgs.length > 0,
         remote: remote.plan,
+        serviceConfigCleanup: services.cleanup,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,
         workerEnabled: options.worker !== false,

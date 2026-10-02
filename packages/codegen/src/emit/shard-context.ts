@@ -60,12 +60,14 @@ const renderBuildContext = ({
     workflowsContextField,
 }: BuildContextParts): string => {
     const actionOnlyHasAny = actionOnlyFields.length > 0;
+    // The builds are written at `buildCtx` body depth (they are shared with the
+    // every-context helpers' shape); here they sit one block deeper.
     const actionOnlyBlock = actionOnlyHasAny
         ? `
             // ActionCtx-only helpers (external, non-deterministic I/O): constructed
             // and attached only for an \`action\` so query/mutation ctx never carry them.
             if (isAction) {
-${actionOnlyBuild}${actionOnlyFields.map((field) => `                ctx.${field} = ${field};`).join("\n")}
+${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field) => `                ctx.${field} = ${field};`).join("\n")}
             }
 `
         : "";

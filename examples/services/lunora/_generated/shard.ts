@@ -1050,7 +1050,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // and attached only for an `action` so query/mutation ctx never carry them.
             if (isAction) {
 
-            const services = createServices(env, LUNORA_SERVICES);
+                const services = createServices(env, LUNORA_SERVICES);
                 ctx.services = services;
             }
 

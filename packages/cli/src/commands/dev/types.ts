@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
 import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
-import type { materializeRemoteWranglerConfig } from "@lunora/config/cloudflare";
+import type { materializeRemoteWranglerConfig, materializeServiceDevConfigs } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -55,9 +55,13 @@ interface DevCommandOptions {
      */
     jsonLogs?: boolean;
 
+    /** Pass `--local` to `wrangler dev`: no remote proxy session, so a binding with no local mode (`ai`) cannot stop the session from starting. */
+    local?: boolean;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
+    /** Injection seam for tests — defaults to the real per-service dev-config materializer. */
+    materializeServiceConfigs?: typeof materializeServiceDevConfigs;
     /** Studio server port. */
     port?: number;
     /** Injection seam for tests — defaults to the real HTTP readiness probe. Without it the suite issues live GETs to the dev port. */
@@ -141,6 +145,13 @@ interface DevCommandPlan {
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
+
+    /**
+     * Unlinks the copies of service configs written so a service's custom build
+     * runs in its own folder (`materializeServiceDevConfigs`). Idempotent; absent
+     * for a flavor that runs no services through a `wrangler dev` of its own.
+     */
+    serviceConfigCleanup?: () => void;
 
     /**
      * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /

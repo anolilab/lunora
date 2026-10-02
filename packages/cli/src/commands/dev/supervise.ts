@@ -132,6 +132,8 @@ interface Teardown {
     readyProbe?: AbortController;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
     remoteCleanup?: () => void;
+    /** Disposer for the materialized service dev configs (idempotent, never throws). */
+    serviceConfigCleanup?: () => void;
     studio?: StudioServerHandle;
 }
 
@@ -175,7 +177,7 @@ const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogSt
     });
 };
 
-/** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
+/** Best-effort shutdown of the studio server, codegen watcher, container logs, and the remote / service temp configs. */
 const teardown = async (handles: Teardown): Promise<void> => {
     // Idempotent second call: `runDevCommand`'s `finally` aborts before clearing
     // the state record, and this covers the paths that tear down without going
@@ -197,6 +199,7 @@ const teardown = async (handles: Teardown): Promise<void> => {
     // idempotent + swallows errors, but guard the call site too for safety.
     try {
         handles.remoteCleanup?.();
+        handles.serviceConfigCleanup?.();
     } catch {
         /* already gone */
     }
