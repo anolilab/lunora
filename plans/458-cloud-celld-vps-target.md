@@ -14,6 +14,17 @@ studio pages (G18)
   (D15–D17).
 - Q6: BYO-VPS and BYO-Cloudflare are built in parallel (§7).
 
+**Code-quality pass (2026-10-02, after the security fixes):** the target seam
+was reshaped — `TargetDriver` is built per placement (`deploy`, `destroy`,
+`domains { platformTargets, onVerified? }`, `id: TargetId`) and `TargetFleet`
+per target (`reach`, `dispatch?`, `usage?`); `Placement` is a union with the
+box on the `celld-vps` arm; what a target is lives in `TARGETS`
+(`provision-contract.ts`) — `7febed559`…`b4b86d0da`. `BoxSessionDO` is reached
+over native RPC (`21bf73f1e`); `@lunora/hostd/release` verifies envelopes on
+WebCrypto for box and control plane alike (`7febed559`); git builds run in a
+per-build `BuildRunnerDO`, off the cron path (`285c381cb`). `apps/cloud/MULTIPLATFORM.md`
+§6 Phase 1 lists the interface as it now stands.
+
 Every `apps/cloud` path below is on the PR #85 branch. Read it with
 `git show origin/claude/cloud-platform-dx-ojvkmu:apps/cloud/<path>` until #85 merges.
 
@@ -494,7 +505,10 @@ control-plane changes.
 
 - `@lunora/hostd/release` (manifest + envelope types, strict validator,
   canonical bytes; runs in workerd) and `@lunora/hostd/release/verify` (Node:
-  sign, verify against pinned keys, artifact size + hash checks).
+  sign, verify against pinned keys, artifact size + hash checks). Since the
+  code-quality pass the verifier itself is in `@lunora/hostd/release`, on
+  WebCrypto (`verifyReleaseManifest`, async); `/verify` keeps signing and
+  artifact hashing.
 - `apps/hostd/scripts/build-sea.mjs`: Node 24 single executable (esbuild
   bundle + SEA blob + postject), smoke-tested with `--version`.
 - `apps/hostd/scripts/make-release-manifest.mjs` + `release-pins.json`: make,
@@ -520,8 +534,9 @@ the workflow stops at signing until then. Next in W7:
 
 **Landed (2026-10-02, G17 control-plane half, `85c5f6c91`):** the
 `hostdReleases` table; `POST /v1/hostd/releases` (admin token) stores an
-envelope only once it verifies as a box would verify it — strict validator,
-pinned keys, placeholder refused, Ed25519 checked with WebCrypto — so until a
+envelope only once it verifies as a box would verify it — with the box's own
+`verifyReleaseManifest` since the code-quality pass: strict validator, pinned
+keys, placeholder refused, Ed25519 checked with WebCrypto — so until a
 real key is pinned every release is refused; `GET
 /v1/hostd/releases/:releaseId/manifest` (box-signed); `POST /v1/hostd/rollout`
 sets `boxes.desiredReleaseId` and rolls the release out through

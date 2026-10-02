@@ -61,19 +61,20 @@ src/
                      palette, dashboards, styles.css)
                      — components only; routing and data loading live above
   provision-contract.ts the deploy contract: manifest, per-target BINDING_SUPPORT,
-                     target ids, the target-neutral TenantDeploymentSpec
+                     target ids and descriptors (TARGETS), the TenantDeploymentSpec
   targets/
-    driver.ts        TargetDriver — the one seam to a deploy target (see below)
-    registry.ts      target id → driver, built over the Worker env
-    placement.ts     a project's placement: its target, and its org's cell
+    driver.ts        TargetDriver (one placement) + TargetFleet (every tenant of a target)
+    registry.ts      placement → driver, target → fleet, built over the Worker env
+    placement.ts     a project's placement (its org's cell, or its box), and a
+                     deployment's, for the sweeps
     cloudflare-wfp/  the Workers-for-Platforms driver: provision-box client + job
                      contract, dispatch-namespace sender, hostname grammar,
                      Analytics Engine writer/reader
     celld-vps/       the customer-box driver (plan 458): jobs over the box's session,
                      box DNS in the platform's own zone
-  boxes/             customer boxes: the BoxSessionDO (session-do.ts) and its pure
-                     handshake (session.ts), job correlation, signed requests, usage
-                     reports, hostd releases + rollout
+  boxes/             customer boxes: the BoxSessionDO (session-do.ts, native RPC) and
+                     its pure handshake (session.ts), job correlation, signed requests,
+                     usage reports, hostd releases + rollout, urls.ts (box domain + paths)
   cloudflare/
     api.ts           Cloudflare REST port: D1 export (the control plane's own
                      backup), custom hostnames, and the box zone's DNS records
@@ -81,31 +82,42 @@ src/
   secrets/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
   metering/
-    rollback.ts      request-count readback → platformUsage, over a driver's `usage`
+    rollback.ts      request-count readback → platformUsage, over a fleet's `usage`
   fanout/
     cron.ts          tenant cron fan-out: cron-expression matching + due ticks (§2.4)
     queue.ts         tenant queue fan-out: group a shared-queue batch by tenant (§2.4)
+    platform-queue.ts the platform-owned queue consumer over a fleet's `dispatch`
+    live.ts          the live deployments both fan-outs read
+  sweeps/
+    scheduled.ts     every scheduled sweep, its cron bucket, the build drain and the
+                     tenant cron fan-out (`runScheduled`)
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
     orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
     keys.ts          deploy-key format / parse / hash helpers
     preview.ts       preview script-name + TTL helpers (§2.3)
-    handler.ts       the deploy core (`startRelease`: validate → record → store → provision
-                     → health-check/revert → activate) + the POST /v1/deploy handler over it
+    release-core.ts  the deploy core (`startRelease`: validate → record → store → provision
+                     → health-check/revert → activate)
+    manifest-parse.ts a release's manifest + assets, validated against its target's tables
+    handler.ts       POST /v1/deploy: bearer key, body cap, kind ceiling, NDJSON stream
     client.ts        lunora-deploy client (POST + consume NDJSON stream)
-    router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,usage,
-                     invitations/send,secrets,admin,tenants/plan} + per-IP rate limiting
+    router.ts        httpRouter: the /v1 route table + per-IP rate limiting; routes/
+                     holds the deploy/rollback/build wiring (deploy.ts), domains,
+                     boxes, hostd, OTLP and tenant-admin routes
   dispatcher/
     worker.ts        WfP dispatcher Worker — per-plan limits + per-request usage emit
                      (routing lives in targets/cloudflare-wfp/route.ts)
   builds/
     paths.ts         monorepo settings: rootDirectory / watchPaths validation + push path filter
-    runner.ts        one build: fetch → execute → release → complete/fail (pure over ports)
-    dispatch.ts      claim → run loop, bounded per tick
+    runner.ts        one build in two halves: fetch → execute, then release → complete
+                     (pure over ports)
+    dispatch.ts      claim → hand-off loop, bounded per tick
+    runner-do.ts     BuildRunnerDO: one per build, each half in its own alarm
     container-exec.ts the build box's NDJSON reply → log lines + the release it produced
     release.ts       a build's release through the deploy core (production vs preview, per-release key)
-    control-plane.ts the real ports, run by POST /v1/builds/dispatch from the Worker's scheduled()
+    control-plane.ts the real ports: POST /v1/builds/dispatch (the cron's claim) and
+                     POST /v1/builds/run (a runner alarm's half)
   github/
     webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3),
                      push → changed files (fails open when the payload can't prove them)
@@ -161,17 +173,21 @@ inside each mutation (deploy key or membership).
 
 ### The target seam (`src/targets/`)
 
-The control plane's coupling to the deploy substrate is the `TargetDriver`
-interface (`src/targets/driver.ts`, MULTIPLATFORM.md §5.1) — not only converge
-and destroy, but everything that reaches a running tenant: its binding table,
-routing, request-count readback, log source, custom-domain targets, admin
-`reach`, the in-network `dispatch` the cron and queue fan-out use, and the
-tenant URL. The driver for a project comes from its `target` column
-(`src/targets/registry.ts`; absent means `cloudflare-wfp`), and a
-`cloudflare-wfp` project deploys only from the control plane of its
-organization's cell (`src/targets/placement.ts`). Every driver must pass the
-conformance suite in `__tests__/support/target-conformance.ts`; ESLint fences
-the Cloudflare-specific modules so nothing else imports them.
+The control plane's coupling to the deploy substrate is two interfaces in
+`src/targets/driver.ts` (MULTIPLATFORM.md §5.1). A `TargetDriver` converges one
+placement — `deploy`, `destroy`, and the custom-domain hooks (`platformTargets`,
+`onVerified`) — and is built per placement (`resolveTargetDriver`). A
+`TargetFleet` reaches any tenant of a target — admin `reach`, the in-network
+`dispatch` the cron and queue fan-out use, and the request-count readback
+(`usage`). What a target is — placed in a cell or on a box, who fires its
+crons, how it is metered, which bindings it refuses — is static: `TARGETS`,
+`BINDING_SUPPORT` and `UNSUPPORTED_REASONS` in `src/provision-contract.ts`,
+read by the server and the studio alike. A project's target comes from its
+`target` column (absent means `cloudflare-wfp`), and a cell-placed project
+deploys only from the control plane of its organization's cell
+(`src/targets/placement.ts`). Every driver must pass the conformance suite in
+`__tests__/support/target-conformance.ts`; ESLint fences the Cloudflare-specific
+modules so nothing else imports them.
 
 The one driver today, `cloudflare-wfp` (`src/targets/cloudflare-wfp/`),
 converges by posting a `ProvisionJob` (`box-contract.ts`) to the **provision
@@ -226,8 +242,12 @@ public key and nothing else (plan 458 §3).
   single-use nonce) → `auth` (Ed25519 over the challenge, verified with
   WebCrypto). Hibernatable WebSockets; a 30-second alarm pings, closes a box
   silent for 90 seconds (it goes `offline`) and cuts a revoked box off. Every
-  frame is strictly decoded and rate-limited (`@lunora/hostd/protocol`).
-- **Deploy.** The driver hands the box a `deploy` job over the session; the box
+  frame is strictly decoded and rate-limited (`@lunora/hostd/protocol`). The
+  control plane calls the object over native RPC — `dispatch`, `pushRoutes`,
+  `close`, `claimNonce` (`BoxSession`, `src/boxes/session-client.ts`); only the
+  upgrade crosses `fetch`.
+- **Deploy.** The driver, built for the project's box (its placement), hands
+  the box a `deploy` job over the session; the box
   downloads the stored release from `GET /v1/boxes/releases/:deploymentId`,
   signed with its key (nonce replay-protected). Secrets ride as celld vars
   (celld has no secret store — they persist in the customer's bucket). An
@@ -238,8 +258,10 @@ public key and nothing else (plan 458 §3).
   with the box — shown in the studio, never billed. Billing is per box per
   month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
 - **Releases.** Signed `lunora-hostd` releases are stored with
-  `POST /v1/hostd/releases` (admin token; verified against the pinned release
-  keys, so nothing is accepted until a real key replaces the placeholder) and
+  `POST /v1/hostd/releases` (admin token; verified by `@lunora/hostd/release`'s
+  `verifyReleaseManifest` — the box's own verifier, on WebCrypto — against the
+  pinned release keys, so nothing is accepted until a real key replaces the
+  placeholder) and
   rolled out with `POST /v1/hostd/rollout`: it sets `boxes.desiredReleaseId`
   (the durable intent), plans the online boxes (canary, then batches, through
   `src/fleet/upgrade.ts`) and answers **202** with the batches; the run starts
@@ -255,7 +277,8 @@ public key and nothing else (plan 458 §3).
   release.
 - **Revocation.** `POST /v1/boxes/revoke` (owner/admin session) is the only
   way to revoke: it runs the internal `boxes.revoke`, closes the session with
-  `BOX_REVOKED` and removes the DNS records. A box whose row is gone (its
+  `BOX_REVOKED` (`retireBox`, shared with the box sweep) and removes the DNS
+  records. A box whose row is gone (its
   organization was purged) is cut off on its session's next liveness tick.
 - **Box sweep** (hourly, `src/boxes/reconcile.ts`). Lists every record under
   `LUNORA_BOX_DOMAIN` (paginated, at most 50 pages) and deletes each box record
@@ -275,8 +298,8 @@ public key and nothing else (plan 458 §3).
   route above); hostnames come from `boxes.domain`. A project's **Deploy
   target** card calls `boxes.setProjectTarget`, and a `celld-vps` project's
   view marks what that target refuses, with the reason, from
-  `src/client/target-capabilities.ts` (the contract's `UNSUPPORTED_REASONS`
-  plus celld's capability notes).
+  `src/client/target-capabilities.ts` (the contract's `UNSUPPORTED_REASONS` and
+  the target's `TARGETS` limitations, which quote celld's capability notes).
 
 | Route                                        | Auth             |
 | -------------------------------------------- | ---------------- |
@@ -518,9 +541,14 @@ A connected repository deploys without the CLI. The flow, end to end:
    successful build of the same commit, root directory and trigger is reused.
 2. **Drain.** Every minute the Worker's own `scheduled()` calls
    `POST /v1/builds/dispatch` in-process (admin-token gated), which claims up to
-   five builds under a lease. It runs in the Worker rather than as a Lunora cron
-   action because the release needs the Worker's bindings (`RELEASES`, the
-   provision box, `SECRET_ENCRYPTION_KEY`), which an action's `ctx` does not carry.
+   five builds under a lease and hands each to its own `BuildRunnerDO`
+   (`BUILD_RUNNER`). The runner's alarms run the build and its release as two
+   halves through `POST /v1/builds/run`, in-process on the Worker — each half in
+   its own alarm invocation, so neither the cron tick nor any one alarm has to
+   fit a build and a release in 15 minutes of wall time. It runs in the Worker
+   rather than as a Lunora cron action because the release needs the Worker's
+   bindings (`RELEASES`, the provision box, `SECRET_ENCRYPTION_KEY`), which an
+   action's `ctx` does not carry.
 3. **Build.** The source tarball is fetched with the GitHub App's installation
    token and posted to the build box, which installs, runs the project's own
    `lunora build`, then `lunora cloud deploy --out` with the same pinned CLI. The
