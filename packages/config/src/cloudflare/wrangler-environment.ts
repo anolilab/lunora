@@ -24,8 +24,14 @@ import type { WranglerConfig } from "./wrangler-config";
  *
  * `artifacts` is not in that list either; the Artifacts Workers-binding page
  * states it directly ("`artifacts` is non-inheritable", checked 2026-09-30).
+ *
+ * `ai_search` / `ai_search_namespaces` are not in the docs' list either; wrangler
+ * 4.143.1's own config normaliser reads both through `notInheritable(...)`
+ * (checked 2026-10-02), which is the behaviour this table models.
  */
 const NON_INHERITABLE_KEYS = [
+    "ai_search",
+    "ai_search_namespaces",
     "artifacts",
     "containers",
     "d1_databases",

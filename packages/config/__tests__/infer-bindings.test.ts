@@ -844,30 +844,40 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
     });
 
     it("does not infer a ctx-access capability from a mention inside a comment or a string", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/notes.ts", `// TODO: move this to ctx.pipelines.send(...)\nexport const label = "see ctx.r2sql.query() for reports";`);
+        write(
+            "lunora/notes.ts",
+            `// TODO: move this to ctx.pipelines.send(...)\n// ctx.aiSearch.get("docs") once the index exists\nexport const label = "see ctx.r2sql.query() for reports";`,
+        );
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesPipelines).toBe(false);
         expect(result.usesR2sql).toBe(false);
+        // A comment must not auto-write `ai_search_namespaces` into wrangler.jsonc.
+        expect(result.usesAiSearch).toBe(false);
     });
 
     it("infers a ctx-access capability from a destructured read off ctx", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
         write("lunora/ingest.ts", `export const handler = async (ctx) => {\n    const { pipelines } = ctx;\n    await pipelines.send([]);\n};`);
         write("lunora/reports.ts", `export const report = async ({ ctx: { r2sql } }) => r2sql.query("select 1");`);
+        write(
+            "lunora/search.ts",
+            `export const ask = async ({ ctx }) => {\n    const { aiSearch } = ctx;\n    return aiSearch.get("docs").search({ query: "q" });\n};`,
+        );
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesPipelines).toBe(true);
         expect(result.usesR2sql).toBe(true);
+        expect(result.usesAiSearch).toBe(true);
     });
 
     it("ignores a capability import whose every specifier is type-only", async () => {
@@ -895,7 +905,9 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
          * config's inference and assert they agree — the drift guard for the
          * ctx-access capabilities and type-only imports.
          */
-        const agree = async (source: string): Promise<{ codegen: { pipelines: boolean; r2sql: boolean }; config: { pipelines: boolean; r2sql: boolean } }> => {
+        type Flags = { aiSearch: boolean; pipelines: boolean; r2sql: boolean };
+
+        const agree = async (source: string): Promise<{ codegen: Flags; config: Flags }> => {
             write("wrangler.jsonc", WRANGLER);
             write("src/server/index.ts", ENTRY_SHARD_ONLY);
             write("lunora/handler.ts", source);
@@ -904,23 +916,34 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             const usage = discoverFeatureUsage(project, join(root, "lunora"));
             const inferred = await inferLunoraBindings({ projectRoot: root });
 
-            return { codegen: { pipelines: usage.pipelines, r2sql: usage.r2sql }, config: { pipelines: inferred.usesPipelines, r2sql: inferred.usesR2sql } };
+            return {
+                codegen: { aiSearch: usage.aiSearch, pipelines: usage.pipelines, r2sql: usage.r2sql },
+                config: { aiSearch: inferred.usesAiSearch, pipelines: inferred.usesPipelines, r2sql: inferred.usesR2sql },
+            };
         };
 
         it("agree: comment and string mentions imply nothing", async () => {
             expect.assertions(1);
 
-            const result = await agree(`// ctx.pipelines\nexport const s = "ctx.r2sql";`);
+            const result = await agree(`// ctx.pipelines\n// ctx.aiSearch\nexport const s = "ctx.r2sql";`);
 
-            expect(result).toStrictEqual({ codegen: { pipelines: false, r2sql: false }, config: { pipelines: false, r2sql: false } });
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: false, pipelines: false, r2sql: false },
+                config: { aiSearch: false, pipelines: false, r2sql: false },
+            });
         });
 
         it("agree: destructured and renamed ctx reads", async () => {
             expect.assertions(1);
 
-            const result = await agree(`export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.r2sql;`);
+            const result = await agree(
+                `export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.r2sql;\nexport const c = (ctx) => {\n    const { aiSearch } = ctx;\n    return aiSearch;\n};`,
+            );
 
-            expect(result).toStrictEqual({ codegen: { pipelines: true, r2sql: true }, config: { pipelines: true, r2sql: true } });
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: true, pipelines: true, r2sql: true },
+                config: { aiSearch: true, pipelines: true, r2sql: true },
+            });
         });
 
         it("agree: a type-only import of the capability's subpath", async () => {
@@ -928,7 +951,10 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
             const result = await agree(`import type { PipelineClient } from "@lunora/bindings/pipelines";\nexport type P = PipelineClient;`);
 
-            expect(result).toStrictEqual({ codegen: { pipelines: false, r2sql: false }, config: { pipelines: false, r2sql: false } });
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: false, pipelines: false, r2sql: false },
+                config: { aiSearch: false, pipelines: false, r2sql: false },
+            });
         });
     });
 
@@ -1042,6 +1068,36 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesR2sql).toBe(true);
         expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
+    });
+
+    it("infers AI Search from a ctx.aiSearch access, the only signal an app gives", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // `@lunora/bindings/ai-search` is types only — an app reads the generated
+        // `ctx.aiSearch` and never imports it at runtime.
+        write("lunora/search.ts", `export const handler = (ctx) => ctx.aiSearch.get("docs").search({ query: "q" });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(true);
+        expect(result.signals.some((signal) => signal.startsWith("ai_search_namespaces (ctx.aiSearch used)"))).toBe(true);
+    });
+
+    it("does not infer AI Search from a type-only import or an unrelated `aiSearch` name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AiSearch } from "@lunora/bindings/ai-search";\nexport const aiSearchLabel = (search: AiSearch) => String(search);`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(false);
     });
 
     it("does not infer mail for a project that does not import @lunora/mail", async () => {

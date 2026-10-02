@@ -23,6 +23,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         services: [],
         signals: [],
         usesAi: false,
+        usesAiSearch: false,
         usesAnalytics: false,
         usesArtifacts: false,
         usesAuth: false,
@@ -672,6 +673,53 @@ describe("reconcileWranglerBindings", () => {
         const second = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
 
         expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the AI_SEARCH namespace binding when ctx.aiSearch is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(first.added).toContain("AI_SEARCH (AI Search namespace)");
+        // No `remote: true`: wrangler proxies an AI Search binding remotely in plain dev already.
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "AI_SEARCH", namespace: "default" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("leaves a hand-written ai_search_namespaces entry alone instead of adding AI_SEARCH beside it", () => {
+        expect.assertions(3);
+
+        const block = `    "ai_search_namespaces": [{ "binding": "DOCS_SEARCH", "namespace": "docs", "remote": true }],\n`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.changed).toBe(false);
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "DOCS_SEARCH", namespace: "docs", remote: true }]);
+    });
+
+    it.each([
+        ["an ai_search instance", `    "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "docs" }],\n`, "ai_search"],
+        ["a KV namespace", `    "kv_namespaces": [{ "binding": "AI_SEARCH", "id": "abc" }],\n`, "kv_namespaces"],
+        ["a queue producer", `    "queues": { "producers": [{ "binding": "AI_SEARCH", "queue": "search-jobs" }] },\n`, "queues.producers"],
+        ["a var", `    "vars": { "AI_SEARCH": "on" },\n`, "vars"],
+    ])("does not write AI_SEARCH when %s already holds the name, and says why", (_label, block, owner) => {
+        expect.assertions(4);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        // Writing it would make wrangler reject the config: "AI_SEARCH assigned to multiple bindings".
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.startsWith("ai_search_namespaces: not adding"))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
     });
 
     it("auto-writes the LOADER worker_loaders binding when jsCodeTool is inferred, idempotently", () => {

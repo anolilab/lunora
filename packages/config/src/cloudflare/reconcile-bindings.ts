@@ -243,26 +243,86 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" 
 };
 
 /**
+ * Where `name` is already bound in the top-level config, as `section` (or
+ * `section.sub`), else `undefined`. Covers every entry shape wrangler binds a
+ * name with: a `{ binding }` object (`ai`, `browser`, …), a list of
+ * `{ binding }` entries (`kv_namespaces`, `services`, `ai_search`, …),
+ * `durable_objects.bindings[].name`, `queues.producers[].binding`,
+ * `send_email[].name`, and the `vars` keys. `env.*` blocks are skipped: they
+ * are separate workers' configs as far as name clashes go.
+ */
+const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefined => {
+    const bindsName = (entry: unknown, field = "binding"): boolean =>
+        typeof entry === "object" && entry !== null && (entry as Record<string, unknown>)[field] === name;
+
+    for (const [section, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (section === "env") {
+            continue;
+        }
+
+        if (section === "vars" && typeof value === "object" && value !== null && Object.hasOwn(value, name)) {
+            return section;
+        }
+
+        if (bindsName(value) || (Array.isArray(value) && value.some((entry) => bindsName(entry) || (section === "send_email" && bindsName(entry, "name"))))) {
+            return section;
+        }
+    }
+
+    if (parsed.durable_objects?.bindings?.some((entry) => entry.name === name) === true) {
+        return "durable_objects.bindings";
+    }
+
+    if (parsed.queues?.producers?.some((entry) => entry.binding === name) === true) {
+        return "queues.producers";
+    }
+
+    return undefined;
+};
+
+/**
  * The array twin of {@link reconcileSelfDescribing}: add a self-describing
- * binding whose wrangler key holds a LIST (`analytics_engine_datasets`), as a
- * one-entry array, when the key has no entry at all. Idempotent on ANY existing
- * entry — an app that binds its own dataset under another name keeps it, and a
- * second, unused binding is never added beside it. Pure.
+ * binding whose wrangler key holds a LIST, as a one-entry array, when the key
+ * has no entry at all. Idempotent on ANY existing entry — an app that binds its
+ * own resource under another name keeps it (pointing the `defineApp()` override
+ * at it), and a second, unused binding is never added beside it. Pure.
  *
- * `analytics_engine_datasets` (`@lunora/bindings/analytics` usage) is written as
- * `{ binding: "ANALYTICS", dataset: "ANALYTICS" }`: the dataset is created lazily
- * on first write (no remote id to mint), and defaults to the binding name on
- * Cloudflare's side — written explicitly to avoid drift.
+ * Skipped, with a warning instead, when the entry's binding name is already
+ * taken by another section (`ANALYTICS` as a KV namespace, `AI_SEARCH` as an
+ * `ai_search` instance, …): writing it would make wrangler reject the config
+ * with "assigned to multiple bindings".
+ *
+ * - `analytics_engine_datasets` (`@lunora/bindings/analytics` usage) is written
+ * as `{ binding: "ANALYTICS", dataset: "ANALYTICS" }`: the dataset is created
+ * lazily on first write (no remote id to mint), and defaults to the binding name
+ * on Cloudflare's side — written explicitly to avoid drift.
+ * - `ai_search_namespaces` (`ctx.aiSearch` reads) is written as
+ * `{ binding: "AI_SEARCH", namespace: "default" }`: `default` exists on every
+ * account and wrangler creates a missing namespace on deploy. No `remote: true`
+ * either — wrangler rates the binding "never has a local simulator" and proxies
+ * it remotely in plain `wrangler dev`, exactly like `ai`.
  */
 const reconcileSelfDescribingArray = (
     text: string,
     parsed: WranglerShape,
-    key: "analytics_engine_datasets",
-    entry: Readonly<Record<string, string>>,
+    key: "ai_search_namespaces" | "analytics_engine_datasets",
+    entry: Readonly<Record<string, string>> & { binding: string },
     label: string,
 ): ReconcileStep => {
     if ((parsed[key]?.length ?? 0) > 0) {
         return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, entry.binding);
+
+    if (owner !== undefined) {
+        return {
+            added: [],
+            text,
+            warnings: [
+                `${key}: not adding ${JSON.stringify(entry)} — the name "${entry.binding}" is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`,
+            ],
+        };
     }
 
     return { added: [label], text: applyModify(text, [key], [entry]) };
@@ -770,7 +830,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
-    // browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
+    // ai_search_namespaces vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
     // observability vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
@@ -781,6 +841,17 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai", "AI", "AI (Workers AI)") },
+        {
+            enabled: inferred.usesAiSearch,
+            run: (text) =>
+                reconcileSelfDescribingArray(
+                    text,
+                    parsed,
+                    "ai_search_namespaces",
+                    { binding: "AI_SEARCH", namespace: "default" },
+                    "AI_SEARCH (AI Search namespace)",
+                ),
+        },
         { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
         { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
         {

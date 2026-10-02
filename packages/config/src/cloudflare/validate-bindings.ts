@@ -707,6 +707,33 @@ const validateSelfDescribingBinding = (wrangler: WranglerConfig, rule: (typeof S
  */
 const REQUIRED_FIELD_BINDING_RULES = [
     {
+        // `namespace` is required even though `default` always exists: wrangler
+        // rejects an entry without one, and a `{ binding }`-only entry is the
+        // easy hand-written mistake.
+        arrayMessage: "ai_search_namespaces must be an array of { binding, namespace } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the AI Search binding` },
+            {
+                field: "namespace",
+                message: (label: string) => `${label} must have a non-empty "namespace" naming the AI Search namespace (every account has "default")`,
+            },
+        ],
+        key: "ai_search_namespaces",
+        objectMessage: (label: string) => `${label} must be a { binding, namespace } object`,
+    },
+    {
+        arrayMessage: "ai_search must be an array of { binding, instance_name } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the AI Search binding` },
+            {
+                field: "instance_name",
+                message: (label: string) => `${label} must have a non-empty "instance_name" naming an existing AI Search instance`,
+            },
+        ],
+        key: "ai_search",
+        objectMessage: (label: string) => `${label} must be a { binding, instance_name } object`,
+    },
+    {
         arrayMessage: "services must be an array of { binding, service, entrypoint? } entries",
         fields: [
             { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the service binding` },
