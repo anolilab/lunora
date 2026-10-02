@@ -281,7 +281,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { authDiscoveryPaths, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  `import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
@@ -960,7 +960,9 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                discoveryPaths: authDiscoveryPaths(authDeclaration.options(env)),
+                // Memoised on the declaration: a framework-hosted worker rebuilds these
+                // options per request, and \`options(env)\` rebuilds every plugin.
+                discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),
                 internalSecret: authDeclaration.internalSecret?.(env),${doAuthJurisdictionLine(options)}
                 namespace: authNamespace(env),
                 objectName: authDeclaration.objectName?.(env),

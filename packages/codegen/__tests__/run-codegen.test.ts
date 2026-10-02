@@ -2151,7 +2151,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { authDiscoveryPaths, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
@@ -2189,7 +2189,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             expect(app).toContain("options.authJurisdictionMove = authWiring.jurisdictionMove;");
             // Discovery paths are derived in the worker, so only those exact paths
             // cost a round-trip to the object.
-            expect(app).toContain("discoveryPaths: authDiscoveryPaths(authDeclaration.options(env)),");
+            expect(app).toContain("discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),");
             expect(app).toContain("options.authDiscoveryHandler = authWiring.discoveryHandler;");
 
             // Both modes must be rejected together — silently doing nothing is worse.
