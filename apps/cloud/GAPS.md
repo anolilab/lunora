@@ -333,7 +333,7 @@ unit tests, verified by codegen + tsc + vitest):
 - **Metering readback (✅ wired).** The dispatcher wrote one Analytics-Engine
   data point per request, but `createHttpAnalyticsReader` had no caller, so
   `platformUsage` stayed empty and spend caps / usage views evaluated nothing.
-  A per-cell `usageReadAtMs`-checkpointed delta rollback
+  A checkpointed delta rollback (now one `usageCheckpoints` row per target and scope)
   (`src/metering/rollback.ts`) now folds AE counts into the ledger in
   `scheduled()` (no double-count; under-count-not-over-bill on failure).
 - **Build dispatcher (🧩 → logic wired, 🌐 execution).** `builds.claimNext` had

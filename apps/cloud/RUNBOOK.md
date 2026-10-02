@@ -64,6 +64,15 @@ Two tokens, both scoped to this account:
 
 Also set `CLOUDFLARE_ACCOUNT_ID` on the GitHub Environment.
 
+Tokens an organization pastes for its own account (the `cloudflare-workers`
+target, Cloudflare accounts tab) are not operator tokens and never go here.
+Their permissions are `CLOUDFLARE_TOKEN_PERMISSIONS` in
+`src/provision-contract.ts`: Workers Scripts:Edit (required); D1, Workers KV,
+R2 and Queues:Edit as the app's bindings need them; Account Analytics:Read for
+the usage chart; Billing:Read for the Cloudflare costs tab. The costs tab has
+no token of its own any more — it reads a connected account that holds
+Billing:Read.
+
 **Check:** `curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify`
 answers `"status": "active"` for each.
 

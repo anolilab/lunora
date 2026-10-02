@@ -437,13 +437,15 @@ interface below is the current one):
     `ConvergeOptions` is `{ onProgress?: (line) => void }`, passed per call, so a
     driver is built when a converge runs and never late-binds a sink. The
     bundle hash is computed once, by `runDeployment`, not by each driver. What a
-    target IS — `placedOn: "cell" | "box"`, `fanout: "dispatcher" | "native"`,
+    target IS — `placedOn: "cell" | "box" | "account"`, `fanout: "dispatcher" | "native"`,
     `metering: "readback" | "pushed"`, `dropsUnboundClasses`, its label and
     limitations — is static, in `TARGETS` beside `BINDING_SUPPORT` /
     `UNSUPPORTED_REASONS` in `src/provision-contract.ts`; the deploy core
     validates a manifest against the `TargetId`'s tables, never a driver's.
-    `Placement` is `{ target: BoxTargetId; box } | { target: AccountTargetId; account } | { target: CellTargetId }`
-    (the account member landed with Phase 3).
+    `Placement` is `{ target: BoxTargetId; host: BoxHost } | { target: AccountTargetId; host: AccountHost } | { target: CellTargetId }`
+    (the account member landed with Phase 3; the per-kind `box` / `account`
+    members became one `host`, read through `PLACEMENT_HOSTS`, in code-quality
+    round 2).
 
 2. `src/targets/cloudflare-wfp/` — the provision-box client and its job contract
    (was `src/provision.ts` + the job half of `provision-contract.ts`), the
@@ -578,17 +580,24 @@ What shipped:
    and a scoped API token; `POST /v1/cloudflare-accounts` verifies it
    (`/user/tokens/verify`, falling back to `/accounts/{id}/tokens/verify` for
    an account-owned token), requires Workers Scripts on THIS account and a
-   workers.dev subdomain, probes D1/KV/R2/Queues/Account Analytics read-only
-   and records what answered, then seals the token with
+   workers.dev subdomain, probes D1/KV/R2/Queues/Account Analytics/Billing
+   read-only and records what answered, then seals the token with
    `SECRET_ENCRYPTION_KEY`. Rotate (same account only) and disconnect
    (refused while a project or an un-torn-down deployment uses it) are
    audited; `limits.cloudflareAccounts` caps connections; the org purge
    erases them. Token permissions: `CLOUDFLARE_TOKEN_PERMISSIONS` in
-   `src/provision-contract.ts`.
+   `src/provision-contract.ts`. Every reader goes through
+   `src/cloudflare-accounts/store.ts`; a row carries its organization's
+   `cellId` (`by_cell`). Billing Read on the same connection feeds the
+   Cloudflare costs tab (`cloudflareAccounts.costs`) — the former separate
+   `cloudflareBilling` connection is gone.
 2. **Placement.** `TARGETS["cloudflare-workers"]` is `placedOn: "account"`,
    `fanout: "native"`, `metering: "readback"`. `projects.setTarget` (moved
-   from `boxes.setProjectTarget`) writes `projects.cloudflareAccountId`;
-   deployments copy it and qualify `resourceRef` as `<account row>/<alias>`.
+   from `boxes.setProjectTarget`) writes the account row into
+   `projects.placementRef` — the one host column every hosted target uses, its
+   table implied by `placedOn` (`PLACEMENT_HOSTS` in
+   `src/targets/placement.ts`); deployments copy it, and `resourceRefOf`
+   qualifies their `resourceRef` as `<account row>/<alias>`.
    The organization's cell still converges an account-placed project, since
    its provision box holds the state and its sweep reads the usage.
 3. **Driver** (`src/targets/cloudflare-workers/`). The provision-box client
@@ -603,15 +612,17 @@ What shipped:
 4. **Usage.** One scope per connected account (of this cell's organizations,
    with Account Analytics granted), read from the GraphQL Analytics API's
    `workersInvocationsAdaptive` (requests per `scriptName`, `datetime_gt`
-   the checkpoint). Rows carry `cloudflareAccountId` and `isBillableUsage`
-   excludes them: never on the spend cap, the overage debit or the invoice.
+   the checkpoint). Rows carry the account as `placementRef` and are written
+   `billable: false` (`isBilledTarget`), which `isBillableUsage` reads: never
+   on the spend cap, the overage debit or the invoice.
 5. **`POST /v1/cells`** takes `target` (cell-placed targets only) and
    `config`. **`cells.credentialsRef` was not added:** BYO credentials are per
    organization, not per cell, and nothing else would read it.
 6. **Studio.** A Cloudflare accounts tab (connect, verify, permissions,
    rotate, disconnect); the deploy-target card's "Your Cloudflare account"
-   with an account picker; the capabilities card states the target's
-   limitations and refusals.
+   with an account picker (the card shows the picker of the drafted target's
+   `placedOn`); the capabilities card states the target's limitations and
+   refusals; the Cloudflare costs tab reads each connected account's bill.
 7. **Conformance.** `describeTargetConformance` and the per-scope readback
    legs run against the driver over a fake provision box and a fake
    GraphQL source.

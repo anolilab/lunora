@@ -66,8 +66,9 @@ src/
   targets/
     driver.ts        TargetDriver (one placement) + TargetFleet (every tenant of a target)
     registry.ts      placement → driver, target → fleet, built over the Worker env
-    placement.ts     a project's placement (its org's cell, its box, or its connected
-                     Cloudflare account), and a deployment's, for the sweeps
+    placement.ts     a project's placement (its org's cell, or the host its
+                     `placementRef` names: a box or a connected Cloudflare
+                     account, per PLACEMENT_HOSTS), and a deployment's, for the sweeps
     provision-box/   the Alchemy provision box's client + job contract, shared by
                      both Cloudflare drivers
     cloudflare-wfp/  the Workers-for-Platforms driver: dispatch-namespace sender,
@@ -196,9 +197,11 @@ a connected account, who fires its crons, how it is metered, which bindings it
 refuses — is static: `TARGETS`,
 `BINDING_SUPPORT` and `UNSUPPORTED_REASONS` in `src/provision-contract.ts`,
 read by the server and the studio alike. A project's target comes from its
-`target` column (absent means `cloudflare-wfp`), and a cell- or
-account-placed project deploys only from the control plane of its
-organization's cell
+`target` column (absent means `cloudflare-wfp`); a target placed on a box or in
+a connected account names that host in the project's one `placementRef`
+column, whose table follows from `TARGETS[target].placedOn` and which every
+layer reads through `PLACEMENT_HOSTS`. A cell- or account-placed project
+deploys only from the control plane of its organization's cell
 (`src/targets/placement.ts`). Every driver must pass the conformance suite in
 `__tests__/support/target-conformance.ts`; ESLint fences the Cloudflare-specific
 modules so nothing else imports them.
@@ -247,8 +250,9 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
 - **Credential.** The route checks the token before storing anything: it must
   verify as active (`/user/tokens/verify`, or `/accounts/{id}/tokens/verify`
   for an account-owned token), reach the account with Workers Scripts, and the
-  account must have a workers.dev subdomain. D1, KV, R2, Queues and Account
-  Analytics are probed with read-only calls and recorded on the row. The token
+  account must have a workers.dev subdomain. D1, KV, R2, Queues, Account
+  Analytics and Billing are probed with read-only calls and recorded on the
+  row, which also carries its organization's cell (`cellId`). The token
   is then sealed with `SECRET_ENCRYPTION_KEY` like a tenant secret
   (`cloudflareAccounts`, `lunora/cloudflare-accounts.ts`); rotate replaces it
   for the same account only; disconnect deletes it, and is refused while a
@@ -257,8 +261,9 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
 - **Token permissions** (account-scoped, least privilege, listed in
   `CLOUDFLARE_TOKEN_PERMISSIONS`): Workers Scripts: Edit (required); D1: Edit,
   Workers KV Storage: Edit, Workers R2 Storage: Edit, Queues: Edit as the app's
-  bindings need them; Account Analytics: Read for the usage chart. No zone
-  permission: custom routes on the customer's zone are not wired yet.
+  bindings need them; Account Analytics: Read for the usage chart; Billing:
+  Read for the Cloudflare costs tab. No zone permission: custom routes on the
+  customer's zone are not wired yet.
 - **Converge.** The same provision box and Alchemy program as `cloudflare-wfp`,
   with an `account` job target carrying the account id and the unsealed token
   (as process env to the Alchemy child, scrubbed from every log line). The
@@ -271,10 +276,15 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
 - **Usage.** The hourly rollback reads each connected account's GraphQL
   Analytics API (`workersInvocationsAdaptive`, requests per script) — one usage
   scope, and checkpoint, per account, only for accounts of this cell's
-  organizations whose token holds Account Analytics. The rows carry
-  `cloudflareAccountId` and are shown, never billed: Cloudflare bills the
-  customer, and Lunora Cloud charges for the control plane
-  (`limits.cloudflareAccounts` caps connections per plan).
+  organizations whose token holds Account Analytics (one `by_cell` read). The
+  rows carry the account as `placementRef` and are written `billable: false`:
+  shown, never billed — Cloudflare bills the customer, and Lunora Cloud charges
+  for the control plane (`limits.cloudflareAccounts` caps connections per plan).
+- **Costs.** The Cloudflare costs tab lists the connected accounts and, for each
+  whose token holds Billing: Read, its real spend by product for the current
+  charge period (`cloudflareAccounts.costs`, an action over the Billable Usage
+  API, `src/cloudflare-accounts/costs.ts`). There is no separate billing
+  connection: the account is connected once, here.
 - **Not yet:** custom domains on the customer's zone, platform runtime logs
   (the tail consumer lives in the platform's account), per-plan runtime limits
   (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,
@@ -299,7 +309,7 @@ public key and nothing else (plan 458 §3).
   `POST /v1/boxes/enrol` with the token, its raw public key (base64url), its
   public IPs and versions; the box gets a random DNS label (`slug`) and A/AAAA
   records `*.<slug>.<LUNORA_BOX_DOMAIN>` and `<slug>.<LUNORA_BOX_DOMAIN>` in the
-  box zone. `projects.setTarget` places a project on a box.
+  box zone. `projects.setTarget` places a project on a box (its `placementRef`).
 - **Session.** `hostd` dials `GET /v1/boxes/connect?box=<id>`, forwarded to the
   box's `BoxSessionDO` (binding `BOX_SESSION`, named by box id — the first
   Durable Object of this app's own). Handshake: `hello` → `challenge` (a
@@ -330,7 +340,8 @@ public key and nothing else (plan 458 §3).
   lines, capped at 4 000 lines and 256 KiB (one frame's worth); a job that
   failed still answers 200 with what arrived before it.
 - **Usage.** Box `report` frames become `platformUsage` request rows tagged
-  with the box — shown in the studio, never billed. Billing is per box per
+  with the box (`placementRef`) and written `billable: false` — shown in the
+  studio, never billed. Billing is per box per
   month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
 - **Releases.** Signed `lunora-hostd` releases are stored with
   `POST /v1/hostd/releases` (admin token; verified by `@lunora/hostd/release`'s

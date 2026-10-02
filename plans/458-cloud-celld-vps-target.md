@@ -999,7 +999,7 @@ Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
   `1dea0abe8` keeps the `hello` fleets out of the socket attachment (up to
   ~100 KB against workerd's 16 KiB cap), found while measuring for the bench.
 - **Deploy pacing per target** — `58cc121af`: `TARGETS[target].convergeBudget`
-  and `src/deploy/pacing.ts`; `cloudflare-wfp` keeps the platform account's
+  (since derived from `placedOn`, see §11) and `src/deploy/pacing.ts`; `cloudflare-wfp` keeps the platform account's
   1,200 / 5 min budget, `cloudflare-workers` spends the connected account's,
   `celld-vps` only its box's four converge slots.
 - **Re-releasing a commit already built** — `9333ea9a5`: a push whose build
@@ -1016,3 +1016,35 @@ Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
   follows them to `active` (GAPS.md B1; zone setup is 🌐, RUNBOOK step 6a).
 - **Pre-rename dev databases** — `bf8515923`: the seed renames a lone
   `dev-cell` to `default` in the local D1 file, or prints the reseed steps.
+
+## 11. Code-quality round 2 (`work/cloud-vps-gaps`, 2026-10-03)
+
+A maintainability review of `apps/cloud` (thermos round 2); each finding its
+own commit, all pre-release breaks recorded in the commit bodies. No data
+migration: the cloud app and every changed column exist only on this
+pre-release line.
+
+- **One placement column** — `4f306989d`: `projects.boxId` /
+  `projects.cloudflareAccountId` (and the same pair on `deployments` and
+  `platformUsage`) became one `placementRef` (a `v.id("boxes") |
+v.id("cloudflareAccounts")` union), its table implied by
+  `TARGETS[t].placedOn`; `PLACEMENT_HOSTS` in `src/targets/placement.ts` is
+  the one place "box or account" is decided, and `Placement` is
+  `{ target, host }`. `platformUsage.billable: false` replaces inferring
+  "display only" from which FK is set. The teardown's alias→project→box
+  fallback for rows predating `deployments.boxId` is gone.
+- **One "connect your Cloudflare account"** — `6f413f23b`:
+  `cloudflareBilling`, `lunora/cloudflare-billing.ts` and
+  `POST /v1/cloudflare-billing` are gone; Billing Read is a permission group
+  of `cloudflareAccounts`, and `cloudflareAccounts.costs` reads a connection's
+  bill.
+- **`resourceRefOf`** — `cbd693b9b`; **one account store**
+  (`src/cloudflare-accounts/store.ts`, `cloudflareAccounts.cellId` + `by_cell`)
+  — `ded2a34fd`; **one v4 caller**
+  (`src/cloudflare/fetch.ts`) — `cdaea07b6`.
+- **`cells.usageReadAtMs` dropped** with its checkpoint seed — `0b089142d`.
+- **Lows:** `convergeBudget` folded into `placedOn` — `b5efbeb1b`;
+  `resolveTargetDriver` without a per-target switch — `12418de8b`;
+  one `pendingTeardown` predicate, which no longer counts a `failed` row the
+  teardown sweep already stamped (it blocked target changes and disconnects
+  forever) — `ad6f0299d`.
