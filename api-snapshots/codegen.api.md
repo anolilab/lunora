@@ -1781,7 +1781,7 @@ const CAPABILITY_ROWS: readonly [
                 };
             };
             readonly clientType: "ArtifactsClient";
-            readonly missingMessage: "ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\\"ARTIFACTS\\\", namespace }) to wrangler.jsonc, or pass \\`artifacts\\` to createShardDO().";
+            readonly missingMessage: "ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\\"ARTIFACTS\\\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).";
             readonly stubMethods: readonly [
                 "authenticatedRemote",
                 "create",

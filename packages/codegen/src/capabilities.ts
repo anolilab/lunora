@@ -231,7 +231,7 @@ const CAPABILITY_ROWS = [
             binding: { bindingType: "ArtifactsBindingLike", envName: "ARTIFACTS", factory: { name: "createArtifacts", option: "binding" } },
             clientType: "ArtifactsClient",
             missingMessage:
-                'ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\"ARTIFACTS\\", namespace }) to wrangler.jsonc, or pass \\`artifacts\\` to createShardDO().',
+                'ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\"ARTIFACTS\\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).',
             stubMethods: ["authenticatedRemote", "create", "delete", "import", "info", "list", "withRepo"],
             syncStubMethods: ["authenticatedRemote"],
         },
