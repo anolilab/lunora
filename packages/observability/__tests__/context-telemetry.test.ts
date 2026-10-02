@@ -171,6 +171,17 @@ describe("createSpanCollector recordException redaction and stacktrace gating", 
     });
 });
 
+describe("dispatchRootSpan ray id", () => {
+    it("stamps the anchor's cloudflare ray id on the dispatch span, and omits it when absent", () => {
+        expect.assertions(2);
+
+        const base = { durationMs: 1, failure: undefined, functionPath: "messages:list", shardKey: undefined, startTs: 1, userId: undefined };
+
+        expect(dispatchRootSpan({ ...base, anchor: { ...anchor, rayId: "8f2a1b3c4d5e6f70" } }).rayId).toBe("8f2a1b3c4d5e6f70");
+        expect(dispatchRootSpan({ ...base, anchor })).not.toHaveProperty("rayId");
+    });
+});
+
 describe("dispatchRootSpan error-message redaction", () => {
     it("redacts the thrown failure's message by default", () => {
         expect.assertions(1);

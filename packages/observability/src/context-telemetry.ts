@@ -211,6 +211,13 @@ export interface ContextMetrics {
 
 /** The trace a ctx's spans hang off: the shared id, and the span they parent to. */
 export interface TraceAnchor {
+    /**
+     * Cloudflare Ray ID of the request this dispatch serves, forwarded by the
+     * runtime alongside `traceparent`. Carried on the anchor so every span and
+     * log line of the dispatch stamps the same value. Informational only; absent
+     * off the edge.
+     */
+    rayId?: string;
     rootSpanId: string;
 
     /**
@@ -550,6 +557,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             name,
                             ok,
                             parentSpanId: parentId,
+                            ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
                             shardKey,
                             spanId,
                             startTs,
@@ -753,6 +761,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     name: `${request.method} ${safeHost(request.url)}`,
                     ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
+                    ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
                     shardKey,
                     spanId,
                     startTs,
@@ -880,6 +889,7 @@ export const dispatchRootSpan = (input: {
         // sits above it in a full collector-side trace, but it is not in this
         // buffer, so naming it here would dangle.
         parentSpanId: "",
+        ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
         shardKey,
         spanId: anchor.rootSpanId,
         startTs,

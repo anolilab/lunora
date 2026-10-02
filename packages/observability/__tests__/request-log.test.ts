@@ -849,6 +849,22 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
         expect(event.traceId).toBe(TRACE_ID);
     });
 
+    it("carries the cloudflare ray id so the event can be found in Cloudflare Traces", () => {
+        expect.assertions(2);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(entry({ rayId: "8f2a1b3c4d5e6f70" }));
+        emitRequestLogEvent(entry({}));
+
+        const withRay = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+        const withoutRay = JSON.parse(log.mock.calls.at(1)?.at(0) as string) as Record<string, unknown>;
+
+        expect(withRay.rayId).toBe("8f2a1b3c4d5e6f70");
+        // Absent off the edge — and `JSON.stringify` drops the undefined key.
+        expect(withoutRay).not.toHaveProperty("rayId");
+    });
+
     it("carries the deploy attribution so 'did this start with a deploy?' is a group-by", () => {
         expect.assertions(2);
 

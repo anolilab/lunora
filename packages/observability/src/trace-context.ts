@@ -10,6 +10,7 @@
 import { isLunoraError } from "@lunora/errors";
 
 import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
+import { parseRayId } from "../../../shared/ray-id";
 
 /**
  * The trace ids a dispatch's spans hang off: taken from the inbound
@@ -17,11 +18,21 @@ import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
  * worker's trace and any container's beneath it), else freshly minted so a
  * dispatch with no inbound context — a subscription re-run, a server-initiated
  * call — still produces a coherent, self-contained local trace.
+ *
+ * `rayHeader` is the Cloudflare Ray ID the runtime forwarded alongside the
+ * `traceparent` (`x-lunora-ray-id`). It is re-validated here and carried on the
+ * anchor so every span and log line of the dispatch stamps it; absent or
+ * malformed, the anchor simply has none. Informational only.
  */
-export const resolveTraceAnchor = (traceparent: string | undefined): { rootSpanId: string; sampled: boolean; traceId: string } => {
+export const resolveTraceAnchor = (
+    traceparent: string | undefined,
+    rayHeader?: null | string,
+): { rayId?: string; rootSpanId: string; sampled: boolean; traceId: string } => {
     const inbound = parseTraceparent(traceparent);
+    const rayId = parseRayId(rayHeader);
 
     return {
+        ...(rayId === undefined ? {} : { rayId }),
         rootSpanId: inbound?.parentSpanId ?? otlpRandomHex(8),
         // Honour the upstream verdict. An unsampled inbound trace stays unsampled
         // through the shard and out to whatever the handler calls, which is the

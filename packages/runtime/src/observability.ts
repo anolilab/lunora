@@ -69,6 +69,17 @@ export interface ObservabilityEvent {
     path?: string;
     /** Port of the inbound request, when available. */
     port?: number;
+
+    /**
+     * Cloudflare Ray ID of the inbound request — its `cf-ray` header with the
+     * data-center suffix dropped (`8f2a1b3c4d5e6f70`). The key Cloudflare Traces
+     * and Workers Logs are searched by, so a Lunora event can be followed to the
+     * platform's view of the same request. Exported on the SERVER span as
+     * `cloudflare.ray_id`, the attribute Cloudflare's own Workers traces use.
+     * Informational only — never an authorization input. Absent off the edge
+     * (`wrangler dev` does not set `cf-ray`).
+     */
+    rayId?: string;
     /** URL scheme of the inbound request (e.g. `"https"`). */
     scheme?: string;
 
