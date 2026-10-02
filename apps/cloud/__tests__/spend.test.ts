@@ -17,7 +17,7 @@ import {
 
 describe("rate card", () => {
     /**
-     * The ledger's `kind` union is spelled out in `lunora/schema.ts` (codegen
+     * The ledger's `kind` union is spelled out in `lunora/tables/shared.ts` (codegen
      * reads it statically, so it cannot import the type) and priced by
      * `UsageMeter`. Nothing at runtime couples them, so this assertion is what
      * turns "added a meter and forgot the schema" into a `lint:types` failure

@@ -28,13 +28,13 @@ export interface ApiTypes {
     boxes: {
         createEnrolment: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations"> }, { expiresAt: number; installCommand: string; token: string; }>;
         domain: FunctionReference<"action", { organizationId: Id<"organizations"> }, string>;
-        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
         rename: FunctionReference<"mutation", { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }, void>;
         setProjectTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }, void>;
     };
     builds: {
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
     cells: {
@@ -89,7 +89,7 @@ export interface ApiTypes {
     invitations: {
         accept: FunctionReference<"mutation", { token: unknown }, { organizationId: Id<"organizations">; }>;
         invite: FunctionReference<"mutation", { email: unknown; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, { id: Id<"invitations">; token: string; }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; email: string; createdAt: number; status: "pending" | "revoked" | "accepted"; _id: Id<"invitations">; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { organizationId: Id<"organizations">; email: string; createdAt: number; status: "pending" | "accepted" | "revoked"; _id: Id<"invitations">; expiresAt: number; invitedBy: string; role: "admin" | "member" | "owner" | "viewer" }[]>;
         revoke: FunctionReference<"mutation", { id: Id<"invitations">; organizationId: Id<"organizations"> }, void>;
     };
     issues: {
@@ -188,7 +188,7 @@ export interface InternalApiTypes {
         ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
         recordDns: FunctionReference<"mutation", { boxId: Id<"boxes">; dnsError: null | unknown }, void>;
         revoke: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { ipv4?: string; ipv6?: string; slug: string; }>;
-        setDesiredRelease: FunctionReference<"mutation", { boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "online" | "offline" | "revoked"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        setDesiredRelease: FunctionReference<"mutation", { boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
     };
     builds: {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;

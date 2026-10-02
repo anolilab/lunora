@@ -21,7 +21,8 @@ import { describe, expect, it } from "vitest";
 
 const read = (name: string): string => readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 
-const SCHEMA = read("../lunora/schema.ts");
+/** Every table module the schema composes (`lunora/schema.ts` spreads them). */
+const SCHEMA = ["billing", "boxes", "deploy", "observability", "platform"].map((group) => read(`../lunora/tables/${group}.ts`)).join("\n");
 const ORGANIZATIONS = read("../lunora/organizations.ts");
 
 /** The two shapes an org-scoped column is declared in. Plain substrings — no regex to backtrack. */

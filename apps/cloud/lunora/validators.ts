@@ -64,12 +64,3 @@ export const LIMITS = {
     /** A raw provider webhook payload, read before signature verification. */
     webhookBody: 262_144,
 } as const;
-
-/**
- * A deploy target: `TARGET_IDS` in `src/provision-contract.ts`, as a validator —
- * the one the schema's `target` columns and `boxes.setProjectTarget` share.
- * Spelled out rather than mapped from `TARGET_IDS`, because codegen reads
- * validators statically and a computed union would type as `unknown`;
- * `__tests__/placement.test.ts` fails the type check when the two drift.
- */
-export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"));

@@ -17,7 +17,8 @@ import { action, internalMutation, internalQuery, mutation, query, v } from "./_
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
-import { boundedString, deployTarget, LIMITS } from "./validators";
+import { deployTarget } from "./tables/shared";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Customer boxes (plan 458 G12): machines an organization runs `lunora-hostd`

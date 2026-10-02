@@ -73,6 +73,47 @@ export const projects = sqliteTable("projects", {
     by_box: index("by_box").on(t.boxId),
 }));
 
+export const invitations = sqliteTable("invitations", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    email: text("email").notNull(),
+    expiresAt: real("expiresAt").notNull(),
+    invitedBy: text("invitedBy").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    role: text("role", { mode: "json" }).$type<"owner" | "admin" | "member" | "viewer">().notNull(),
+    status: text("status", { mode: "json" }).$type<"pending" | "accepted" | "revoked">().notNull(),
+    tokenHash: text("tokenHash").notNull(),
+}, (t) => ({
+    by_token: uniqueIndex("by_token").on(t.tokenHash),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const auditLog = sqliteTable("auditLog", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    action: text("action").notNull(),
+    actorUserId: text("actorUserId").notNull(),
+    createdAt: real("createdAt").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    target: text("target"),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const githubInstallations = sqliteTable("githubInstallations", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    accountLogin: text("accountLogin").notNull(),
+    claimedAt: real("claimedAt"),
+    createdAt: real("createdAt").notNull(),
+    installationId: real("installationId").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_installation: uniqueIndex("by_installation").on(t.installationId),
+}));
+
 export const deployments = sqliteTable("deployments", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
@@ -125,6 +166,123 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
 }, (t) => ({
     by_project: index("by_project").on(t.projectId),
     by_alias: uniqueIndex("by_alias").on(t.alias),
+}));
+
+export const deployKeys = sqliteTable("deployKeys", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
+    createdAt: real("createdAt").notNull(),
+    encryptedSecret: text("encryptedSecret", { mode: "json" }).$type<{ ciphertext: string; iv: string }>(),
+    expiresAt: real("expiresAt"),
+    hashedKey: text("hashedKey").notNull(),
+    lastUsedAt: real("lastUsedAt"),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id),
+    revokedAt: real("revokedAt"),
+    type: text("type", { mode: "json" }).$type<"production" | "dev" | "preview">().notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_hash: uniqueIndex("by_hash").on(t.hashedKey),
+}));
+
+export const builds = sqliteTable("builds", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    branch: text("branch").notNull(),
+    bundleHash: text("bundleHash"),
+    commitSha: text("commitSha").notNull(),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId"),
+    error: text("error"),
+    fromFork: integer("fromFork", { mode: "boolean" }),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    processingBy: text("processingBy"),
+    processingStartedAt: real("processingStartedAt"),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    pullRequest: real("pullRequest"),
+    rootDirectory: text("rootDirectory"),
+    skipReason: text("skipReason"),
+    status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
+    trigger: text("trigger", { mode: "json" }).$type<"push" | "pull_request">(),
+    updatedAt: real("updatedAt").notNull(),
+    buildingAt: real("buildingAt"),
+    successfulAt: real("successfulAt"),
+    failedAt: real("failedAt"),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
+}));
+
+export const buildLogs = sqliteTable("buildLogs", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    buildId: text("buildId").references((): AnySQLiteColumn => builds._id).notNull(),
+    createdAt: real("createdAt").notNull(),
+    level: text("level", { mode: "json" }).$type<"info" | "error">().notNull(),
+    line: text("line").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_build: index("by_build").on(t.buildId),
+}));
+
+export const domains = sqliteTable("domains", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    customHostnameId: text("customHostnameId"),
+    createdAt: real("createdAt").notNull(),
+    hostname: text("hostname").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    redirectStatusCode: real("redirectStatusCode"),
+    redirectTo: text("redirectTo"),
+    txtToken: text("txtToken").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+    verifiedAt: real("verifiedAt"),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_hostname: uniqueIndex("by_hostname").on(t.hostname),
+}));
+
+export const secrets = sqliteTable("secrets", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    createdAt: real("createdAt").notNull(),
+    environment: text("environment", { mode: "json" }).$type<"all" | "production" | "preview" | "dev">().notNull(),
+    iv: text("iv").notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
+}));
+
+export const tenantBackups = sqliteTable("tenantBackups", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    alias: text("alias").notNull(),
+    bytes: real("bytes"),
+    completedAt: real("completedAt"),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id).notNull(),
+    error: text("error"),
+    key: text("key").notNull(),
+    operation: text("operation", { mode: "json" }).$type<"backup" | "restore">().notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    restoredFrom: text("restoredFrom").references((): AnySQLiteColumn => tenantBackups._id),
+    restoreConflicts: real("restoreConflicts"),
+    restoreInserted: real("restoreInserted"),
+    restoreRowErrors: real("restoreRowErrors"),
+    status: text("status", { mode: "json" }).$type<"running" | "succeeded" | "failed">().notNull(),
+    trigger: text("trigger", { mode: "json" }).$type<"scheduled" | "manual" | "pre-restore">().notNull(),
+}, (t) => ({
+    by_project: index("by_project").on(t.projectId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const boxes = sqliteTable("boxes", {
@@ -197,36 +355,6 @@ export const metricPoints = sqliteTable("metricPoints", {
     by_org_at: index("by_org_at").on(t.organizationId, t.at),
 }));
 
-export const deployKeys = sqliteTable("deployKeys", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    capability: text("capability", { mode: "json" }).$type<"deploy" | "ingest">(),
-    createdAt: real("createdAt").notNull(),
-    encryptedSecret: text("encryptedSecret", { mode: "json" }).$type<{ ciphertext: string; iv: string }>(),
-    expiresAt: real("expiresAt"),
-    hashedKey: text("hashedKey").notNull(),
-    lastUsedAt: real("lastUsedAt"),
-    name: text("name").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    projectId: text("projectId").references((): AnySQLiteColumn => projects._id),
-    revokedAt: real("revokedAt"),
-    type: text("type", { mode: "json" }).$type<"production" | "dev" | "preview">().notNull(),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
-    by_hash: uniqueIndex("by_hash").on(t.hashedKey),
-}));
-
-export const overageDebits = sqliteTable("overageDebits", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    debitedCredits: real("debitedCredits").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    periodStart: real("periodStart").notNull(),
-    updatedAt: real("updatedAt").notNull(),
-}, (t) => ({
-    by_org_period: uniqueIndex("by_org_period").on(t.organizationId, t.periodStart),
-}));
-
 export const tenantLogs = sqliteTable("tenantLogs", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
@@ -277,146 +405,6 @@ export const observations = sqliteTable("observations", {
     by_org_session: index("by_org_session").on(t.organizationId, t.sessionId),
     by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
-}));
-
-export const githubInstallations = sqliteTable("githubInstallations", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    accountLogin: text("accountLogin").notNull(),
-    claimedAt: real("claimedAt"),
-    createdAt: real("createdAt").notNull(),
-    installationId: real("installationId").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
-    by_installation: uniqueIndex("by_installation").on(t.installationId),
-}));
-
-export const builds = sqliteTable("builds", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    branch: text("branch").notNull(),
-    bundleHash: text("bundleHash"),
-    commitSha: text("commitSha").notNull(),
-    createdAt: real("createdAt").notNull(),
-    deploymentId: text("deploymentId"),
-    error: text("error"),
-    fromFork: integer("fromFork", { mode: "boolean" }),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    processingBy: text("processingBy"),
-    processingStartedAt: real("processingStartedAt"),
-    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
-    pullRequest: real("pullRequest"),
-    rootDirectory: text("rootDirectory"),
-    skipReason: text("skipReason"),
-    status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
-    trigger: text("trigger", { mode: "json" }).$type<"push" | "pull_request">(),
-    updatedAt: real("updatedAt").notNull(),
-    buildingAt: real("buildingAt"),
-    successfulAt: real("successfulAt"),
-    failedAt: real("failedAt"),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
-    by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
-}));
-
-export const buildLogs = sqliteTable("buildLogs", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    buildId: text("buildId").references((): AnySQLiteColumn => builds._id).notNull(),
-    createdAt: real("createdAt").notNull(),
-    level: text("level", { mode: "json" }).$type<"info" | "error">().notNull(),
-    line: text("line").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
-    by_build: index("by_build").on(t.buildId),
-}));
-
-export const domains = sqliteTable("domains", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    customHostnameId: text("customHostnameId"),
-    createdAt: real("createdAt").notNull(),
-    hostname: text("hostname").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
-    redirectStatusCode: real("redirectStatusCode"),
-    redirectTo: text("redirectTo"),
-    txtToken: text("txtToken").notNull(),
-    updatedAt: real("updatedAt").notNull(),
-    verifiedAt: real("verifiedAt"),
-}, (t) => ({
-    by_project: index("by_project").on(t.projectId),
-    by_hostname: uniqueIndex("by_hostname").on(t.hostname),
-}));
-
-export const auditLog = sqliteTable("auditLog", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    action: text("action").notNull(),
-    actorUserId: text("actorUserId").notNull(),
-    createdAt: real("createdAt").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    target: text("target"),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
-}));
-
-export const tenantBackups = sqliteTable("tenantBackups", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    alias: text("alias").notNull(),
-    bytes: real("bytes"),
-    completedAt: real("completedAt"),
-    createdAt: real("createdAt").notNull(),
-    deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id).notNull(),
-    error: text("error"),
-    key: text("key").notNull(),
-    operation: text("operation", { mode: "json" }).$type<"backup" | "restore">().notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
-    restoredFrom: text("restoredFrom").references((): AnySQLiteColumn => tenantBackups._id),
-    restoreConflicts: real("restoreConflicts"),
-    restoreInserted: real("restoreInserted"),
-    restoreRowErrors: real("restoreRowErrors"),
-    status: text("status", { mode: "json" }).$type<"running" | "succeeded" | "failed">().notNull(),
-    trigger: text("trigger", { mode: "json" }).$type<"scheduled" | "manual" | "pre-restore">().notNull(),
-}, (t) => ({
-    by_project: index("by_project").on(t.projectId),
-    by_org: index("by_org").on(t.organizationId),
-}));
-
-export const invitations = sqliteTable("invitations", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    createdAt: real("createdAt").notNull(),
-    email: text("email").notNull(),
-    expiresAt: real("expiresAt").notNull(),
-    invitedBy: text("invitedBy").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    role: text("role", { mode: "json" }).$type<"owner" | "admin" | "member" | "viewer">().notNull(),
-    status: text("status", { mode: "json" }).$type<"pending" | "accepted" | "revoked">().notNull(),
-    tokenHash: text("tokenHash").notNull(),
-}, (t) => ({
-    by_token: uniqueIndex("by_token").on(t.tokenHash),
-    by_org: index("by_org").on(t.organizationId),
-}));
-
-export const platformUsage = sqliteTable("platformUsage", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
-    createdAt: real("createdAt").notNull(),
-    deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
-    kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    periodStart: real("periodStart").notNull(),
-    quantity: real("quantity").notNull(),
-    windowStart: real("windowStart"),
-}, (t) => ({
-    by_box_window: index("by_box_window").on(t.boxId, t.windowStart),
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const issues = sqliteTable("issues", {
@@ -548,19 +536,43 @@ export const uptimeState = sqliteTable("uptimeState", {
     by_deployment: index("by_deployment").on(t.deploymentId),
 }));
 
-export const secrets = sqliteTable("secrets", {
+export const dashboards = sqliteTable("dashboards", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    ciphertext: text("ciphertext").notNull(),
     createdAt: real("createdAt").notNull(),
-    environment: text("environment", { mode: "json" }).$type<"all" | "production" | "preview" | "dev">().notNull(),
-    iv: text("iv").notNull(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    panels: text("panels", { mode: "json" }).$type<Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>>().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_project_env_name: uniqueIndex("by_project_env_name").on(t.projectId, t.environment, t.name),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const overageDebits = sqliteTable("overageDebits", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    debitedCredits: real("debitedCredits").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    periodStart: real("periodStart").notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_period: uniqueIndex("by_org_period").on(t.organizationId, t.periodStart),
+}));
+
+export const platformUsage = sqliteTable("platformUsage", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    createdAt: real("createdAt").notNull(),
+    deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
+    kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    periodStart: real("periodStart").notNull(),
+    quantity: real("quantity").notNull(),
+    windowStart: real("windowStart"),
+}, (t) => ({
+    by_box_window: index("by_box_window").on(t.boxId, t.windowStart),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const cloudflareBilling = sqliteTable("cloudflareBilling", {
@@ -574,18 +586,6 @@ export const cloudflareBilling = sqliteTable("cloudflareBilling", {
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_org: uniqueIndex("by_org").on(t.organizationId),
-}));
-
-export const dashboards = sqliteTable("dashboards", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    createdAt: real("createdAt").notNull(),
-    name: text("name").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    panels: text("panels", { mode: "json" }).$type<Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }>>().notNull(),
-    updatedAt: real("updatedAt").notNull(),
-}, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const customers = sqliteTable("customers", {
