@@ -59,6 +59,8 @@ const CLASS_NAME = /^[A-Za-z_$][\w$]{0,127}$/u;
 const RESOURCE_NAME = /^[a-z0-9][\w-]{0,62}$/u;
 // A Cloudflare account id.
 const ACCOUNT_ID = /^[\da-f]{32}$/u;
+// The platform's Alchemy state store: an https origin on workers.dev.
+const STATE_STORE_URL = /^https:\/\/[\w.-]+\.workers\.dev\/?$/u;
 // One cron expression: five or six fields of the characters cron syntax uses.
 const CRON = /^[\d*/,?#A-Za-z-]+(?: [\d*/,?#A-Za-z-]+){4,5}$/u;
 /** The control plane's own cap on a release's crons (`startRelease`); Cloudflare's per-account limit is enforced by Cloudflare. */
@@ -86,7 +88,8 @@ const expect = (value, pattern, what) => {
  * @returns {{ stage: string, state: "cell" | "platform", target: PlanTarget }} The stage, whose state store holds it, and the target as the program reads it.
  */
 const planTarget = (target) => {
-    const candidate = /** @type {{ accountId?: unknown, apiToken?: unknown, dispatchNamespace?: unknown, kind?: unknown } | null | undefined} */ (target);
+    const candidate =
+        /** @type {{ accountId?: unknown, apiToken?: unknown, dispatchNamespace?: unknown, kind?: unknown, state?: unknown } | null | undefined} */ (target);
 
     if (candidate?.kind === "dispatch-namespace") {
         const namespace = expect(candidate.dispatchNamespace, LABEL, "dispatch namespace");
@@ -99,6 +102,14 @@ const planTarget = (target) => {
 
         if (typeof candidate.apiToken !== "string" || candidate.apiToken === "") {
             throw new PlanError(`the job carries no token for account ${accountId}`);
+        }
+
+        // Without the platform's store the state would land in the customer's account; refuse instead.
+        const { state: rawState } = candidate;
+        const state = /** @type {{ token?: unknown, url?: unknown } | undefined} */ (rawState);
+
+        if (typeof state?.token !== "string" || state.token === "" || typeof state.url !== "string" || !STATE_STORE_URL.test(state.url)) {
+            throw new PlanError("the job names no platform state store, and an account job never keeps its state in the customer's account");
         }
 
         return { stage: `account-${accountId}`, state: "platform", target: { accountId, kind: "account" } };

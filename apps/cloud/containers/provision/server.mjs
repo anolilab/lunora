@@ -37,11 +37,11 @@ const STEP_TIMEOUT_MS = 15 * 60 * 1000;
  * A `dispatch-namespace` job converges in the cell's own account with the box's
  * own credentials, and Alchemy keeps its state in that account's state store.
  * An `account` job converges in a customer's account with the token the job
- * carries — but its state stays in the PLATFORM's store, reached over HTTP
- * (`LUNORA_STATE_STORE_URL` + `LUNORA_STATE_STORE_TOKEN`, the cell's
- * `alchemy-state-store`): a customer must never hold the record of what was
- * converged for them (MULTIPLATFORM.md §5.3). A box without that store refuses
- * account jobs rather than keep their state in the customer's account.
+ * carries — but its state stays in the PLATFORM's store (the cell's
+ * `alchemy-state-store`), reached over HTTP with the URL and bearer the job
+ * also carries: a customer must never hold the record of what was converged
+ * for them (MULTIPLATFORM.md §5.3). `plan.mjs` refuses an account job without
+ * that store.
  * @param {import("./plan.mjs").ProvisionJob} job The planned job.
  * @param {import("./plan.mjs").Plan} plan Its plan.
  * @returns {Record<string, string>} The env entries the child needs for them.
@@ -51,22 +51,14 @@ const credentialsFor = (job, plan) => {
         return { CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? "", CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN ?? "" };
     }
 
-    const stateUrl = process.env.LUNORA_STATE_STORE_URL ?? "";
-    const stateToken = process.env.LUNORA_STATE_STORE_TOKEN ?? "";
-
-    if (stateUrl === "" || stateToken === "") {
-        throw new PlanError(
-            "this provision box has no platform state store (LUNORA_STATE_STORE_URL, LUNORA_STATE_STORE_TOKEN), so it cannot converge into a customer's account",
-        );
-    }
-
-    const target = job.action === "deploy" ? job.spec.target : job.target;
+    // plan.mjs validated the target, its token and its state store before this runs.
+    const target = /** @type {{ apiToken: string, state: { token: string, url: string } }} */ (job.action === "deploy" ? job.spec.target : job.target);
 
     return {
         CLOUDFLARE_ACCOUNT_ID: plan.target.accountId,
-        CLOUDFLARE_API_TOKEN: /** @type {{ apiToken: string }} */ (target).apiToken,
-        LUNORA_STATE_STORE_TOKEN: stateToken,
-        LUNORA_STATE_STORE_URL: stateUrl,
+        CLOUDFLARE_API_TOKEN: target.apiToken,
+        LUNORA_STATE_STORE_TOKEN: target.state.token,
+        LUNORA_STATE_STORE_URL: target.state.url,
     };
 };
 

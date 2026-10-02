@@ -38,6 +38,18 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # SECRET_ENCRYPTION_KEY (below) before storage, so no extra env var is needed —
 # only that SECRET_ENCRYPTION_KEY is set, which the summary read reuses to decrypt.
 
+# ── Customer Cloudflare accounts (cloudflare-workers, MULTIPLATFORM.md Phase 3) ─
+# An org connects its own account from the Cloudflare accounts tab; its token is
+# sealed with SECRET_ENCRYPTION_KEY, so it needs no env var. Converging into such
+# an account needs this cell's Alchemy state store, because that state stays in
+# the PLATFORM's account, never the customer's: the URL of the cell's
+# `alchemy-state-store` Worker and its bearer token (created by
+# `alchemy provider cloudflare bootstrap`, kept in the cell's Secrets Store).
+# They travel to the provision box in each job. Unset -> projects cannot deploy
+# into a connected account here, and their teardowns wait.
+# LUNORA_STATE_STORE_URL=https://alchemy-state-store.<cell-subdomain>.workers.dev
+# LUNORA_STATE_STORE_TOKEN=replace-with-the-state-store-bearer
+
 # Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
 # Generate with: openssl rand -hex 32
 GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32

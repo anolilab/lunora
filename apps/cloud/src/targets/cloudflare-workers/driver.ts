@@ -32,7 +32,7 @@ import type { ProgressLine, TargetDriver, TargetFleet } from "../driver";
 import type { AccountPlacement } from "../placement";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
-import type { ProvisionTarget } from "../provision-box/contract";
+import type { PlatformStateStore, ProvisionTarget } from "../provision-box/contract";
 import type { ScriptRequests } from "./api";
 import { readScriptRequests } from "./api";
 
@@ -48,6 +48,8 @@ export interface CloudflareWorkersPorts {
     credentials: AccountCredentials;
     /** The provision box's log lines — Workers Logs only, as on `cloudflare-wfp`. */
     log?: ProgressLine;
+    /** The cell's Alchemy state store, where every converge of this target keeps its state; absent → this control plane cannot converge it. */
+    state?: PlatformStateStore;
 }
 
 /** The public URL of `alias` in an account: its Worker on the account's `workers.dev` subdomain. */
@@ -57,6 +59,16 @@ export const createCloudflareWorkersDriver = (ports: CloudflareWorkersPorts): Ta
     const { account } = ports;
 
     const target = async (): Promise<ProvisionTarget> => {
+        const { state } = ports;
+
+        // Never fall back to a store in the customer's account: convergence state is platform state.
+        if (state === undefined) {
+            throw new LunoraError(
+                "SERVICE_UNAVAILABLE",
+                "this control plane has no Alchemy state store configured (LUNORA_STATE_STORE_URL, LUNORA_STATE_STORE_TOKEN)",
+            );
+        }
+
         const credentials = await ports.credentials(account.id);
 
         // Rotating is refused across accounts, so this only guards drift; converging into another account would strand the tenant.
@@ -64,7 +76,7 @@ export const createCloudflareWorkersDriver = (ports: CloudflareWorkersPorts): Ta
             throw new LunoraError("CONFLICT", `the connected token is for account ${credentials.accountId}, not ${account.accountId}`);
         }
 
-        return { accountId: account.accountId, apiToken: credentials.apiToken, kind: "account" };
+        return { accountId: account.accountId, apiToken: credentials.apiToken, kind: "account", state };
     };
 
     return {
@@ -134,6 +146,10 @@ export type CloudflareWorkersEnvironment = {
     CONTAINER_PROVISION_BOX?: unknown;
     DB?: unknown;
     LUNORA_CELL?: string;
+    /** The bearer token of this cell's `alchemy-state-store` (from its bootstrap). A secret. */
+    LUNORA_STATE_STORE_TOKEN?: string;
+    /** This cell's `alchemy-state-store` URL (`https://alchemy-state-store.{subdomain}.workers.dev`). */
+    LUNORA_STATE_STORE_URL?: string;
     /** Unseals each connected account's token. */
     SECRET_ENCRYPTION_KEY?: string;
 };
@@ -203,9 +219,18 @@ const meteredAccountsFrom = (environment: CloudflareWorkersEnvironment) => async
     return scopes;
 };
 
+/** This cell's Alchemy state store, when both halves are configured. */
+const stateStoreOf = (environment: CloudflareWorkersEnvironment): PlatformStateStore | undefined =>
+    environment.LUNORA_STATE_STORE_URL && environment.LUNORA_STATE_STORE_TOKEN
+        ? { token: environment.LUNORA_STATE_STORE_TOKEN, url: environment.LUNORA_STATE_STORE_URL }
+        : undefined;
+
 /** Whether this control-plane deployment can converge and tear down `cloudflare-workers` tenants. */
 export const cloudflareWorkersCanConverge = (environment: CloudflareWorkersEnvironment): boolean =>
-    environment.CONTAINER_PROVISION_BOX != null && environment.DB != null && Boolean(environment.SECRET_ENCRYPTION_KEY);
+    environment.CONTAINER_PROVISION_BOX != null &&
+    environment.DB != null &&
+    Boolean(environment.SECRET_ENCRYPTION_KEY) &&
+    stateStoreOf(environment) !== undefined;
 
 /** Build the driver for one connected account off the Worker env. Lazy: nothing is touched until a member is called. */
 export const cloudflareWorkersDriverFromEnv = (account: AccountPlacement, environment: CloudflareWorkersEnvironment): TargetDriver =>
@@ -213,6 +238,7 @@ export const cloudflareWorkersDriverFromEnv = (account: AccountPlacement, enviro
         account,
         box: () => provisionBoxFrom(environment),
         credentials: credentialsFrom(environment),
+        ...(stateStoreOf(environment) === undefined ? {} : { state: stateStoreOf(environment) }),
         log: (line) => {
             // eslint-disable-next-line no-console -- the provision box's log stays in Workers Logs, as on cloudflare-wfp
             console.log("[provision]", line);

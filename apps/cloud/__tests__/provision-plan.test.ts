@@ -14,6 +14,7 @@ import { BINDING_SUPPORT as BINDING_SUPPORT_BY_TARGET, tenantResourceName } from
 
 const ALIAS = "acme";
 const ACCOUNT = "a".repeat(32);
+const STATE = { token: "state-token", url: "https://alchemy-state-store.cell.workers.dev" };
 
 /** The box provisions for `cloudflare-wfp` only; its table is the contract this mapping honours. */
 const BINDING_SUPPORT = BINDING_SUPPORT_BY_TARGET["cloudflare-wfp"];
@@ -342,7 +343,7 @@ describe("provision plan: destroy", () => {
     it("destroys an account target's stacks on the account's stage, with the platform's state", () => {
         expect.assertions(1);
 
-        expect(plan({ action: "destroy", alias: ALIAS, target: { accountId: ACCOUNT, apiToken: "tok", kind: "account" } })).toMatchObject({
+        expect(plan({ action: "destroy", alias: ALIAS, target: { accountId: ACCOUNT, apiToken: "tok", kind: "account", state: STATE } })).toMatchObject({
             stage: `account-${ACCOUNT}`,
             state: "platform",
             target: { accountId: ACCOUNT, kind: "account" },
@@ -352,7 +353,7 @@ describe("provision plan: destroy", () => {
 
 describe("provision plan: a customer's own account (cloudflare-workers)", () => {
     const accountJob = (bindings: BindingRequirement[], overrides: Partial<DeployJob["spec"]> = {}): DeployJob =>
-        deployJob(bindings, { target: { accountId: ACCOUNT, apiToken: "tok", kind: "account" }, ...overrides });
+        deployJob(bindings, { target: { accountId: ACCOUNT, apiToken: "tok", kind: "account", state: STATE }, ...overrides });
 
     it("plans a plain Worker on the account's stage: no namespace, its own crons, the platform's state", () => {
         expect.assertions(4);
@@ -365,10 +366,23 @@ describe("provision plan: a customer's own account (cloudflare-workers)", () => 
         expect(result.worker?.crons).toStrictEqual(["*/5 * * * *", "0 3 * * 1"]);
     });
 
-    it("never writes the token into the plan", () => {
-        expect.assertions(1);
+    it("never writes the token or the state store's bearer into the plan", () => {
+        expect.assertions(2);
 
-        expect(JSON.stringify(plan(accountJob([], { secrets: {} })))).not.toContain('"tok"');
+        const written = JSON.stringify(plan(accountJob([], { secrets: {} })));
+
+        expect(written).not.toContain('"tok"');
+        expect(written).not.toContain("state-token");
+    });
+
+    it("refuses an account job that names no platform state store, rather than keep its state in the customer's account", () => {
+        expect.assertions(4);
+
+        refuse(accountJob([], { target: { accountId: ACCOUNT, apiToken: "tok", kind: "account" } as never }), /platform state store/u);
+        refuse(
+            accountJob([], { target: { accountId: ACCOUNT, apiToken: "tok", kind: "account", state: { token: "t", url: "https://evil.example.com" } } }),
+            /platform state store/u,
+        );
     });
 
     it("attaches a consumed queue to the Worker itself, never to the control plane", () => {
@@ -388,8 +402,8 @@ describe("provision plan: a customer's own account (cloudflare-workers)", () => 
     it("refuses a malformed account id, a missing token, and a hostile cron", () => {
         expect.assertions(6);
 
-        refuse(accountJob([], { target: { accountId: "acme", apiToken: "tok", kind: "account" } }), /account id/u);
-        refuse(accountJob([], { target: { accountId: ACCOUNT, apiToken: "", kind: "account" } }), /no token/u);
+        refuse(accountJob([], { target: { accountId: "acme", apiToken: "tok", kind: "account", state: STATE } }), /account id/u);
+        refuse(accountJob([], { target: { accountId: ACCOUNT, apiToken: "", kind: "account", state: STATE } }), /no token/u);
         refuse(accountJob([], { crons: ["* * * * *; rm -rf /"] }), /cron expression/u);
     });
 

@@ -140,6 +140,7 @@ describeTargetConformance("cloudflare-workers", () => {
             account: BYO_ACCOUNT,
             box: () => box,
             credentials: () => Promise.resolve({ accountId: BYO_ACCOUNT.accountId, apiToken: "customer-token" }),
+            state: { token: "state-token", url: "https://alchemy-state-store.cell.workers.dev" },
         }),
         running: () => [...workers.keys()],
     };

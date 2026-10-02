@@ -29,10 +29,20 @@ import type { AssetsUpload, BindingRequirement, DeployManifest } from "../../pro
  */
 export type ProvisionBinding = BindingRequirement & { resourceName?: string };
 
+/** The platform's own Alchemy state store (the cell's `alchemy-state-store` Worker) — where an `account` job's state lives. */
+export interface PlatformStateStore {
+    token: string;
+    url: string;
+}
+
 /** Which Cloudflare account a job converges in, and how the Worker is placed there. */
 export type ProvisionTarget =
-    /** A customer's own account: a plain Worker, its token carried in the job. */
-    | { accountId: string; apiToken: string; kind: "account" }
+    /**
+     * A customer's own account: a plain Worker, its token carried in the job —
+     * and the platform's state store, since that state must never live in the
+     * customer's account.
+     */
+    | { accountId: string; apiToken: string; kind: "account"; state: PlatformStateStore }
     /** The cell's account (the box's own credentials): a Worker in a dispatch namespace. */
     | { cell: string; dispatchNamespace: string; kind: "dispatch-namespace" };
 

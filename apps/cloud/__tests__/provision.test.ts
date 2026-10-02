@@ -137,10 +137,11 @@ describe(createCloudflareWorkersDriver, () => {
     const ACCOUNT = "a".repeat(32);
     const account = { accountId: ACCOUNT, id: "cfa_1", workersSubdomain: "acme" };
     const credentials = vi.fn<AccountCredentials>(() => Promise.resolve({ accountId: ACCOUNT, apiToken: "customer-token" }));
+    const state = { token: "state-token", url: "https://alchemy-state-store.cell.workers.dev" };
 
     it("converges a plain Worker into the customer's account, with its crons and no log tail, at its workers.dev URL", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
-        const driver = createCloudflareWorkersDriver({ account, box: () => box, credentials });
+        const driver = createCloudflareWorkersDriver({ account, box: () => box, credentials, state });
 
         await expect(driver.deploy({ ...spec, collectLogs: true, crons: ["*/5 * * * *"] })).resolves.toStrictEqual({
             url: "https://org-project.acme.workers.dev",
@@ -148,7 +149,7 @@ describe(createCloudflareWorkersDriver, () => {
 
         expect(credentials).toHaveBeenCalledWith("cfa_1");
         expect(calls[0]?.job).toMatchObject({
-            spec: { crons: ["*/5 * * * *"], target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account" } },
+            spec: { crons: ["*/5 * * * *"], target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account", state } },
         });
         expect(calls[0]?.job.action === "deploy" && calls[0].job.spec.tailConsumers).toBeUndefined();
         expect(driver.domains.platformTargets()).toStrictEqual(["acme.workers.dev"]);
@@ -157,16 +158,32 @@ describe(createCloudflareWorkersDriver, () => {
     it("destroys in the account, and refuses a token that drifted to another account", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 
-        await createCloudflareWorkersDriver({ account, box: () => box, credentials }).destroy("app");
+        await createCloudflareWorkersDriver({ account, box: () => box, credentials, state }).destroy("app");
 
-        expect(calls[0]?.job).toStrictEqual({ action: "destroy", alias: "app", target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account" } });
+        expect(calls[0]?.job).toStrictEqual({
+            action: "destroy",
+            alias: "app",
+            target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account", state },
+        });
 
         const drifted = createCloudflareWorkersDriver({
             account,
             box: () => box,
             credentials: () => Promise.resolve({ accountId: "b".repeat(32), apiToken: "other" }),
+            state,
         });
 
         await expect(drifted.deploy(spec)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("refuses to converge without the platform's state store, before unsealing anything", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+        const unseal = vi.fn<AccountCredentials>(() => Promise.resolve({ accountId: ACCOUNT, apiToken: "customer-token" }));
+
+        await expect(createCloudflareWorkersDriver({ account, box: () => box, credentials: unseal }).deploy(spec)).rejects.toMatchObject({
+            code: "SERVICE_UNAVAILABLE",
+        });
+        expect(unseal).not.toHaveBeenCalled();
+        expect(calls).toStrictEqual([]);
     });
 });

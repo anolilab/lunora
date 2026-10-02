@@ -69,8 +69,6 @@ describe("provision box", { timeout: 20_000 }, () => {
                 CLOUDFLARE_API_TOKEN: "cf-token-value",
                 LUNORA_ALCHEMY_CLI: STUB,
                 LUNORA_CONTROL_PLANE_SCRIPT: "lunora-cloud",
-                LUNORA_STATE_STORE_TOKEN: "state-store-token",
-                LUNORA_STATE_STORE_URL: "https://alchemy-state-store.cell.workers.dev",
                 PORT: "0",
             },
             stdio: ["ignore", "pipe", "inherit"],
@@ -130,19 +128,25 @@ describe("provision box", { timeout: 20_000 }, () => {
     });
 
     it("converges a customer-account job with the job's credentials, keeping the state in the platform's store", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const job = deployJob();
 
-        job.spec.target = { accountId: ACCOUNT, apiToken: "customer-token-value", kind: "account" };
+        job.spec.target = {
+            accountId: ACCOUNT,
+            apiToken: "customer-token-value",
+            kind: "account",
+            state: { token: "state-store-token", url: "https://alchemy-state-store.cell.workers.dev" },
+        } as unknown as Record<string, string>;
 
         const stream = await events(await post(job));
         const [project, worker] = reports(stream);
 
         expect([project?.account, worker?.account]).toStrictEqual([ACCOUNT, ACCOUNT]);
         expect(worker?.stateStore).toBe("https://alchemy-state-store.cell.workers.dev");
-        // The customer's token is scrubbed exactly like the cell's.
+        // The customer's token is scrubbed exactly like the cell's, and so is the store's bearer.
         expect(JSON.stringify(stream)).not.toContain("customer-token-value");
+        expect(JSON.stringify(stream)).not.toContain("state-store-token");
         expect(stream.at(-1)).toStrictEqual({ type: "result" });
     });
 
