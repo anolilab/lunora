@@ -152,6 +152,17 @@ export default createConfig(
             "vitest/require-hook": ["warn", { allowedFunctionCalls: ["describeTargetConformance"] }],
         },
     },
+    // The `workerd` vitest project (`__tests__/workerd/`), as in the packages that
+    // have one: `env` from `cloudflare:test` carries an upstream @deprecated JSDoc
+    // alias in the pool types and the suite must use it anyway, and the
+    // `Cloudflare.Env` augmentation is an empty interface by construction.
+    {
+        files: ["__tests__/workerd/**/*.ts"],
+        rules: {
+            "@typescript-eslint/no-empty-object-type": "off",
+            "sonarjs/deprecation": "off",
+        },
+    },
     // Cirrus function modules (cirrus/*.ts) and the worker entry export *named*
     // queries/mutations/actions + DO/handler bindings by design — codegen and
     // wrangler reference them by name, so a single-export file is still idiomatically

@@ -58,6 +58,7 @@
     },
     "devDependencies": {
         "@cloudflare/vite-plugin": "catalog:vite",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/cli": "workspace:*",
         "@lunora/codegen": "workspace:*",
