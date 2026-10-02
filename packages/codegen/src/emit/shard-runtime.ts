@@ -40,6 +40,17 @@ export class ${container.className} extends LunoraContainer {
         .join("\n");
 
     const imports = containers.map((container) => container.exportName).join(", ");
+    // Only when a container opts in, so an app that never does neither exports
+    // the gateways nor loads `@cloudflare/sandbox`.
+    const sandboxExports = containers.some((container) => container.sandbox === true)
+        ? `
+/**
+ * \`DirectoryBackup\` and \`S3Mount\` route a \`sandbox: true\` container's storage
+ * traffic through these WorkerEntrypoints, so the deployed worker must export them.
+ */
+export { DirectoryBackupGateway, S3Gateway } from "@lunora/container/sandbox";
+`
+        : "";
 
     return `${GENERATED_HEADER}/**
  * Container-enabled Durable Object classes for the containers declared in
@@ -58,7 +69,7 @@ import { LunoraContainer } from "@lunora/container/do";
 import { ${imports} } from "../containers.js";
 
 export { ContainerProxy } from "@lunora/container/do";
-
+${sandboxExports}
 ${classes}`;
 };
 

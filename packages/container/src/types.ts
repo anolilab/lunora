@@ -230,6 +230,18 @@ interface ContainerConfigBase {
     requiredPorts?: ReadonlyArray<number>;
 
     /**
+     * Opt in to the Sandbox SDK helpers (`@cloudflare/sandbox`): structured
+     * file operations, directory backups to R2 and S3-compatible bucket mounts
+     * on a named instance. The image must ship the `sandbox-shim` helper at
+     * `/usr/local/bin/sandbox-shim` — base it on Cloudflare's `cloudflare/sandbox`
+     * image. Turning it on also makes codegen export the `S3Gateway` and
+     * `DirectoryBackupGateway` entrypoints from the worker, which the helpers
+     * route the container's storage traffic through. Must be a `true`/`false`
+     * literal, because codegen reads it. Defaults to `false`.
+     */
+    sandbox?: boolean;
+
+    /**
      * Names of Worker secrets (from `wrangler secret` / `.dev.vars`) forwarded
      * into the container's environment at instance start. Each declared name
      * must exist on the Worker `env` — a missing one fails fast with a

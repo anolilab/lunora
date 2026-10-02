@@ -69,6 +69,7 @@ interface ContainerConfigBase {
     pingEndpoint?: string;
     readyOn?: ReadonlyArray<ContainerReadinessCheck>;
     requiredPorts?: ReadonlyArray<number>;
+    sandbox?: boolean;
     secrets?: ReadonlyArray<string>;
     secretsStore?: Readonly<Record<string, string>>;
     sleepAfter?: number | string;
@@ -659,6 +660,16 @@ type OtelFetchLike = (input: string, init: {
 ```ts
 const createContainerTelemetry: (options?: ContainerTelemetryOptions) => ContainerTelemetry;
 ```
+
+## `@lunora/container/sandbox`
+
+### `DirectoryBackupGateway` (class)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
+
+### `S3Gateway` (class)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
 
 ## Referenced internal declarations
 

@@ -1927,6 +1927,7 @@ interface ContainerIRBase {
         vcpu?: number;
     };
     name?: string;
+    sandbox?: boolean;
     sleepAfter?: number | string;
 }
 ```

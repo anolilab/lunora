@@ -1,7 +1,7 @@
 # Plan 458 — Container sandbox parity with Cloudflare Sandbox SDK 1.0
 
 **Baseline:** `f79680910` (2026-10-02)
-**Status:** TODO
+**Status:** IN PROGRESS (workstream A shipped)
 
 ## 0. Headline finding
 
@@ -156,6 +156,27 @@ from the Node-safe root (`index.ts` header). Add `sandbox?: boolean` to
 them in `shard-runtime.ts` next to `ContainerProxy`. Add a golden fixture for a
 `sandbox: true` app, and keep the existing fixtures byte-identical. Run
 `pnpm run lint:package-json`, `api:check` and `dist:check`.
+
+**Done.** What shipped, including where it differs from the above:
+
+- `@cloudflare/sandbox` is a regular `dependency` of `@lunora/container`, not
+  bundled. It carries no local patch, so leaving it external lets the app
+  dedupe `zod`.
+- The gateways are re-exported from a **new `@lunora/container/sandbox`
+  subpath**, not from `/do`, so an app that never opts in never loads the
+  package. The emitter adds that one export line only when some container sets
+  `sandbox: true`.
+- `sandbox` must be a static literal: it joined the statically-read key set
+  (renamed `WRANGLER_KEYS` → `STATIC_KEYS` in `discover/containers.ts`), and a
+  non-literal value is a located diagnostic. `defineContainer` rejects a
+  non-boolean at runtime.
+- The `containerSandboxTools` capability key and its `PlatformSignals` gate
+  landed here rather than in B, because the flag is what codegen keys on.
+  It is rated native on cloudflare and unsupported on celld and node, and the
+  node docs table is updated.
+- Container emit tests are `toContain` assertions, not golden files. The
+  "unchanged output" check asserts that the `ContainerProxy` export is still
+  followed directly by the first class.
 
 **B. `files` on the instance handle (M).**
 Add RPC methods on `LunoraContainer` that wrap `new Files(this.ctx.container)`:

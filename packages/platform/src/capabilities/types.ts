@@ -30,7 +30,7 @@
  * gate-bearing keys are:
  *
  * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
- * `containerEgressPolicy`, `containerRuntimeScheduling`, `containers`,
+ * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
@@ -81,7 +81,7 @@
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
- * `containerRuntimeScheduling`, `cronTriggers`,
+ * `containerRuntimeScheduling`, `containerSandboxTools`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
  * `relationGraph`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
@@ -224,6 +224,19 @@ export interface PlatformCapabilities {
          * result back should say so in this note.
          */
         containers?: Capability;
+
+        /**
+         * The Sandbox SDK helpers on a `defineContainer({ sandbox: true })`
+         * container: structured file operations (`Files`), directory backups to
+         * R2 (`DirectoryBackup`) and S3-compatible bucket mounts (`S3Mount`),
+         * from `@cloudflare/sandbox`. All three run the `sandbox-shim` helper
+         * through the native `ctx.container.exec()`, and the backup and mount
+         * helpers route the container's storage traffic through Worker
+         * entrypoints via `interceptOutboundHttp`. A host that runs a container
+         * but has neither cannot carry them. Gate-bearing: codegen sets the
+         * `containerSandboxTools` `PlatformSignals` flag off `ContainerIR.sandbox`.
+         */
+        containerSandboxTools?: Capability;
 
         /**
          * DECLARED cron triggers — the `cronJobs()` registrations codegen lifts

@@ -349,6 +349,10 @@ const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
     }
 
     assertValidReadyOnChecks(config);
+
+    if (config.sandbox !== undefined && typeof config.sandbox !== "boolean") {
+        throw new TypeError("defineContainer: `sandbox` must be a boolean, or omitted");
+    }
 };
 
 /** Whether a registry reference is digest-pinned in the Cloudflare registry — the only kind a named image accepts. */

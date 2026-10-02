@@ -157,6 +157,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No container orchestration implemented, so there is no image to pick at start and no filesystem to snapshot",
         },
+        containerSandboxTools: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is no container filesystem to read, back up or mount a bucket into",
+        },
         containers: {
             level: "unsupported",
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",

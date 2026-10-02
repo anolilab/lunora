@@ -213,6 +213,13 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", interceptHttps: "yes" as unknown as boolean })).toThrow("`interceptHttps` must be a boolean");
     });
 
+    it("accepts a boolean sandbox flag and rejects anything else", () => {
+        expect.assertions(2);
+
+        expect(defineContainer({ image: "./app", sandbox: true }).sandbox).toBe(true);
+        expect(() => defineContainer({ image: "./app", sandbox: "yes" as unknown as boolean })).toThrow("`sandbox` must be a boolean");
+    });
+
     it("accepts hardTimeout and readyOn config", () => {
         expect.assertions(3);
 

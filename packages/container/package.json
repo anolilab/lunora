@@ -50,6 +50,10 @@
             "types": "./dist/otel.d.ts",
             "import": "./dist/otel.mjs"
         },
+        "./sandbox": {
+            "types": "./dist/sandbox/index.d.ts",
+            "import": "./dist/sandbox/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -70,6 +74,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@cloudflare/sandbox": "catalog:cloudflare",
         "@lunora/errors": "1.0.0-alpha.48"
     },
     "devDependencies": {

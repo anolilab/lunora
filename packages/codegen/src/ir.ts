@@ -576,6 +576,14 @@ export interface ContainerIRBase {
     name?: string;
 
     /**
+     * `true` when the definition opts in to the Sandbox SDK helpers
+     * (`defineContainer({ sandbox: true })`). Must be a literal: it decides
+     * whether the generated `containers.ts` exports the sandbox gateways, and
+     * it raises the `containerSandboxTools` platform signal.
+     */
+    sandbox?: boolean;
+
+    /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means
      * omitted (platform default `"10m"`) or non-literal. Lifted for the advisor.
      */
