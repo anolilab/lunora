@@ -125,38 +125,68 @@ One handler speaks one protocol:
 
 #### Mount the handler
 
-`authorize` is the gate. It runs before **every** request of an upload: `POST`
-creates it, `PATCH` sends a chunk, `HEAD` asks where to resume, `DELETE` cancels.
-It allows the request only when it returns exactly `true`. Returning anything
-else, or throwing, answers `403`. In an [HTTP action](/docs/concepts/http-endpoints)
-the caller is already resolved on `ctx.auth`, so the gate can close over it:
+`authorize` is the gate. It runs on every request of an upload: `POST` creates
+it, `PATCH` sends a chunk, `HEAD` asks where to resume, `DELETE` cancels one in
+progress. It allows the request only when it returns exactly `true`; anything
+else, or a throw, answers `403`. A request that declares a size over `maxFileSize`
+is answered `413` before the gate runs. A finished upload cannot be deleted
+through the route at all: removing a stored file is `ctx.storage.delete` in your
+own code.
+
+The gate has two jobs. On `POST` it decides who may start an upload. On every
+other method it must check that the upload in the URL belongs to the caller,
+because anyone who learns an upload's id could otherwise append to it, or cancel
+it. So record the owner when the upload is created. In an
+[HTTP action](/docs/concepts/http-endpoints) the caller is already resolved on
+`ctx.auth`:
 
 ```ts
 // lunora/http.ts
 import { createR2UploadStorage, createUploadHandler } from "@lunora/storage/upload";
 import { httpAction, httpRouter } from "lunorash/server";
 import { env } from "cloudflare:workers";
+import { internal } from "@/lunora/_generated/api";
 
 // R2 over its S3 API (`aws4fetch`, no AWS SDK). Needs R2 S3 API credentials and
-// `nodejs_compat` in wrangler.jsonc. `path` must match the route below.
-const storage = createR2UploadStorage({
-    accountId: env.CF_ACCOUNT_ID,
-    bucket: "user-uploads",
-    accessKeyId: env.R2_ACCESS_KEY_ID,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-    path: "/uploads",
-});
+// `nodejs_compat` in wrangler.jsonc. Built on first use, not at import: the
+// constructor throws on a missing credential, and at module scope that would
+// take down every route of the Worker, not just this one.
+let storage: ReturnType<typeof createR2UploadStorage> | undefined;
+
+const uploadStorage = () =>
+    (storage ??= createR2UploadStorage({
+        accountId: env.CF_ACCOUNT_ID,
+        bucket: "user-uploads",
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        path: "/uploads", // must match the routes below
+    }));
+
+/** The upload id in `/uploads/<id>`. */
+const uploadId = (url: URL) => url.pathname.split("/").pop() ?? "";
 
 const upload = httpAction(async (ctx, request) => {
-    const handler = createUploadHandler({
-        storage,
-        maxFileSize: 2 * 1024 * 1024 * 1024, // 2 GiB
-        // Signed-in users only. Add your own rules here: a per-user quota, or a
-        // stricter `maxFileSize` per MIME type in a second handler.
-        authorize: () => ctx.auth.userId !== null,
-    });
+    const { userId } = ctx.auth;
 
-    return handler.fetch(request);
+    if (userId === null) {
+        return new Response("Unauthorized", { status: 401 });
+    }
+
+    const handler = createUploadHandler({
+        storage: uploadStorage(),
+        maxFileSize: 2 * 1024 * 1024 * 1024, // 2 GiB
+        authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
+    });
+    const response = await handler.fetch(request);
+
+    // The new upload's URL comes back in `Location`: record who owns it.
+    const location = response.headers.get("location");
+
+    if (request.method === "POST" && response.ok && location !== null) {
+        await ctx.runMutation(internal.uploads.claim, { uploadId: uploadId(new URL(location, request.url)), userId });
+    }
+
+    return response;
 });
 
 const app = httpRouter();
@@ -168,15 +198,16 @@ app.all("/uploads/*", upload);
 export default app;
 ```
 
-An upload's state lives in the storage provider, which is built once and shared,
-so building the handler per request is fine. That is what lets the gate see this
-request's `ctx.auth`.
+`internal.uploads.claim` and `internal.uploads.isOwner` are your own
+[internal functions](/docs/concepts/internal-functions) over an `uploads` table:
+one inserts `{ uploadId, userId }`, the other reports whether that row exists.
+The same table is where you check ownership before you serve the file.
 
-The storage provider names the object, and `createR2UploadStorage` does not take
-a naming function, so you cannot put each user's uploads under their own key
-prefix. Keep ownership in your tables: when an upload finishes, have the client
-call a mutation that records the file for `ctx.auth.userId`, and check that row
-before you serve the file.
+An upload's progress lives in the storage provider, which is built once and
+shared, so building the handler per request is fine; that is what lets the gate
+see this request's `ctx.auth`. The provider also names the object, and
+`createR2UploadStorage` takes no naming function, so you cannot put each user's
+uploads under their own key prefix. Ownership lives in your table instead.
 
 #### Upload from the client
 
@@ -187,6 +218,8 @@ export function VideoUpload({ token }: { token: string }) {
     const { upload, progress, isUploading, isPaused, pause, resume, error } = useUpload({
         endpointTus: "/uploads",
         method: "tus",
+        // R2 rejects multipart parts under 5 MiB; TUS defaults to 1 MiB chunks.
+        chunkSize: 5 * 1024 * 1024,
         // Sent on every request, so the route's `ctx.auth` resolves the caller.
         headers: { authorization: `Bearer ${token}` },
         restrictions: { allowedFileTypes: ["video/*"], maxFileSize: 2 * 1024 * 1024 * 1024 },
@@ -204,21 +237,28 @@ export function VideoUpload({ token }: { token: string }) {
 }
 ```
 
-`useUpload` uses the protocol you name in `method`. Without it, it picks one
-from the endpoints you pass: TUS for files above `tusThreshold` (10 MB by
-default), multipart below it. Since each handler speaks one protocol, give each
-endpoint its own route, such as a TUS handler on `/uploads` and a
-`protocol: "multipart"` handler on `/uploads-form`. Never point two of them at
-the same path. Client `restrictions` reject a file before any request is sent.
-They are a convenience, not a check: the server's `maxFileSize` and `authorize`
-are what hold.
+Pass `method` so the protocol is always the one your route speaks. Without it,
+`useUpload` uses the only endpoint you give it, or, given several, picks one by
+file size against `tusThreshold` (10 MB by default). Each handler speaks one
+protocol, so each endpoint needs its own route, such as a TUS handler on
+`/uploads` and a `protocol: "multipart"` handler on `/uploads-form`. Client
+`restrictions` reject a file before any request is sent. They are a convenience,
+not a check: the server's `maxFileSize` and `authorize` are what hold.
 
-The same hooks ship for every client: `@lunora/vue/upload` (`useUpload`, …),
-`@lunora/svelte/upload` and `@lunora/solid/upload` (`createUpload`, …),
-`@lunora/angular/upload`, and the framework-free `@lunora/client/upload`
-(`createUpload`, `createTusAdapter`, …). All of them export `UploadError`, for a
-failed request (it carries the HTTP `status`), and `RestrictionError`, for a file
-the client-side `restrictions` rejected.
+A failed upload surfaces on `error` as a plain `Error` whose message carries the
+HTTP status (`Upload failed: 403`). A file the client-side `restrictions` reject
+throws a `RestrictionError`.
+
+The other clients ship the same uploader under their own names:
+
+| Package                  | Entry point                                    | Notes                                                                                  |
+| ------------------------ | ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `@lunora/react/upload`   | `useUpload`, `useTusUpload`, `useFileInput`, … | As above.                                                                              |
+| `@lunora/vue/upload`     | `useUpload`, `useTusUpload`, `useFileInput`, … | Same options as React.                                                                 |
+| `@lunora/svelte/upload`  | `createUpload`, `createTusUpload`, …           | Same options as React.                                                                 |
+| `@lunora/solid/upload`   | `createUpload`, `createTusUpload`, …           | Same options as React.                                                                 |
+| `@lunora/angular/upload` | `upload(options)`                              | TUS or chunked REST only (`protocol`); no size-based selection.                        |
+| `@lunora/client/upload`  | `createUpload(options)`, `createTusAdapter`, … | Framework-free; one `endpoint` plus a `protocol` (default `"tus"`), no size selection. |
 
 #### Authenticating the upload route
 
@@ -229,29 +269,28 @@ Never put a token in the upload URL: TUS clients store and reuse upload URLs to
 resume, and a URL ends up in logs and `Referer` headers.
 
 Serving the result is a separate route. Register the upload routes on their own
-prefix. A `GET` route that streams stored objects with
+prefix, so a `GET` route that streams stored objects with
 `serveStorageObject(ctx, key, request, authorize)`, or that checks a signed URL,
-then cannot shadow them, and each route keeps its own gate: the upload `authorize`
-decides who may write, and the serving route's `authorize` decides who may read.
+cannot shadow them. Each route keeps its own gate: the upload `authorize` decides
+who may write, the serving route's `authorize` who may read. `serveStorageObject`
+reads through the Worker's `.storage()` R2 binding, while the upload handler
+writes over the S3 API, so point that binding at the same bucket.
 
 #### Limits
 
-- **Request body size.** Every request still passes through the Worker, so each
-  one must fit [Cloudflare's request body limit](https://developers.cloudflare.com/workers/platform/limits/#request-limits)
-  for your plan (100 MB on Free and Pro). A TUS or chunked-REST upload stays
-  under it by sending chunks: `chunkSize` on the hook (1 MB for TUS and 5 MB for
-  chunked REST by default) is the size of each request. A multipart upload is a
-  single request, so the whole file has to fit.
-- **`maxFileSize`** defaults to 100 MiB, and there is no unlimited setting. It
-  must be a finite, non-negative number; a `NaN` from an unset env var throws when
-  the handler is built instead of switching the cap off. For TUS and chunked REST
-  the handler checks the total size the client declares (`Upload-Length`,
-  `X-Total-Size`) and the request's `Content-Length`, and answers `413` above the
-  cap. For multipart it does not read `Content-Length`, which covers the whole
-  form body including boundaries and would reject a file within the limit;
-  the multipart parser enforces the cap on the file itself. A TUS upload created
-  with `Upload-Defer-Length` declares no total up front, so the early check does
-  not apply to it.
+- **Request body size.** Every request passes through the Worker, so each one
+  must fit [Cloudflare's request body limit](https://developers.cloudflare.com/workers/platform/limits/#request-limits)
+  for your plan (100 MB on Free and Pro). TUS and chunked REST send the file as
+  chunks of `chunkSize` bytes, one request each. A multipart upload is a single
+  request, so the whole file has to fit.
+- **R2 part size.** Over `createR2UploadStorage` each chunk becomes one part of
+  an R2 multipart upload, and R2 rejects parts under 5 MiB (except the last).
+  Set `chunkSize` to at least 5 MiB for TUS, whose default is 1 MiB. Chunked
+  REST's 5 MiB default already fits.
+- **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
+  finite, non-negative number. Uploads over it get a `413`.
+  [@lunora/storage](/docs/packages/storage#end-user-uploads-rls-gated) covers how
+  each protocol declares its size.
 - **No `authorize`** mounts an open, writable endpoint and logs a warning when
   the handler is built. Pass `public: true` only for a bucket that is meant to be
   open.

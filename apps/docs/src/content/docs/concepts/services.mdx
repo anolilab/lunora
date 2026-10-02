@@ -122,7 +122,7 @@ import { vi } from "vitest";
 
 const t = lunoraTest(schema, {
     services: {
-        documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) },
+        documentParser: { fetch: vi.fn(async () => Response.json({ text: "…" })) },
         llmGateway: { complete: vi.fn().mockResolvedValue("summary") },
     },
 });
