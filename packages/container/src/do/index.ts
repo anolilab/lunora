@@ -14,14 +14,27 @@ import { abortDeadline } from "../../../../shared/abort-deadline";
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { CONTAINER_EXEC_PATH, pathMatchesAnyDecoding } from "../exec";
 import { emitContainerLifecycle } from "../lifecycle-event";
+import type { ContainerSpawnRequest } from "../spawn";
 import type { ContainerDefinition, ContainerReadinessCheck, ContainerSnapshot } from "../types";
 import runNativeExec from "./native-exec";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
 import { reportContainerLifecycle } from "./report-lifecycle";
+import type { SpawnedProcess } from "./spawn";
+import { spawnNative } from "./spawn";
 import type { StartOverride } from "./start-override";
 import { resolveImageReference, sameStart, START_OVERRIDE_KEY } from "./start-override";
 
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
+
+/** The runtime's `ctx.container`, once known to be present. */
+type ContainerRuntime = NonNullable<DurableObjectContext["container"]>;
+
+/** A running container plus the release for the in-flight count taken on it. See `LunoraContainer.lunoraAcquire`. */
+interface AcquiredContainer {
+    container: ContainerRuntime;
+    /** Drop the in-flight count. Idempotent. */
+    release: () => void;
+}
 
 /** Interval between `readyOn` probe attempts while waiting for the app to come up. */
 const READINESS_POLL_INTERVAL_MS = 500;
@@ -109,14 +122,15 @@ const TARGET_PORT_HEADER = "cf-container-target-port";
  * ```
  */
 class LunoraContainer<Env = unknown> extends Container<Env> {
+    /** The `lunora/containers.ts` export name, for lifecycle log correlation and error messages. */
+    protected readonly lunoraName: string;
+
     /**
      * Data-residency jurisdiction the app's DOs are pinned to (codegen passes the
      * schema's `.jurisdiction("…")`). Used to pin the best-effort lifecycle report
      * to the same region as the root shard. `undefined` ⇒ un-pinned.
      */
     private readonly lunoraJurisdiction?: DurableObjectJurisdiction;
-    /** The `lunora/containers.ts` export name, for lifecycle log correlation. */
-    private readonly lunoraName: string;
     /** Default port the readiness probes target when a check omits its own `port`. */
     private readonly lunoraDefaultPort?: number;
     /** Hard-cap lifetime in whole seconds (from the `hardTimeout` config), or `undefined`. */
@@ -313,6 +327,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 
     /**
+     * Start a process and stream it (`handle.spawn()`), through the runtime's
+     * native `ctx.container.exec()`. Starts the container first when it is not
+     * running, and counts the process in flight until it exits, so `sleepAfter`
+     * cannot stop the container under it. The process's streams and a control
+     * stub (`exitCode` / `kill` / `resize`) cross back over RPC.
+     */
+    public async lunoraSpawn(request: ContainerSpawnRequest): Promise<SpawnedProcess> {
+        const { container, release } = await this.lunoraAcquire("spawn");
+
+        return spawnNative(container.exec.bind(container), request, this.envVars ?? {}, release);
+    }
+
+    /**
      * The start path `containerFetch` takes (and the one an app can call itself).
      * Resolves the `secretsStore` bindings into `envVars` first — `doStartContainer`
      * reads `this.envVars`, so a container started this way would otherwise boot
@@ -328,6 +355,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // snapshot claiming the run was still up. See {@link beginStart}.
         await this.applyStartEnv();
         await this.applyStartSelection();
+        await this.beforeContainerStart();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -359,6 +387,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         await this.recordStartOverride({ envVars: options?.envVars, image, instanceType }, snapshot);
         await this.applyStartEnv();
         await this.applyStartSelection(snapshot !== undefined);
+        await this.beforeContainerStart();
 
         const stops = this.lunoraStops;
         const wasRunning = this.beginStart();
@@ -462,6 +491,57 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         await super.onStop(parameters);
     }
+
+    /**
+     * Get the container running for an operation that talks to it through
+     * `ctx.container` rather than over HTTP (`spawn`, and the sandbox helpers),
+     * and count the operation in flight so `sleepAfter` cannot stop the
+     * container underneath it. Goes through the same readiness gate a proxied
+     * request does, and through {@link start} when the container is stopped —
+     * `start()` returns once the container runs, so a container that serves no
+     * port starts here too. The caller must call `release` when the operation
+     * ends, including when the result is a stream that outlives this call.
+     */
+    protected async lunoraAcquire(operation: string): Promise<AcquiredContainer> {
+        const { container } = this.ctx;
+
+        if (typeof container?.exec !== "function") {
+            throw new LunoraError(
+                "NOT_IMPLEMENTED",
+                `container "${this.lunoraName}": ${operation}() needs the runtime's native ctx.container.exec(), which this host does not provide`,
+            );
+        }
+
+        await this.awaitReadinessGate();
+
+        if (!container.running) {
+            await this.start();
+        }
+
+        this.inflightRequests += 1;
+        this.renewActivityTimeout();
+
+        let released = false;
+
+        return {
+            container,
+            release: () => {
+                if (!released) {
+                    released = true;
+                    this.decrementInflight();
+                }
+            },
+        };
+    }
+
+    /**
+     * Runs on every start path after the env and image are settled and before
+     * the base starts the container — which is also before the base installs
+     * its outbound interception. A subclass that has to register an outbound
+     * intercept ahead of the base's catch-all does it here. No-op by default.
+     */
+    // eslint-disable-next-line class-methods-use-this -- an override point; the base has nothing to do
+    protected async beforeContainerStart(): Promise<void> {}
 
     /** A 403 for a path under the reserved namespace, else `undefined`. */
     private refuseReserved(pathname: string): Response | undefined {

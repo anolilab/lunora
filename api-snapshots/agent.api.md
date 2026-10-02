@@ -263,6 +263,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `ContainerFsToolOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ContainerToolInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -445,6 +449,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `compileAgentWorkflow` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `containerFsTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -693,6 +701,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `ContainerFsToolOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ContainerToolInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -722,6 +734,10 @@ Re-exported from `@lunora/agent` — signature tracked in that section.
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `browserTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `containerFsTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

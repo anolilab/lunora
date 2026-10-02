@@ -468,6 +468,14 @@ export const operator = defineAgent({
     same bound `exec` has always had: the body is buffered in a 128MB isolate
     shared with every other in-flight request.
 
+- **`containerFsTool(name, opts?)`** has the same `ls` / `read` / `write` /
+  `rm` / `stat` ops as `fsTool`, but on the **container's own disk**, the one
+  `containerTool`'s `exec` runs against. It addresses the same per-thread
+  instance, so a file the model writes is the file its next command sees. The
+  container needs `sandbox: true` in `lunora/containers.ts` (see the container
+  docs). Paths are scoped under `opts.root` (default `/workspace`), a `write`
+  creates missing parent directories, and the writing ops are gated by default.
+
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.

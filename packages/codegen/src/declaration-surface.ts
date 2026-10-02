@@ -290,6 +290,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // Read off the container IR: the policy is deploy configuration codegen
         // already lifts statically, so no separate AST signal is needed.
         containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
+        containerSandboxTools: containers.some((container) => container.sandbox === true),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,

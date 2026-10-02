@@ -1840,6 +1840,16 @@ provisioning and per-service deploy were considered and left out.
 | 456  | [Modules: catalog, call graph, architecture diagram](456-modules-catalog-architecture.md) | IN PROGRESS |
 | 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)            | IN PROGRESS |
 
+## Cloudflare Sandbox SDK 1.0 parity (baseline `f79680910`, 2026-10-02)
+
+Sandbox SDK 1.0 moved container control into the app's own Durable Object, which
+`@lunora/container` already does. What remains: its `Files` / `S3Mount` /
+`DirectoryBackup` helpers, plus streaming and PTY exec (which enable browser terminals).
+
+| Plan | Title                                                                         | Status                         |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------ |
+| 458  | [Container sandbox parity with Sandbox SDK 1.0](458-container-sandbox-1-0.md) | DONE (`mount` unverified live) |
+
 ## Cloudflare changelog, 2026-10-01 / 02 (baseline `f79680910`, 2026-10-02)
 
 Shipped directly, without a plan: the `compatibility_date` 2026-10-01 default (Durable Object

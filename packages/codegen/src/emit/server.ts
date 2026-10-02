@@ -164,11 +164,15 @@ const emitServer = ({
 
     // Same gating for containers: container calls are external I/O, so the
     // typed `ctx.containers` record lives on ActionCtx only. One property per
-    // `lunora/containers.ts` export, each a `ContainerAccessor` handle.
-    const containersTypeImport = containers.length > 0 ? `import type { ContainerAccessor } from "@lunora/container";\n` : "";
+    // `lunora/containers.ts` export, each a `ContainerAccessor` handle — or a
+    // `SandboxContainerAccessor` for a `sandbox: true` container, whose `.get()`
+    // adds the file, backup and mount helpers.
+    const accessorType = (container: ContainerIR): string => (container.sandbox === true ? "SandboxContainerAccessor" : "ContainerAccessor");
+    const accessorTypes = [...new Set(containers.map((container) => accessorType(container)))].toSorted((a, b) => a.localeCompare(b));
+    const containersTypeImport = containers.length > 0 ? `import type { ${accessorTypes.join(", ")} } from "@lunora/container";\n` : "";
     const containersActionField =
         containers.length > 0
-            ? `\n    readonly containers: {${containers.map((container) => `\n        readonly ${container.exportName}: ContainerAccessor;`).join("")}\n    };`
+            ? `\n    readonly containers: {${containers.map((container) => `\n        readonly ${container.exportName}: ${accessorType(container)};`).join("")}\n    };`
             : "";
 
     // ─── Job A — the typed `Env` / `CloudflareBindings` seam ──────────────────

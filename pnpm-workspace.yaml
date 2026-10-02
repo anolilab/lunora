@@ -346,6 +346,10 @@ catalogs:
     # Exact-pinned for the same reason as @cloudflare/workers-types below: the patch
     # in `patchedDependencies` is version-pinned, so a caret would break the install.
     "@cloudflare/containers": 0.3.7
+    # Exact-pinned: `@lunora/container/do` wraps its Files / DirectoryBackup / S3Mount
+    # helpers, which speak a versioned frame protocol to the `sandbox-shim` binary in
+    # the app's image. A bump must be checked against the shim in `cloudflare/sandbox`.
+    "@cloudflare/sandbox": 1.0.0
     # Exact-pinned: `@lunora/browser` tracks a verified-good Playwright-on-Workers
     # release, and bumps are vetted against a live worker.
     #

@@ -192,27 +192,31 @@ describe("gatePlatformFeatures", () => {
     // feature, so they are gated from the app's declaration, not discovered in
     // production. Worker Loaders (`jsCodeTool`) exist on both Workers hosts only.
     it.each([
-        ["celld", ["containerEgressPolicy", "containerRuntimeScheduling", "workflowRollback"]],
-        ["node", ["containerEgressPolicy", "containerRuntimeScheduling", "workerLoaders"]],
+        ["celld", ["containerEgressPolicy", "containerRuntimeScheduling", "containerSandboxTools", "workflowRollback"]],
+        ["node", ["containerEgressPolicy", "containerRuntimeScheduling", "containerSandboxTools", "workerLoaders"]],
         ["cloudflare", []],
-    ])("gates step rollback, container egress policies, container scheduling and worker loaders per target (%s)", async (target, refused) => {
-        expect.assertions(1);
+    ])(
+        "gates step rollback, container egress policies, container scheduling, container sandbox helpers and worker loaders per target (%s)",
+        async (target, refused) => {
+            expect.assertions(1);
 
-        const { gatePlatformFeatures } = await import("../src/platform-target");
-        const result = gatePlatformFeatures(ALL_OFF, target, {
-            containerEgressPolicy: true,
-            containerRuntimeScheduling: true,
-            workerLoaders: true,
-            workflowRollback: true,
-        });
+            const { gatePlatformFeatures } = await import("../src/platform-target");
+            const result = gatePlatformFeatures(ALL_OFF, target, {
+                containerEgressPolicy: true,
+                containerRuntimeScheduling: true,
+                containerSandboxTools: true,
+                workerLoaders: true,
+                workflowRollback: true,
+            });
 
-        expect(
-            result.diagnostics
-                .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
-                .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1])
-                .toSorted((a, b) => String(a).localeCompare(String(b))),
-        ).toStrictEqual(refused);
-    });
+            expect(
+                result.diagnostics
+                    .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+                    .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1])
+                    .toSorted((a, b) => String(a).localeCompare(String(b))),
+            ).toStrictEqual(refused);
+        },
+    );
 
     it.each([
         ["celld", true],

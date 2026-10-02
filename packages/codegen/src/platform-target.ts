@@ -261,6 +261,8 @@ interface PlatformSignals {
     containerEgressPolicy?: boolean;
     /** A `defineContainer({ schedulingPolicy: "durable_object" })` — runtime image/size choice and snapshots. */
     containerRuntimeScheduling?: boolean;
+    /** A `defineContainer({ sandbox: true })` — the Sandbox SDK file, backup and bucket-mount helpers. */
+    containerSandboxTools?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
@@ -295,6 +297,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "commitOrderedTables",
     "containerEgressPolicy",
     "containerRuntimeScheduling",
+    "containerSandboxTools",
     "cronTriggers",
     "crossShardFanout",
     "durableStreams",
@@ -316,6 +319,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
     containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
     containerRuntimeScheduling: 'per-instance container images and snapshots (`defineContainer({ schedulingPolicy: "durable_object" })`)',
+    containerSandboxTools: "container sandbox helpers — files, directory backups, bucket mounts (`defineContainer({ sandbox: true })`)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
