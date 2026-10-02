@@ -44,26 +44,31 @@ const ERROR_CODE_MAP: Readonly<Record<ArtifactsErrorCode, LunoraErrorCode>> = {
     UPSTREAM_UNAVAILABLE: "INTERNAL",
 };
 
-const isKnownCode = (code: string): code is ArtifactsErrorCode => Object.hasOwn(ERROR_CODE_MAP, code);
-
 /**
- * Recognise an `ArtifactsError`. Matched structurally, not by class: the error
- * crosses an RPC boundary, so there is no constructor to `instanceof` against.
- * A known `code` is enough; an unknown code counts only when the error also
- * names itself `ArtifactsError` (a code the service added after this table).
+ * Recognise an `ArtifactsError` and pick the `LunoraError` code it maps to.
+ * Matched structurally, not by class: the error crosses an RPC boundary, so
+ * there is no constructor to `instanceof` against. A known `code` is enough; an
+ * unknown code counts only when the error also names itself `ArtifactsError` (a
+ * code the service added after this table) and maps to `INTERNAL`.
  */
-const asArtifactsError = (error: unknown): { code: string; numericCode?: number } | undefined => {
+const asArtifactsError = (error: unknown): { data: ArtifactsErrorData; lunoraCode: LunoraErrorCode } | undefined => {
     if (typeof error !== "object" || error === null) {
         return undefined;
     }
 
     const { code, name, numericCode } = error as { code?: unknown; name?: unknown; numericCode?: unknown };
 
-    if (typeof code !== "string" || (!isKnownCode(code) && name !== "ArtifactsError")) {
+    if (typeof code !== "string") {
         return undefined;
     }
 
-    return typeof numericCode === "number" ? { code, numericCode } : { code };
+    const lunoraCode: LunoraErrorCode | undefined = Object.hasOwn(ERROR_CODE_MAP, code) ? ERROR_CODE_MAP[code as ArtifactsErrorCode] : undefined;
+
+    if (lunoraCode === undefined && name !== "ArtifactsError") {
+        return undefined;
+    }
+
+    return { data: typeof numericCode === "number" ? { code, numericCode } : { code }, lunoraCode: lunoraCode ?? "INTERNAL" };
 };
 
 /**
@@ -79,10 +84,9 @@ const mapArtifactsError = (operation: string, error: unknown): unknown => {
         return error;
     }
 
-    const lunoraCode = isKnownCode(artifactsError.code) ? ERROR_CODE_MAP[artifactsError.code] : "INTERNAL";
-    const data: ArtifactsErrorData = artifactsError;
+    const { data, lunoraCode } = artifactsError;
 
-    return new LunoraError(lunoraCode, `@lunora/bindings/artifacts: ${operation} failed (${artifactsError.code})`, { cause: error, data });
+    return new LunoraError(lunoraCode, `@lunora/bindings/artifacts: ${operation} failed (${data.code})`, { cause: error, data });
 };
 
 /** Run one binding call under the error mapping. */

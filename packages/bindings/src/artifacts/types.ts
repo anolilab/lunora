@@ -213,24 +213,44 @@ export interface ArtifactsReadFileArgs {
  */
 export interface ArtifactsRepoLike {
     [Symbol.dispose]?: () => void;
+
+    /**
+     * Mint a repo-scoped Git token. `ttl` is in seconds (60 to one year; the
+     * binding defaults to 86,400). Keep write tokens short-lived and revoke them
+     * when the session that needed them ends.
+     */
     createToken: (scope?: ArtifactsTokenScope, ttl?: number) => Promise<ArtifactsCreateTokenResult>;
+    /** Fork this repo into a new repo in the same namespace. */
     fork: (name: string, options?: ArtifactsForkOptions) => Promise<ArtifactsCreateRepoResult>;
+    /** Fresh repository metadata. */
     info: () => Promise<ArtifactsRepoInfo>;
+    /** Token metadata for this repo (never plaintext). */
     listTokens: () => Promise<ArtifactsTokenListResult>;
+    /** First-parent history, newest first. An unresolvable ref yields `[]`. */
     log: (options?: ArtifactsLogOptions) => Promise<ArtifactsCommitMetadata[]>;
+    /** A blob's raw bytes as an untyped `Blob` (returned unbuffered), or `null` when missing. */
     readBlob: (hash: string) => Promise<Blob | null>;
+    /** One decoded commit, or `null` when missing. */
     readCommit: (hash: string) => Promise<ArtifactsCommitMetadata | null>;
+    /** A file at a ref as a MIME-typed `Blob` (returned unbuffered), or `null` when the path is missing or a directory. */
     readFile: (args: ArtifactsReadFileArgs) => Promise<Blob | null>;
+    /** A tree's immediate children, or `null` when missing. */
     readTree: (hash: string) => Promise<ArtifactsTreeEntry[] | null>;
+    /** Revoke a token by id (preferred) or plaintext. `false` when it was not found. */
     revokeToken: (tokenOrId: string) => Promise<boolean>;
 }
 
 /** The namespace-level `env.ARTIFACTS` binding. */
 export interface ArtifactsBindingLike {
+    /** Create a repo. The first `create` against a missing namespace creates that namespace, unrestricted. */
     create: (name: string, options?: ArtifactsCreateOptions) => Promise<ArtifactsCreateRepoResult>;
+    /** Delete a repo and its tokens. `false` when it did not exist. */
     delete: (name: string) => Promise<boolean>;
+    /** Open a repo handle. It must be disposed of before the request ends — prefer `ArtifactsClient.withRepo`. */
     get: (name: string) => Promise<ArtifactsRepoLike>;
+    /** Import a repo from an external HTTPS Git remote. */
     import: (params: ArtifactsImportParams) => Promise<ArtifactsCreateRepoResult>;
+    /** One page of the namespace's repos. */
     list: (options?: ArtifactsListOptions) => Promise<ArtifactsRepoListResult>;
 }
 
@@ -259,57 +279,25 @@ export interface ArtifactsErrorData {
 }
 
 /** The repo operations, wrapped with the Lunora error mapping. Handed to {@link ArtifactsClient.withRepo}'s callback. */
-export interface ArtifactsRepoClient {
-    /**
-     * Mint a repo-scoped Git token. `ttl` is in seconds (60 to one year; the
-     * binding defaults to 86,400). Keep write tokens short-lived and revoke them
-     * when the session that needed them ends.
-     */
-    createToken: (scope?: ArtifactsTokenScope, ttl?: number) => Promise<ArtifactsCreateTokenResult>;
-    /** Fork this repo into a new repo in the same namespace. */
-    fork: (name: string, options?: ArtifactsForkOptions) => Promise<ArtifactsCreateRepoResult>;
-    /** Fresh repository metadata. */
-    info: () => Promise<ArtifactsRepoInfo>;
-    /** Token metadata for this repo (never plaintext). */
-    listTokens: () => Promise<ArtifactsTokenListResult>;
-    /** First-parent history, newest first. An unresolvable ref yields `[]`. */
-    log: (options?: ArtifactsLogOptions) => Promise<ArtifactsCommitMetadata[]>;
-    /** A blob's raw bytes as an untyped `Blob` (returned unbuffered), or `null` when missing. */
-    readBlob: (hash: string) => Promise<Blob | null>;
-    /** One decoded commit, or `null` when missing. */
-    readCommit: (hash: string) => Promise<ArtifactsCommitMetadata | null>;
-    /** A file at a ref as a MIME-typed `Blob` (returned unbuffered), or `null` when the path is missing or a directory. */
-    readFile: (args: ArtifactsReadFileArgs) => Promise<Blob | null>;
-    /** A tree's immediate children, or `null` when missing. */
-    readTree: (hash: string) => Promise<ArtifactsTreeEntry[] | null>;
-    /** Revoke a token by id (preferred) or plaintext. `false` when it was not found. */
-    revokeToken: (tokenOrId: string) => Promise<boolean>;
-}
+export type ArtifactsRepoClient = Omit<ArtifactsRepoLike, typeof Symbol.dispose>;
 
 /**
- * The action-only `ctx.artifacts` client. Every call is a billed, remote
- * operation, and every `ArtifactsError` is rethrown as a `LunoraError` (see
- * `createArtifacts`). It cannot write files — push with a Git client using a
- * token from {@link ArtifactsRepoClient.createToken} and
- * {@link ArtifactsClient.authenticatedRemote}.
+ * The action-only `ctx.artifacts` client: the binding's namespace operations,
+ * with the raw `get` replaced by the disposing `withRepo`, plus two helpers.
+ * Every call is a billed, remote operation, and every `ArtifactsError` is
+ * rethrown as a `LunoraError` (see `createArtifacts`). It cannot write files —
+ * push with a Git client using a token from `ArtifactsRepoClient.createToken`
+ * and `authenticatedRemote`.
  */
-export interface ArtifactsClient {
+export type ArtifactsClient = {
     /**
      * Build the `https://x:<token>@host/…` remote a Git client pushes to. Pure: no
-     * I/O. The result embeds a secret — pass it through an environment variable,
-     * never a log line or a command argument.
+     * I/O. With a write token the result is a push credential — never return it
+     * from a public function, log it, or put it in a command argument.
      */
     authenticatedRemote: (remote: string, token: string) => string;
-    /** Create a repo. The first `create` against a missing namespace creates that namespace, unrestricted. */
-    create: (name: string, options?: ArtifactsCreateOptions) => Promise<ArtifactsCreateRepoResult>;
-    /** Delete a repo and its tokens. `false` when it did not exist. */
-    delete: (name: string) => Promise<boolean>;
-    /** Import a repo from an external HTTPS Git remote. */
-    import: (params: ArtifactsImportParams) => Promise<ArtifactsCreateRepoResult>;
     /** Fresh metadata for one repo — shorthand for `withRepo(name, (repo) => repo.info())`. */
     info: (name: string) => Promise<ArtifactsRepoInfo>;
-    /** One page of the namespace's repos. */
-    list: (options?: ArtifactsListOptions) => Promise<ArtifactsRepoListResult>;
 
     /**
      * Open a repo handle, run `callback` with it, and dispose of the handle whether
@@ -317,7 +305,7 @@ export interface ArtifactsClient {
      * handle only inside `callback`.
      */
     withRepo: <T>(name: string, callback: (repo: ArtifactsRepoClient) => Promise<T> | T) => Promise<T>;
-}
+} & Omit<ArtifactsBindingLike, "get">;
 
 /** Options for `createArtifacts`. */
 export interface LunoraArtifactsOptions {

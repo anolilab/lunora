@@ -132,18 +132,14 @@ interface ArtifactsBindingLike {
 }
 ```
 
-### `ArtifactsClient` (interface)
+### `ArtifactsClient` (type)
 
 ```ts
-interface ArtifactsClient {
+type ArtifactsClient = {
     authenticatedRemote: (remote: string, token: string) => string;
-    create: (name: string, options?: ArtifactsCreateOptions) => Promise<ArtifactsCreateRepoResult>;
-    delete: (name: string) => Promise<boolean>;
-    import: (params: ArtifactsImportParams) => Promise<ArtifactsCreateRepoResult>;
     info: (name: string) => Promise<ArtifactsRepoInfo>;
-    list: (options?: ArtifactsListOptions) => Promise<ArtifactsRepoListResult>;
     withRepo: <T>(name: string, callback: (repo: ArtifactsRepoClient) => Promise<T> | T) => Promise<T>;
-}
+} & Omit<ArtifactsBindingLike, "get">;
 ```
 
 ### `ArtifactsCommitIdentity` (interface)
@@ -306,21 +302,10 @@ interface ArtifactsReadFileArgs {
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `ArtifactsRepoClient` (interface)
+### `ArtifactsRepoClient` (type)
 
 ```ts
-interface ArtifactsRepoClient {
-    createToken: (scope?: ArtifactsTokenScope, ttl?: number) => Promise<ArtifactsCreateTokenResult>;
-    fork: (name: string, options?: ArtifactsForkOptions) => Promise<ArtifactsCreateRepoResult>;
-    info: () => Promise<ArtifactsRepoInfo>;
-    listTokens: () => Promise<ArtifactsTokenListResult>;
-    log: (options?: ArtifactsLogOptions) => Promise<ArtifactsCommitMetadata[]>;
-    readBlob: (hash: string) => Promise<Blob | null>;
-    readCommit: (hash: string) => Promise<ArtifactsCommitMetadata | null>;
-    readFile: (args: ArtifactsReadFileArgs) => Promise<Blob | null>;
-    readTree: (hash: string) => Promise<ArtifactsTreeEntry[] | null>;
-    revokeToken: (tokenOrId: string) => Promise<boolean>;
-}
+type ArtifactsRepoClient = Omit<ArtifactsRepoLike, typeof Symbol.dispose>;
 ```
 
 ### `ArtifactsRepoEventState` (interface)
