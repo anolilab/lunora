@@ -62,6 +62,39 @@ describe(runContainerFsOp, () => {
     });
 });
 
+describe("runContainerFsOp read cap", () => {
+    it("refuses a file that grew past the cap between stat and read, instead of truncating it", async () => {
+        expect.assertions(1);
+
+        const big = "x".repeat(1_000_001);
+        const accessor = {
+            any: () => {
+                throw new Error("unused");
+            },
+            get: () => {
+                return {
+                    exec: async () => {
+                        return { code: 0, stderr: "", stdout: "" };
+                    },
+                    fetch: async () => new Response(""),
+                    files: {
+                        mkdir: async () => {},
+                        readDirectory: async () => [],
+                        readFile: async () => new Response(big),
+                        remove: async () => {},
+                        stat: async () => {
+                            return { size: 10, type: "file" };
+                        },
+                        writeFile: async () => {},
+                    },
+                };
+            },
+        } as unknown as SandboxContainerAccessor;
+
+        await expect(runContainerFsOp(accessor, fsOp("read", { path: "grows.log" }))).rejects.toThrow("exceeds 1000000 bytes");
+    });
+});
+
 describe(containerFsTool, () => {
     it("dispatches sandbox:invoke pinned to the thread's container and the root", async () => {
         expect.assertions(1);

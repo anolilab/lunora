@@ -538,6 +538,13 @@ const runContainerFsOp = async (accessor: SandboxContainerAccessor, request: San
             const response = await files.readFile(path);
             const body = await readCapped(response.body, MAX_FS_BYTES);
 
+            // The file grew past the cap between the `stat` above and this read.
+            // Partial content handed to the model as the whole file could be
+            // written back over it, so refuse rather than truncate silently.
+            if (body.overflowed) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/agent: fs read: "${request.path ?? ""}" exceeds ${String(MAX_FS_BYTES)} bytes`);
+            }
+
             return body.text;
         }
         case "rm": {
