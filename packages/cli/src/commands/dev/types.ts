@@ -134,6 +134,14 @@ interface DevCommandPlan {
     runsCodegenWatch: boolean;
 
     /**
+     * `lunora.config` services (plan 457) to boot once, in order, before the
+     * worker on a host whose dev server resolves a service binding from a local
+     * deployment record (celld): each runs until it answers on the worker port,
+     * which records it, and is then stopped. Absent for every other host.
+     */
+    serviceRegistrations?: ReadonlyArray<SpawnDescriptor & { name: string; tag: string }>;
+
+    /**
      * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /
      * Nuxt): a second child that owns the real `ShardDO` in `workerd`, wired via
      * the committed `wrangler.dev.jsonc`. `undefined` for every other flavor —
@@ -142,6 +150,7 @@ interface DevCommandPlan {
      * is the Lunora realtime plane.
      */
     sidecar?: SpawnDescriptor & { tag: string };
+
     studioEnabled: boolean;
 
     studioPort: number;

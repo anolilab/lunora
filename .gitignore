@@ -99,6 +99,7 @@ dist/
 # celld driver writes its projection of wrangler.jsonc there too
 .celld/
 .celld.wrangler.json
+.celld.service.*.wrangler.json
 
 # Per-checkout Lunora dev state written by `lunora dev` / the Vite plugin in
 # workspace apps (dev.json lockfile, dev.log, binding-inference cache) —

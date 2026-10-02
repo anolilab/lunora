@@ -223,6 +223,10 @@ interface DevCommandPlan {
     ipv4LoopbackForced: boolean;
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
+    serviceRegistrations?: ReadonlyArray<SpawnDescriptor & {
+        name: string;
+        tag: string;
+    }>;
     sidecar?: SpawnDescriptor & {
         tag: string;
     };

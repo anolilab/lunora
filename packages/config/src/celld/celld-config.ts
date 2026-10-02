@@ -492,4 +492,38 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
     };
 };
 
-export { planCelldConfig, projectCelldConfig };
+/**
+ * Project a service Worker's config (plan 457) for `celld dev`, written into
+ * `root` — the directory of the app's own projection — as
+ * `.celld.service.<name>.wrangler.json`.
+ *
+ * celld resolves a service binding from the target Worker's deployment record
+ * in the local store, and `celld dev` keeps that store under the config's
+ * directory. A service booted from a projection beside the app's therefore
+ * records its deployment where the app's `celld dev` looks it up. celld also
+ * requires every path a config names to sit inside its directory, so the
+ * service has to live inside `root`.
+ */
+const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedConfig => {
+    const own = readConfig(wranglerPath);
+    const serviceDirectory = dirname(wranglerPath);
+    const { config, dropped } = projectCelldConfig(own);
+    const name = typeof own["name"] === "string" ? own["name"] : "service";
+
+    if (relative(root, serviceDirectory).startsWith("..")) {
+        throw new Error(`service ${name} (${serviceDirectory}) must sit inside ${root} — celld dev runs it from a config beside the app's`);
+    }
+
+    const configPath = join(root, `.celld.service.${name}.wrangler.json`);
+    const contents = `${JSON.stringify(markDevelopment(rebasePaths(config, serviceDirectory, root)), undefined, 4)}\n`;
+
+    return {
+        configPath,
+        dropped,
+        write: () => {
+            writeFileSync(configPath, contents);
+        },
+    };
+};
+
+export { planCelldConfig, planCelldServiceConfig, projectCelldConfig };

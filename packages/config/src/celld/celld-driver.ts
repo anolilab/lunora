@@ -19,7 +19,7 @@
  * `celld dev`), and has no log stream a CLI can follow.
  */
 import type { DeployDriver, DeployRequest, DriverToolchain } from "../deploy-driver";
-import { planCelldConfig } from "./celld-config";
+import { planCelldConfig, planCelldServiceConfig } from "./celld-config";
 
 /**
  * The deploy options celld has no equivalent for, with what to do instead.
@@ -75,6 +75,7 @@ const CELLD_DRIVER: DeployDriver = {
     id: "celld",
     name: "celld",
     projectConfig: planCelldConfig,
+    projectServiceConfig: planCelldServiceConfig,
     toolchain: CELLD_TOOLCHAIN,
 };
 

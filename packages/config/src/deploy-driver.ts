@@ -189,6 +189,15 @@ export interface DeployDriver {
     readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
 
     /**
+     * Project a `lunora.config` service Worker's config (plan 457) for this
+     * host's own dev server, written into `root` (the directory of the app's
+     * projection), so the service registers in the same local state the app
+     * resolves its service bindings from. Absent when the host's dev server
+     * needs no such step (`wrangler dev` takes one `--config` per Worker).
+     */
+    readonly projectServiceConfig?: (root: string, wranglerPath: string) => ProjectedConfig;
+
+    /**
      * The host's command-line surface, or `undefined` for a host that has none.
      * Pure: these build argv, they never spawn.
      */

@@ -15,7 +15,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
-import { detectPackageManager, execArgsFor, toolchainExecArgs } from "../../util/detect-package-manager";
+import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -602,7 +602,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
 };
 
 /** Why this run deploys no services, or `undefined` when it deploys them. */
-const serviceDeploySkipReason = (options: DeployCommandOptions, target: string): string | undefined => {
+const serviceDeploySkipReason = (options: DeployCommandOptions, driver: DeployDriver): string | undefined => {
     if (options.skipServices === true) {
         return "--skip-services";
     }
@@ -617,17 +617,20 @@ const serviceDeploySkipReason = (options: DeployCommandOptions, target: string):
         return "--temporary deploys the app to a throwaway account";
     }
 
-    return target === "cloudflare" ? undefined : `target "${target}"`;
+    return driver.toolchain === undefined ? `target "${driver.id}" has no deploy command` : undefined;
 };
 
 /**
  * Deploy each `lunora.config` service (plan 457) before the app, so the app's
  * `services[]` bindings never point at a Worker that does not exist yet, or at
- * an older one missing a method the app now calls. `--env` and `--dry-run` pass
- * through. A preview uploads the app's version only: services deploy live, so
- * they are left out of it. Returns the error that stops the deploy, if any.
+ * an older one missing a method the app now calls. Each one goes through the
+ * target's own deploy command, run from the service's folder (so a custom
+ * `build` runs where the service lives) against the target's projection of the
+ * service's config — celld's driver projects it like the app's. `--env` and
+ * `--dry-run` pass through; a target refusing one says so here. Returns the
+ * error that stops the deploy, if any.
  */
-const deployServices = async (cwd: string, options: DeployCommandOptions, target: string, spawner: Spawner): Promise<string | undefined> => {
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
     const { error, services } = readServiceBindings(cwd);
 
     if (error !== undefined) {
@@ -638,39 +641,44 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, target
         return undefined;
     }
 
-    const skipped = serviceDeploySkipReason(options, target);
+    const skipped = serviceDeploySkipReason(options, driver);
 
-    if (skipped !== undefined) {
+    if (skipped !== undefined || driver.toolchain === undefined) {
         const names = services.map((service) => service.worker).join(", ");
 
-        options.logger.warn(`services not deployed (${skipped}): ${names} — deploy them yourself if the app calls anything new`);
+        options.logger.warn(`services not deployed (${skipped ?? "no deploy command"}): ${names} — deploy them yourself if the app calls anything new`);
 
         return undefined;
     }
 
+    const { toolchain } = driver;
     const manager = detectPackageManager(cwd);
-
     // Two keys may bind two entrypoints of one Worker: it deploys once.
     const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
-    const verb = options.dryRun === true ? "deploy --dry-run" : "deploy";
 
     for (const service of workers) {
-        const exec = execArgsFor(manager, "wrangler", [
-            "deploy",
-            "--config",
-            service.wranglerPath,
-            ...(options.env === undefined ? [] : ["--env", options.env]),
-            ...(options.dryRun === true ? ["--dry-run"] : []),
-        ]);
+        const directory = dirname(service.wranglerPath);
+        let invocation: ReturnType<typeof planToolchainInvocation>;
+
+        try {
+            invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
+                toolchain.deploy({ configPath, dryRun: options.dryRun === true, environment: options.env }),
+            );
+        } catch (error_: unknown) {
+            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
+        }
+
+        invocation.commit();
+
+        const exec = toolchainExecArgs(manager, invocation.command);
 
         options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
 
-        // From the service's own folder, so a custom `build` command runs where the service lives.
         // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
-        const result = await spawner({ args: exec.args, command: exec.command, cwd: dirname(service.wranglerPath), stdoutToStderr: options.format === "json" });
+        const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
 
         if (result.code !== 0) {
-            return `service ${service.name} (${service.worker}): wrangler ${verb} exited ${String(result.code)} — stopping before the app`;
+            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
         }
     }
 
@@ -738,7 +746,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     }
 
     const spawner = options.spawner ?? defaultSpawner;
-    const servicesError = await deployServices(cwd, options, pipeline.target, spawner);
+    const servicesError = await deployServices(cwd, options, driver, spawner);
 
     if (servicesError !== undefined) {
         return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: servicesError, mintedSecretsFile, validation };

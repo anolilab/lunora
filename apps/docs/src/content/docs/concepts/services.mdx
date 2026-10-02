@@ -123,11 +123,11 @@ is the internal path only.
 
 ## Platforms
 
-| Target       | Support                                                                                                                                                                                          |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cloudflare` | Native.                                                                                                                                                                                          |
-| `celld`      | Unsupported for now. celld's runtime handles both kinds (verified on v0.6.0) once each service is deployed into the same fleet as the app, but `lunora dev` / `lunora deploy` don't do that yet. |
-| `node`       | Unsupported: there is no sibling Worker to bind. Codegen omits `ctx.services`.                                                                                                                   |
+| Target       | Support                                                                                                                                                                                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflare` | Native.                                                                                                                                                                                                                                                                       |
+| `celld`      | Native (verified on v0.6.0). celld resolves a binding from the service's deployment, so `lunora deploy` deploys each service into the fleet first and `lunora dev` boots each once into the local state before the app. A service edited during `lunora dev` needs a restart. |
+| `node`       | Unsupported: there is no sibling Worker to bind. Codegen omits `ctx.services`.                                                                                                                                                                                                |
 
 ## Migrating from URLs and HMAC
 

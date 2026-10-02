@@ -300,9 +300,8 @@ describe("lunora deploy", () => {
                 const result = await runDeployCommand({ cwd: workdir, dryRun: true, env: "production", logger, secretLister: noRemoteSecrets, spawner });
 
                 expect(result.code).toBe(0);
-                expect(calls[0]?.descriptor.args.join(" ")).toContain(
-                    `deploy --config ${join(workdir, "services", "parser", "wrangler.jsonc")} --env production --dry-run`,
-                );
+                // Run from the service's folder, so wrangler reads the service's own config.
+                expect(calls[0]?.descriptor.args.join(" ")).toContain("wrangler deploy --env production --dry-run");
                 expect(calls.at(-1)?.descriptor.args.join(" ")).not.toContain("services/parser");
                 // From the service's folder, so its own build command runs there.
                 expect(calls[0]?.descriptor.cwd).toBe(join(workdir, "services", "parser"));
@@ -323,17 +322,25 @@ describe("lunora deploy", () => {
                 expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
             });
 
-            it("refuses a target that rates services unsupported before deploying anything", async () => {
-                expect.assertions(2);
+            it("deploys each service through celld's own deploy, from a projection of the service's config", async () => {
+                expect.assertions(3);
 
                 declareParser();
+                writeFileSync(
+                    join(workdir, "services", "parser", "wrangler.jsonc"),
+                    `{ "name": "parser", "main": "src/index.ts", "workers_dev": false }\n`,
+                    "utf8",
+                );
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
                 const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const projection = join(workdir, "services", "parser", ".celld.wrangler.json");
 
-                expect(result.code).not.toBe(0);
-                expect(calls).toHaveLength(0);
+                expect(result.code).toBe(0);
+                expect([calls[0]?.descriptor.command, ...(calls[0]?.descriptor.args ?? [])]).toStrictEqual(["celld", "deploy", projection, "--dry-run"]);
+                // celld refuses `workers_dev`, which a service bound by the app usually sets.
+                expect(JSON.parse(readFileSync(projection, "utf8"))).toStrictEqual({ main: "src/index.ts", name: "parser" });
             });
 
             it("stops before the app when a service fails", async () => {
@@ -347,7 +354,7 @@ describe("lunora deploy", () => {
                 const { logger } = silentLogger();
                 const failed = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner: failing });
 
-                expect(failed.error).toBe("service parser (parser): wrangler deploy --dry-run exited 1 — stopping before the app");
+                expect(failed.error).toMatch(/^service parser \(parser\): .*wrangler deploy --dry-run exited 1 — stopping before the app$/u);
             });
 
             it.each([

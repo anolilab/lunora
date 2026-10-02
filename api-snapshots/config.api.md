@@ -320,6 +320,7 @@ interface DeployDriver {
     readonly id: string;
     readonly name: string;
     readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
+    readonly projectServiceConfig?: (root: string, wranglerPath: string) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```

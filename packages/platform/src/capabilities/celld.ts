@@ -160,8 +160,8 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
         services: {
-            level: "unsupported",
-            note: "Verified against celld v0.6.0: a fetch service and a WorkerEntrypoint RPC service both work, but only once each service Worker is deployed into the same fleet (or `celld dev` state) as the app — celld resolves a binding from that Worker's deployment record. `lunora dev` and `lunora deploy` do not do that yet, so this stays unsupported until they do",
+            level: "native",
+            note: "Verified against celld v0.6.0 for a fetch service and a WorkerEntrypoint RPC service. celld resolves a binding from the target Worker's deployment record, so the service must be deployed into the same fleet (or `celld dev` state) first: `lunora deploy` deploys each service before the app, and `lunora dev` boots each once into the app's local state before the app starts. A service edited during `lunora dev` needs a restart to redeploy",
         },
         topics: {
             level: "emulated",

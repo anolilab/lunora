@@ -280,10 +280,14 @@ deploy` does not deploy services there either.
   `examples/services` plus `tests/e2e/examples/services.spec.ts` call the same
   action through a live `vite dev` session. The `wrangler dev` flavor was run by
   hand with the same result.
-- **celld, verified on v0.6.0:** both kinds work once each service is deployed
-  into the same fleet / `celld dev` state as the app (celld resolves a binding
-  from the target's `deploy/<name>/current.json`). Still rated unsupported:
-  `lunora dev` and `lunora deploy` don't deploy services into celld yet.
+- **celld, verified on v0.6.0, now native:** both kinds work once each service
+  is deployed into the same fleet / `celld dev` state as the app (celld resolves
+  a binding from the target's `deploy/<name>/current.json`). `lunora deploy`
+  deploys each service through the target's driver (celld: from a projection of
+  the service's config), and `lunora dev --target celld` boots each service once
+  from a projection beside the app's (`DeployDriver.projectServiceConfig`),
+  then starts the app. Verified live on `examples/services`; a real fleet deploy
+  (S3 bucket) was not run, only `--dry-run`.
 - **Limits lifted after review:** `vite build` no longer builds services (the
   auxiliary Workers are added on `serve` only), and the SvelteKit / Nuxt sidecar
   runs them (reconcile writes `wrangler.dev.jsonc`'s `services[]`, ownership

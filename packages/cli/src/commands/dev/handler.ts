@@ -42,7 +42,7 @@ import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import { codegenRequested, detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
-import { resolveTargetFlavor } from "./own-dev-server";
+import { registerServices, resolveTargetFlavor } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
 import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
@@ -579,6 +579,23 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
+
+        if (plan.serviceRegistrations !== undefined) {
+            const registrationError = await registerServices({
+                logger,
+                origin: plan.workerOrigin,
+                probe: options.probeReady,
+                registrations: plan.serviceRegistrations,
+                spawn,
+            });
+
+            if (registrationError !== undefined) {
+                logger.error(registrationError);
+
+                return { code: EXIT_CODE.FAILURE, plan };
+            }
+        }
+
         const worker = spawn(plan.wrangler, logger);
         // The Lunora realtime sidecar (`wrangler dev`, owns ShardDO) for the
         // framework-worker flavor — `undefined` for every single-process flavor.

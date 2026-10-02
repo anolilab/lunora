@@ -750,6 +750,97 @@ describe("lunora dev", () => {
             });
         });
 
+        it("boots each lunora.config service into celld's local state before the app", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts", "workers_dev": false }\n`);
+
+            const spawned: string[][] = [];
+            const killed: string[] = [];
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                probeReady: async () => true,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                // A dev server runs until it is killed.
+                startWorker: (descriptor) => {
+                    spawned.push([descriptor.command, ...descriptor.args]);
+
+                    let exit: (code: number) => void = () => {};
+                    const exited = new Promise<number>((resolve) => {
+                        exit = resolve;
+                    });
+
+                    // The app's own server: let the run end once it has started.
+                    if (!descriptor.tag.startsWith("service:")) {
+                        exit(0);
+                    }
+
+                    return {
+                        exited,
+                        kill: () => {
+                            killed.push(descriptor.tag);
+                            exit(0);
+                        },
+                    };
+                },
+                target: "celld",
+            });
+            const service = join(workdir, ".celld.service.parser.wrangler.json");
+
+            expect(result.code).toBe(0);
+            // The service first, from a projection beside the app's so both share `.celld/dev`; then the app.
+            expect(spawned).toStrictEqual([
+                ["celld", "dev", service, "--port", "8790"],
+                ["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"],
+            ]);
+            expect(killed).toStrictEqual(["service:parser"]);
+            expect(JSON.parse(readFileSync(service, "utf8"))).toStrictEqual({
+                main: "services/parser/src/index.ts",
+                name: "parser",
+                vars: { WORKER_ENV: "development" },
+            });
+        });
+
+        it("stops before the app when a celld service never starts", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const tags: string[] = [];
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                probeReady: async () => false,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                // The service's dev server exits at once (a bundle error, say).
+                startWorker: (descriptor) => {
+                    tags.push(descriptor.tag);
+
+                    return { exited: Promise.resolve(1), kill: () => {} };
+                },
+                target: "celld",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            expect(tags).toStrictEqual(["service:parser"]);
+        });
+
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
             expect.assertions(2);
 
