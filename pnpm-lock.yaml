@@ -593,6 +593,9 @@ catalogs:
     vitest:
       specifier: 4.1.10
       version: 4.1.10
+    ws:
+      specifier: 8.21.3
+      version: 8.21.3
   tooling:
     '@types/better-sqlite3':
       specifier: ^9.6.0
@@ -631,6 +634,9 @@ catalogs:
     '@types/semver':
       specifier: ^7.8.0
       version: 7.8.0
+    '@types/ws':
+      specifier: 8.18.1
+      version: 8.18.1
   ui:
     '@base-ui/react':
       specifier: 1.8.0
@@ -1700,10 +1706,20 @@ importers:
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.4.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.14.0)(jsdom@30.0.1(@noble/hashes@2.2.0))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
 
   apps/hostd:
+    dependencies:
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      aws4fetch:
+        specifier: catalog:storage
+        version: 1.0.20
     devDependencies:
       '@types/node':
         specifier: catalog:types
         version: 26.4.1
+      '@types/ws':
+        specifier: catalog:types
+        version: 8.18.1
       '@visulima/packem':
         specifier: catalog:build
         version: 2.1.0(63f26df00254c162e310bc9433e37d35)
@@ -1722,6 +1738,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.4.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.14.0)(jsdom@30.0.1(@noble/hashes@2.2.0))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
+      ws:
+        specifier: catalog:test
+        version: 8.21.3
 
   apps/playground:
     dependencies:

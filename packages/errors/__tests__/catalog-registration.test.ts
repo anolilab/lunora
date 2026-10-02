@@ -91,6 +91,13 @@ const CODE_PATTERNS: ReadonlyArray<RegExp> = [
  * original site is edited or removed.
  */
 const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
+    // lunora-hostd's job failures (plan 458 W4) — every entry naming
+    // apps/hostd/src/daemon/job-error.ts, sorted in among the rest: the
+    // `result.error.code` a box reports for a job, all in its `JobErrorCode`
+    // union. hostd protocol codes on the box ↔ control-plane socket, never a
+    // `LunoraError`.
+    ["ALIAS_BUSY", "apps/hostd/src/daemon/job-error.ts"],
+    ["ARTIFACT_INVALID", "apps/hostd/src/daemon/job-error.ts"],
     // Lunora Cloud's per-box session (plan 458, apps/cloud/src/boxes): the
     // codes a job settles with when the session refuses it or the box never
     // answers (the shape of a hostd protocol `result.error`), and the refusals
@@ -99,16 +106,29 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     ["BAD_JOB", "apps/cloud/src/boxes/session-do.ts"],
     ["BOX_BUSY", "apps/cloud/src/boxes/session-do.ts"],
     ["BOX_OFFLINE", "apps/cloud/src/boxes/session-do.ts"],
+    // Why lunora-hostd's control session ended (`SessionEnd`): the control
+    // plane's `BOX_REVOKED` refusal, or a local stop (`STOPPED`, below). Plain
+    // values.
+    ["BOX_REVOKED", "apps/hostd/src/daemon/session.ts"],
+    ["BUCKET_FAILED", "apps/hostd/src/daemon/job-error.ts"],
+    ["CELLD_FAILED", "apps/hostd/src/daemon/job-error.ts"],
     ["DISPATCH_FAILED", "apps/cloud/src/boxes/rollout.ts"],
+    ["FETCH_FAILED", "apps/hostd/src/daemon/job-error.ts"],
     // `verifyArtifact`'s result codes — returned as `{ ok: false, error }`
     // values by the hostd release verifier, never a `LunoraError` construction.
     ["HASH_MISMATCH", "apps/hostd/src/release-verify.ts"],
+    ["HEALTH_TIMEOUT", "apps/hostd/src/daemon/job-error.ts"],
     ["INVALID_EXPECTATION", "apps/hostd/src/release-verify.ts"],
+    ["JOB_FAILED", "apps/hostd/src/daemon/job-error.ts"],
     ["JOB_TIMEOUT", "apps/cloud/src/boxes/jobs.ts"],
+    ["NO_FLEET", "apps/hostd/src/daemon/job-error.ts"],
+    ["ORIGIN_REFUSED", "apps/hostd/src/daemon/job-error.ts"],
+    ["PORTS_EXHAUSTED", "apps/hostd/src/daemon/job-error.ts"],
     // The hostd wire protocol's `error` frame code for a version mismatch — a
     // frame on the box ↔ control-plane socket, never a `LunoraError`.
     ["PROTOCOL_UNSUPPORTED", "apps/hostd/src/wire/constants.ts"],
     ["READ_FAILED", "apps/hostd/src/release-verify.ts"],
+    ["RELEASE_INVALID", "apps/hostd/src/daemon/job-error.ts"],
     // A hand-rolled `Response.json(...)` error body for an oversized upload,
     // never a `LunoraError` construction.
     ["REQUEST_ENTITY_TOO_LARGE", "packages/storage/src/upload-handler.ts"],
@@ -120,11 +140,13 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     ["SQL_EMPTY", "shared/sql-readonly.ts"],
     ["SQL_MULTIPLE_STATEMENTS", "shared/sql-readonly.ts"],
     ["SQL_NOT_READONLY", "shared/sql-readonly.ts"],
+    ["STOPPED", "apps/hostd/src/daemon/session.ts"],
     // `fanSubscriptionError`'s callback payload — a plain object, never a
     // `LunoraError` construction.
     ["SUBSCRIPTION_CANCELLED", "packages/client/src/lunora-client.ts"],
     // The box session's internal API again (see the first group).
     ["TOO_MANY_SESSIONS", "apps/cloud/src/boxes/session-do.ts"],
+    ["UPGRADE_REFUSED", "apps/hostd/src/daemon/job-error.ts"],
     ["UPGRADE_REQUIRED", "apps/cloud/src/boxes/session-do.ts"],
 ]);
 
@@ -254,7 +276,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(17);
+        expect.assertions(31);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
