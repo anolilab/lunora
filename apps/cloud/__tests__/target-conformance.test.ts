@@ -27,7 +27,11 @@ describeTargetConformance("memory (reference)", () => {
 describeUsageReadbackConformance("memory (reference)", () => {
     const { fleet, serve } = createMemoryTarget();
 
-    return { read: fleet.usage ?? (() => Promise.reject(new Error("the memory fleet reads usage back"))), serve };
+    if (fleet.usage === undefined) {
+        throw new Error("the memory fleet reads usage back");
+    }
+
+    return { read: fleet.usage, serve };
 });
 
 /**
@@ -65,6 +69,7 @@ describeTargetConformance("cloudflare-wfp", () => {
 describeUsageReadbackConformance("cloudflare-wfp", () => {
     const dataPoints: { atMs: number; requests: number; scriptName: string }[] = [];
     const { usage } = createCloudflareWfpFleet({
+        cell: "default",
         usage: {
             readRequestUsage: (sinceMs) => {
                 // `timestamp > since`, summed per script — the SQL `createHttpAnalyticsReader` runs.
@@ -83,9 +88,14 @@ describeUsageReadbackConformance("cloudflare-wfp", () => {
         },
     });
 
+    if (usage === undefined) {
+        throw new Error("the fleet was built with a usage reader");
+    }
+
     return {
-        read: usage ?? (() => Promise.reject(new Error("the fleet was built with a usage reader"))),
-        serve: (scriptName, requests, atMs) => {
+        read: usage,
+        // One scope, the cell: the dispatcher writes every tenant's requests to its one dataset.
+        serve: (_scope, scriptName, requests, atMs) => {
             dataPoints.push({ atMs, requests, scriptName });
         },
     };

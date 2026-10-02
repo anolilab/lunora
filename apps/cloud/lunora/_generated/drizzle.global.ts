@@ -575,6 +575,17 @@ export const platformUsage = sqliteTable("platformUsage", {
     by_org: index("by_org").on(t.organizationId),
 }));
 
+export const usageCheckpoints = sqliteTable("usageCheckpoints", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    readAtMs: real("readAtMs").notNull(),
+    scopeKey: text("scopeKey").notNull(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_target_scope: uniqueIndex("by_target_scope").on(t.target, t.scopeKey),
+}));
+
 export const cloudflareBilling = sqliteTable("cloudflareBilling", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

@@ -16,18 +16,21 @@ import type { TargetDriver, TargetFleet, UsageRow } from "../../src/targets/driv
 /** The platform apex memory tenants are served under. */
 export const MEMORY_APP_DOMAIN = "memory.test";
 
+/** The memory target's usage scopes: two, so the suite proves each keeps its own checkpoint. */
+export const MEMORY_SCOPES = ["memory-a", "memory-b"] as const;
+
 export interface MemoryTarget {
     driver: TargetDriver;
     fleet: TargetFleet;
     /** The aliases the target runs, each with the bundle bytes it serves. */
     running: () => ReadonlyMap<string, ArrayBuffer>;
-    /** Record that `resourceRef` served `requests` requests at `atMs`. */
-    serve: (resourceRef: string, requests: number, atMs: number) => void;
+    /** Record that `alias` served `requests` requests at `atMs`, in usage scope `scope` ({@link MEMORY_SCOPES}). */
+    serve: (scope: string, alias: string, requests: number, atMs: number) => void;
 }
 
 export const createMemoryTarget = (): MemoryTarget => {
     const tenants = new Map<string, ArrayBuffer>();
-    const served: { atMs: number; requests: number; resourceRef: string }[] = [];
+    const served: { atMs: number; requests: number; resourceRef: string; scope: string }[] = [];
 
     const driver: TargetDriver = {
         deploy: async (spec) => {
@@ -45,18 +48,21 @@ export const createMemoryTarget = (): MemoryTarget => {
     const fleet: TargetFleet = {
         id: "cloudflare-wfp",
         reach: (tenant) => tenantSender(tenant),
-        usage: async (sinceMs) => {
-            const totals = new Map<string, number>();
+        usage: {
+            read: async (scope, sinceMs) => {
+                const totals = new Map<string, number>();
 
-            for (const record of served) {
-                if (record.atMs > sinceMs) {
-                    totals.set(record.resourceRef, (totals.get(record.resourceRef) ?? 0) + record.requests);
+                for (const record of served) {
+                    if (record.scope === scope && record.atMs > sinceMs) {
+                        totals.set(record.resourceRef, (totals.get(record.resourceRef) ?? 0) + record.requests);
+                    }
                 }
-            }
 
-            return [...totals].map(([resourceRef, requests]): UsageRow => {
-                return { requests, resourceRef };
-            });
+                return [...totals].map(([resourceRef, requests]): UsageRow => {
+                    return { requests, resourceRef };
+                });
+            },
+            scopes: async () => [...MEMORY_SCOPES],
         },
     };
 
@@ -64,8 +70,9 @@ export const createMemoryTarget = (): MemoryTarget => {
         driver,
         fleet,
         running: () => tenants,
-        serve: (resourceRef, requests, atMs) => {
-            served.push({ atMs, requests, resourceRef });
+        serve: (scope, alias, requests, atMs) => {
+            // A resource is named within its scope, as `cloudflare-workers` names one per account.
+            served.push({ atMs, requests, resourceRef: `${scope}/${alias}`, scope });
         },
     };
 };

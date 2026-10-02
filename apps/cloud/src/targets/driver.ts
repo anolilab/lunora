@@ -107,9 +107,30 @@ export interface TargetFleet {
     reach: (tenant: TenantHandle) => TenantSend;
 
     /**
-     * Requests per resource with a timestamp strictly after `sinceMs` — the
-     * metering readback of a `metering: "readback"` target, when this deployment
-     * is configured to read it (`cloudflare-wfp/analytics.ts`).
+     * The metering readback of a `metering: "readback"` target, when this
+     * deployment is configured to read it (`cloudflare-wfp/analytics.ts`,
+     * `cloudflare-workers/analytics.ts`).
      */
-    usage?: (sinceMs: number) => Promise<UsageRow[]>;
+    usage?: UsageReadback;
+}
+
+/**
+ * A readback target's request-count source, split into SCOPES: one per
+ * independent metering source, each with its own checkpoint
+ * (`usageCheckpoints`, keyed by target and scope). `cloudflare-wfp` has one —
+ * this control plane's cell, whose Analytics Engine dataset counts every
+ * tenant. `cloudflare-workers` has one per connected Cloudflare account, each
+ * read with that account's own token. Two sources sharing one checkpoint would
+ * advance one boundary and each skip the other's window.
+ */
+export interface UsageReadback {
+    /**
+     * Requests per resource in `scope` with a timestamp strictly after
+     * `sinceMs`. A row's `resourceRef` must be one only `scope`'s deployments
+     * carry, so a source can never attribute requests to a tenant it does not
+     * hold.
+     */
+    read: (scope: string, sinceMs: number) => Promise<UsageRow[]>;
+    /** Every scope this deployment reads right now. */
+    scopes: () => Promise<string[]>;
 }

@@ -32,10 +32,9 @@ export const platformTables = {
         // The target this cell's capacity serves; absent → `cloudflare-wfp`,
         // which every cell registered before targets is.
         target: v.optional(deployTarget),
-        // Metering readback checkpoint (§4): the epoch-ms boundary this cell has
-        // folded Analytics-Engine request counts into `platformUsage` through.
-        // The rollback reads AE for `timestamp > usageReadAtMs`, so repeated runs
-        // never double-count the same requests.
+        // The metering readback checkpoint from before `usageCheckpoints`:
+        // read once, as the initial value of this cell's `cloudflare-wfp` row
+        // there, and never written again. Drop it once every cell has swept.
         usageReadAtMs: v.optional(v.number()),
     })
         .global()

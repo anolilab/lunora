@@ -160,7 +160,7 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 500, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 500, scope: "default", target: "cloudflare-wfp" });
 
         // Every release shares the alias's script; its usage lands on the live one.
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
@@ -177,7 +177,7 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
 
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_wfp", organizationId: "org_a" });
         // Another target's resource never lands on this target's bill.
@@ -189,7 +189,7 @@ describe(usageRollbackPorts, () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { insert });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 777, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "default", target: "cloudflare-wfp" });
         await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, quantity: 12 });
 
         expect(insert).toHaveBeenCalledWith("platformUsage", {
@@ -202,25 +202,58 @@ describe(usageRollbackPorts, () => {
         });
     });
 
-    it("advances the cell's usageReadAtMs on setCheckpoint", async () => {
-        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default" }], deployments: [] }, { patch });
+    it("seeds a cloudflare-wfp cell's first checkpoint from its old cells.usageReadAtMs", async () => {
+        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }], deployments: [], usageCheckpoints: [] });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
-        await ports.setCheckpoint(4242);
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
 
-        expect(patch).toHaveBeenCalledWith("cell_1", { usageReadAtMs: 4242 }, "cells");
+        await expect(ports.getCheckpoint()).resolves.toBe(999);
     });
 
-    it("no-ops setCheckpoint when the cell row is missing (unregistered cell)", async () => {
-        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeControlPlaneDb({ cells: [], deployments: [] }, { patch });
+    it("reads the scope's own checkpoint row, never the old column, once one exists", async () => {
+        const database = fakeControlPlaneDb({
+            cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }],
+            deployments: [],
+            usageCheckpoints: [
+                { _id: "cp_other", readAtMs: 7, scopeKey: "eu-1", target: "cloudflare-wfp" },
+                { _id: "cp_1", readAtMs: 5000, scopeKey: "default", target: "cloudflare-wfp" },
+            ],
+        });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
-        await ports.setCheckpoint(4242);
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+
+        await expect(ports.getCheckpoint()).resolves.toBe(5000);
+    });
+
+    it("inserts the scope's checkpoint row on its first advance and patches it after", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("cp_new"));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const first = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] }, { insert, patch });
+
+        const firstPorts = await usageRollbackPorts(first, reader([]), { now: 1000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+
+        await firstPorts.setCheckpoint(4242);
+
+        expect(insert).toHaveBeenCalledWith("usageCheckpoints", { readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp", updatedAt: 1000 });
+        expect(patch).not.toHaveBeenCalled();
+
+        const later = fakeControlPlaneDb(
+            { cells: [], deployments: [], usageCheckpoints: [{ _id: "cp_1", readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp" }] },
+            { insert, patch },
+        );
+
+        const laterPorts = await usageRollbackPorts(later, reader([]), { now: 2000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+
+        await laterPorts.setCheckpoint(5000);
+
+        expect(patch).toHaveBeenCalledWith("cp_1", { readAtMs: 5000, updatedAt: 2000 }, "usageCheckpoints");
+    });
+
+    it("starts a scope with no checkpoint and no old cell column from nothing (the bootstrap window applies)", async () => {
+        const database = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] });
+
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "ghost", target: "cloudflare-wfp" });
 
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();
-
-        expect(patch).not.toHaveBeenCalled();
     });
 });

@@ -71,6 +71,8 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
 };
 
 export interface CloudflareWfpFleetPorts {
+    /** This control plane's cell (`LUNORA_CELL`): the one usage scope, since its Analytics Engine dataset counts every tenant here. */
+    cell: string;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
@@ -78,7 +80,7 @@ export interface CloudflareWfpFleetPorts {
 }
 
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { dispatcher, usage } = ports;
+    const { cell, dispatcher, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
@@ -89,13 +91,21 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
         reach: (tenant) => (dispatch ? dispatch(tenant) : tenantSender(tenant)),
         ...(usage
             ? {
-                  usage: async (sinceMs: number): Promise<UsageRow[]> => {
-                      // The dispatcher's `index1` is the script name, which is the resource handle.
-                      const rows = await usage.readRequestUsage(sinceMs);
+                  usage: {
+                      read: async (scope: string, sinceMs: number): Promise<UsageRow[]> => {
+                          // This cell's dataset is the only source; another cell's scope is another control plane's.
+                          if (scope !== cell) {
+                              return [];
+                          }
 
-                      return rows.map((row) => {
-                          return { requests: row.requests, resourceRef: row.scriptName };
-                      });
+                          // The dispatcher's `index1` is the script name, which is the resource handle.
+                          const rows = await usage.readRequestUsage(sinceMs);
+
+                          return rows.map((row) => {
+                              return { requests: row.requests, resourceRef: row.scriptName };
+                          });
+                      },
+                      scopes: () => Promise.resolve([cell]),
                   },
               }
             : {}),
@@ -151,6 +161,7 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
     const apiToken = environment.CLOUDFLARE_API_TOKEN;
 
     return createCloudflareWfpFleet({
+        cell: environment.LUNORA_CELL ?? "default",
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
         ...(accountId && apiToken
             ? { usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }) }

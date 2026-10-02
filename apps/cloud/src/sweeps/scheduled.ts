@@ -131,10 +131,12 @@ const currentPeriodStart = (): number => {
 /**
  * Fold tenant request counts into the `platformUsage` ledger (§4) so spend caps,
  * the usage summary, and the usage chart have data to read — for every
- * `metering: "readback"` target whose fleet reads usage here (`cloudflare-wfp`:
- * Analytics Engine, and only with account credentials configured). Delta-read
- * off this cell's `usageReadAtMs` checkpoint (no double counting); a second
- * readback target needs a checkpoint of its own first (`usageRollbackPorts`).
+ * `metering: "readback"` target whose fleet reads usage here, and every scope
+ * of it (`cloudflare-wfp`: this cell's Analytics Engine dataset, and only with
+ * account credentials configured). Each scope is delta-read off its own
+ * `usageCheckpoints` row (no double counting), and isolated from the others: a
+ * scope whose read throws keeps its checkpoint and is retried next hour, while
+ * the rest advance.
  */
 const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     if (!env.DB) {
@@ -142,21 +144,37 @@ const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     }
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const periodStart = currentPeriodStart();
 
-    await Promise.all(
+    const swept = await Promise.allSettled(
         registeredFleets(env, { metering: "readback" }).map(async ({ id: target, usage }) => {
-            if (usage) {
-                await runUsageRollback(
-                    await usageRollbackPorts(database, usage, {
-                        cellName: env.LUNORA_CELL ?? "default",
-                        now: Date.now(),
-                        periodStart: currentPeriodStart(),
-                        target,
-                    }),
-                );
+            if (!usage) {
+                return;
+            }
+
+            const scopes = await usage.scopes();
+            const results = await Promise.allSettled(
+                scopes.map(async (scope) => {
+                    await runUsageRollback(await usageRollbackPorts(database, (sinceMs) => usage.read(scope, sinceMs), { now, periodStart, scope, target }));
+                }),
+            );
+
+            for (const result of results) {
+                if (result.status === "rejected") {
+                    // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
+                    console.error(`[usage] ${target} readback failed for one scope`, result.reason);
+                }
             }
         }),
     );
+
+    for (const result of swept) {
+        if (result.status === "rejected") {
+            // eslint-disable-next-line no-console -- see above
+            console.error("[usage] readback failed", result.reason);
+        }
+    }
 };
 
 /**

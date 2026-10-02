@@ -27,7 +27,8 @@ interface ConformanceFixture {
 /** A `metering: "readback"` target's usage readback, and a way to make a tenant serve requests the way its host records them. */
 interface UsageFixture {
     read: NonNullable<TargetFleet["usage"]>;
-    serve: (resourceRef: string, requests: number, atMs: number) => void;
+    /** Record that the tenant `alias` in `scope` (one of `read.scopes()`) served `requests` at `atMs`. */
+    serve: (scope: string, alias: string, requests: number, atMs: number) => void;
 }
 
 const SHARD = { binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" } as const;
@@ -109,40 +110,67 @@ const describeTargetConformance = (name: string, makeFixture: () => ConformanceF
 
 const describeUsageReadbackConformance = (name: string, makeFixture: () => UsageFixture): void => {
     describe(`${name} — usage readback conformance`, () => {
-        it("never double-counts usage it reads back across a checkpoint", async () => {
+        it("never double-counts usage it reads back across a checkpoint, in any scope", async () => {
             const usage = makeFixture();
+            const scopes = await usage.read.scopes();
 
-            let checkpoint: number | undefined;
+            expect(scopes.length).toBeGreaterThan(0);
+
+            // One checkpoint per scope, as `usageCheckpoints` keeps them.
+            const checkpoints = new Map<string, number>();
             let recorded = 0;
-            const sweep = (now: number) =>
-                runUsageRollback({
-                    getCheckpoint: () => Promise.resolve(checkpoint),
-                    now,
-                    read: usage.read,
-                    record: ({ quantity }) => {
-                        recorded += quantity;
+            const sweep = async (now: number): Promise<void> => {
+                for (const scope of await usage.read.scopes()) {
+                    // eslint-disable-next-line no-await-in-loop -- one scope at a time, as a deterministic sweep
+                    await runUsageRollback({
+                        getCheckpoint: () => Promise.resolve(checkpoints.get(scope)),
+                        now,
+                        read: (sinceMs) => usage.read.read(scope, sinceMs),
+                        record: ({ quantity }) => {
+                            recorded += quantity;
 
-                        return Promise.resolve();
-                    },
-                    resolveResource: () => {
-                        return { organizationId: "org_1" };
-                    },
-                    setCheckpoint: (ms) => {
-                        checkpoint = ms;
+                            return Promise.resolve();
+                        },
+                        resolveResource: () => {
+                            return { organizationId: "org_1" };
+                        },
+                        setCheckpoint: (ms) => {
+                            checkpoints.set(scope, ms);
 
-                        return Promise.resolve();
-                    },
-                });
+                            return Promise.resolve();
+                        },
+                    });
+                }
+            };
 
-            usage.serve("app", 3, 1000);
-            // Exactly on the first checkpoint: counted by the first sweep, never by the second.
-            usage.serve("app", 5, 2000);
+            for (const scope of scopes) {
+                usage.serve(scope, "app", 3, 1000);
+                // Exactly on the first checkpoint: counted by the first sweep, never by the second.
+                usage.serve(scope, "app", 5, 2000);
+            }
+
             await sweep(2000);
-            usage.serve("app", 4, 2500);
+
+            for (const scope of scopes) {
+                usage.serve(scope, "app", 4, 2500);
+            }
+
             await sweep(3000);
             await sweep(4000);
 
-            expect(recorded).toBe(12);
+            expect(recorded).toBe(12 * scopes.length);
+        });
+
+        it("reads each scope's usage only from that scope", async () => {
+            const usage = makeFixture();
+            const [scope] = await usage.read.scopes();
+
+            usage.serve(scope, "app", 7, 1000);
+
+            const rows = await usage.read.read(scope, 0);
+
+            expect(rows.reduce((sum, row) => sum + row.requests, 0)).toBe(7);
+            await expect(usage.read.read("not-a-scope", 0)).resolves.toStrictEqual([]);
         });
     });
 };

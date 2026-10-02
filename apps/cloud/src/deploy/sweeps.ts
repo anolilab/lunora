@@ -4,7 +4,7 @@
  * each expressed as a pure function over injected ports (`runTeardownSweep`,
  * `runUsageRollback`). These builders wire those ports to the control-plane D1,
  * so the row→target mapping, the `teardownAt` marker, the ledger insert, and the
- * per-cell checkpoint are testable against a fake store (server.ts just supplies
+ * per-scope checkpoint are testable against a fake store (server.ts just supplies
  * the real ctx-db and the target drivers).
  *
  * Every row is read with its `target` (absent on rows that predate it, which
@@ -162,26 +162,56 @@ interface AttributionRow {
 
 interface CellRow {
     _id: string;
-    usageReadAtMs?: number;
+    usageReadAtMs?: null | number;
+}
+
+interface CheckpointRow {
+    _id: string;
+    readAtMs: number;
 }
 
 /**
- * Build the {@link runUsageRollback} ports against the control-plane D1 for one
- * `readback` target. Reads that target's deployment attribution map and this
- * cell's checkpoint up front, then returns ports that resolve a resource →
- * org/deployment, append `requests` rows, and advance the cell's
- * `usageReadAtMs`. No cell row (unregistered cell) → the checkpoint can't
- * persist and the bootstrap window applies each run.
- *
- * The checkpoint is the CELL's, which is `cloudflare-wfp`'s unit of placement
- * and today the only `readback` target. A second readback target needs a
- * checkpoint of its own before it is swept here, or the two would advance one
- * boundary and each skip the other's window.
+ * The checkpoint of one (target, scope), and how to advance it. A
+ * `cloudflare-wfp` cell swept for the first time since checkpoints moved to
+ * `usageCheckpoints` starts from its old `cells.usageReadAtMs`, so the move
+ * neither re-reads nor skips a window.
+ */
+const checkpointPorts = async (
+    database: ControlPlaneDatabase,
+    options: { now: number; scope: string; target: TargetId },
+): Promise<Pick<UsageRollbackPorts, "getCheckpoint" | "setCheckpoint">> => {
+    const { page } = await database.findMany("usageCheckpoints", { where: { scopeKey: options.scope, target: options.target } });
+    const row = (page as CheckpointRow[]).at(0);
+    let seed: number | undefined;
+
+    if (row === undefined && options.target === "cloudflare-wfp") {
+        const { page: cells } = await database.findMany("cells", { where: { name: options.scope } });
+
+        seed = (cells as CellRow[])[0]?.usageReadAtMs ?? undefined;
+    }
+
+    return {
+        getCheckpoint: () => Promise.resolve(row?.readAtMs ?? seed),
+        setCheckpoint: async (ms) => {
+            await (row === undefined
+                ? database.insert("usageCheckpoints", { readAtMs: ms, scopeKey: options.scope, target: options.target, updatedAt: options.now })
+                : database.patch(row._id, { readAtMs: ms, updatedAt: options.now }, "usageCheckpoints"));
+        },
+    };
+};
+
+/**
+ * Build the {@link runUsageRollback} ports against the control-plane D1 for
+ * one scope of one `readback` target. Reads that target's deployment
+ * attribution map and the scope's checkpoint (`usageCheckpoints`) up front,
+ * then returns ports that resolve a resource → org/deployment, append
+ * `requests` rows, and advance the scope's checkpoint — never another
+ * scope's, so two sources of one target never skip each other's windows.
  */
 export const usageRollbackPorts = async (
     database: ControlPlaneDatabase,
     read: (sinceMs: number) => Promise<UsageRow[]>,
-    options: { cellName: string; now: number; periodStart: number; target: TargetId },
+    options: { now: number; periodStart: number; scope: string; target: TargetId },
 ): Promise<UsageRollbackPorts> => {
     // Drained: this map attributes metered usage to a deployment, so a resource
     // missing from it is usage that lands on nobody's bill.
@@ -203,11 +233,8 @@ export const usageRollbackPorts = async (
         }
     }
 
-    const { page: cellPage } = await database.findMany("cells", { where: { name: options.cellName } });
-    const cell = (cellPage as CellRow[])[0];
-
     return {
-        getCheckpoint: () => Promise.resolve(cell?.usageReadAtMs),
+        ...(await checkpointPorts(database, options)),
         now: options.now,
         read,
         record: async ({ attribution, quantity }) => {
@@ -221,10 +248,5 @@ export const usageRollbackPorts = async (
             });
         },
         resolveResource: (resourceRef) => byResource.get(resourceRef),
-        setCheckpoint: async (ms) => {
-            if (cell) {
-                await database.patch(cell._id, { usageReadAtMs: ms }, "cells");
-            }
-        },
     };
 };
