@@ -87,6 +87,27 @@ describe("discover/feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir)).toMatchObject({ mail: true });
     });
 
+    it("ignores type-only imports, which compile away and use nothing", () => {
+        expect.assertions(2);
+
+        // An events-only consumer naming a payload type: neither form may wire `ctx.pipelines` / `ctx.kv`.
+        writeSource(
+            "events.ts",
+            `import type { PipelineRecord } from "@lunora/bindings/pipelines";\nexport const handle = (record: PipelineRecord) => record;`,
+        );
+        writeSource(
+            "cache.ts",
+            `import { type Kv, type KvEntry } from "@lunora/bindings/kv";\nexport const read = (kv: Kv): KvEntry | undefined => undefined;`,
+        );
+
+        expect(discoverFeatureUsage(newProject(), workdir)).toStrictEqual(ALL_OFF);
+
+        // One value specifier beside a type one is a real import.
+        writeSource("cache.ts", `import { createKv, type Kv } from "@lunora/bindings/kv";\nexport const read = (): Kv => createKv();`);
+
+        expect(discoverFeatureUsage(newProject(), workdir)).toMatchObject({ kv: true, pipelines: false });
+    });
+
     it("detects ai and payments via the package import or the `ctx.*` helper", () => {
         expect.assertions(4);
 

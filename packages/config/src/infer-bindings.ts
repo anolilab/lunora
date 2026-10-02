@@ -23,8 +23,9 @@ import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import type { ServiceBindingIR } from "@lunora/codegen";
-import { readServiceBindings } from "@lunora/codegen";
+import { contextPropertiesRead, readServiceBindings } from "@lunora/codegen";
 import { init as initLexer, parse as lexModule } from "es-module-lexer";
+import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
@@ -32,7 +33,7 @@ import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { discoverFlagsInfo } from "./flags-info";
 import type { SandboxToolName } from "./infer-sandbox-tools";
-import { SANDBOX_TOOLS, sandboxToolImports, TYPE_ONLY_IMPORT_PATTERN } from "./infer-sandbox-tools";
+import { extractImportSpecifierList, SANDBOX_TOOLS, sandboxToolImports, TYPE_ONLY_IMPORT_PATTERN } from "./infer-sandbox-tools";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
@@ -61,23 +62,14 @@ const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
-// Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
-// ActionCtx, so apps reach it via `ctx.pipelines` rather than importing the
-// subpath — and a plain `@lunora/bindings/analytics` import must NOT flip the
-// pipelines binding hint. So detect the `ctx.pipelines` access directly,
-// mirroring the codegen feature probe.
-const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
-// R2 SQL is the same shape as pipelines: `@lunora/bindings/r2sql` is codegen-wired
-// onto ActionCtx, so apps reach it as `ctx.r2sql` and never import the subpath.
-// Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
-// `ctx.r2sql` failed silently on the deployed worker.
-const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
 
 /**
  * The single source of truth for import-driven capabilities: each capability
- * flag → the `@lunora/*` package whose import implies it, plus the regex used by
- * the {@link regexCapabilities} fallback when `es-module-lexer` can't parse a
- * mid-edit file. Everything else that enumerates capabilities — the
+ * flag → the `@lunora/*` package whose import implies it, plus either the regex
+ * used by the {@link regexCapabilities} fallback when `es-module-lexer` can't
+ * parse a mid-edit file, or — for a **ctx-access** capability — the
+ * `contextProperty` whose `ctx.<property>` read implies it (see
+ * {@link CTX_ACCESS_CAPABILITIES}). Everything else that enumerates capabilities — the
  * {@link Capabilities} type, {@link NO_CAPABILITIES}, {@link mergeCapabilities},
  * {@link capabilityForImportSource}, {@link regexCapabilities}, and the final
  * {@link InferredBindings} return — is derived from this table, so adding a
@@ -106,13 +98,15 @@ const CAPABILITY_SOURCES = {
     // declared and consumed by nothing.
     usesNotify: { pattern: /\bfrom\s+["']@lunora\/notify["']/, source: "@lunora/notify" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
-    // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
-    // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
-    // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
-    // for the hint message.
-    usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
-    // Keyed off the `ctx.r2sql` access, not an import — see CTX_R2SQL_PATTERN.
-    usesR2sql: { pattern: CTX_R2SQL_PATTERN, source: "@lunora/bindings/r2sql" },
+    // Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
+    // ActionCtx, so apps reach it via `ctx.pipelines` rather than importing the
+    // subpath — and a plain `@lunora/bindings/analytics` import must NOT flip the
+    // pipelines binding hint. So the `ctx.pipelines` access is the signal.
+    usesPipelines: { contextProperty: "pipelines", source: "@lunora/bindings/pipelines" },
+    // R2 SQL is the same shape: codegen-wired onto ActionCtx, reached as
+    // `ctx.r2sql`. Its three `R2_SQL_*` secrets had neither a flag nor a registry
+    // entry, so `ctx.r2sql` failed silently on the deployed worker.
+    usesR2sql: { contextProperty: "r2sql", source: "@lunora/bindings/r2sql" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
     // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
@@ -121,12 +115,30 @@ const CAPABILITY_SOURCES = {
     // entry and the pay wallet key is a Secrets Store binding — both hint-only.
     usesX402Charge: { pattern: /\bfrom\s+["']@lunora\/x402\/charge["']/, source: "@lunora/x402/charge" },
     usesX402Pay: { pattern: /\bfrom\s+["']@lunora\/x402\/pay["']/, source: "@lunora/x402/pay" },
-} as const satisfies Record<string, { pattern: RegExp; source: string }>;
+} as const satisfies Record<string, { contextProperty: string; source: string } | { pattern: RegExp; source: string }>;
 
 /** The import-driven capability flag names (every key of {@link CAPABILITY_SOURCES}). */
 type CapabilityFlag = keyof typeof CAPABILITY_SOURCES;
 
 const CAPABILITY_FLAGS = Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[];
+
+/**
+ * The **ctx-access** capabilities — the {@link CAPABILITY_SOURCES} rows with a
+ * `contextProperty`. Codegen wires each onto `ctx` itself, so an app reaches it
+ * as `ctx.<property>` without importing anything; the read is the signal. It is
+ * detected with `@lunora/codegen`'s own `contextPropertiesRead` — the AST pass
+ * behind codegen's feature probe — so config and codegen agree on every form:
+ * a `ctx.<property>` access, a `const { <property> } = ctx` / `({ ctx: { <property> } })`
+ * destructuring, a renamed context, and never a comment or a string literal.
+ */
+const CTX_ACCESS_CAPABILITIES: ReadonlyArray<readonly [CapabilityFlag, string]> = CAPABILITY_FLAGS.flatMap((flag) => {
+    const row: { contextProperty?: string; source: string } = CAPABILITY_SOURCES[flag];
+
+    return row.contextProperty === undefined ? [] : [[flag, row.contextProperty] as const];
+});
+
+/** Cheap pre-check: only a file naming one of the ctx-access properties is parsed. */
+const CTX_ACCESS_PREFILTER = new RegExp(String.raw`\b(?:${CTX_ACCESS_CAPABILITIES.map(([, property]) => property).join("|")})\b`, "u");
 
 /**
  * The provider secret pairs `@lunora/payment` reads at runtime. The package is
@@ -290,6 +302,38 @@ const capabilityForImportSource = (source: string): Capabilities => {
     return NO_CAPABILITIES;
 };
 
+/** An import clause with no default or namespace binding — just `import {`. */
+const NAMED_ONLY_IMPORT_HEAD_PATTERN = /^\s*import\s*$/u;
+
+/** A `type`-qualified import specifier (`type Foo`, `type Foo as Bar`). */
+const TYPE_SPECIFIER_PATTERN = /^type\s/u;
+
+/**
+ * Whether one lexed import statement compiles away: `import type { … } from "…"`,
+ * or a named-only import whose every specifier is `type`-qualified
+ * (`import { type A, type B } from "…"`). Mirrors codegen's feature probe
+ * (`discover/feature-usage.ts`), so a payload type imported from a capability's
+ * package wires neither the binding here nor `ctx.<cap>` there.
+ */
+const isTypeOnlyImportStatement = (statementText: string): boolean => {
+    if (TYPE_ONLY_IMPORT_PATTERN.test(statementText)) {
+        return true;
+    }
+
+    const openBraceIndex = statementText.indexOf("{");
+
+    if (openBraceIndex === -1 || !NAMED_ONLY_IMPORT_HEAD_PATTERN.test(statementText.slice(0, openBraceIndex))) {
+        return false;
+    }
+
+    const specifiers = extractImportSpecifierList(statementText)
+        .split(",")
+        .map((specifier) => specifier.trim())
+        .filter((specifier) => specifier.length > 0);
+
+    return specifiers.length > 0 && specifiers.every((specifier) => TYPE_SPECIFIER_PATTERN.test(specifier));
+};
+
 /**
  * Lex imports with `es-module-lexer` and union the capability each runtime
  * source implies. Type-only imports compile away and imply nothing. Throws on
@@ -303,7 +347,7 @@ const lexCapabilities = (code: string): Capabilities => {
     for (const entry of imports) {
         const source = entry.n;
 
-        if (!source || TYPE_ONLY_IMPORT_PATTERN.test(code.slice(entry.ss, entry.se))) {
+        if (!source || isTypeOnlyImportStatement(code.slice(entry.ss, entry.se))) {
             continue;
         }
 
@@ -313,19 +357,53 @@ const lexCapabilities = (code: string): Capabilities => {
     return capabilities;
 };
 
-/** Regex fallback for when `es-module-lexer` cannot parse a mid-edit file. */
+/** Regex fallback for when `es-module-lexer` cannot parse a mid-edit file. The ctx-access rows have no pattern: {@link contextAccessCapabilities} covers them either way. */
 const regexCapabilities = (code: string): Capabilities => {
     const capabilities = { ...NO_CAPABILITIES };
 
     for (const flag of CAPABILITY_FLAGS) {
-        capabilities[flag] = CAPABILITY_SOURCES[flag].pattern.test(code);
+        const row: { pattern?: RegExp; source: string } = CAPABILITY_SOURCES[flag];
+
+        capabilities[flag] = row.pattern?.test(code) ?? false;
     }
 
     return capabilities;
 };
 
-/** Detect, for a single source file, which Lunora capabilities it pulls in. */
-const capabilitiesFromSource = (code: string): Capabilities => {
+/** The in-memory project the ctx-access pass parses into — created on first use, one file at a time. */
+let contextAccessProject: Project | undefined;
+
+/**
+ * The {@link CTX_ACCESS_CAPABILITIES} a source file reads off `ctx`, via
+ * codegen's own `contextPropertiesRead` over a parsed AST — never a text match,
+ * so a `ctx.pipelines` inside a comment or a string implies nothing, while a
+ * destructured `const { r2sql } = ctx` does. Only a file that names one of the
+ * properties at all is parsed. `fileName` picks the parser's script kind
+ * (`.tsx` / `.jsx` vs `.ts` / `.js`).
+ */
+const contextAccessCapabilities = (code: string, fileName: string): Capabilities => {
+    if (!CTX_ACCESS_PREFILTER.test(code)) {
+        return NO_CAPABILITIES;
+    }
+
+    contextAccessProject ??= new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+
+    const sourceFile = contextAccessProject.createSourceFile(`/scan/${fileName.slice(fileName.lastIndexOf("/") + 1)}`, code, { overwrite: true });
+    const read = contextPropertiesRead(sourceFile);
+
+    contextAccessProject.removeSourceFile(sourceFile);
+
+    const capabilities = { ...NO_CAPABILITIES };
+
+    for (const [flag, property] of CTX_ACCESS_CAPABILITIES) {
+        capabilities[flag] = read.has(property);
+    }
+
+    return capabilities;
+};
+
+/** Detect, for a single source file (`fileName` only picks the parser), which Lunora capabilities it pulls in. */
+const capabilitiesFromSource = (code: string, fileName: string): Capabilities => {
     let capabilities: Capabilities;
 
     try {
@@ -339,12 +417,10 @@ const capabilitiesFromSource = (code: string): Capabilities => {
     // other probe, it must be scoped to EXACTLY the `lunora/` file set
     // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
     // lunora-only pass in `inferLunoraBindings` instead.
-    return mergeCapabilities(capabilities, {
+    return mergeCapabilities(mergeCapabilities(capabilities, contextAccessCapabilities(code, fileName)), {
         ...NO_CAPABILITIES,
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
-        usesPipelines: CTX_PIPELINES_PATTERN.test(code),
-        usesR2sql: CTX_R2SQL_PATTERN.test(code),
     });
 };
 
@@ -408,7 +484,7 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
-            merged = mergeCapabilities(merged, capabilitiesFromSource(readFileSync(file, "utf8")));
+            merged = mergeCapabilities(merged, capabilitiesFromSource(readFileSync(file, "utf8"), file));
         }
     }
 

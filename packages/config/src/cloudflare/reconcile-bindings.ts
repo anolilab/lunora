@@ -243,20 +243,29 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" 
 };
 
 /**
- * Add the `analytics_engine_datasets` binding for `@lunora/bindings/analytics` usage, if
- * absent. Self-describing: the `dataset` name is user-chosen and created lazily
- * on first write (no remote id to mint), so it auto-writes like the DO bindings.
- * The dataset defaults to the binding name on Cloudflare's side; we write it
- * explicitly to avoid drift. Idempotent on any existing `analytics_engine_datasets` entry. Pure.
+ * The array twin of {@link reconcileSelfDescribing}: add a self-describing
+ * binding whose wrangler key holds a LIST (`analytics_engine_datasets`), as a
+ * one-entry array, when the key has no entry at all. Idempotent on ANY existing
+ * entry — an app that binds its own dataset under another name keeps it, and a
+ * second, unused binding is never added beside it. Pure.
+ *
+ * `analytics_engine_datasets` (`@lunora/bindings/analytics` usage) is written as
+ * `{ binding: "ANALYTICS", dataset: "ANALYTICS" }`: the dataset is created lazily
+ * on first write (no remote id to mint), and defaults to the binding name on
+ * Cloudflare's side — written explicitly to avoid drift.
  */
-const reconcileAnalytics = (text: string, parsed: WranglerShape): ReconcileStep => {
-    if ((parsed.analytics_engine_datasets?.length ?? 0) > 0) {
+const reconcileSelfDescribingArray = (
+    text: string,
+    parsed: WranglerShape,
+    key: "analytics_engine_datasets",
+    entry: Readonly<Record<string, string>>,
+    label: string,
+): ReconcileStep => {
+    if ((parsed[key]?.length ?? 0) > 0) {
         return { added: [], text };
     }
 
-    const nextDatasets = [{ binding: "ANALYTICS", dataset: "ANALYTICS" }];
-
-    return { added: ["ANALYTICS (Analytics Engine)"], text: applyModify(text, ["analytics_engine_datasets"], nextDatasets) };
+    return { added: [label], text: applyModify(text, [key], [entry]) };
 };
 
 /**
@@ -774,7 +783,17 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai", "AI", "AI (Workers AI)") },
         { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
         { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
-        { enabled: inferred.usesAnalytics, run: (text) => reconcileAnalytics(text, parsed) },
+        {
+            enabled: inferred.usesAnalytics,
+            run: (text) =>
+                reconcileSelfDescribingArray(
+                    text,
+                    parsed,
+                    "analytics_engine_datasets",
+                    { binding: "ANALYTICS", dataset: "ANALYTICS" },
+                    "ANALYTICS (Analytics Engine)",
+                ),
+        },
         { enabled: inferred.usesWorkerLoader, run: (text) => reconcileWorkerLoaders(text, parsed) },
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
