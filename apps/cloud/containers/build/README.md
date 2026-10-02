@@ -1,20 +1,20 @@
 # The build box (GAPS.md A3)
 
-The container image that turns a repo tarball into the single Worker module the
-deploy path uploads. One throwaway instance per build.
+The container image that turns a repo tarball into a release: the single Worker
+module the deploy path uploads, plus the binding manifest, crons and static
+assets it deploys with. One throwaway instance per build.
 
 This is the 🌐 half of A3. Everything around it — the `builds` table, the work
-lease, `builds.claimNext`, the dispatcher, log streaming, commit-SHA dedup — is
-already code-complete in `src/builds/`; what was missing was an image to run
-`lunora build` in. `BuildRunnerPorts.execute` is still unwired: see **Wiring**.
+lease, `builds.claimNext`, the dispatcher, log streaming, commit-SHA dedup and
+the release into the deploy core — is code in `src/builds/`; see **Wiring**.
 
 ## The contract
 
-| Route                  | Purpose                                                                                                                                                                                                    |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens, then `{"bundle","bundleHash"}` or `{"error"}`. |
-| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                             |
-| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                           |
+| Route                  | Purpose                                                                                                                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens, then the release `{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?}` or `{"error"}`. |
+| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                                                                                         |
+| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                                                                                       |
 
 **Why a build route and not just exec.** `BuildRunnerPorts.execute` receives the
 source as an `ArrayBuffer` in the Worker, and exec has nowhere to put it — it
@@ -55,6 +55,16 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    that produced several modules is refused here rather than deployed as
    whichever file sorted first — that would ship a Worker missing half its code,
    first noticed as a runtime import error in production.
+
+6. **Collect the release** (`release.mjs`). The same pinned `.bin/lunora` runs
+   `lunora cloud deploy --bundle <module> --out <file>`, which writes exactly the
+   request body a CLI deploy would upload — binding manifest, crons and static
+   assets derived from the project's wrangler config — without authenticating.
+   The file is read back, held to the control plane's caps (100 MiB body, 50 MiB
+   and 20,000 files of assets) so an oversized project fails here with the cap
+   named, and its routing fields are dropped: the control plane decides project,
+   kind and branch from the build row. A CLI too old for `--out` fails the build
+   with a message saying to upgrade.
 
 ## Security posture
 
@@ -100,8 +110,11 @@ Done — the image is reachable from the control plane:
 3. `fetchSource` downloads the tarball with the GitHub App installation token
    (`downloadTarball` in `src/github/app.ts`, reusing the same cached token as
    the commit-status write-back).
-4. The dispatcher was **already** on a once-a-minute cron
-   (`lunora/crons.ts` → `internal.builds.dispatch`); it needed no change.
+4. The dispatcher runs once a minute from the Worker's own `scheduled()`, which
+   calls `POST /v1/builds/dispatch` in-process (`src/builds/control-plane.ts`).
+   It used to be a Lunora cron action; it moved because the `release` port —
+   `src/builds/release.ts`, which hands the build to the same deploy core as
+   `POST /v1/deploy` — needs the Worker's bindings, which an action lacks.
 
 Two things to know before this runs for real:
 
@@ -114,4 +127,4 @@ Two things to know before this runs for real:
 - **`fetchSource` still needs the GitHub App credential** (`GITHUB_APP_ID` /
   `GITHUB_APP_PRIVATE_KEY`). Without it a build fails in its first minute with
   that reason in `buildLogs`, which is deliberate — see the `unconfigured`
-  note in `lunora/builds.ts`.
+  note in `src/builds/control-plane.ts`.

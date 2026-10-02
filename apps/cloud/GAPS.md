@@ -385,7 +385,7 @@ bad deploy replaces the good one instantly and there is nothing to roll back to.
 `updateStatus`. Queue time, provision time, and time-to-live become dashboard
 columns for free.
 
-### A3. Server-side builds + build logs (✅ wired end to end; 🌐 GitHub App credential only)
+### A3. Server-side builds + build logs (✅ push → build → release wired in code, 2026-10-02; 🌐 App credential, build image, never run live)
 
 > **2026-07-21:** the claim→run→drain **dispatcher** (`src/builds/dispatch.ts`)
 > now exists and is tested — `builds.claimNext` finally has a caller at the logic
@@ -444,6 +444,48 @@ GitHub webhook only parses PR events into preview _intents_.
 > cell with the binding present and nothing behind it. Both cells carry it
 > explicitly, verified against a real production build's emitted
 > `wrangler.json`. See `containers/build/README.md`.
+
+> **2026-10-02: a build now releases.** The status line above used to read
+> "wired end to end", and that overstated it: a push built, but nothing ever
+> deployed. The build box returned only the Worker module and its hash — no
+> binding manifest, no assets — the bundle was never stored, and `runBuild`'s
+> `release` port had no caller. Only a CLI upload reached `/v1/deploy`.
+>
+> What flows now, in code:
+>
+> - The webhook records `trigger` on the build (`push` for the default branch,
+>   `pull_request` for a PR); dedup keys on it, so a fast-forward merge of a
+>   PR's head still releases to production.
+> - The build box runs the project's own pinned CLI a second time,
+>   `lunora cloud deploy --out`, which writes the exact body a CLI deploy would
+>   upload. Its last NDJSON line carries bundle, hash, manifest, crons and
+>   assets, held to the deploy caps so an oversized project fails its build.
+> - The dispatcher moved from the `builds.dispatch` cron action to
+>   `POST /v1/builds/dispatch`, called in-process from the Worker's own
+>   `scheduled()` (handed to `waitUntil`, so tenant cron fan-out no longer waits
+>   behind builds). The move was forced: a release needs `RELEASES`, the
+>   provision box and the master key, and an action's `ctx.env` carries vars only.
+> - The `release` port (`src/builds/release.ts`) hands the build to
+>   `startRelease`, the transport-agnostic deploy core now extracted from
+>   `handleDeployRequest` — same validation, stored release, health gate,
+>   revert and activation as `POST /v1/deploy`, on the same `deployDeps`
+>   wiring. A push releases to production on the project's alias; a PR to a
+>   TTL'd `<alias>-pr-<branch>` preview. The core authorizes by deploy key, so
+>   each release mints one scoped to the build's project and kind, deleted when
+>   the release ends.
+> - Release progress lands in `buildLogs`, `builds.deploymentId` is linked, and
+>   the commit status reports the release outcome. A failed release never fails
+>   the build.
+>
+> Still 🌐, and so **never exercised against real infrastructure**:
+> `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`, `LUNORA_ADMIN_TOKEN` (the drain
+> no-ops without it), the `RELEASES` bucket, and the build-box image built and
+> pushed. Known limits: the release payload rides one NDJSON line and is
+> parsed in the Worker, so a release near the 100 MiB cap will exceed Worker
+> memory exactly as a `POST /v1/deploy` of that size would; a build plus its
+> release must finish inside the 30-minute lease; and a reused build (same
+> commit, root directory and trigger) does not re-release, because its bundle
+> was never stored.
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 

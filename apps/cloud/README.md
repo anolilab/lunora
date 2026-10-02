@@ -76,7 +76,8 @@ src/
     orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
     keys.ts          deploy-key format / parse / hash helpers
     preview.ts       preview script-name + TTL helpers (§2.3)
-    handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
+    handler.ts       the deploy core (`startRelease`: validate → record → store → provision
+                     → health-check/revert → activate) + the POST /v1/deploy handler over it
     client.ts        lunora-deploy client (POST + consume NDJSON stream)
     router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,usage,
                      invitations/send,secrets,admin,tenants/plan} + per-IP rate limiting
@@ -85,6 +86,11 @@ src/
     worker.ts        WfP dispatcher Worker — per-plan limits + per-request usage emit
   builds/
     paths.ts         monorepo settings: rootDirectory / watchPaths validation + push path filter
+    runner.ts        one build: fetch → execute → release → complete/fail (pure over ports)
+    dispatch.ts      claim → run loop, bounded per tick
+    container-exec.ts the build box's NDJSON reply → log lines + the release it produced
+    release.ts       a build's release through the deploy core (production vs preview, per-release key)
+    control-plane.ts the real ports, run by POST /v1/builds/dispatch from the Worker's scheduled()
   github/
     webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3),
                      push → changed files (fails open when the payload can't prove them)
@@ -376,6 +382,41 @@ Copy `.dev.vars.example` → `.dev.vars` and fill `LUNORA_ADMIN_TOKEN` and
 `AUTH_SECRET` (the studio's better-auth session secret). Before a real deploy,
 create the D1 database and replace the `database_id` placeholder in
 `wrangler.jsonc`.
+
+## Push-to-deploy
+
+A connected repository deploys without the CLI. The flow, end to end:
+
+1. **Webhook.** `POST /v1/github/webhook` (HMAC-verified) records a `builds` row
+   through `builds.recordPush`: a push to the default branch with
+   `trigger: "push"`, a pull-request upsert with `trigger: "pull_request"`. A
+   successful build of the same commit, root directory and trigger is reused.
+2. **Drain.** Every minute the Worker's own `scheduled()` calls
+   `POST /v1/builds/dispatch` in-process (admin-token gated), which claims up to
+   five builds under a lease. It runs in the Worker rather than as a Lunora cron
+   action because the release needs the Worker's bindings (`RELEASES`, the
+   provision box, `SECRET_ENCRYPTION_KEY`), which an action's `ctx` does not carry.
+3. **Build.** The source tarball is fetched with the GitHub App's installation
+   token and posted to the build box, which installs, runs the project's own
+   `lunora build`, then `lunora cloud deploy --out` with the same pinned CLI. The
+   last NDJSON line is the whole release: bundle, hash, binding manifest, crons
+   and static assets, held to the deploy caps (100 MiB body, 50 MiB / 20,000
+   asset files) so an oversized project fails its build, not its release.
+4. **Release.** `src/builds/release.ts` hands it to `startRelease`, the same
+   deploy core `POST /v1/deploy` runs: validation, the stored release in
+   `RELEASES`, provisioning, the health check with automatic revert, and
+   activation. A push releases to **production** on the project's existing alias
+   (or its wrangler `name`, then its slug); a pull request to a **preview**,
+   `<alias>-pr-<branch>`, with the usual 5-day TTL. The core authorizes by deploy
+   key, so each release gets one: minted for that build's project with the
+   release's kind as its ceiling, and deleted when the release ends.
+5. **Record.** Release progress streams into the build's log; the build is
+   completed with `deploymentId` linked; the commit status says whether it went
+   live, linking the URL. A failed release never fails the build.
+
+What still needs credentials (🌐): `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`
+for the source fetch and commit statuses, `LUNORA_ADMIN_TOKEN` for the drain, a
+`RELEASES` bucket, and a built and pushed build-box image.
 
 ## Monorepos (push-to-deploy)
 
