@@ -49,9 +49,9 @@ const fail = (message) => {
 const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
 /**
- * Cloudflare's pre-compression Worker script limit — 64 MB, the same on Free and
- * Paid, alongside the per-plan gzip limit (3 MB / 10 MB).
- * https://developers.cloudflare.com/workers/platform/limits/
+ * Cloudflare's Worker size limit — 64 MiB uncompressed, the same on Free and
+ * Paid. There is no compressed limit; only the uncompressed bundle counts.
+ * https://developers.cloudflare.com/workers/platform/limits/#worker-size
  */
 const RAW_LIMIT_BYTES = 64 * 1024 * 1024;
 
@@ -165,8 +165,8 @@ if (update) {
     process.exit(0);
 }
 
-// Cloudflare enforces two ceilings, not one: the plan's gzip limit AND a 64 MB
-// pre-compression limit on both plans. The baseline check below is a regression
+// Cloudflare's only size ceiling is the 64 MiB uncompressed limit (both plans;
+// there is no compressed limit). The baseline check below is a regression
 // signal measured in gzip, so it cannot see a bundle that compresses extremely
 // well — a large generated lookup table is tiny gzipped and enormous raw. That
 // bundle would pass the gate and be rejected at upload, so the raw limit gets

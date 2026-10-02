@@ -1,6 +1,6 @@
 ---
 title: Runtime & bundling
-description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 10 MB bundle you have to fit into.
+description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 64 MiB bundle you have to fit into.
 related:
     - to: /docs/concepts/actions
     - to: /docs/concepts/debugging
@@ -53,7 +53,7 @@ polyfill.
 
 | Constraint      | Value               | What it means                                       |
 | --------------- | ------------------- | --------------------------------------------------- |
-| Bundle size     | 10 MB               | The whole worker, dependencies included             |
+| Bundle size     | 64 MiB uncompressed | The whole worker, dependencies included             |
 | CPU per request | 30 s                | Long work belongs in an action plus the scheduler   |
 | Subrequests     | 50 free / 1000 paid | Caps outbound `fetch` and fan-out reads per request |
 | Env var size    | 5 KB total          | Larger config belongs in D1 or KV                   |

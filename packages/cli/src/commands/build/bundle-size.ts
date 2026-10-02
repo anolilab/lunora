@@ -8,16 +8,25 @@ interface BundleSize {
     files: number;
 
     /**
-     * Sum of the per-file gzip sizes. Cloudflare states its script-size limit
-     * against the compressed script, and gzip at zlib's default level is what
-     * wrangler itself reports ("Total Upload: … / gzip: …") — measuring the same
-     * way keeps the two numbers comparable instead of inviting a "which is
-     * right?" question. Summing per file rather than gzipping the concatenation
-     * is the conservative direction: separate streams share no dictionary.
+     * Sum of the per-file gzip sizes — for reference only. Cloudflare has no
+     * compressed size limit; this mirrors the gzip figure wrangler prints
+     * ("Total Upload: … / gzip: …") so the two outputs stay comparable, and it
+     * is a useful regression signal for what crosses the wire. Summing per file
+     * rather than gzipping the concatenation is the conservative direction:
+     * separate streams share no dictionary.
      */
     gzipBytes: number;
+
+    /** Sum of the uncompressed file sizes — the number Cloudflare's Worker size limit counts. */
     rawBytes: number;
 }
+
+/**
+ * Cloudflare's Worker size limit: 64 MiB uncompressed, the same on Free and
+ * Paid. There is no compressed limit — only the uncompressed bundle counts.
+ * https://developers.cloudflare.com/workers/platform/limits/#worker-size
+ */
+const WORKER_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 
 /**
  * True for files that are part of the uploaded Worker.
@@ -66,4 +75,4 @@ const measureBundle = (outDirectory: string): BundleSize | undefined => {
 };
 
 export type { BundleSize };
-export { measureBundle };
+export { measureBundle, WORKER_SIZE_LIMIT_BYTES };

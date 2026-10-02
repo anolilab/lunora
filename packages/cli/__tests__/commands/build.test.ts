@@ -6,6 +6,7 @@ import { gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { WORKER_SIZE_LIMIT_BYTES } from "../../src/commands/build/bundle-size";
 import type { BuildCommandData, BuildCommandResult } from "../../src/commands/build/handler";
 import { execute, runBuildCommand } from "../../src/commands/build/handler";
 import type { BuildOptions } from "../../src/commands/build/index";
@@ -32,14 +33,16 @@ const VALID_WRANGLER = `{
 }
 `;
 
-const silentLogger = (): { logger: Logger; successes: string[]; warnings: string[] } => {
+const silentLogger = (): { infos: string[]; logger: Logger; successes: string[]; warnings: string[] } => {
+    const infos: string[] = [];
     const successes: string[] = [];
     const warnings: string[] = [];
 
     return {
+        infos,
         logger: {
             error: () => {},
-            info: () => {},
+            info: (message) => infos.push(message),
             success: (message) => successes.push(message),
             warn: (message) => warnings.push(message),
         },
@@ -187,6 +190,42 @@ describe("lunora build", () => {
         expect(result.bundle?.rawBytes).toBe(Buffer.byteLength(SCRIPT));
         expect(result.bundle?.gzipBytes).toBe(gzipSync(Buffer.from(SCRIPT)).byteLength);
         expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
+    });
+
+    it("reports the raw size against the 64 MiB uncompressed limit, gzip only for reference", async () => {
+        expect.assertions(4);
+
+        const { infos, logger, warnings } = silentLogger();
+
+        await runBuildCommand({ cwd: workdir, logger, outDir: "dist-worker", spawner: bundlingSpawner("dist-worker") });
+
+        const summary = infos.join("\n");
+
+        expect(summary).toContain("64 MiB uncompressed Worker size limit");
+        expect(summary).toContain("there is no compressed limit");
+        // The retired per-plan gzip limits must not come back.
+        expect(summary).not.toMatch(/3 MB|10 MB/u);
+        expect(warnings.join("\n")).not.toContain("Cloudflare will reject this upload");
+    });
+
+    it("warns, without failing, when the raw bundle is over the 64 MiB limit", async () => {
+        expect.assertions(3);
+
+        const { logger, warnings } = silentLogger();
+        const oversizedSpawner: Spawner = async (descriptor) => {
+            const directory = join(workdir, "dist-worker");
+
+            mkdirSync(directory, { recursive: true });
+            writeFileSync(join(directory, "server.js"), Buffer.alloc(WORKER_SIZE_LIMIT_BYTES + 1, 0x61));
+
+            return { code: 0, descriptor, stderr: "", stdout: "" };
+        };
+
+        const result = await runBuildCommand({ cwd: workdir, logger, outDir: "dist-worker", spawner: oversizedSpawner });
+
+        expect(result.code).toBe(0);
+        expect(result.bundle?.rawBytes).toBe(WORKER_SIZE_LIMIT_BYTES + 1);
+        expect(warnings.join("\n")).toContain("Cloudflare will reject this upload");
     });
 
     it("measures the bundle for the --format json payload without failing on it", async () => {

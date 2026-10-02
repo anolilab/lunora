@@ -230,7 +230,7 @@ that can do the job, and you escalate only when the work demands it.
 
 | Tier          | Where                  | Good for                                                           | Bounded by                               |
 | ------------- | ---------------------- | ------------------------------------------------------------------ | ---------------------------------------- |
-| **Worker**    | Stateless edge         | RPC routing, auth, fan-out coordination, actions (external I/O)    | 30 s CPU, 10 MB bundle, no state         |
+| **Worker**    | Stateless edge         | RPC routing, auth, fan-out coordination, actions (external I/O)    | 30 s CPU, 64 MiB bundle, no state        |
 | **ShardDO**   | Stateful, serialized   | Reads, writes, live subscriptions: the deterministic core          | 30 s CPU, 10 GB SQLite, ~1 000 req/s     |
 | **Container** | Full Linux VM (Docker) | Native binaries, full filesystem, long-running or heavyweight work | Paid plan, `linux/amd64`, ephemeral disk |
 
@@ -478,7 +478,7 @@ guard.)
 and workflows are each their own `@lunora/*` package and an opt-in `ctx.*` facade.
 The umbrella `lunorash` package bundles only the base.
 
-**Why.** The Worker bundle ceiling is 10 MB; an app shouldn't pay bundle size for
+**Why.** The Worker bundle ceiling is 64 MiB uncompressed; an app shouldn't pay bundle size for
 a provider it never calls. Separate installs also mean no hard dependency on, say,
 a specific auth library: `@lunora/auth` is swappable, and the core doesn't know it
 exists.

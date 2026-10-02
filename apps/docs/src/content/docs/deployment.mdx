@@ -283,32 +283,33 @@ types:
 
 ## Worker size
 
-Cloudflare caps a Worker script
-[in two places](https://developers.cloudflare.com/workers/platform/limits/):
-**3 MB on Workers Free and 10 MB on Workers Paid after gzip compression**, and
-**64 MB before compression** on both plans. Both are enforced at upload, so an
-over-budget bundle is a rejected deploy rather than a slow one. A bundle that
-compresses unusually well (a large generated table, say) can sit under the gzip
-limit while breaching the raw one. Check both numbers.
+Cloudflare caps a Worker at
+[**64 MiB uncompressed**](https://developers.cloudflare.com/workers/platform/limits/#worker-size),
+the same on Workers Free and Workers Paid. There is no compressed size limit:
+only the uncompressed bundle counts, and the gzip figure `wrangler deploy` prints
+is for reference. The limit is enforced at upload, so an over-budget bundle is a
+rejected deploy rather than a slow one.
 
 `lunora build` weighs what it wrote:
 
 ```bash
 pnpm lunora build
-# … bundle: 1684.9 KiB raw, 412.9 KiB gzipped across 1 file(s)
+# … bundle: 1684.9 KiB raw across 1 file(s) — 2.6% of Cloudflare's 64 MiB uncompressed
+#   Worker size limit (412.9 KiB gzipped, for reference; there is no compressed limit)
 
-pnpm lunora build --format json | jq .bundle
+pnpm lunora build --format json | jq .data.bundle
 # { "files": 1, "gzipBytes": 422840, "rawBytes": 1725313 }
 ```
 
 Only the uploaded files are counted: the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
-roughly triple the number. Compare `gzipBytes` against your plan's compressed
-limit and `rawBytes` against the 64 MB one; together they match what
-`wrangler deploy` reports as `Total Upload: … / gzip: …`.
+roughly triple the number. Compare `rawBytes` against the 64 MiB limit; a bundle
+over it is reported as a warning. `gzipBytes` matches the `gzip:` figure in
+wrangler's `Total Upload: … / gzip: …` line and is useful for tracking what
+crosses the wire, but Cloudflare does not limit it.
 
-A starter app is around **410 KiB gzipped**, so most projects have a lot of
-room. If yours is approaching the limit:
+A starter app is around **1.7 MiB raw**, so most projects have a lot of room.
+Bundle size still affects cold-start time, so if yours is growing:
 
 - **Drop add-ons you no longer import.** Every `@lunora/*` add-on your Worker
   entry reaches is bundled, whether or not a request ever uses it.
