@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { memoryAdapter } from "better-auth/adapters/memory";
-import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import workersCimdFetch from "../src/cimd-workers";
-import type { LunoraAuthOptions } from "../src/create-auth";
-import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import { cimd, jwt, mcp } from "../src/plugins";
+import createMemoryAuth from "./helpers/memory-auth";
 
 /**
  * `workersCimdFetch` — the Workers transport for `cimd()` — on its own, then wired
@@ -41,7 +38,8 @@ const metadataDocument = (overrides: Record<string, unknown> = {}): Record<strin
     };
 };
 
-const jsonResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" } });
+const jsonResponse = (body: unknown, headers: Record<string, string> = {}): Response =>
+    Response.json(body, { headers: { "content-type": "application/json", ...headers } });
 
 describe(workersCimdFetch, () => {
     afterEach(() => {
@@ -105,6 +103,17 @@ describe(workersCimdFetch, () => {
             await expect(workersCimdFetch()(CLIENT_ID)).rejects.toThrow("redirects");
         });
 
+        // A 3xx, but not a redirect: the answer to cimd's own conditional revalidation.
+        it("passes a 304 Not Modified through", async () => {
+            expect.assertions(1);
+
+            upstream.mockResolvedValue(new Response(null, { headers: { etag: '"v1"' }, status: 304 }));
+
+            const response = await workersCimdFetch()(CLIENT_ID, { headers: { "if-none-match": '"v1"' } });
+
+            expect(response.status).toBe(304);
+        });
+
         it.each([
             ["plain http", "http://client.example.com/client.json"],
             // Placeholder userinfo, not a credential: the refusal of any userinfo is under test.
@@ -132,25 +141,16 @@ describe("cimd() with workersCimdFetch behind a real mcp() server", () => {
         vi.unstubAllGlobals();
     });
 
-    const buildAuth = (): { handler: (request: Request) => Promise<Response> } => {
-        const database: Record<string, unknown[]> = {};
-        const options: LunoraAuthOptions = {
+    const buildAuth = (cimdOptions: Partial<Parameters<typeof cimd>[0]> = {}): { handler: (request: Request) => Promise<Response> } =>
+        createMemoryAuth({
             baseURL: ORIGIN,
-            database: memoryAdapter(database),
             plugins: [
                 jwt(),
                 mcp({ consentPage: "/consent", loginPage: "/login", resource: RESOURCE, scopes: ["lunora:read", "lunora:write"] }),
-                cimd({ fetchClientMetadataResource: workersCimdFetch(), metadataProfile: "mcp-2026-07-28" }),
+                cimd({ fetchClientMetadataResource: workersCimdFetch(), metadataProfile: "mcp-2026-07-28", ...cimdOptions }),
             ],
             secret: "x".repeat(32),
-        };
-
-        for (const table of Object.values(getAuthTables(resolveAuthOptions(options)))) {
-            database[table.modelName] = [];
-        }
-
-        return createAuth(options);
-    };
+        });
 
     /** Start an authorization-code request from the CIMD client, as an MCP host does. */
     const authorize = async (auth: { handler: (request: Request) => Promise<Response> }): Promise<Response> => {
@@ -210,6 +210,29 @@ describe("cimd() with workersCimdFetch behind a real mcp() server", () => {
         expect(upstream).toHaveBeenCalledTimes(1);
         await expect(errorOf(response)).resolves.toBeNull();
         expect(response.headers.get("location")).toContain("/login");
+    });
+
+    // cimd keeps a validated document with its ETag and, once it goes stale, asks the
+    // origin `If-None-Match`. The 304 that comes back must reach cimd as a 304 — a
+    // transport that refused it as a redirect would lock the client out for good at
+    // its first expiry.
+    it("keeps a client resolving after a stale document revalidates as 304 Not Modified", async () => {
+        expect.assertions(4);
+
+        // `no-cache` makes every cached document stale at once; the zero interval
+        // lifts cimd's per-client fetch throttle so the second fetch is allowed.
+        upstream.mockResolvedValueOnce(jsonResponse(metadataDocument(), { "cache-control": "no-cache", etag: '"v1"' }));
+        upstream.mockResolvedValueOnce(new Response(null, { headers: { etag: '"v1"' }, status: 304 }));
+
+        const auth = buildAuth({ metadataFetchPolicy: { minimumFetchInterval: 0 } });
+
+        await expect(errorOf(await authorize(auth))).resolves.toBeNull();
+
+        const revalidated = await authorize(auth);
+
+        expect(upstream).toHaveBeenCalledTimes(2);
+        expect(upstream.mock.calls[1]?.[0].headers.get("if-none-match")).toBe('"v1"');
+        await expect(errorOf(revalidated)).resolves.toBeNull();
     });
 
     it("rejects a client whose metadata URL redirects, without following it", async () => {

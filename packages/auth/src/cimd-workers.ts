@@ -18,10 +18,13 @@
  * fetching attacker-chosen internal URLs.
  *
  * It is weaker than the letter of cimd's contract — there is no DNS pinning, so a
- * rebinding host still reaches *some* public address. Pair it with an origin
- * allowlist (the isMetadataDocumentUrlAllowed option) in production.
+ * rebinding host still reaches *some* public address. An origin allowlist (the
+ * isMetadataDocumentUrlAllowed option) narrows that to hosts you trust, but it only
+ * gates the `client_id` fetch: oauth-provider fetches a document's `jwks_uri`
+ * through this same transport without consulting it. Add `jwks_uri` to cimd's
+ * originBoundFields so it must share the allowlisted `client_id` origin.
  *
- * On Node, use `fetchClientMetadataResource` from `@better-auth/cimd/node`, which
+ * On Node, use `fetchClientMetadataResource` from `@lunora/auth/cimd/node`, which
  * does pin the connection.
  *
  * Kept off the package root (and out of `./plugins`) because it is Workers-only:
@@ -49,8 +52,15 @@ const hasStrictlyPublicFetch = (): boolean => {
     return cloudflare?.compatibilityFlags?.[STRICTLY_PUBLIC_FLAG] === true;
 };
 
-/** A 3xx, or the opaque stand-in a `redirect: "manual"` fetch can return for one. */
-const isRedirect = (response: Response): boolean => (response.status >= 300 && response.status < 400) || response.type === "opaqueredirect";
+/** The statuses that carry a `Location` to follow. */
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * A redirect, or the opaque stand-in a `redirect: "manual"` fetch can return for
+ * one. Not every 3xx: cimd revalidates its cache with `If-None-Match` /
+ * `If-Modified-Since` and needs the `304 Not Modified` answer passed through.
+ */
+const isRedirect = (response: Response): boolean => REDIRECT_STATUSES.has(response.status) || response.type === "opaqueredirect";
 
 /**
  * Build the `fetchClientMetadataResource` transport for `cimd()` on Cloudflare
@@ -67,14 +77,17 @@ const isRedirect = (response: Response): boolean => (response.status >= 300 && r
  *         fetchClientMetadataResource: workersCimdFetch(),
  *         metadataProfile: "mcp-2026-07-28",
  *         isMetadataDocumentUrlAllowed: (url) => new URL(url).origin === "https://claude.ai",
+ *         // The allowlist gates only the `client_id` fetch; bind `jwks_uri` to it too.
+ *         originBoundFields: ["post_logout_redirect_uris", "client_uri", "jwks_uri"],
  *     }),
  * ];
  * ```
  *
  * The returned transport only issues `GET` / `HEAD` to `https:` URLs without
  * credentials, and never follows a redirect: it fetches with `redirect: "manual"`
- * (workerd does not implement `"error"`) and throws on any 3xx, which cimd reports
- * as `invalid_client`.
+ * (workerd does not implement `"error"`) and throws on any redirect status, which
+ * cimd reports as `invalid_client`. A `304` from a conditional revalidation passes
+ * through.
  * @throws LunoraError `AUTH_CIMD_FETCH_NOT_PUBLIC` when the Worker runs without the
  * `global_fetch_strictly_public` compatibility flag.
  */
