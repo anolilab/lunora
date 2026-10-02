@@ -399,7 +399,7 @@
                   {
                       echo "lunora-hostd ${VERSION}."
                       echo
-                      echo "Install or upgrade a box (Debian or Ubuntu, amd64 or arm64, 2 GB of memory):"
+                      echo "Install or upgrade a box (Debian 12+ or Ubuntu 22.04+, amd64 or arm64, 2 GB of memory):"
                       echo
                       echo '```sh'
                       echo "curl -fsSLO https://github.com/anolilab/lunora/releases/download/${TAG}/install.sh"

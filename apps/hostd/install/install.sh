@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Installs, upgrades or removes lunora-hostd on a Debian or Ubuntu server
-# (plan 458 W7). Published with every hostd-v* GitHub Release; the release
+# Installs, upgrades or removes lunora-hostd on a Debian 12+ or Ubuntu 22.04+
+# server (plan 458 W7) — the releases whose OpenSSL 3 verifies the release
+# signature. Published with every hostd-v* GitHub Release; the release
 # notes give its SHA-256.
 #
 #   curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
@@ -37,6 +38,7 @@ UNIT_PATH="/etc/systemd/system/lunora-hostd.service"
 HOSTD_USER="lunora-hostd"
 FLEET_USER="lunora-fleet"
 NFT_TABLE="lunora_hostd"
+OS_RELEASE="/etc/os-release"
 # A "2 GB" server reports a little under 2048 MiB.
 MIN_MEMORY_MIB=1900
 
@@ -204,20 +206,49 @@ uninstall() {
 
 # --- The machine -------------------------------------------------------------
 
-check_machine() {
-    local id="" id_like=""
+# Debian 12+ or Ubuntu 22.04+ (or a derivative of either): the first releases whose
+# OpenSSL (3.x) can verify an Ed25519 signature over raw bytes (pkeyutl -rawin).
+check_os_release() {
+    local id="" id_like="" version=""
 
-    if [ -r /etc/os-release ]; then
-        # shellcheck disable=SC1091 # the running system's os-release, not a file in this repository
-        id="$(. /etc/os-release && printf '%s' "${ID:-}")"
-        # shellcheck disable=SC1091
-        id_like="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
+    if [ -r "${OS_RELEASE}" ]; then
+        # shellcheck disable=SC1090 # the running system's os-release, not a file in this repository
+        id="$(. "${OS_RELEASE}" && printf '%s' "${ID:-}")"
+        # shellcheck disable=SC1090
+        id_like="$(. "${OS_RELEASE}" && printf '%s' "${ID_LIKE:-}")"
+        # shellcheck disable=SC1090
+        version="$(. "${OS_RELEASE}" && printf '%s' "${VERSION_ID:-}")"
     fi
 
     case " ${id} ${id_like} " in
         *" debian "* | *" ubuntu "*) ;;
-        *) die "this installer supports Debian and Ubuntu (found '${id:-unknown}')" ;;
+        *) die "this installer supports Debian 12+ and Ubuntu 22.04+ (found '${id:-unknown}')" ;;
     esac
+
+    # Derivatives (ID_LIKE) number their releases their own way: check_openssl decides for them.
+    case "${id}" in
+        # Testing and sid carry no VERSION_ID, and are newer than any stable release.
+        debian) [ -z "${version}" ] || [ "${version%%.*}" -ge 12 ] 2> /dev/null || die "this installer supports Debian 12 (bookworm) and later, not Debian ${version:-unknown}: older releases ship OpenSSL 1.1, which cannot verify the release signature" ;;
+        ubuntu) [ "${version%%.*}" -ge 22 ] 2> /dev/null || die "this installer supports Ubuntu 22.04 and later, not Ubuntu ${version:-unknown}: older releases ship OpenSSL 1.1, which cannot verify the release signature" ;;
+        *) ;;
+    esac
+}
+
+# The release signature is checked with `openssl pkeyutl -verify -rawin`, which OpenSSL
+# 1.1 lacks: it would fail as "signature does not verify". Say what is wrong instead.
+check_openssl() {
+    local version
+
+    version="$(openssl version 2> /dev/null | awk '{ print $1 " " $2 }')"
+
+    case "${version}" in
+        "OpenSSL "[3-9].* | "OpenSSL "[1-9][0-9].*) ;;
+        *) die "install.sh verifies the release signature with OpenSSL 3 or later (Debian 12+, Ubuntu 22.04+); this machine has ${version:-no openssl}" ;;
+    esac
+}
+
+check_machine() {
+    check_os_release
 
     case "$(uname -m)" in
         x86_64 | amd64) PLATFORM="linux-x64" ;;
@@ -621,6 +652,7 @@ main() {
     check_machine
     read_secrets
     install_packages
+    check_openssl
     create_users
     create_directories
     install_release

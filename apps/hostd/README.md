@@ -14,7 +14,8 @@ and forwarding hostd's own logs as OTLP (W6).
 
 ## Install
 
-On a Debian or Ubuntu server (amd64 or arm64, 2 GB of memory, systemd), as root:
+On a **Debian 12 (bookworm) or later, or Ubuntu 22.04 or later** server (or a
+derivative of either; amd64 or arm64, 2 GB of memory, systemd), as root:
 
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
@@ -37,6 +38,13 @@ that must belong to root and be readable by root alone (0600 or 0400).
 `install.sh` takes them out of its environment at once, so nothing it runs
 inherits them except `lunora-hostd enrol`, which gets them through its
 environment alone. `--token` is refused, and so is `lunora-hostd enrol --token`.
+
+Those are the first releases with OpenSSL 3, which `install.sh` verifies the
+release signature with (`openssl pkeyutl -verify -rawin`; OpenSSL 1.1, on
+Debian 11 and Ubuntu 20.04, cannot). It refuses an older release by name
+before asking for anything, and checks OpenSSL's own version once it is
+installed (which decides for a derivative), rather than failing later as "the
+release manifest's signature does not verify".
 
 `install.sh` ([`install/install.sh`](./install/install.sh)) installs any missing
 `curl`, `jq`, `openssl`, `nftables`, `util-linux` (`setpriv`) and `gzip`; creates

@@ -297,4 +297,53 @@ describe("install.sh, installing a release", () => {
             expect(result.output).toMatch(/no enrolment token: run install\.sh in a terminal and paste it when asked, or pass --token-file/u);
         });
     });
+
+    describe("the machine", () => {
+        /** `check_os_release` against an os-release naming `id`, `like` and `version`; prints SUPPORTED when it passes. */
+        const osRelease = (id: string, like: string, version: string): string => {
+            const path = join(box, "os-release");
+            const lines = [`ID=${id}`, ...(like === "" ? [] : [`ID_LIKE="${like}"`]), ...(version === "" ? [] : [`VERSION_ID="${version}"`])];
+
+            writeFileSync(path, `${lines.join("\n")}\n`);
+
+            return `OS_RELEASE="${path}"; check_os_release; echo SUPPORTED`;
+        };
+
+        it.each([
+            ["debian", "", "12", true],
+            ["debian", "", "13", true],
+            ["debian", "", "", true],
+            ["ubuntu", "debian", "22.04", true],
+            ["ubuntu", "debian", "24.04", true],
+            ["linuxmint", "ubuntu debian", "21.3", true],
+            ["debian", "", "11", false],
+            ["ubuntu", "debian", "20.04", false],
+            ["fedora", "", "40", false],
+        ] as const)("supports %s (like %j) %j: %s", (id, like, version, supported) => {
+            expect.assertions(1);
+
+            expect(installFunctions(osRelease(id, like, version)).output.includes("SUPPORTED")).toBe(supported);
+        });
+
+        it("names the release that is too old, and why", () => {
+            expect.assertions(1);
+
+            expect(installFunctions(osRelease("ubuntu", "debian", "20.04")).output).toMatch(
+                /supports Ubuntu 22\.04 and later, not Ubuntu 20\.04: older releases ship OpenSSL 1\.1, which cannot verify the release signature/u,
+            );
+        });
+
+        it("refuses OpenSSL 1.1 up front instead of failing as a bad signature", () => {
+            expect.assertions(3);
+
+            const withVersion = (printed: string): string => installFunctions(`openssl() { echo "${printed}"; }; check_openssl; echo OPENSSL-OK`).output;
+
+            expect(withVersion("OpenSSL 1.1.1w  11 Sep 2023")).toMatch(
+                /verifies the release signature with OpenSSL 3 or later \(Debian 12\+, Ubuntu 22\.04\+\); this machine has OpenSSL 1\.1\.1w/u,
+            );
+            expect(withVersion("OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)")).toContain("OPENSSL-OK");
+            // The machine's own, which the tests above already used to verify signatures.
+            expect(installFunctions("check_openssl; echo OPENSSL-OK").output).toContain("OPENSSL-OK");
+        });
+    });
 });
