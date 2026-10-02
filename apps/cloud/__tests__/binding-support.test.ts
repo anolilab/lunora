@@ -1,3 +1,4 @@
+import { CELLD_RELEASE_BINDING_TYPES, releaseResourceName } from "@lunora/config/celld";
 import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { startRelease } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingType, TargetId } from "../src/provision-contract";
-import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
+import { BINDING_SUPPORT, TARGET_IDS, tenantResourceName, UNSUPPORTED_REASONS } from "../src/provision-contract";
 import type { Placement } from "../src/targets/placement";
 import { resolvePlacement } from "../src/targets/placement";
 import { resolveTargetDriver, targetFleet } from "../src/targets/registry";
@@ -112,6 +113,28 @@ describe("celld-vps agrees with celld's capability matrix", () => {
 
     it("routes nothing through the control plane — celld delivers queues and crons itself", () => {
         expect(Object.values(table)).not.toContain("routed");
+    });
+});
+
+// The box builds its celld config from the stored release with `@lunora/config/celld`
+// (plan 458 W3); it must refuse exactly what this table refuses, and name every
+// resource exactly as the other targets do.
+describe("the box's celld config agrees with the celld-vps row", () => {
+    it("runs exactly the binding types the row does not refuse", () => {
+        const runs = (Object.entries(BINDING_SUPPORT["celld-vps"]) as [BindingType, string][])
+            .filter(([, support]) => support !== "unsupported")
+            .map(([type]) => type);
+
+        expect([...CELLD_RELEASE_BINDING_TYPES].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(runs.toSorted((a, b) => a.localeCompare(b)));
+    });
+
+    it.each([
+        ["my-app", "DB", "d1"],
+        ["app-b", "USER_FILES", "r2"],
+        ["shop", "JOBS", "queue_producer"],
+        ["a", "Cache", "kv"],
+    ] as const)("names %s's %s (%s) as tenantResourceName does", (alias, binding, type) => {
+        expect(releaseResourceName(alias, binding)).toBe(tenantResourceName(alias, { binding, type }));
     });
 });
 
