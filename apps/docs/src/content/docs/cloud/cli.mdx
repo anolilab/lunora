@@ -188,9 +188,21 @@ there filters the **console channel** (`info`, `warn`, `error`), not the
 seven-tier `ctx.log` ramp, because the channel is what the capture records; the
 finer level still shows in the formatted line.
 
+## Push-to-deploy, without the CLI
+
+Once a project is connected to a repository through the Lunora Cloud GitHub App,
+a push to the default branch is built on the platform and released as
+production, and a pull request from the same repository gets a preview, with
+build logs and a commit status. The build box runs **your project's own pinned
+`@lunora/cli`** and calls `lunora cloud deploy --out` to produce the release, so
+a project needs a CLI release that includes `--out` before git deploys work for
+it; an older CLI fails the build with a message saying so. Pull requests from
+forks are built but never deployed, because a deploy carries the project's
+secrets.
+
 ## What is not here yet
 
-Lunora Cloud is early, and this command group ships what exists. Push-to-deploy
-from a git remote, build logs from server-side builds, and preview environments
-per pull request are on the [roadmap](https://github.com/anolilab/lunora) rather
-than in the CLI today.
+Lunora Cloud is early: the commands above talk to a control plane that is in
+private early access. Deploying into **your own Cloudflare account** or onto
+**your own server** is being built in parallel and is not in this command group
+yet; see the [roadmap](https://github.com/anolilab/lunora/blob/alpha/apps/cloud/ROADMAP.md).

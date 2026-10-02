@@ -79,14 +79,19 @@ Lunora Cloud ships in **two phases**, and the roadmap reflects the transition:
 
 - **Deploy from git.** One-click / push-to-deploy into your own Cloudflare
   account or onto your own server, with build logs and rollbacks.
+- **Bring your own Cloudflare account.** Link your account with a scoped,
+  revocable API token and deploy into it as plain Workers: your Durable
+  Objects, D1 and R2 live in your account, Cloud orchestrates, meters from your
+  account's analytics and never bills your usage. Built in parallel with the
+  server path below.
 - **Bring your own server.** Install the Lunora agent on a Linux VPS with one
   command and manage it from Cloud. It covers deploys, previews, custom domains
   with automatic TLS, logs, metrics and upgrades. The agent dials out to Cloud,
   so your server opens no extra ports and Cloud never holds SSH keys. App data
   lives in an S3-compatible bucket you own; leaving means keeping it.
   Capability-gated: Cloud tells you before deploying when your app uses a
-  feature a server cannot provide. Built in parallel with the Cloudflare-account
-  path ([plan 458](../../plans/458-cloud-celld-vps-target.md)).
+  feature a server cannot provide
+  ([plan 458](../../plans/458-cloud-celld-vps-target.md)).
 - **Teams, orgs & RBAC.** Multi-member organizations with roles, built on the
   framework's auth/organization primitives.
 - **Backups & restore.** Scheduled snapshots and point-in-time restore for Durable
