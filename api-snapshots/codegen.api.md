@@ -42,10 +42,26 @@ interface AuthApiCallIR {
 }
 ```
 
+### `CAPABILITY_PROBES` (const)
+
+```ts
+const CAPABILITY_PROBES: ReadonlyArray<{
+    readonly contextProperty: string | undefined;
+    readonly key: CapabilityKey;
+    readonly moduleSpecifier: string;
+}>;
+```
+
 ### `CONTAINERS_FILENAME` (const)
 
 ```ts
 const CONTAINERS_FILENAME = "containers.ts";
+```
+
+### `CapabilityKey` (type)
+
+```ts
+type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
 ```
 
 ### `CodegenDiagnosticError` (class)
@@ -270,12 +286,6 @@ interface EmitAppOptions {
 
 ```ts
 const FLAGS_FILENAME = "flags.ts";
-```
-
-### `FeatureUsage` (type)
-
-```ts
-type FeatureUsage = Record<CapabilityKey, boolean>;
 ```
 
 ### `FieldSnapshot` (interface)
@@ -939,6 +949,15 @@ interface ShapeIR {
 }
 ```
 
+### `SourceCapabilitySignals` (interface)
+
+```ts
+interface SourceCapabilitySignals {
+    contextReads: ReadonlySet<string>;
+    valueImports: ReadonlySet<string>;
+}
+```
+
 ### `StorageRuleIR` (interface)
 
 ```ts
@@ -1107,12 +1126,6 @@ const buildOpenRpcDocument: (input: OpenRpcEmitInput) => Record<string, unknown>
 const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string>) => SchemaSnapshot;
 ```
 
-### `contextPropertiesRead` (const)
-
-```ts
-const contextPropertiesRead: (sourceFile: SourceFile) => Set<string>;
-```
-
 ### `createCodegenProject` (const)
 
 ```ts
@@ -1162,12 +1175,6 @@ const discoverContainers: (project: Project, lunoraDirectory: string) => Contain
 
 ```ts
 const discoverCrons: (project: Project, lunoraDirectory: string, workflows?: ReadonlyArray<WorkflowIR>, agents?: ReadonlyArray<AgentIR>) => CronJobIR[];
-```
-
-### `discoverFeatureUsage` (const)
-
-```ts
-const discoverFeatureUsage: (project: Project, lunoraDirectory: string) => FeatureUsage;
 ```
 
 ### `discoverFlags` (const)
@@ -1598,6 +1605,12 @@ const serializeSchemaSnapshot: (snapshot: SchemaSnapshot) => string;
 
 ```ts
 const sortedUniqueNames: (names: Iterable<string>) => ReadonlyArray<string>;
+```
+
+### `sourceCapabilitySignals` (const)
+
+```ts
+const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySignals;
 ```
 
 ### `toAdvisorContext` (const)
@@ -2051,12 +2064,6 @@ const CAPABILITY_ROWS: readonly [
         readonly moduleSpecifier: "@lunora/workflow";
     }
 ];
-```
-
-### `CapabilityKey` (type)
-
-```ts
-type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
 ```
 
 ### `ColumnMetaIR` (interface)

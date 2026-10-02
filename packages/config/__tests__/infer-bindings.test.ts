@@ -2,10 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { discoverFeatureUsage, discoverSandboxUsage } from "@lunora/codegen";
+import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+// Not part of codegen's public API: only this drift guard needs the whole-project probe.
+import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
+import type { InferredBindings } from "../src/infer-bindings";
 import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
@@ -919,15 +922,79 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesImages).toBe(true);
     });
 
-    describe("agreement with codegen's discoverFeatureUsage on ctx-access and type-only signals", () => {
-        /**
-         * Feed the SAME `lunora/` source through codegen's feature probe and
-         * config's inference and assert they agree — the drift guard for the
-         * ctx-access capabilities and type-only imports.
-         */
-        type Flags = { aiSearch: boolean; pipelines: boolean; r2sql: boolean };
+    // A handler reading a codegen-wired helper with no import gets the helper
+    // wired by codegen, so inference must add or hint its binding too — before,
+    // only the pipelines/r2sql/aiSearch/artifacts rows read `ctx`, and the rest
+    // built green and threw on first use.
+    it.each([
+        ["kv", "usesKv", /hint: @lunora\/bindings\/kv/u],
+        ["images", "usesImages", /images \(@lunora\/bindings\/images/u],
+        ["analytics", "usesAnalytics", /analytics_engine_datasets/u],
+        ["browser", "usesBrowser", /browser \(@lunora\/browser/u],
+        ["sql", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
+    ] as const)("infers a bare ctx.%s read with no import", async (property, flag, signalRe) => {
+        expect.assertions(2);
 
-        const agree = async (source: string): Promise<{ codegen: Flags; config: Flags }> => {
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/handler.ts", `export const handler = async ({ ctx }) => ctx.${property};`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result[flag]).toBe(true);
+        expect(result.signals.join(" ")).toMatch(signalRe);
+    });
+
+    // Codegen probes `lunora/` only, so only a read there gets a helper wired. A
+    // hand-written Durable Object in `src/` reads its OWN `ctx.storage` (the
+    // `DurableObjectState`) — that must not hint an R2 bucket.
+    it("counts ctx reads under lunora/ only, never a src/ Durable Object's own ctx", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/counter-do.ts", `export class CounterDO {\n    constructor(ctx) {\n        this.sql = ctx.storage.sql;\n    }\n}`);
+
+        const fromSource = await inferLunoraBindings({ projectRoot: root });
+
+        write("lunora/upload.ts", `export const upload = async ({ ctx }) => ctx.storage.upload("a", new Blob());`);
+
+        const fromLunora = await inferLunoraBindings({ projectRoot: root });
+
+        expect(fromSource.usesStorage).toBe(false);
+        expect(fromLunora.usesStorage).toBe(true);
+    });
+
+    describe("agreement with codegen's discoverFeatureUsage over every capability row", () => {
+        /**
+         * Config's flag for each codegen capability it reports. Every row of
+         * codegen's table must be either here or in {@link CODEGEN_ONLY}, so a
+         * row added there fails this suite until someone decides what config
+         * infers from it.
+         */
+        const FLAG_FOR: Readonly<Record<string, keyof InferredBindings>> = {
+            ai: "usesAi",
+            aiSearch: "usesAiSearch",
+            analytics: "usesAnalytics",
+            artifacts: "usesArtifacts",
+            browser: "usesBrowser",
+            hyperdrive: "usesHyperdrive",
+            images: "usesImages",
+            kv: "usesKv",
+            mail: "usesMail",
+            notify: "usesNotify",
+            payments: "usesPayment",
+            pipelines: "usesPipelines",
+            r2sql: "usesR2sql",
+            scheduler: "usesScheduler",
+            storage: "usesStorage",
+            x402: "usesX402Pay",
+        };
+        /** Codegen rows with no binding or secret for config to infer: their wiring is a declaration file or a ctx facade over existing state. */
+        const CODEGEN_ONLY = new Set(["access", "container", "flags", "vectors", "workflows"]);
+
+        /** Feed the SAME `lunora/` source through codegen's probe and config's inference, and read both verdicts for every mapped row. */
+        const verdicts = async (source: string): Promise<{ codegen: Record<string, boolean>; config: Record<string, boolean> }> => {
             write("wrangler.jsonc", WRANGLER);
             write("src/server/index.ts", ENTRY_SHARD_ONLY);
             write("lunora/handler.ts", source);
@@ -935,46 +1002,61 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const usage = discoverFeatureUsage(project, join(root, "lunora"));
             const inferred = await inferLunoraBindings({ projectRoot: root });
+            const mapped = CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] !== undefined);
 
             return {
-                codegen: { aiSearch: usage.aiSearch, pipelines: usage.pipelines, r2sql: usage.r2sql },
-                config: { aiSearch: inferred.usesAiSearch, pipelines: inferred.usesPipelines, r2sql: inferred.usesR2sql },
+                codegen: Object.fromEntries(mapped.map((probe) => [probe.key, usage[probe.key]])),
+                config: Object.fromEntries(mapped.map((probe) => [probe.key, inferred[FLAG_FOR[probe.key] as keyof InferredBindings] === true])),
             };
         };
+
+        it("maps every codegen capability row to a config flag or a deliberate omission", () => {
+            expect.assertions(1);
+
+            expect(
+                CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] === undefined && !CODEGEN_ONLY.has(probe.key)).map((probe) => probe.key),
+            ).toStrictEqual([]);
+        });
+
+        it.each(CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] !== undefined).map((probe) => [probe.key, probe] as const))(
+            "agree on %s: a value import, a ctx read, and a type-only import",
+            async (key, { contextProperty, moduleSpecifier }) => {
+                expect.assertions(3);
+
+                const valueImport = await verdicts(`import * as capability from "${moduleSpecifier}";\nexport const used = capability;`);
+
+                expect(valueImport.config).toStrictEqual(valueImport.codegen);
+
+                const contextRead = await verdicts(
+                    contextProperty === undefined ? "export const none = 1;" : `export const handler = async ({ ctx }) => ctx.${contextProperty};`,
+                );
+
+                expect(contextRead.config).toStrictEqual(contextRead.codegen);
+
+                const typeOnly = await verdicts(`import type { Thing } from "${moduleSpecifier}";\nexport type T = Thing;`);
+
+                // The type-only import compiles away: neither side marks `key` used.
+                expect([typeOnly.codegen[key], typeOnly.config[key]]).toStrictEqual([false, false]);
+            },
+        );
 
         it("agree: comment and string mentions imply nothing", async () => {
             expect.assertions(1);
 
-            const result = await agree(`// ctx.pipelines\n// ctx.aiSearch\nexport const s = "ctx.r2sql";`);
+            const result = await verdicts(`// ctx.pipelines\n// ctx.kv\nexport const s = "ctx.r2sql";`);
 
-            expect(result).toStrictEqual({
-                codegen: { aiSearch: false, pipelines: false, r2sql: false },
-                config: { aiSearch: false, pipelines: false, r2sql: false },
-            });
+            expect(result.config).toStrictEqual(result.codegen);
         });
 
         it("agree: destructured and renamed ctx reads", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
-            const result = await agree(
-                `export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.r2sql;\nexport const c = (ctx) => {\n    const { aiSearch } = ctx;\n    return aiSearch;\n};`,
+            const result = await verdicts(
+                `export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.kv;\nexport const c = (ctx) => {\n    const { aiSearch } = ctx;\n    return aiSearch;\n};`,
             );
 
-            expect(result).toStrictEqual({
-                codegen: { aiSearch: true, pipelines: true, r2sql: true },
-                config: { aiSearch: true, pipelines: true, r2sql: true },
-            });
-        });
-
-        it("agree: a type-only import of the capability's subpath", async () => {
-            expect.assertions(1);
-
-            const result = await agree(`import type { PipelineClient } from "@lunora/bindings/pipelines";\nexport type P = PipelineClient;`);
-
-            expect(result).toStrictEqual({
-                codegen: { aiSearch: false, pipelines: false, r2sql: false },
-                config: { aiSearch: false, pipelines: false, r2sql: false },
-            });
+            expect(result.config).toStrictEqual(result.codegen);
+            expect([result.config.pipelines, result.config.kv, result.config.aiSearch]).toStrictEqual([true, true, true]);
         });
     });
 
