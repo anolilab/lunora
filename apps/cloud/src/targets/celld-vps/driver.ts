@@ -27,6 +27,7 @@ import stripTrailingSlashes from "../../lib/strip-trailing-slashes";
 import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../../provision-contract";
 import type { TargetDriver, UsageRow } from "../driver";
 import type { BoxPlacement } from "../placement";
+import type { BoxDnsEnvironment } from "./dns";
 
 /** The apex box hostnames live under when `LUNORA_BOX_DOMAIN` is unset. */
 export const DEFAULT_BOX_DOMAIN = "boxes.lunora.app";
@@ -190,7 +191,7 @@ export type CelldVpsEnvironment = {
     LUNORA_BOX_DOMAIN?: string;
     /** This control plane's public origin — the base of every `releaseUrl` a box is handed. */
     LUNORA_ORIGIN_URL?: string;
-};
+} & BoxDnsEnvironment;
 
 interface BoxRow {
     _id: string;

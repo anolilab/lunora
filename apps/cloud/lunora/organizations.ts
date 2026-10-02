@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
@@ -186,9 +187,6 @@ export const rename = mutation
         await context.db.patch(organizationId, { name });
         await context.db.insert("auditLog", { action: "organization.rename", actorUserId: member.userId, createdAt: now, organizationId, target: name });
     });
-
-/** Deletion grace window (GAPS.md D3): 30 days to change your mind before the purge. */
-export const DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Request org deletion (owner only, GAPS.md D3). Starts the retention window;

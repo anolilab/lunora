@@ -37,7 +37,21 @@ export interface CloudflareApi {
 
     /** The records named exactly `name` (any type) — what makes the box DNS writes idempotent. */
     listDnsRecords: (input: { name: string; zoneId: string }) => Promise<DnsRecord[]>;
+
+    /**
+     * Every record whose name ends in `.{domain}` (any type), across all pages —
+     * what the box DNS reconcile sweep diffs against the `boxes` table. Bounded:
+     * it stops after {@link MAX_DNS_LIST_PAGES} pages and says so with `truncated`,
+     * rather than reading a runaway zone forever.
+     */
+    listDnsRecordsUnder: (input: { domain: string; zoneId: string }) => Promise<{ records: DnsRecord[]; truncated: boolean }>;
 }
+
+/** Records per page of a DNS listing — the API's maximum. */
+const DNS_PAGE_SIZE = 100;
+
+/** Pages {@link CloudflareApi.listDnsRecordsUnder} reads at most: 5,000 records, two per address family per box. */
+export const MAX_DNS_LIST_PAGES = 50;
 
 export interface HttpCloudflareApiOptions {
     accountId: string;
@@ -95,6 +109,21 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
         }
 
         return envelope.result;
+    };
+
+    /** A GET whose envelope carries `result_info`, for paginated listings. */
+    const getPage = async (fullUrl: string): Promise<{ result: unknown; totalPages: number }> => {
+        const response = await fetchImpl(fullUrl, { headers: { authorization: authHeader, "content-type": "application/json" }, method: "GET" });
+        const data: unknown = await response.json();
+        const envelope = data as CloudflareEnvelope & { result_info?: { total_pages?: number } };
+
+        if (!response.ok || envelope.success === false) {
+            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
+
+            throw new Error(`cloudflare GET ${fullUrl} failed: ${message}`);
+        }
+
+        return { result: envelope.result, totalPages: envelope.result_info?.total_pages ?? 1 };
     };
 
     const callJson = async (path: string, method: string, body: unknown): Promise<unknown> => {
@@ -189,6 +218,26 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             return result.map((record) => {
                 return { content: record.content, id: record.id, name: record.name, type: record.type };
             });
+        },
+        listDnsRecordsUnder: async ({ domain, zoneId }) => {
+            const records: DnsRecord[] = [];
+
+            for (let page = 1; page <= MAX_DNS_LIST_PAGES; page += 1) {
+                // eslint-disable-next-line no-await-in-loop -- pagination is sequential by construction
+                const { result, totalPages } = await getPage(
+                    `${apiRoot}/zones/${zoneId}/dns_records?name.endswith=${encodeURIComponent(`.${domain}`)}&per_page=${String(DNS_PAGE_SIZE)}&page=${String(page)}`,
+                );
+
+                for (const record of result as DnsRecord[]) {
+                    records.push({ content: record.content, id: record.id, name: record.name, type: record.type });
+                }
+
+                if (page >= totalPages) {
+                    return { records, truncated: false };
+                }
+            }
+
+            return { records, truncated: true };
         },
     };
 };

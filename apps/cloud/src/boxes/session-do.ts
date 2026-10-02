@@ -226,12 +226,14 @@ export class BoxSessionDO {
         const database = this.database();
         const now = Date.now();
 
-        // A revoke made anywhere — the studio route, or the bare mutation over RPC —
-        // reaches the box here within one tick.
-        const box = database === undefined || boxId === undefined ? null : await loadBox(database, boxId);
+        // A revoke made anywhere — the studio route or the box sweep — reaches the box
+        // here within one tick. So does an erasure: once the row is gone (the org was
+        // purged) the box is no longer anyone's, and its session ends the same way.
+        const known = database !== undefined && boxId !== undefined;
+        const box = known ? await loadBox(database, boxId) : null;
 
-        if (box?.status === "revoked") {
-            for (const socket of sockets) {
+        if (known && (box === null || box.status === "revoked")) {
+            for (const socket of sockets.filter((candidate) => attachmentOf(candidate).closed !== true)) {
                 refuseSocket(socket, "BOX_REVOKED", "this box has been revoked; enrol the machine again to use it");
             }
         } else {
