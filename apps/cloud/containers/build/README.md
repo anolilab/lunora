@@ -63,8 +63,10 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    The file is read back, held to the control plane's caps (100 MiB body, 50 MiB
    and 20,000 files of assets) so an oversized project fails here with the cap
    named, and its routing fields are dropped: the control plane decides project,
-   kind and branch from the build row. A CLI too old for `--out` fails the build
-   with a message saying to upgrade.
+   kind and branch from the build row. A CLI too old for `--out` (anything
+   before the next `@lunora/cli` release) fails the build with an error saying
+   so and naming the upgrade — a build that can never be released never reads
+   green.
 
 ## Security posture
 

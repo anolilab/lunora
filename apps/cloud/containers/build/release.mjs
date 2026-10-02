@@ -123,4 +123,29 @@ const readRelease = async (path, limits = DEFAULT_LIMITS) => {
     };
 };
 
-export { DEFAULT_LIMITS, readRelease };
+/**
+ * What a CLI that predates `cloud deploy --out` prints when the box runs it.
+ * Such a CLI ignores `--out` and tries to upload: the box passes no
+ * `--project`, no API URL and no deploy key, and it refuses on whichever it
+ * checks first. A CLI that has `--out` reads none of the three, so it never
+ * prints these.
+ */
+const PRE_OUT_CLI_REFUSALS = [/cloud deploy requires a project/u, /cloud: no API URL/u, /cloud: no deploy key/u];
+
+/**
+ * The build's error when `lunora cloud deploy --out` exited non-zero.
+ *
+ * A release needs the manifest only that command writes, so a project whose
+ * CLI cannot write it fails its build — never a green build that silently never
+ * deploys. When the output shows the CLI is simply too old, the error says
+ * that, and what to upgrade to.
+ * @param {number} code The command's exit code.
+ * @param {ReadonlyArray<string>} lines Everything the command printed.
+ * @returns {string} The error the build reports.
+ */
+const releaseFailure = (code, lines) =>
+    lines.some((line) => PRE_OUT_CLI_REFUSALS.some((pattern) => pattern.test(line)))
+        ? "this project's @lunora/cli predates `lunora cloud deploy --out`, which deploying from git needs: upgrade @lunora/cli (or lunorash) to the next @lunora/cli release or later, then push again"
+        : `lunora cloud deploy --out failed with exit code ${code}`;
+
+export { DEFAULT_LIMITS, readRelease, releaseFailure };

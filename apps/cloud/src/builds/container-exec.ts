@@ -22,9 +22,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * validates a `POST /v1/deploy` body, so a box that ran tenant code cannot
  * reach the provisioner with anything a CLI upload could not.
  *
- * A line with no `manifest` is still a build: it is what a build box that
- * predates release payloads sends, and its build should stay green. It just
- * cannot be released, which the release says.
+ * A line with no `manifest` is still a build — but only an older build-box
+ * IMAGE sends one, from before the box collected releases; its build stays
+ * green and the release refuses it, saying why. The current box never sends
+ * one: it runs the project's own `lunora cloud deploy --out` for the manifest,
+ * and a project whose `@lunora/cli` predates `--out` fails its BUILD there with
+ * an error naming the upgrade (`containers/build/release.mjs`
+ * `releaseFailure`), since a build that can never be released must not read green.
  */
 const toExecution = (payload: Record<string, unknown> & { bundle: string; bundleHash: string }): BuildExecution => {
     const { assets, cronSpecs, manifest, scriptName } = payload;

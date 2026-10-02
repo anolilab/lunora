@@ -30,7 +30,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { readRelease } from "./release.mjs";
+import { readRelease, releaseFailure } from "./release.mjs";
 import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. The provision box defaults `mainModule` to this. */
@@ -302,17 +302,24 @@ const handleBuild = async (request, response) => {
         // never a registry copy.
         emit({ line: "collecting the release with lunora cloud deploy --out" });
 
+        // Kept, as well as streamed (the first few hundred): a CLI too old to have
+        // `--out` is told apart by what it printed.
+        const releaseLines = [];
         const releaseCode = await run(
             lunora,
             ["cloud", "deploy", "--bundle", bundlePath, "--out", releaseFile],
             { cwd: project, label: "`lunora cloud deploy --out`", timeoutMs: EXEC_TIMEOUT_MS },
-            onLine,
+            (line) => {
+                if (releaseLines.length < 200) {
+                    releaseLines.push(line);
+                }
+
+                onLine(line);
+            },
         );
 
         if (releaseCode !== 0) {
-            emit({
-                error: `lunora cloud deploy --out failed with exit code ${releaseCode}. If the log above shows it asking for a deploy key or URL, the project's Lunora CLI predates \`--out\`: upgrade lunorash or @lunora/cli.`,
-            });
+            emit({ error: releaseFailure(releaseCode, releaseLines) });
 
             return;
         }

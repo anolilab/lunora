@@ -19,10 +19,11 @@ interface Limits {
 interface ReleaseModule {
     DEFAULT_LIMITS: Limits;
     readRelease: (path: string, limits?: Limits) => Promise<Record<string, unknown>>;
+    releaseFailure: (code: number, lines: ReadonlyArray<string>) => string;
 }
 
 // Loaded by URL: plain `.mjs` shipped into the image, with no declaration file.
-const { DEFAULT_LIMITS, readRelease } = (await import(new URL("../containers/build/release.mjs", import.meta.url).href)) as ReleaseModule;
+const { DEFAULT_LIMITS, readRelease, releaseFailure } = (await import(new URL("../containers/build/release.mjs", import.meta.url).href)) as ReleaseModule;
 
 let sandbox: string;
 
@@ -120,5 +121,23 @@ describe("build box release reader", () => {
         const path = await written({ assets: { files }, bundle: "YnVuZGxl", manifest: MANIFEST });
 
         await expect(readRelease(path, { ...DEFAULT_LIMITS, maxAssetsBytes: 8 })).rejects.toThrow(/static assets total/u);
+    });
+});
+
+describe("a failed `lunora cloud deploy --out`", () => {
+    it.each([
+        ["no project", "ERROR cloud deploy requires a project. Usage: lunora cloud deploy --project <id> --bundle <path>"],
+        ["no API URL", "\u001B[31mcloud: no API URL — pass --url or set LUNORA_CLOUD_URL\u001B[39m"],
+        ["no deploy key", "cloud: no deploy key — set LUNORA_DEPLOY_KEY (never passed as a flag)"],
+    ])("names the upgrade when the project's CLI predates --out (it refused for %s)", (_reason, line) => {
+        expect(releaseFailure(1, ["reading wrangler.jsonc", line])).toBe(
+            "this project's @lunora/cli predates `lunora cloud deploy --out`, which deploying from git needs: upgrade @lunora/cli (or lunorash) to the next @lunora/cli release or later, then push again",
+        );
+    });
+
+    it("reports any other failure by its exit code", () => {
+        expect(releaseFailure(2, ["cloud deploy: wrangler `assets` has no `directory` — set it to your build output"])).toBe(
+            "lunora cloud deploy --out failed with exit code 2",
+        );
     });
 });
