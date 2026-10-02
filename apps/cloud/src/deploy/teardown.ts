@@ -34,6 +34,8 @@ export interface TeardownTarget {
     id: string;
     /** The host the alias runs on (a box, a connected account), from its deployment rows — the project may be gone. */
     placementRef?: string;
+    /** The project the row was released for — the only owner whose claim on the alias its teardown may release. */
+    projectId: string;
     /** The target the row was deployed to — whose driver destroys it. */
     target: TargetId;
 }
@@ -47,8 +49,13 @@ export interface TeardownPorts {
     listPending: () => Promise<TeardownTarget[]>;
     /** Record that a deployment's stored release (and, for {@link TeardownTarget.destroyWorker}, its tenant) is gone. */
     markTornDown: (id: string) => Promise<void>;
-    /** Release the alias's ownership row once its tenant is gone. Idempotent. */
-    releaseAlias: (alias: string) => Promise<void>;
+
+    /**
+     * Release `projectId`'s claim on the alias once its tenant is gone — never
+     * another project's: one that claimed the alias since holds its own reservation.
+     * Idempotent.
+     */
+    releaseAlias: (alias: string, projectId: string) => Promise<void>;
 }
 
 export interface TeardownResult {
@@ -78,7 +85,7 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
                 // Released BEFORE `markTornDown` so a failure here leaves the row
                 // pending and the (idempotent) release retries next tick.
                 // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
-                await ports.releaseAlias(target.alias);
+                await ports.releaseAlias(target.alias, target.projectId);
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small

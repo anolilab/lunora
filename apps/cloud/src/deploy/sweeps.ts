@@ -27,6 +27,7 @@ interface TeardownRow {
     createdAt?: number;
     kind: string;
     placementRef?: null | string;
+    projectId: string;
     scriptName: string;
     status: string;
     target?: string;
@@ -139,6 +140,7 @@ export const teardownPorts = (
                             destroyWorker,
                             id: row._id,
                             ...(placementRef === undefined ? {} : { placementRef }),
+                            projectId: row.projectId,
                             target: storedTarget(row.target),
                         };
                     })
@@ -149,11 +151,13 @@ export const teardownPorts = (
         markTornDown: async (id) => {
             await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");
         },
-        releaseAlias: async (alias) => {
-            // Drop the ownership ledger row(s) for a fully-torn-down alias so the label
-            // is free to re-claim. Idempotent: no row (already released, or a pre-ledger
-            // deployment) is a no-op.
-            const { page } = await database.findMany("aliasOwnership", { where: { alias } });
+        releaseAlias: async (alias, projectId) => {
+            // Drop the torn-down project's claim on the alias so the label is free to
+            // re-claim. Only its own: a claim of another project is that project's
+            // reservation (`projects.create` claims before any deployment exists),
+            // which an alias-wide delete would hand to whoever claims next.
+            // Idempotent: no row (already released) is a no-op.
+            const { page } = await database.findMany("aliasOwnership", { where: { alias, projectId } });
 
             for (const row of page as { _id: string }[]) {
                 // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)

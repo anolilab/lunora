@@ -354,6 +354,36 @@ const placementColumns = (
 export const pendingTeardown = <Row extends { status: string; teardownAt?: null | number }>(rows: ReadonlyArray<Row>): Row[] =>
     rows.filter((row) => (row.status !== "destroyed" && row.status !== "failed") || row.teardownAt == null);
 
+/**
+ * Drop the alias claims of a project or organization being deleted whose
+ * tenant is already gone, and keep the rest.
+ *
+ * An alias names its tenant — its script and the resources derived from it —
+ * so it must stay claimed until the teardown sweep has destroyed that tenant:
+ * released earlier, another project could claim the same alias and its first
+ * deploy would converge onto the deleted project's tenant, data included,
+ * while the sweep (seeing the alias alive again) never destroyed it. An alias
+ * with a deployment the sweep has not finished with ({@link pendingTeardown})
+ * is therefore left claimed, and the sweep releases it once the tenant is gone;
+ * one with none (reserved and never deployed, or already torn down) is released
+ * here, since no sweep will ever reach it.
+ */
+export const releaseIdleAliases = async (
+    context: MutationContext,
+    where: { organizationId: Id<"organizations"> } | { projectId: Id<"projects"> },
+): Promise<void> => {
+    const { page: deployments } = await context.db.deployments.findMany({ where });
+    const claimed = new Set(pendingTeardown(deployments).map((row) => row.alias ?? row.scriptName));
+    const { page: owned } = await context.db.aliasOwnership.findMany({ where });
+
+    for (const row of owned) {
+        if (!claimed.has(row.alias)) {
+            // eslint-disable-next-line no-await-in-loop -- one scope's aliases are few
+            await context.db.delete(row._id);
+        }
+    }
+};
+
 /** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
 interface CreatedDeployment {
     deploymentId: Id<"deployments">;

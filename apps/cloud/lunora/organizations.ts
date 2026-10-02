@@ -4,6 +4,7 @@ import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { releaseIdleAliases } from "./deployments";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
@@ -247,10 +248,12 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     // sharpest one — its envelope-encrypted Cloudflare tokens in
     // `cloudflareAccounts`, orphaned with no org row left to key a future sweep off.
     //
-    // Two deliberate exceptions to "every table with an organizationId":
+    // The deliberate exceptions to "every table with an organizationId":
     // `deployments` is NOT hard-deleted here — the block below transitions it to
     // `destroyed` so the teardown path can still reach the live dispatch script,
-    // D1 and R2; deleting the row first would leak all three. And
+    // D1 and R2; deleting the row first would leak all three. `aliasOwnership`
+    // is released by `releaseIdleAliases` instead: an alias whose tenant still
+    // exists stays claimed until the teardown sweep destroyed it. And
     // `githubInstallations` IS included even though its `organizationId` is
     // optional, which is why it cannot simply be derived from the schema.
     //
@@ -261,7 +264,6 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "alertRuleState",
         "alertRules",
         "alerts",
-        "aliasOwnership",
         "auditLog",
         "boxEnrolments",
         "boxes",
@@ -292,6 +294,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 
         // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
         await purgeScopedRows(context, orgScopedTables, { organizationId });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await releaseIdleAliases(context, { organizationId });
 
         // Deployments transition to destroyed (not hard-deleted) so the 🌐
         // teardown path still sees what to tear down; a later sweep removes rows.

@@ -4,7 +4,7 @@ import type { TeardownPorts, TeardownTarget } from "../src/deploy/teardown";
 import { runTeardownSweep } from "../src/deploy/teardown";
 
 const target = (id: string, overrides: Partial<TeardownTarget> = {}): TeardownTarget => {
-    return { alias: id, destroyWorker: false, id, target: "cloudflare-wfp", ...overrides };
+    return { alias: id, destroyWorker: false, id, projectId: "prj_1", target: "cloudflare-wfp", ...overrides };
 };
 
 const ports = (overrides: Partial<TeardownPorts>): TeardownPorts => {
@@ -63,8 +63,8 @@ describe(runTeardownSweep, () => {
                     return Promise.resolve();
                 },
                 listPending: () => Promise.resolve([target("keep"), target("gone", { destroyWorker: true })]),
-                releaseAlias: (alias) => {
-                    released.push(alias);
+                releaseAlias: (alias, projectId) => {
+                    released.push(`${alias}@${projectId}`);
 
                     return Promise.resolve();
                 },
@@ -73,7 +73,7 @@ describe(runTeardownSweep, () => {
 
         // The row itself — its target and alias pick the driver.
         expect(destroyed).toStrictEqual([target("gone", { destroyWorker: true })]);
-        expect(released).toStrictEqual(["gone"]);
+        expect(released).toStrictEqual(["gone@prj_1"]);
         expect(result).toStrictEqual({ failed: 0, tornDown: 2 });
     });
 

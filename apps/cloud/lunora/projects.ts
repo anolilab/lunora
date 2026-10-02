@@ -10,7 +10,7 @@ import { assertPlacementRef, hostsOf, isCellPlaced, rowReaderOf } from "../src/t
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { claimFirstFreeAlias, pendingTeardown } from "./deployments";
+import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
@@ -360,9 +360,11 @@ export const updateBuildSettings = mutation
  * `deployments` is absent for the same reason it is absent there: they are
  * transitioned to `destroyed` below so the teardown sweep can still reach the
  * live dispatch script, tenant D1 and R2. Deleting the row first orphans all
- * three, which is a resource leak with a monthly bill attached.
+ * three, which is a resource leak with a monthly bill attached. `aliasOwnership`
+ * is absent too: an alias stays claimed until its tenant is gone
+ * (`releaseIdleAliases`).
  */
-const PROJECT_SCOPED_TABLES = ["aliasOwnership", "buildLogs", "builds", "domains", "secrets"] as const;
+const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "domains", "secrets"] as const;
 
 /**
  * Delete a project and everything scoped to it (owners/admins).
@@ -391,6 +393,7 @@ export const remove = mutation
         const { now } = context;
 
         await purgeScopedRows(context, PROJECT_SCOPED_TABLES, { projectId: id });
+        await releaseIdleAliases(context, { projectId: id });
 
         // Deployments transition rather than vanish, so the teardown sweep still
         // has something to tear down.

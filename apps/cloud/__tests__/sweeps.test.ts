@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
+import { runTeardownSweep } from "../src/deploy/teardown";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { UsageRow } from "../src/targets/driver";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { fakeDriver } from "./support/memory-driver";
+import { memoryStore } from "./support/memory-store";
 
 describe(teardownPorts, () => {
     const noop = {
@@ -18,9 +20,9 @@ describe(teardownPorts, () => {
     it("destroys the Worker of an alias with no deployment left, once, and skips torn-down rows", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "d1", alias: "a", kind: "preview", scriptName: "a", status: "destroyed" },
-                { _id: "d3", alias: "a", kind: "preview", scriptName: "a", status: "destroyed" },
-                { _id: "d2", alias: "b", kind: "production", scriptName: "b", status: "destroyed", teardownAt: 123 },
+                { _id: "d1", alias: "a", kind: "preview", projectId: "prj_1", scriptName: "a", status: "destroyed" },
+                { _id: "d3", alias: "a", kind: "preview", projectId: "prj_1", scriptName: "a", status: "destroyed" },
+                { _id: "d2", alias: "b", kind: "production", projectId: "prj_1", scriptName: "b", status: "destroyed", teardownAt: 123 },
             ],
         });
 
@@ -28,34 +30,34 @@ describe(teardownPorts, () => {
 
         // One destroy job per dead alias; the other row only drops its stored bundle.
         expect(pending).toStrictEqual([
-            { alias: "a", destroyWorker: true, id: "d1", target: "cloudflare-wfp" },
-            { alias: "a", destroyWorker: false, id: "d3", target: "cloudflare-wfp" },
+            { alias: "a", destroyWorker: true, id: "d1", projectId: "prj_1", target: "cloudflare-wfp" },
+            { alias: "a", destroyWorker: false, id: "d3", projectId: "prj_1", target: "cloudflare-wfp" },
         ]);
     });
 
     it("prunes stored bundles beyond retention but never the Worker the live release runs on", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "v1", alias: "app", kind: "production", scriptName: "app", status: "destroyed" }, // pruned
-                { _id: "v2", alias: "app", kind: "production", scriptName: "app", status: "failed" }, // never a rollback target
-                { _id: "v3", alias: "app", kind: "production", scriptName: "app", status: "superseded" }, // retained
-                { _id: "v4", alias: "app", kind: "production", scriptName: "app", status: "live" },
+                { _id: "v1", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "destroyed" }, // pruned
+                { _id: "v2", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "failed" }, // never a rollback target
+                { _id: "v3", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "superseded" }, // retained
+                { _id: "v4", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "live" },
             ],
         });
 
         const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         expect(pending).toStrictEqual([
-            { alias: "app", destroyWorker: false, id: "v1", target: "cloudflare-wfp" },
-            { alias: "app", destroyWorker: false, id: "v2", target: "cloudflare-wfp" },
+            { alias: "app", destroyWorker: false, id: "v1", projectId: "prj_1", target: "cloudflare-wfp" },
+            { alias: "app", destroyWorker: false, id: "v2", projectId: "prj_1", target: "cloudflare-wfp" },
         ]);
     });
 
     it("keeps the Worker of an alias whose only other deployment failed", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "v1", alias: "app", kind: "production", scriptName: "app", status: "destroyed" },
-                { _id: "v2", alias: "app", kind: "production", scriptName: "app", status: "failed" },
+                { _id: "v1", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "destroyed" },
+                { _id: "v2", alias: "app", kind: "production", projectId: "prj_1", scriptName: "app", status: "failed" },
             ],
         });
 
@@ -67,23 +69,23 @@ describe(teardownPorts, () => {
     it("leaves the rows of a target that cannot converge here pending, and acts on the rest", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "wfp", alias: "a", kind: "production", scriptName: "a", status: "destroyed" },
-                { _id: "box", alias: "b", kind: "production", scriptName: "b", status: "destroyed", target: "celld-vps" },
+                { _id: "wfp", alias: "a", kind: "production", projectId: "prj_1", scriptName: "a", status: "destroyed" },
+                { _id: "box", alias: "b", kind: "production", projectId: "prj_1", scriptName: "b", status: "destroyed", target: "celld-vps" },
                 // An id no target answers to waits too, rather than failing the sweep.
-                { _id: "odd", alias: "c", kind: "production", scriptName: "c", status: "destroyed", target: "aws-lambda" },
+                { _id: "odd", alias: "c", kind: "production", projectId: "prj_1", scriptName: "c", status: "destroyed", target: "aws-lambda" },
             ],
         });
 
         const pending = await teardownPorts(database, noop, 1000, (target) => target === "cloudflare-wfp").listPending();
 
-        expect(pending).toStrictEqual([{ alias: "a", destroyWorker: true, id: "wfp", target: "cloudflare-wfp" }]);
+        expect(pending).toStrictEqual([{ alias: "a", destroyWorker: true, id: "wfp", projectId: "prj_1", target: "cloudflare-wfp" }]);
     });
 
     it("hands each row to its own target, reading a NULL target as cloudflare-wfp", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "old", alias: "a", kind: "production", scriptName: "a", status: "destroyed", target: null },
-                { _id: "box", alias: "b", kind: "production", scriptName: "b", status: "destroyed", target: "celld-vps" },
+                { _id: "old", alias: "a", kind: "production", projectId: "prj_1", scriptName: "a", status: "destroyed", target: null },
+                { _id: "box", alias: "b", kind: "production", projectId: "prj_1", scriptName: "b", status: "destroyed", target: "celld-vps" },
             ],
         });
 
@@ -104,6 +106,7 @@ describe(teardownPorts, () => {
                     createdAt: 1,
                     placementRef: "box_old",
                     kind: "production",
+                    projectId: "prj_1",
                     scriptName: "web",
                     status: "destroyed",
                     target: "celld-vps",
@@ -114,20 +117,21 @@ describe(teardownPorts, () => {
                     createdAt: 2,
                     placementRef: "box_new",
                     kind: "production",
+                    projectId: "prj_1",
                     scriptName: "web",
                     status: "destroyed",
                     target: "celld-vps",
                 },
-                { _id: "wfp", alias: "a", kind: "production", scriptName: "a", status: "destroyed" },
+                { _id: "wfp", alias: "a", kind: "production", projectId: "prj_1", scriptName: "a", status: "destroyed" },
             ],
         });
 
         const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         expect(pending).toStrictEqual([
-            { alias: "web", destroyWorker: true, id: "old", placementRef: "box_new", target: "celld-vps" },
-            { alias: "web", destroyWorker: false, id: "new", placementRef: "box_new", target: "celld-vps" },
-            { alias: "a", destroyWorker: true, id: "wfp", target: "cloudflare-wfp" },
+            { alias: "web", destroyWorker: true, id: "old", placementRef: "box_new", projectId: "prj_1", target: "celld-vps" },
+            { alias: "web", destroyWorker: false, id: "new", placementRef: "box_new", projectId: "prj_1", target: "celld-vps" },
+            { alias: "a", destroyWorker: true, id: "wfp", projectId: "prj_1", target: "cloudflare-wfp" },
         ]);
     });
 
@@ -140,6 +144,7 @@ describe(teardownPorts, () => {
                     createdAt: 1,
                     kind: "production",
                     placementRef: "cfa_1",
+                    projectId: "prj_1",
                     scriptName: "web",
                     status: "destroyed",
                     target: "cloudflare-workers",
@@ -168,7 +173,14 @@ describe(teardownPorts, () => {
         );
         const [pending] = await ports.listPending();
 
-        expect(pending).toStrictEqual({ alias: "web", destroyWorker: true, id: "byo", placementRef: "cfa_1", target: "cloudflare-workers" });
+        expect(pending).toStrictEqual({
+            alias: "web",
+            destroyWorker: true,
+            id: "byo",
+            placementRef: "cfa_1",
+            projectId: "prj_1",
+            target: "cloudflare-workers",
+        });
 
         await ports.destroy(pending);
 
@@ -190,7 +202,7 @@ describe(teardownPorts, () => {
             everyTarget,
         );
 
-        await ports.destroy({ alias: "web", destroyWorker: true, id: "byo", placementRef: "cfa_gone", target: "cloudflare-workers" });
+        await ports.destroy({ alias: "web", destroyWorker: true, id: "byo", placementRef: "cfa_gone", projectId: "prj_1", target: "cloudflare-workers" });
 
         expect(log).toStrictEqual([
             'alias "web": its Cloudflare account is no longer connected; the Worker and its data stay in that account, releasing the alias',
@@ -206,23 +218,39 @@ describe(teardownPorts, () => {
         expect(patch).toHaveBeenCalledWith("dep_1", { teardownAt: 5000, updatedAt: 5000 }, "deployments");
     });
 
-    it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
+    it("releaseAlias deletes the torn-down project's own claim on the alias", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
-        const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
+        const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app", projectId: "prj_1" }] }, { delete: deleteRow });
         const ports = teardownPorts(database, noop, 1000, everyTarget);
 
-        await ports.releaseAlias("app");
+        await ports.releaseAlias("app", "prj_1");
 
         expect(deleteRow).toHaveBeenCalledWith("ao_1", "aliasOwnership");
     });
 
-    it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
+    it("releaseAlias is a no-op when no ownership row exists (already released)", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000, everyTarget);
 
-        await ports.releaseAlias("ghost");
+        await ports.releaseAlias("ghost", "prj_1");
 
         expect(deleteRow).not.toHaveBeenCalled();
+    });
+
+    it("never releases another project's reservation of the alias: A deletes `shop`, B reserves it, the sweep runs", async () => {
+        // B's project reserved `shop` (`projects.create` claims before any
+        // deployment exists) after A's was deleted; A's destroyed row is the
+        // one the sweep tears down.
+        const database = memoryStore({
+            aliasOwnership: [{ _id: "ao_b", alias: "shop", organizationId: "org_b", projectId: "prj_b" }],
+            deployments: [{ _id: "dep_a", alias: "shop", kind: "production", projectId: "prj_a", scriptName: "shop", status: "destroyed" }],
+        });
+        const ports = teardownPorts(database, noop, 1000, everyTarget);
+
+        const result = await runTeardownSweep({ ...ports, deleteRelease: () => Promise.resolve() });
+
+        expect(result).toStrictEqual({ failed: 0, tornDown: 1 });
+        expect(database.tables["aliasOwnership"]).toStrictEqual([{ _id: "ao_b", alias: "shop", organizationId: "org_b", projectId: "prj_b" }]);
     });
 });
 

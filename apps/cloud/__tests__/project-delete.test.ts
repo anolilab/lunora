@@ -102,6 +102,30 @@ describe("projects.remove", () => {
         expect(result).toStrictEqual({ destroyed: 1 });
     });
 
+    it("keeps an alias claimed until its tenant is torn down, and releases one with nothing left to tear down", async () => {
+        const { ctx, deleted } = makeCtx({
+            aliasOwnership: [
+                { _id: "ao_live", alias: "shop", projectId: PROJECT },
+                { _id: "ao_reserved", alias: "spare", projectId: PROJECT },
+                { _id: "ao_done", alias: "old", projectId: PROJECT },
+            ],
+            deployments: [
+                { _id: "dep_live", alias: "shop", projectId: PROJECT, scriptName: "shop", status: "live" },
+                { _id: "dep_old", alias: "old", projectId: PROJECT, scriptName: "old", status: "destroyed", teardownAt: 1 },
+            ],
+            members,
+        });
+
+        await remove.handler(ctx, { id: PROJECT as never, organizationId: ORG as never });
+
+        // `shop`'s tenant is still running: released now, another project could
+        // claim `shop` and deploy onto it before the sweep destroyed it.
+        expect(deleted).not.toContain("ao_live");
+        // Reserved and never deployed, or already torn down: no sweep will release these.
+        expect(deleted).toContain("ao_reserved");
+        expect(deleted).toContain("ao_done");
+    });
+
     it("leaves org-scoped rows alone — this deletes a project, not an organization", async () => {
         const { ctx, deleted } = makeCtx({ deployments: [], members, secrets: [{ _id: "sec_other", projectId: "prj_other" }] });
 

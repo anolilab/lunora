@@ -70,6 +70,11 @@ const purgedTables = (): string[] => {
  * R2. Hard-deleting the row would leak all three.
  */
 const HANDLED_ELSEWHERE = new Set([
+    // An alias names its tenant, so it stays claimed until the teardown sweep
+    // destroyed that tenant (`releaseIdleAliases`, then the sweep's `releaseAlias`):
+    // purged here, another organization could claim it and deploy onto the
+    // erased one's tenant and data.
+    "aliasOwnership",
     "deployments",
     // Each row points at a snapshot object in R2, which a mutation cannot delete.
     // The purge deletes the org's projects; the tenant backup sweep then deletes
@@ -89,6 +94,10 @@ describe("organizations.purgeDeleted", () => {
     it("does not hard-delete deployments — teardown needs the row", () => {
         expect(purgedTables()).not.toContain("deployments");
         expect(ORGANIZATIONS).toContain('status: "destroyed"');
+    });
+
+    it("releases only the alias claims whose tenant is already gone", () => {
+        expect(ORGANIZATIONS).toContain("await releaseIdleAliases(context, { organizationId });");
     });
 
     it("purges githubInstallations, whose organizationId is optional and so is not derivable", () => {
