@@ -40,6 +40,7 @@ import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { BOX_RELEASE_PATH, handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute, HOSTD_MANIFEST_PATH } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
@@ -1153,6 +1154,10 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxReleaseRoute, method: "GET", path: BOX_RELEASE_PATH, spec: { auth: "boxKey" } },
         // session — the revoke mutation asserts owner/admin of the box's org.
         { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
+        // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator, fetched by boxes.
+        { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
+        { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },
+        { handler: handleHostdManifestRoute, method: "GET", path: HOSTD_MANIFEST_PATH, spec: { auth: "boxKey" } },
     ];
 
     // Boot scanner: throws here (at construction) if a route is unclassified.

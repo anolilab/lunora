@@ -387,6 +387,25 @@ export default defineSchema({
         .index("by_hash", ["hashedToken"], { unique: true })
         .index("by_org", ["organizationId"]),
 
+    // Signed `lunora-hostd` releases the control plane offers boxes (plan 458
+    // W7, G17). Stored only after the envelope verified against the pinned
+    // release keys; boxes fetch the envelope verbatim and verify it themselves.
+    hostdReleases: defineTable({
+        // `canary` releases go to boxes named in a rollout; `stable` is what an
+        // outdated box is measured against. Absent → stable.
+        channel: v.optional(v.union(v.literal("stable"), v.literal("canary"))),
+        createdAt: v.number(),
+        // The signed envelope (`manifest.json`), as JSON — served to boxes as is.
+        envelope: v.string(),
+        keyId: v.string(),
+        releaseId: v.string(),
+        // What the release installs, lifted out of the envelope so a box's
+        // reported versions can be compared to it without parsing.
+        versions: boxVersions,
+    })
+        .global()
+        .index("by_release", ["releaseId"], { unique: true }),
+
     // Exact metric measurements (the precise tier behind the Metrics UI). Every
     // `ctx.metrics.*` data point OTLP-ingested via `/v1/metrics` lands here as one
     // row, so the series read is exact per-bucket (all points averaged) — unlike the

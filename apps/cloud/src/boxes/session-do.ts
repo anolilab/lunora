@@ -22,6 +22,9 @@ import { encodeMessage, HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
+import stripTrailingSlashes from "../lib/strip-trailing-slashes";
+import type { ReleaseVersions } from "./hostd-releases";
+import { versionKey } from "./hostd-releases";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame } from "./session";
@@ -34,6 +37,8 @@ export type BoxSessionEnvironment = {
     DB?: unknown;
     /** The apex boxes' default hostnames live under (`{alias}.{slug}.{LUNORA_BOX_DOMAIN}`). */
     LUNORA_BOX_DOMAIN?: string;
+    /** This control plane's public origin — where a box fetches the release manifest an `upgrade` job names. */
+    LUNORA_ORIGIN_URL?: string;
 };
 
 /** The hibernatable-WebSocket slice of a socket the session uses. */
@@ -333,6 +338,7 @@ export class BoxSessionDO {
                 await recordHello(database, attachment.boxId, effect.hello, now);
                 await this.state.storage.put("seenWrittenAt", now);
                 await this.pushRoutes(attachment.boxId);
+                await this.replayDesiredRelease(database, socket, attachment.boxId, effect.hello.versions);
                 break;
             }
             case "pong": {
@@ -428,6 +434,42 @@ export class BoxSessionDO {
         finish().catch(() => undefined);
 
         return new Response(readable, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
+    }
+
+    /**
+     * Hand a box that just authenticated the `upgrade` it missed (plan 458 W2):
+     * when its row names a desired release whose versions it does not run yet.
+     * Fire-and-forget — the job settles on the box's `result` like any other,
+     * and the next `hello` shows whether it took.
+     */
+    private async replayDesiredRelease(database: ControlPlaneStore, socket: SessionSocket, boxId: string, running: ReleaseVersions): Promise<void> {
+        const box = await loadBox(database, boxId);
+        const origin = this.environment.LUNORA_ORIGIN_URL;
+
+        if (box?.desiredReleaseId == null || origin === undefined) {
+            return;
+        }
+
+        const { page } = await database.findMany("hostdReleases", { where: { releaseId: box.desiredReleaseId } });
+        const release = page[0] as undefined | { releaseId: string; versions: ReleaseVersions };
+
+        if (release === undefined || versionKey(release.versions) === versionKey(running)) {
+            return;
+        }
+
+        const jobId = crypto.randomUUID();
+
+        // Never rejects (the registry resolves every job); nothing waits on it.
+        this.jobs.start(jobId, { onProgress: () => undefined, timeoutMs: MAX_JOB_TIMEOUT_MS }).catch(() => undefined);
+        sendFrame(socket, {
+            job: {
+                kind: "upgrade",
+                manifestUrl: `${stripTrailingSlashes(origin)}/v1/hostd/releases/${encodeURIComponent(release.releaseId)}/manifest`,
+                releaseId: release.releaseId,
+            },
+            jobId,
+            type: "job",
+        });
     }
 
     /**

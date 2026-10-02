@@ -165,6 +165,19 @@ export const boxEnrolments = sqliteTable("boxEnrolments", {
     by_hash: uniqueIndex("by_hash").on(t.hashedToken),
 }));
 
+export const hostdReleases = sqliteTable("hostdReleases", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    channel: text("channel", { mode: "json" }).$type<"stable" | "canary">(),
+    createdAt: real("createdAt").notNull(),
+    envelope: text("envelope").notNull(),
+    keyId: text("keyId").notNull(),
+    releaseId: text("releaseId").notNull(),
+    versions: text("versions", { mode: "json" }).$type<{ caddy: string; celld: string; hostd: string }>().notNull(),
+}, (t) => ({
+    by_release: uniqueIndex("by_release").on(t.releaseId),
+}));
+
 export const metricPoints = sqliteTable("metricPoints", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

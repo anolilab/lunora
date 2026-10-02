@@ -78,6 +78,13 @@ export interface BoxView {
     lastSeenAt?: number;
     name: string;
     organizationId: Id<"organizations">;
+
+    /**
+     * The box runs a celld other than the newest stable `lunora-hostd` release's
+     * (plan 458 W7). celld patches only its latest release, so an outdated box is
+     * a security finding, not a cosmetic one. False while either side is unknown.
+     */
+    outdated: boolean;
     /** The box's Ed25519 public key (raw, base64url) — public by definition, shown so an operator can match it to the box. */
     publicKey: string;
     resources?: { diskFreeMb: number; memMb: number };
@@ -91,12 +98,21 @@ export interface BoxView {
 /** Copy the set fields of a row onto the view; NULL and undefined both mean unset. */
 const present = <T>(key: string, value: null | T | undefined): Record<string, T> => (value == null ? {} : { [key]: value });
 
-export const toBoxView = (row: BoxRow): BoxView => {
+/** The newest stable release's versions, which boxes are measured against; `null` before any release is stored. */
+const latestStableVersions = async (context: QueryContext): Promise<BoxVersions | null> => {
+    const { page } = await context.db.hostdReleases.findMany({});
+    const stable = (page as { channel?: null | string; createdAt: number; versions: BoxVersions }[]).filter((row) => row.channel !== "canary");
+
+    return stable.toSorted((a, b) => b.createdAt - a.createdAt).at(0)?.versions ?? null;
+};
+
+export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxView => {
     return {
         _id: row._id,
         createdAt: row.createdAt,
         name: row.name,
         organizationId: row.organizationId,
+        outdated: latest !== null && row.versions != null && row.status !== "revoked" && row.versions.celld !== latest.celld,
         publicKey: row.publicKey,
         singleTrust: row.singleTrust,
         slug: row.slug,
@@ -165,7 +181,9 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.boxes.findMany({ where: { organizationId } });
 
-    return (page as BoxRow[]).map((row) => toBoxView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
+    const latest = await latestStableVersions(context);
+
+    return (page as BoxRow[]).map((row) => toBoxView(row, latest)).toSorted((a, b) => b.createdAt - a.createdAt);
 });
 
 /** One box of an organization (members). `null` for a box that is not this organization's. */
@@ -176,7 +194,7 @@ export const get = query
 
         const row = (await context.db.get(id)) as BoxRow | null;
 
-        return row?.organizationId === organizationId ? toBoxView(row) : null;
+        return row?.organizationId === organizationId ? toBoxView(row, await latestStableVersions(context)) : null;
     });
 
 /** Rename a box (owner/admin). The slug — its DNS label — never changes. */
@@ -478,4 +496,42 @@ export const ownsDeployment = internalQuery
             project.organizationId === box.organizationId &&
             deployment.organizationId === box.organizationId
         );
+    });
+
+/** A box a rollout targets: who it is and what it runs. */
+export interface RolloutBox {
+    boxId: Id<"boxes">;
+    status: BoxStatus;
+    versions?: BoxVersions;
+}
+
+/**
+ * Point boxes at a stored `lunora-hostd` release (SYSTEM — the admin-token
+ * rollout route): the named boxes, or every box that is not revoked. Revoked
+ * boxes are never touched. Answers the boxes it set, for the rollout to plan.
+ */
+export const setDesiredRelease = internalMutation
+    .input({ boxIds: v.optional(v.array(v.id("boxes"))), releaseId: boundedString(LIMITS.name) })
+    .mutation(async ({ ctx: context, args: { boxIds, releaseId } }): Promise<RolloutBox[]> => {
+        const { page: releases } = await context.db.hostdReleases.findMany({ where: { releaseId } });
+
+        if (releases.length === 0) {
+            throw new LunoraError("NOT_FOUND", `no stored hostd release ${releaseId}`);
+        }
+
+        const everyBox = boxIds === undefined ? await context.db.boxes.findMany({}) : undefined;
+        const rows =
+            everyBox === undefined
+                ? ((await Promise.all((boxIds ?? []).map((id) => context.db.get(id)))) as (BoxRow | null)[]).filter((row): row is BoxRow => row !== null)
+                : (everyBox.page as BoxRow[]);
+        const targets = rows.filter((row) => row.status !== "revoked");
+
+        for (const row of targets) {
+            // eslint-disable-next-line no-await-in-loop -- one patch per box; a fleet rollout is an operator action
+            await context.db.patch(row._id, { desiredReleaseId: releaseId });
+        }
+
+        return targets.map((row) => {
+            return { boxId: row._id, status: row.status, ...(row.versions == null ? {} : { versions: row.versions }) };
+        });
     });

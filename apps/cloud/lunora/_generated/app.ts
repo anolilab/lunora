@@ -401,6 +401,7 @@ class AppBuilder<Env extends object> {
             ["aliasOwnership", { mode: { kind: "global" } }],
             ["boxes", { mode: { kind: "global" } }],
             ["boxEnrolments", { mode: { kind: "global" } }],
+            ["hostdReleases", { mode: { kind: "global" } }],
             ["metricPoints", { mode: { kind: "global" } }],
             ["deployKeys", { mode: { kind: "global" } }],
             ["overageDebits", { mode: { kind: "global" } }],

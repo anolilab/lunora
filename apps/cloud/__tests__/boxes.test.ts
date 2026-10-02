@@ -228,7 +228,11 @@ describe("boxes.enrol", () => {
 
 describe("boxes reads and writes are org-scoped", () => {
     it("lists only the caller's boxes and drops unset (NULL) columns", async () => {
-        const { ctx } = makeCtx({ boxes: [box({ dnsError: null }), box({ _id: "box_2", organizationId: "org_2" })], members: [owner("org_1")] });
+        const { ctx } = makeCtx({
+            boxes: [box({ dnsError: null }), box({ _id: "box_2", organizationId: "org_2" })],
+            hostdReleases: [],
+            members: [owner("org_1")],
+        });
 
         const boxes = await list.handler(ctx, { organizationId: "org_1" as never });
 
@@ -237,7 +241,7 @@ describe("boxes reads and writes are org-scoped", () => {
     });
 
     it("answers null for another org's box", async () => {
-        const { ctx } = makeCtx({ boxes: [box({ organizationId: "org_2" })], members: [owner("org_1")] });
+        const { ctx } = makeCtx({ boxes: [box({ organizationId: "org_2" })], hostdReleases: [], members: [owner("org_1")] });
 
         await expect(get.handler(ctx, { id: "box_1" as never, organizationId: "org_1" as never })).resolves.toBeNull();
     });

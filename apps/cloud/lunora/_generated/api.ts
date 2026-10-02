@@ -27,8 +27,8 @@ export interface ApiTypes {
     };
     boxes: {
         createEnrolment: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations"> }, { expiresAt: number; installCommand: string; token: string; }>;
-        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
+        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
         rename: FunctionReference<"mutation", { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }, void>;
         revoke: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { ipv4?: string; ipv6?: string; slug: string; }>;
         setProjectTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }, void>;
@@ -187,6 +187,7 @@ export interface InternalApiTypes {
         identity: FunctionReference<"query", { boxId: Id<"boxes"> }, { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
         ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
         recordDns: FunctionReference<"mutation", { boxId: Id<"boxes">; dnsError: null | unknown }, void>;
+        setDesiredRelease: FunctionReference<"mutation", { boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
     };
     builds: {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
@@ -223,6 +224,11 @@ export interface InternalApiTypes {
     github_installations: {
         record: FunctionReference<"mutation", { accountLogin: string; installationId: number }, Id<"githubInstallations">>;
         remove: FunctionReference<"mutation", { installationId: number }, void>;
+    };
+    hostd_releases: {
+        envelope: FunctionReference<"query", { releaseId: unknown }, string | null>;
+        get: FunctionReference<"query", { releaseId: unknown }, null | { channel: "stable" | "canary"; createdAt: number; keyId: string; releaseId: string; versions: { caddy: string; celld: string; hostd: string; } }>;
+        store: FunctionReference<"mutation", { channel?: "stable" | "canary"; envelope: unknown; keyId: unknown; releaseId: unknown; versions: { caddy: unknown; celld: unknown; hostd: unknown } }, { created: boolean; }>;
     };
     logs: {
         ingestInternal: FunctionReference<"mutation", { lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; organizationId: Id<"organizations">; scriptName: unknown }, { ingested: number; }>;
