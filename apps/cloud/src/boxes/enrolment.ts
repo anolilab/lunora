@@ -4,6 +4,7 @@
  * given when it consumes one.
  */
 import { randomSecret } from "../deploy/keys";
+import stripTrailingSlashes from "../lib/strip-trailing-slashes";
 
 /** How long an enrolment token stays usable (D4). */
 export const ENROLMENT_TTL_MS = 15 * 60 * 1000;
@@ -41,8 +42,10 @@ export const mintBoxSlug = (): string => {
 };
 
 /**
- * The command the studio shows next to a fresh token. `hostd` enrols with the
- * production control plane by default (plan 458 D16); a staging cell's studio
- * adds `--control-plane` (README "Boxes").
+ * The command the studio shows next to a fresh token. `lunora-hostd enrol`
+ * requires `--control-plane`: the origin the box enrols with, dials its
+ * session to, and alone fetches releases from (protocol README §5.2) — so it
+ * is always this control plane's own public origin (`LUNORA_ORIGIN_URL`).
  */
-export const installCommandFor = (token: string): string => `sudo lunora-hostd enrol --token ${token}`;
+export const installCommandFor = (token: string, controlPlaneOrigin: string): string =>
+    `sudo lunora-hostd enrol --control-plane ${stripTrailingSlashes(controlPlaneOrigin)} --token ${token}`;

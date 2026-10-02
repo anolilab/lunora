@@ -936,7 +936,7 @@
     },
     "/_lunora/rpc#boxes:createEnrolment": {
       "post": {
-        "description": "Invoke the `mutation` `boxes:createEnrolment` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "description": "Invoke the `action` `boxes:createEnrolment` over the Lunora RPC envelope (POST /_lunora/rpc).",
         "operationId": "boxes:createEnrolment",
         "requestBody": {
           "content": {
@@ -991,11 +991,11 @@
             "$ref": "#/components/responses/LunoraError"
           }
         },
-        "summary": "mutation: boxes:createEnrolment",
+        "summary": "action: boxes:createEnrolment",
         "tags": [
           "boxes"
         ],
-        "x-lunora-function-kind": "mutation"
+        "x-lunora-function-kind": "action"
       }
     },
     "/_lunora/rpc#boxes:domain": {

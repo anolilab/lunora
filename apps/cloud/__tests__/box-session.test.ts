@@ -1,3 +1,4 @@
+import type { DeployJob } from "@lunora/hostd/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";
@@ -250,6 +251,78 @@ describe("boxSessionDO", () => {
             ],
             type: "routes",
         });
+    });
+
+    it("records the fleets a box reports in hello, one per alias, sorted", async () => {
+        const { key, session, state, store } = await setup();
+
+        await handshake(session, state, key, "box_1", {
+            hello: {
+                fleets: [
+                    { alias: "web", deploymentId: "dep_2", state: "running" },
+                    { alias: "api", state: "stopped" },
+                ],
+            },
+        });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([
+            { alias: "api", state: "stopped" },
+            { alias: "web", deploymentId: "dep_2", state: "running" },
+        ]);
+    });
+
+    it("moves the stored fleets on as deploy and destroy jobs succeed, and leaves them on a failure", async () => {
+        const { key, session, state, store } = await setup();
+        const socket = await handshake(session, state, key, "box_1", { hello: { fleets: [{ alias: "old", deploymentId: "dep_0", state: "running" }] } });
+        const client = boxSession(namespaceOver(session), "box_1");
+        let answered = 0;
+        const answer = async (ok: boolean): Promise<void> => {
+            await vi.waitFor(() => {
+                expect(socket.received().filter((frame) => frame.type === "job").length).toBeGreaterThan(answered);
+            });
+
+            const job = socket.received().filter((frame) => frame.type === "job")[answered];
+
+            answered += 1;
+            await session.webSocketMessage(
+                socket,
+                JSON.stringify(
+                    ok
+                        ? { jobId: job?.type === "job" ? job.jobId : "", ok: true, type: "result" }
+                        : { error: { code: "DEPLOY_FAILED", message: "no" }, jobId: job?.type === "job" ? job.jobId : "", ok: false, type: "result" },
+                ),
+            );
+        };
+        const deploy = (deploymentId: string): DeployJob => {
+            return { alias: "web", crons: [], deploymentId, kind: "deploy", releaseUrl: "https://cloud.test/v1/boxes/releases/x", vars: {} };
+        };
+
+        const first = client.dispatch(deploy("dep_1"));
+
+        await answer(true);
+
+        await expect(first).resolves.toStrictEqual({ ok: true });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([
+            { alias: "old", deploymentId: "dep_0", state: "running" },
+            { alias: "web", deploymentId: "dep_1", state: "running" },
+        ]);
+
+        const failed = client.dispatch(deploy("dep_2"));
+
+        await answer(false);
+
+        await expect(failed).resolves.toMatchObject({ ok: false });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toContainEqual({ alias: "web", deploymentId: "dep_1", state: "running" });
+
+        const destroyed = client.dispatch({ alias: "old", deleteData: false, kind: "destroy" });
+
+        await answer(true);
+
+        await expect(destroyed).resolves.toStrictEqual({ ok: true });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([{ alias: "web", deploymentId: "dep_1", state: "running" }]);
     });
 
     it("refuses a wrong signature with one error frame and a close, and leaves the box as it was", async () => {

@@ -105,6 +105,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "billing:portal": lunora_billing_2.portal as unknown as RegisteredLunoraFunction,
     "billing:processWebhook": lunora_billing_2.processWebhook as unknown as RegisteredLunoraFunction,
     "billing:subscription": lunora_billing_2.subscription as unknown as RegisteredLunoraFunction,
+    "boxes:authorizeDiagnose": lunora_boxes_3.authorizeDiagnose as unknown as RegisteredLunoraFunction,
     "boxes:createEnrolment": lunora_boxes_3.createEnrolment as unknown as RegisteredLunoraFunction,
     "boxes:domain": lunora_boxes_3.domain as unknown as RegisteredLunoraFunction,
     "boxes:enrol": lunora_boxes_3.enrol as unknown as RegisteredLunoraFunction,
@@ -302,6 +303,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_boxes_3.authorizeDiagnose.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_boxes_3.domain.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -916,12 +924,13 @@ export interface Caller {
         subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
     boxes: {
+        authorizeDiagnose: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ slug: string; }>;
         createEnrolment: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<{ expiresAt: number; installCommand: string; token: string; }>;
         domain: (args: { organizationId: Id<"organizations"> }) => Promise<string>;
         enrol: (args: { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }) => Promise<{ boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
-        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
+        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
         identity: (args: { boxId: Id<"boxes"> }) => Promise<{ organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
         ownsDeployment: (args: { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }) => Promise<boolean>;
         recordDns: (args: { boxId: Id<"boxes">; dnsError: null | unknown }) => Promise<void>;
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
@@ -1181,6 +1190,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         subscription: (args) => callRegistered(context, "billing:subscription", args),
     },
     boxes: {
+        authorizeDiagnose: (args) => callRegistered(context, "boxes:authorizeDiagnose", args),
         createEnrolment: (args) => callRegistered(context, "boxes:createEnrolment", args),
         domain: (args) => callRegistered(context, "boxes:domain", args),
         enrol: (args) => callRegistered(context, "boxes:enrol", args),

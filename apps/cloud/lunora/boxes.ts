@@ -1,4 +1,4 @@
-import type { BoxVersions } from "@lunora/hostd/protocol";
+import type { BoxVersions, FleetSummary } from "@lunora/hostd/protocol";
 import { isVersion } from "@lunora/hostd/protocol";
 import { LunoraError } from "@lunora/server";
 
@@ -42,6 +42,7 @@ interface BoxRow {
     desiredReleaseId?: null | string;
     dnsError?: null | string;
     enrolledAt?: null | number;
+    fleets?: FleetSummary[] | null;
     ipv4?: null | string;
     ipv6?: null | string;
     lastSeenAt?: null | number;
@@ -71,6 +72,8 @@ export interface BoxView {
     /** Why the box's DNS records could not be written, when they could not. */
     dnsError?: string;
     enrolledAt?: number;
+    /** The celld fleets the box runs, as it last reported them (one per alias). Absent until it has. */
+    fleets?: FleetSummary[];
     ipv4?: string;
     ipv6?: string;
     lastSeenAt?: number;
@@ -117,6 +120,7 @@ export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxVi
         ...present("desiredReleaseId", row.desiredReleaseId),
         ...present("dnsError", row.dnsError),
         ...present("enrolledAt", row.enrolledAt),
+        ...present("fleets", row.fleets),
         ...present("ipv4", row.ipv4),
         ...present("ipv6", row.ipv6),
         ...present("lastSeenAt", row.lastSeenAt),
@@ -130,15 +134,31 @@ export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxVi
  * Mint a one-time enrolment token for a new box (owner/admin). The plaintext
  * token is returned ONCE, with the command that uses it; only its SHA-256 is
  * stored, and it expires after 15 minutes (plan 458 D4).
+ *
+ * An action because the command names this control plane's public origin
+ * (`--control-plane`, which `lunora-hostd enrol` requires), and only actions
+ * carry `ctx.env`. Not being a transaction costs nothing here: two tokens
+ * minted at once past the plan's limit are refused when the second one is
+ * consumed — `enrol` re-checks the limit.
  */
-export const createEnrolment = mutation
+export const createEnrolment = action
     .use(rateLimit("sensitive"))
     .input({ name: boundedString(LIMITS.name), organizationId: v.id("organizations") })
-    .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<{ expiresAt: number; installCommand: string; token: string }> => {
+    .action(async ({ ctx: context, args: { name, organizationId } }): Promise<{ expiresAt: number; installCommand: string; token: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
         if (name.trim() === "") {
             throw new LunoraError("BAD_REQUEST", "a box needs a name");
+        }
+
+        const origin = context.env?.LUNORA_ORIGIN_URL;
+
+        // Without its own origin the control plane cannot tell a box where to enrol.
+        if (origin === undefined || origin === "") {
+            throw new LunoraError(
+                "SERVICE_UNAVAILABLE",
+                "this control plane has no public origin configured (LUNORA_ORIGIN_URL), so boxes cannot enrol with it",
+            );
         }
 
         // An unused, unexpired token is a box on its way: counting it stops an owner
@@ -169,7 +189,7 @@ export const createEnrolment = mutation
             target: name.trim(),
         });
 
-        return { expiresAt, installCommand: installCommandFor(token), token };
+        return { expiresAt, installCommand: installCommandFor(token, origin), token };
     });
 
 /** An organization's boxes, revoked ones included (members). */
@@ -256,6 +276,34 @@ export const revoke = internalMutation
         }
 
         return { slug: row.slug, ...present("ipv4", row.ipv4), ...present("ipv6", row.ipv6) };
+    });
+
+/**
+ * Clear a diagnose of box `id` (owner/admin, checked against the caller's
+ * session; plan 458 W9) and audit it. The `diagnose` job runs code on the
+ * customer's machine and its output describes the machine, so it is a manager's
+ * act, rate-limited like any other credential-shaped write.
+ *
+ * Internal: only `POST /v1/boxes/diagnose` calls it, right before it hands the
+ * job to the box's session — a mutation cannot reach the session itself.
+ */
+export const authorizeDiagnose = internalMutation
+    .use(rateLimit("sensitive"))
+    .input({ id: v.id("boxes"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ slug: string }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "box");
+
+        const row = (await context.db.get(id)) as BoxRow;
+
+        if (row.status === "revoked") {
+            throw new LunoraError("CONFLICT", "this box is revoked; it takes no more jobs");
+        }
+
+        await context.db.insert("auditLog", { action: "box.diagnose", actorUserId: member.userId, createdAt: context.now, organizationId, target: row.slug });
+
+        return { slug: row.slug };
     });
 
 /** Refuse an enrolment whose key, addresses or versions are malformed — before the token is touched. */

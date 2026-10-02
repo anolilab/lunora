@@ -152,7 +152,7 @@ for this plan.
 | G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6 — ✅ `f87b67285` (the session writes the ledger directly, as the sweeps do) |
 | G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6 — ✅ `ed8b6b8ce`                                                            |
 | G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a); store + rollout `85c5f6c91`, `653804c89`            |
-| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9 — ✅ `325453eb7`, `115a677e9` (no Diagnose yet)                             |
+| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9 — ✅ `325453eb7`, `115a677e9`; Diagnose + fleets on `feat/cloud-followups`  |
 
 **Already target-neutral (no gap):**
 
@@ -617,9 +617,20 @@ The per-state decisions (status → chip, role gating, target draft, refusal
 wording, capability lists) are node-tested as pure modules
 (`__tests__/studio-boxes.test.ts`, `target-capabilities.test.ts`); `apps/cloud`
 has no DOM test environment, so the components are verified with tsc, eslint,
-react-doctor and `vite build`. **Not built:** the Diagnose button, because no
-route or job runs `celld diagnose` on a box yet, and the box's fleets list
-(the box row does not carry them; the tab shows the projects placed on it).
+react-doctor and `vite build`.
+
+**Follow-ups landed (`feat/cloud-followups`):** the Diagnose button and the
+box's fleets. `POST /v1/boxes/diagnose` (owner/admin session, through the
+internal `boxes.authorizeDiagnose`: refuses a revoked box, `sensitive` rate
+limit, audited) dispatches the `diagnose` job over `BoxSessionDO.dispatch`
+with a 60 s timeout and answers the box's `progress` lines, capped at 4 000
+lines / 256 KiB (`src/boxes/diagnose.ts`); the studio's dialog pretty-prints
+JSON output. `boxes.fleets` is written from every `hello` and moved on by each
+successful `deploy` / `reload` / `destroy` result (`src/boxes/fleets.ts`), and
+each box lists its fleets (alias, deployment, state). The enrol dialog's
+command now names this control plane (`--control-plane <LUNORA_ORIGIN_URL>`),
+which `lunora-hostd enrol` requires; `boxes.createEnrolment` became an action
+to read the var.
 
 ### W10 — Docs and positioning (S)
 

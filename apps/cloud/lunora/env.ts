@@ -34,6 +34,13 @@ export const env = defineEnv({
      * the celld-vps driver read the Worker env directly. Defaults to `boxes.lunora.app`.
      */
     LUNORA_BOX_DOMAIN: v.optional(v.string()),
+
+    /**
+     * This control plane's public origin. Read here so the studio's box install
+     * command names it (`lunora-hostd enrol --control-plane`, `boxes.createEnrolment`);
+     * the routes, the box session and the scheduler read the Worker env directly.
+     */
+    LUNORA_ORIGIN_URL: v.optional(v.string()),
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
 

@@ -296,6 +296,7 @@ export const boxes = sqliteTable("boxes", {
     desiredReleaseId: text("desiredReleaseId"),
     dnsError: text("dnsError"),
     enrolledAt: real("enrolledAt"),
+    fleets: text("fleets", { mode: "json" }).$type<Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }>>(),
     ipv4: text("ipv4"),
     ipv6: text("ipv6"),
     lastSeenAt: real("lastSeenAt"),

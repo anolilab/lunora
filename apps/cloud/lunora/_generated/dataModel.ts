@@ -276,6 +276,7 @@ export interface Doc_boxes {
     desiredReleaseId?: string;
     dnsError?: string;
     enrolledAt?: number;
+    fleets?: Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }>;
     ipv4?: string;
     ipv6?: string;
     lastSeenAt?: number;
@@ -1105,6 +1106,7 @@ export interface Insert_boxes {
     desiredReleaseId?: string;
     dnsError?: string;
     enrolledAt?: number;
+    fleets?: Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }>;
     ipv4?: string;
     ipv6?: string;
     lastSeenAt?: number;

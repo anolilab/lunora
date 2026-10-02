@@ -23,13 +23,14 @@ import { DurableObject } from "cloudflare:workers";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
+import { fleetsAfterJob } from "./fleets";
 import { versionKey } from "./hostd-releases";
 import type { JobOutcome } from "./jobs";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame, REVOKED_MESSAGE } from "./session";
 import type { BoxSession } from "./session-client";
-import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf } from "./session-store";
+import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf, updateFleets } from "./session-store";
 import { boxDomainOf, manifestUrlOf } from "./urls";
 import { MAX_REPORT_AGE_MS, recordBoxReport } from "./usage";
 
@@ -135,6 +136,9 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
     /** Reports chained on {@link reports} and not yet recorded. */
     private pendingReports = 0;
+
+    /** Fleet updates from finished jobs, one at a time, so two jobs finishing together cannot lose each other's write. Never rejects. */
+    private fleetWrites: Promise<void> = Promise.resolve();
 
     /**
      * Each socket's report count in the current minute. In memory rather than in
@@ -296,7 +300,11 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
         socket.send(frame);
 
-        return outcome;
+        const settled = await outcome;
+
+        await this.recordFleets(attachmentOf(socket).boxId, job, settled);
+
+        return settled;
     }
 
     /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */
@@ -576,6 +584,28 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
             });
 
         await this.reports;
+    }
+
+    /**
+     * Move the box's stored fleets on after one of its jobs finished (plan 458
+     * W9). Best effort: the next `hello` reports the truth again, so a failed
+     * write is logged, never the job's failure.
+     */
+    private async recordFleets(boxId: string, job: HostdJob, outcome: JobOutcome): Promise<void> {
+        const database = this.database();
+
+        if (database === undefined || fleetsAfterJob([], job, outcome) === undefined) {
+            return;
+        }
+
+        this.fleetWrites = this.fleetWrites
+            .then(() => updateFleets(database, boxId, (fleets) => fleetsAfterJob(fleets, job, outcome)))
+            .catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- a lost fleet write is only visible here, in Workers Logs
+                console.warn(`[box ${boxId}] could not record its fleets after a ${job.kind} job: ${error instanceof Error ? error.message : String(error)}`);
+            });
+
+        await this.fleetWrites;
     }
 
     /** Forget processed report windows too old to be recorded anyway, a bounded batch at a time. */

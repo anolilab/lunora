@@ -279,13 +279,16 @@ organization enrolled — a **box** running `lunora-hostd` (`apps/hostd`). The
 control plane never holds a credential for the box; it holds the box's Ed25519
 public key and nothing else (plan 458 §3).
 
-- **Enrolment.** `boxes.createEnrolment` (owner/admin) mints a one-time token
-  (15 minutes, stored hashed, counted against the plan's `boxes` limit) and
-  shows `sudo lunora-hostd enrol --token …`. `hostd` generates its key and calls
+- **Enrolment.** `boxes.createEnrolment` (owner/admin; an action, because it
+  reads `LUNORA_ORIGIN_URL`) mints a one-time token (15 minutes, stored hashed,
+  counted against the plan's `boxes` limit) and shows
+  `sudo lunora-hostd enrol --control-plane <LUNORA_ORIGIN_URL> --token …` —
+  `enrol` requires the flag, and a control plane without `LUNORA_ORIGIN_URL`
+  mints nothing (`SERVICE_UNAVAILABLE`). `hostd` generates its key and calls
   `POST /v1/boxes/enrol` with the token, its raw public key (base64url), its
   public IPs and versions; the box gets a random DNS label (`slug`) and A/AAAA
   records `*.<slug>.<LUNORA_BOX_DOMAIN>` and `<slug>.<LUNORA_BOX_DOMAIN>` in the
-  box zone. `boxes.setProjectTarget` places a project on a box.
+  box zone. `projects.setTarget` places a project on a box.
 - **Session.** `hostd` dials `GET /v1/boxes/connect?box=<id>`, forwarded to the
   box's `BoxSessionDO` (binding `BOX_SESSION`, named by box id — the first
   Durable Object of this app's own). Handshake: `hello` → `challenge` (a
@@ -304,6 +307,17 @@ public key and nothing else (plan 458 §3).
   offline box fails the deploy at once (`BOX_OFFLINE`). The box's progress
   appears in the deploy stream as `{ deploymentId, log }` frames; its routing
   table is pushed after every job and on every connect.
+- **Fleets.** `boxes.fleets` holds the celld fleets the box runs (alias,
+  deployment, state; at most 500, one per alias): written from every `hello`,
+  and moved on by each `deploy` / `reload` / `destroy` job the session sees
+  succeed (`src/boxes/fleets.ts`). Box-reported, so displayed, never trusted.
+- **Diagnose.** `POST /v1/boxes/diagnose` (owner/admin session; the internal
+  `boxes.authorizeDiagnose` asserts the role, refuses a revoked box, takes the
+  `sensitive` rate-limit bucket and audits `box.diagnose`) runs the `diagnose`
+  job over the box's session with a 60-second timeout and answers
+  `{ ok, output, truncated, error? }`. The output is the box's `progress`
+  lines, capped at 4 000 lines and 256 KiB (one frame's worth); a job that
+  failed still answers 200 with what arrived before it.
 - **Usage.** Box `report` frames become `platformUsage` request rows tagged
   with the box — shown in the studio, never billed. Billing is per box per
   month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
@@ -344,9 +358,10 @@ public key and nothing else (plan 458 §3).
   already gone. Without `LUNORA_BOX_ZONE_ID` and a token it skips the zone with
   a log line.
 - **Studio.** The org's **Boxes** tab (`src/client/BoxesSection.tsx`) lists
-  boxes and lets owners/admins enrol, rename and revoke (through the revoke
-  route above); hostnames come from `boxes.domain`. A project's **Deploy
-  target** card calls `boxes.setProjectTarget`, and a `celld-vps` project's
+  boxes and their fleets and lets owners/admins enrol, rename, diagnose a
+  connected box (the route above; JSON output is pretty-printed) and revoke
+  (through the revoke route above); hostnames come from `boxes.domain`. A project's **Deploy
+  target** card calls `projects.setTarget`, and a `celld-vps` project's
   view marks what that target refuses, with the reason, from
   `src/client/target-capabilities.ts` (the contract's `UNSUPPORTED_REASONS` and
   the target's `TARGETS` limitations, which quote celld's capability notes).
@@ -358,6 +373,7 @@ public key and nothing else (plan 458 §3).
 | `GET /v1/boxes/releases/:deploymentId`       | `boxKey`         |
 | `GET /v1/hostd/releases/:releaseId/manifest` | `boxKey`         |
 | `POST /v1/boxes/revoke`                      | `session`        |
+| `POST /v1/boxes/diagnose`                    | `session`        |
 | `POST /v1/hostd/releases`                    | `adminToken`     |
 | `POST /v1/hostd/rollout`                     | `adminToken`     |
 

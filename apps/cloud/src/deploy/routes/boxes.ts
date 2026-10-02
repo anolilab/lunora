@@ -7,6 +7,8 @@
  *   forwarded untouched to the box's `BoxSessionDO`, which authenticates the
  *   socket with a challenge before it accepts anything else.
  * - `POST /v1/boxes/revoke` — `session`: revoke a box, then close its session.
+ * - `POST /v1/boxes/diagnose` — `session`: run the `diagnose` job on a box and
+ *   answer its output.
  * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
  *   release, with a request signed by its key (plan 458 D6).
  */
@@ -14,6 +16,7 @@ import { isProtocolId } from "@lunora/hostd/protocol";
 
 import { internal } from "../../../lunora/_generated/api.js";
 import type { EnrolResult } from "../../../lunora/boxes";
+import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../../boxes/diagnose";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";
 import { REVOKED_MESSAGE } from "../../boxes/session";
 import type { BoxSessionNamespace } from "../../boxes/session-client";
@@ -198,6 +201,51 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
     await context.runMutation(internal.boxes.recordDns, { boxId: body.id, dnsError }).catch(() => undefined);
 
     return Response.json({ ok: true, sessionClosed: closed, ...(dnsError === null ? {} : { dnsError }) });
+};
+
+/**
+ * `POST /v1/boxes/diagnose` — run the `diagnose` job on a box over its session
+ * (plan 458 W9) and answer what it printed, for the studio's Diagnose button.
+ *
+ * The internal mutation asserts owner/admin of the box's org under the caller's
+ * session, refuses a revoked box, rate-limits and audits; the session then
+ * fails fast when the box is not connected (`BOX_OFFLINE`) or already runs its
+ * maximum of jobs (`BOX_BUSY`). The output is capped (`src/boxes/diagnose.ts`),
+ * and a job that failed still answers 200 with what arrived before it did — a
+ * half-finished diagnose is itself a diagnosis.
+ */
+export const handleBoxDiagnoseRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+    const body = (await request.json().catch(() => null)) as null | RevokeBody;
+
+    if (!body?.id || !body.organizationId) {
+        return jsonError(400, "id and organizationId are required");
+    }
+
+    const namespace = environment.BOX_SESSION;
+
+    if (!namespace) {
+        return jsonError(503, "this control plane has no box sessions bound (BOX_SESSION)");
+    }
+
+    try {
+        await context.runMutation(internal.boxes.authorizeDiagnose, { id: body.id, organizationId: body.organizationId });
+    } catch (error) {
+        return rejected(error, "diagnose refused");
+    }
+
+    const collector = createDiagnoseCollector();
+    const outcome = await boxSession(namespace, body.id).dispatch(
+        { kind: "diagnose" },
+        {
+            onProgress: (line) => {
+                collector.add(line);
+            },
+            timeoutMs: DIAGNOSE_TIMEOUT_MS,
+        },
+    );
+
+    return Response.json(collector.finish(outcome), { headers: { "cache-control": "no-store" } });
 };
 
 /**

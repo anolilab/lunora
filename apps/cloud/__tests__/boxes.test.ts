@@ -1,12 +1,12 @@
 /* eslint-disable sonarjs/no-hardcoded-ip -- the subject under test is which IP addresses a box may publish; every literal is a fixture */
 import { describe, expect, it } from "vitest";
 
-import { createEnrolment, enrol, get, list, rename, revoke } from "../lunora/boxes";
+import { authorizeDiagnose, createEnrolment, enrol, get, list, rename, revoke } from "../lunora/boxes";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { fromBase64Url, isBoxPublicKey, toBase64Url, verifyBoxSignature } from "../src/boxes/encoding";
 import { isEnrolmentTokenShape, mintBoxSlug } from "../src/boxes/enrolment";
 import { sha256Hex } from "../src/deploy/keys";
-import type { Row } from "./_helpers/fake-ctx";
+import type { FakeCtx, Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const NOW = 1_700_000_000_000;
@@ -112,13 +112,19 @@ describe("box addresses", () => {
 });
 
 describe("boxes.createEnrolment", () => {
+    /** The action's ctx: the mutation double plus the env it reads its origin from. */
+    const withOrigin = ({ ctx, ops }: FakeCtx, origin: null | string = "https://cloud.lunora.test/"): FakeCtx => {
+        return { ctx: { ...ctx, env: origin === null ? {} : { LUNORA_ORIGIN_URL: origin } }, ops };
+    };
+
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
-        const { ctx, ops } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
+        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }));
 
         const result = await createEnrolment.handler(ctx, { name: " edge ", organizationId: "org_1" as never });
 
         expect(isEnrolmentTokenShape(result.token)).toBe(true);
-        expect(result.installCommand).toBe(`sudo lunora-hostd enrol --token ${result.token}`);
+        // `lunora-hostd enrol` requires --control-plane: this control plane's own origin.
+        expect(result.installCommand).toBe(`sudo lunora-hostd enrol --control-plane https://cloud.lunora.test --token ${result.token}`);
         expect(result.expiresAt).toBe(NOW + 15 * 60 * 1000);
 
         const stored = ops.find((op) => op.kind === "insert" && op.table === "boxEnrolments");
@@ -132,7 +138,7 @@ describe("boxes.createEnrolment", () => {
         const live = [box({ _id: "b1" }), box({ _id: "b2" }), box({ _id: "b3", status: "revoked" })];
         const unused = { _id: "e1", expiresAt: NOW + 60_000, organizationId: "org_1" };
         const expired = { _id: "e2", expiresAt: NOW - 1, organizationId: "org_1" };
-        const { ctx } = makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
+        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }));
 
         await expect(createEnrolment.handler(ctx, { name: "fourth", organizationId: "org_1" as never })).rejects.toThrow(
             "boxes quota reached for this plan (limit 3)",
@@ -140,15 +146,55 @@ describe("boxes.createEnrolment", () => {
     });
 
     it("gives the free plan no boxes", async () => {
-        const { ctx } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toThrow("(limit 0)");
     });
 
     it("refuses a plain member", async () => {
-        const { ctx } = makeCtx({ members: [{ ...owner("org_1"), role: "member" }] });
+        const { ctx } = withOrigin(makeCtx({ members: [{ ...owner("org_1"), role: "member" }] }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("mints nothing on a control plane that does not know its own origin", async () => {
+        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }), null);
+
+        await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
+            code: "SERVICE_UNAVAILABLE",
+            message: expect.stringContaining("LUNORA_ORIGIN_URL") as unknown,
+        });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "boxEnrolments")).toStrictEqual([]);
+    });
+});
+
+describe("boxes.authorizeDiagnose", () => {
+    it("clears an owner's diagnose of a live box, audited", async () => {
+        const { ctx, ops } = makeCtx({ boxes: [box()], members: [owner("org_1")] }, { now: NOW });
+
+        await expect(authorizeDiagnose.handler(ctx, { id: "box_1" as never, organizationId: "org_1" as never })).resolves.toStrictEqual({
+            slug: "babcdefghij",
+        });
+        expect(ops).toContainEqual({
+            document: { action: "box.diagnose", actorUserId: "usr_1", createdAt: NOW, organizationId: "org_1", target: "babcdefghij" },
+            kind: "insert",
+            table: "auditLog",
+        });
+    });
+
+    it("refuses a plain member, another org's box and a revoked box", async () => {
+        const member = makeCtx({ boxes: [box()], members: [{ ...owner("org_1"), role: "member" }] }).ctx;
+        const stranger = makeCtx({ boxes: [box({ organizationId: "org_2" })], members: [owner("org_1")] }).ctx;
+        const revoked = makeCtx({ boxes: [box({ status: "revoked" })], members: [owner("org_1")] }).ctx;
+        const args = { id: "box_1" as never, organizationId: "org_1" as never };
+
+        await expect(authorizeDiagnose.handler(member, args)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(authorizeDiagnose.handler(stranger, args)).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(authorizeDiagnose.handler(revoked, args)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("is internal: only POST /v1/boxes/diagnose, which holds the box's session, may call it", () => {
+        expect(authorizeDiagnose.visibility).toBe("internal");
     });
 });
 

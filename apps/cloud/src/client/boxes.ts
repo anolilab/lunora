@@ -1,6 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
+import type { DiagnoseReport } from "../boxes/diagnose";
 import { isAccountTarget, isBoxTarget, isTargetId } from "../provision-contract";
 import { formatBytes } from "./format";
 
@@ -71,6 +72,61 @@ export const describeEnrolError = (message: string): { message: string; quota: b
               quota: true,
           }
         : { message, quota: false };
+
+/** The names of the projects placed on each box, by box id — what the Boxes tab lists under "Projects". */
+export const projectNamesByBox = (projects: ReadonlyArray<{ boxId?: string; name: string }> | undefined): Map<string, string[]> => {
+    const byBox = new Map<string, string[]>();
+
+    for (const project of projects ?? []) {
+        if (project.boxId !== undefined) {
+            byBox.set(project.boxId, [...(byBox.get(project.boxId) ?? []), project.name]);
+        }
+    }
+
+    return byBox;
+};
+
+/** One celld fleet on a box, as the box last reported it. */
+export type BoxFleet = NonNullable<BoxView["fleets"]>[number];
+
+/** How a fleet's state reads. */
+export const FLEET_STATE: Readonly<Record<BoxFleet["state"], { label: string; tone: BoxTone }>> = {
+    failed: { label: "failed", tone: "danger" },
+    running: { label: "running", tone: "success" },
+    starting: { label: "starting", tone: "warning" },
+    stopped: { label: "stopped", tone: "neutral" },
+};
+
+/** Who may run a diagnose on a box: a manager, on a box that is connected (anything else fails at once with BOX_OFFLINE). */
+export const canDiagnose = (role: MemberRole | undefined, box: Pick<BoxView, "status">): boolean => canManage(role) && box.status === "online";
+
+/**
+ * How the studio prints a diagnose's output: `celld diagnose --json` answers
+ * one JSON document, so output that parses as JSON is pretty-printed; anything
+ * else (several tools' output, or a box that failed half-way) is shown as it came.
+ */
+export const formatDiagnoseOutput = (output: ReadonlyArray<string>): string => {
+    const text = output.join("\n");
+
+    try {
+        return JSON.stringify(JSON.parse(text) as unknown, null, 2);
+    } catch {
+        return text;
+    }
+};
+
+/** The sentence above a diagnose's output: whether it finished, and whether all of it is shown. */
+export const describeDiagnose = (report: DiagnoseReport): string => {
+    const shown = report.truncated ? " The output was cut short at the size limit; only its start is shown." : "";
+
+    if (report.ok) {
+        return `The box finished diagnosing itself.${shown}`;
+    }
+
+    const reason = report.error ? `${report.error.message} (${report.error.code})` : "the box reported a failure";
+
+    return `The diagnose did not finish: ${reason}.${report.output.length > 0 ? " What the box printed before that is below." : ""}${shown}`;
+};
 
 /** Megabytes as the studio prints sizes (`3.9 GB`). */
 export const formatMegabytes = (megabytes: number): string => formatBytes(megabytes * 1024 * 1024);

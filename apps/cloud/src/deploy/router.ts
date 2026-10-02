@@ -27,7 +27,7 @@ import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
 import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainVerifyRoute } from "./routes/domains";
@@ -794,6 +794,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxReleaseRoute, method: "GET", path: BOX_RELEASE_PATH, spec: { auth: "boxKey" } },
         // session — the revoke mutation asserts owner/admin of the box's org.
         { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
+        // session — the authorize mutation asserts owner/admin of the box's org; the job runs over the box's session.
+        { handler: handleBoxDiagnoseRoute, method: "POST", path: "/v1/boxes/diagnose", spec: { auth: "session" } },
         // session — a customer's own Cloudflare account (cloudflare-workers); the connect mutation asserts owner/admin.
         { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
         // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator, fetched by boxes.

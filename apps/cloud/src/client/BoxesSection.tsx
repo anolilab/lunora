@@ -11,9 +11,10 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { BoxView } from "./boxes";
-import { canManage } from "./boxes";
+import type { BoxView, MemberRole } from "./boxes";
+import { canDiagnose, canManage, projectNamesByBox } from "./boxes";
 import { BoxListItem } from "./BoxListItem";
+import { DiagnoseBoxDialog } from "./DiagnoseBoxDialog";
 import { EnrolBoxDialog } from "./EnrolBoxDialog";
 import { RenameBoxDialog } from "./RenameBoxDialog";
 import { RevokeBoxDialog } from "./RevokeBoxDialog";
@@ -23,34 +24,63 @@ import { useBoxDomain, useMyRole } from "./use-boxes";
 /** Stable empty list for a box with no projects (a fresh `[]` per row trips react-perf). */
 const NO_PROJECTS: ReadonlyArray<string> = [];
 
+interface BoxListProps {
+    boxes: ReadonlyArray<BoxView>;
+    domain?: string;
+    onDiagnose: (box: BoxView) => void;
+    onRename: (box: BoxView) => void;
+    onRevoke: (box: BoxView) => void;
+    projectsByBox: ReadonlyMap<string, string[]>;
+    role: MemberRole | undefined;
+}
+
+/** The boxes, each with the actions the caller's role allows on it. */
+const BoxList = ({ boxes, domain, onDiagnose, onRename, onRevoke, projectsByBox, role }: BoxListProps): ReactElement => (
+    <ul className="m-0 grid list-none p-0">
+        {boxes.map((box) => (
+            <BoxListItem
+                box={box}
+                diagnose={canDiagnose(role, box)}
+                domain={domain}
+                key={box._id}
+                manage={canManage(role)}
+                onDiagnose={() => {
+                    onDiagnose(box);
+                }}
+                onRename={() => {
+                    onRename(box);
+                }}
+                onRevoke={() => {
+                    onRevoke(box);
+                }}
+                projects={projectsByBox.get(box._id) ?? NO_PROJECTS}
+            />
+        ))}
+    </ul>
+);
+
 /**
  * Boxes tab (plan 458 W9): the organization's own servers that `celld-vps`
  * projects deploy to. Lists every box — revoked ones too, for their history —
- * and lets an owner or admin enrol, rename and revoke. Members see the same list
- * without the controls; the mutations assert the role regardless.
- *
- * There is no Diagnose action: no control-plane route runs `celld diagnose` on a
- * box yet, and a button with nothing behind it would be worse than none.
+ * and lets an owner or admin enrol, rename, diagnose (a connected box) and
+ * revoke. Members see the same list without the controls; the mutations and
+ * routes assert the role regardless.
  */
 export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.boxes.list>>): ReactElement => {
     const boxes = usePreloadedQuery(preloaded);
     const projects = useQuery(api.projects.listByOrg, { organizationId });
-    const manage = canManage(useMyRole(organizationId));
+    const role = useMyRole(organizationId);
+    const manage = canManage(role);
     const domain = useBoxDomain(organizationId);
 
     // `seq` remounts the enrol dialog per open, so a token minted earlier never reappears.
     const [enrolDialog, setEnrolDialog] = useState({ open: false, seq: 0 });
     const [renaming, setRenaming] = useState<BoxView | null>(null);
     const [revoking, setRevoking] = useState<BoxView | null>(null);
+    const [diagnosing, setDiagnosing] = useState<BoxView | null>(null);
     const [notice, setNotice] = useState<null | string>(null);
 
-    const projectsByBox = new Map<string, string[]>();
-
-    for (const project of projects ?? []) {
-        if (project.boxId !== undefined) {
-            projectsByBox.set(project.boxId, [...(projectsByBox.get(project.boxId) ?? []), project.name]);
-        }
-    }
+    const projectsByBox = projectNamesByBox(projects);
 
     const openEnrol = (): void => {
         setEnrolDialog((current) => {
@@ -94,24 +124,18 @@ export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnO
         );
     } else {
         body = (
-            <ul className="m-0 grid list-none p-0">
-                {boxes.map((box) => (
-                    <BoxListItem
-                        box={box}
-                        domain={domain}
-                        key={box._id}
-                        manage={manage}
-                        onRename={() => {
-                            setRenaming(box);
-                        }}
-                        onRevoke={() => {
-                            setNotice(null);
-                            setRevoking(box);
-                        }}
-                        projects={projectsByBox.get(box._id) ?? NO_PROJECTS}
-                    />
-                ))}
-            </ul>
+            <BoxList
+                boxes={boxes}
+                domain={domain}
+                onDiagnose={setDiagnosing}
+                onRename={setRenaming}
+                onRevoke={(box) => {
+                    setNotice(null);
+                    setRevoking(box);
+                }}
+                projectsByBox={projectsByBox}
+                role={role}
+            />
         );
     }
 
@@ -155,6 +179,14 @@ export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                     organizationId={organizationId}
                 />
             ) : null}
+            <DiagnoseBoxDialog
+                box={diagnosing}
+                key={diagnosing?._id ?? "none"}
+                onClose={() => {
+                    setDiagnosing(null);
+                }}
+                organizationId={organizationId}
+            />
             <RevokeBoxDialog
                 box={revoking}
                 onClose={() => {

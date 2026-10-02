@@ -171,12 +171,12 @@ export const handshake = async (
     state: FakeState,
     key: BoxKey,
     boxId: string,
-    options: { now?: number; onSend?: FrameListener } = {},
+    options: { hello?: Record<string, unknown>; now?: number; onSend?: FrameListener } = {},
 ): Promise<FakeSocket> => {
     const socket = fakeSocket(openSession(boxId, options.now ?? Date.now()), options.onSend);
 
     state.acceptWebSocket(socket);
-    await session.webSocketMessage(socket, helloFrame(boxId));
+    await session.webSocketMessage(socket, helloFrame(boxId, options.hello));
 
     const challenge = socket.received().find((frame) => frame.type === "challenge");
 

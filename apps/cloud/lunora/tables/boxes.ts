@@ -18,6 +18,13 @@ const boxStatus = v.union(v.literal("pending"), v.literal("online"), v.literal("
 /** The three binaries on a box, as its `hostd` reports them (`@lunora/hostd/protocol` `BoxVersions`). Displayed, never parsed. */
 const boxVersions = v.object({ caddy: v.string(), celld: v.string(), hostd: v.string() });
 
+/** One celld fleet on a box, as its `hostd` reports it (`@lunora/hostd/protocol` `FleetSummary`). */
+const boxFleet = v.object({
+    alias: v.string(),
+    deploymentId: v.optional(v.string()),
+    state: v.union(v.literal("running"), v.literal("stopped"), v.literal("starting"), v.literal("failed")),
+});
+
 export const boxesTables = {
     // A machine a customer runs `lunora-hostd` on (plan 458 D13, G12): org-owned,
     // never shared, and its `organizationId` never changes (§3 rule 6). The
@@ -32,6 +39,10 @@ export const boxesTables = {
         // could not — surfaced on the row rather than failing the enrolment.
         dnsError: v.optional(v.string()),
         enrolledAt: v.optional(v.number()),
+        // The celld fleets the box runs (one per alias, at most 500): what its
+        // `hello` reported, moved on by each deploy / reload / destroy the
+        // session sees succeed (`src/boxes/fleets.ts`). Displayed, never trusted.
+        fleets: v.optional(v.array(boxFleet)),
         ipv4: v.optional(v.string()),
         ipv6: v.optional(v.string()),
         lastSeenAt: v.optional(v.number()),
