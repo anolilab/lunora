@@ -702,12 +702,11 @@ installing it (enrol runs as `lunora-hostd`), since that directory is
   `sudo LUNORA_HOSTD_ENROL_TOKEN=… AWS_…=… bash install.sh --control-plane
 <origin> --bucket <bucket> [--endpoint …] --version <desired release>`.
   `--control-plane` is required until a production origin is compiled in.
-- **`esbuild` on the box:** `celld deploy` re-bundles every release and needs
-  `esbuild` (on `PATH` or `CELLD_ESBUILD`) for any Worker with imports — every
-  Lunora app. Neither the manifest nor `install.sh` ships it; found while
-  validating W8 (the lane's fixture Worker has no imports). Ship a pinned
-  esbuild in the release manifest (a schema change on both sides) and set
-  `CELLD_ESBUILD` for the one-shots.
+- **`esbuild` on the box — not needed (2026-10-03).** Raised while validating W8
+  and then disproved: releases deploy with `no_bundle: true` (W3), and celld
+  v0.6.0 deploys and serves a Worker importing `cloudflare:workers` that way with
+  no esbuild on `PATH` (real S3 deploy + node, not only `--dry-run`); without
+  `no_bundle` the same deploy fails with "esbuild not found".
 
 ### W8 — Hardening on the box (M)
 

@@ -10,8 +10,7 @@ needs no inbound port for the control plane.
 side-by-side upgrades (W7), and fleet isolation (W8) exist, with the
 `test:hostd` lane over all of it. Not yet: a committed release key (so nothing
 can be released or installed yet, see [below](#setting-up-the-release-key-maintainers)),
-`esbuild` on the box (see [Known limits](#known-limits)), and forwarding hostd's
-own logs as OTLP (W6).
+and forwarding hostd's own logs as OTLP (W6).
 
 ## Install
 
@@ -243,10 +242,12 @@ time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
   `hostd/`.
 - **Caddy runs as `lunora-hostd`.** It parses untrusted HTTP with the same uid
   that can read the box key.
-- **`celld deploy` needs `esbuild` on the box.** celld re-bundles every release
-  and looks for `esbuild` on `PATH` (or `CELLD_ESBUILD`); a Worker with imports
-  — every Lunora app imports `cloudflare:workers` — fails to deploy without it.
-  Neither the release manifest nor `install.sh` provides it yet.
+- **No `esbuild` on the box, by design.** A stored release is already bundled,
+  and `celldConfigFromRelease` deploys it with `no_bundle: true`, so neither
+  `celld deploy` nor the node calls esbuild — checked against celld v0.6.0 with
+  a Worker that imports `cloudflare:workers`, deployed to an S3 bucket and served
+  with no esbuild on `PATH`. A config without `no_bundle` would fail with
+  "esbuild not found"; never hand `celld deploy` one.
 - **The customer has root.** Nothing on the box is hidden from them; nothing
   billed depends on what the box reports (plan 458 D12).
 
