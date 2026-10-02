@@ -64,6 +64,10 @@ const HOSTD_PROTOCOL_LIMITS = {
     maxErrorMessageBytes: 8192,
     /** Most fleets one `hello` reports. */
     maxFleets: 500,
+    /** Most entries in `hello.isolation.problems`. */
+    maxIsolationProblems: 8,
+    /** Longest entry in `hello.isolation.problems`, in UTF-8 bytes. */
+    maxIsolationProblemBytes: 512,
     /** Largest encoded frame, in UTF-8 bytes (256 KiB). */
     maxFrameBytes: 262_144,
     /** Longest `progress.line`, in UTF-8 bytes (8 KiB). */

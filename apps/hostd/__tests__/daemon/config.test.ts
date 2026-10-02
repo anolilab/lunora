@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { configPathOf, loadBucketCredentials, parseHostdConfig } from "../../src/daemon/config";
+import { binaryPaths, configPathOf, loadBucketCredentials, parseHostdConfig } from "../../src/daemon/config";
 import { loadIdentity } from "../../src/daemon/identity";
 import { fleetSummaries, loadState, saveState } from "../../src/daemon/state";
 
@@ -24,9 +24,10 @@ describe(parseHostdConfig, () => {
         expect(parseHostdConfig(minimal)).toStrictEqual({
             ...minimal,
             allowRoot: false,
-            binaries: { caddy: "/var/lib/lunora-hostd/bin/caddy", celld: "/var/lib/lunora-hostd/bin/celld" },
             caddy: { adminAddress: "127.0.0.1:2019", askAddress: "127.0.0.1:2020", httpPort: 80, httpsPort: 443, tls: true },
             dataDir: "/var/lib/lunora-hostd",
+            fleetUser: "lunora-fleet",
+            installDir: "/opt/lunora-hostd",
             ports: { first: 20_000, last: 20_999 },
             singleTrust: false,
         });
@@ -38,10 +39,23 @@ describe(parseHostdConfig, () => {
         [{ caddy: { adminAddress: "0.0.0.0:2019" } }, /adminAddress/u],
         [{ ports: { first: 21_000, last: 20_000 } }, /ports.last/u],
         [{ keyFile: "relative/box.key" }, /keyFile/u],
+        [{ fleetUser: "root; rm -rf /" }, /fleetUser/u],
+        [{ fleetMemoryMaxMb: 16 }, /fleetMemoryMaxMb/u],
+        [{ installDir: "opt/lunora-hostd" }, /installDir/u],
     ])("refuses %o", (override, message) => {
         expect.assertions(1);
 
         expect(() => parseHostdConfig({ ...minimal, ...override })).toThrow(message);
+    });
+
+    it("runs the binaries of the current release in the install directory", () => {
+        expect.assertions(1);
+
+        expect(binaryPaths(parseHostdConfig({ ...minimal, installDir: "/srv/hostd" }))).toStrictEqual({
+            caddy: "/srv/hostd/current/caddy",
+            celld: "/srv/hostd/current/celld",
+            hostd: "/srv/hostd/current/lunora-hostd",
+        });
     });
 
     it("resolves --config, then LUNORA_HOSTD_CONFIG, then the default", () => {

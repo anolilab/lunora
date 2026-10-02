@@ -13,8 +13,10 @@ import { HOSTD_PROTOCOL_LIMITS, HOSTD_PROTOCOL_VERSION } from "../wire/constants
 import type { HelloMessage, RouteEntry } from "../wire/types";
 import { CaddyController } from "./caddy";
 import type { HostdConfig } from "./config";
-import { ConfigError, loadBucketCredentials } from "./config";
+import { binaryPaths, ConfigError, loadBucketCredentials } from "./config";
 import { loadIdentity } from "./identity";
+import type { Isolation, IsolationSystem } from "./isolation";
+import { helloIsolation, setUpIsolation } from "./isolation";
 import { JobRunner } from "./jobs";
 import type { Logger } from "./log";
 import LogTailer from "./log-tailer";
@@ -44,6 +46,8 @@ interface DaemonOptions {
     config: HostdConfig;
     /** Injected for tests. */
     fetch?: typeof fetch;
+    /** What the isolation self-check reads and runs: the real system unless a test injects its own. */
+    isolation?: IsolationSystem;
     logger: Logger;
     /** Report tick, injected for tests. */
     reportTickMs?: number;
@@ -60,6 +64,8 @@ class Daemon {
     public readonly state: HostdState;
 
     public readonly supervisor: Supervisor;
+
+    private isolation: Isolation | undefined;
 
     private routes: RouteEntry[] = [];
 
@@ -124,6 +130,10 @@ class Daemon {
             ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
         });
 
+        const isolation = await setUpIsolation(config, logger, this.options.isolation);
+
+        this.isolation = isolation;
+        this.supervisor.isolate(isolation);
         this.versions = await installedVersions(config);
         await this.startEdge();
         this.restoreFleets();
@@ -139,6 +149,7 @@ class Daemon {
                     this.routes = this.routes.filter((route) => route.alias !== alias);
                 },
                 ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
+                isolation: isolation.report,
                 logger,
                 saveState: () => {
                     saveState(config.dataDir, this.state);
@@ -228,6 +239,7 @@ class Daemon {
         return {
             boxId: this.options.config.boxId,
             fleets: fleetSummaries(this.state, HOSTD_PROTOCOL_LIMITS.maxFleets),
+            ...(this.isolation === undefined ? {} : { isolation: helloIsolation(this.isolation.report) }),
             protocol: HOSTD_PROTOCOL_VERSION,
             resources: { diskFreeMb, memMb: Math.floor(freemem() / MIB) },
             type: "hello",
@@ -241,10 +253,12 @@ class Daemon {
 
         this.caddy.writeBootConfig(this.routes, this.ports());
 
-        if (existsSync(config.binaries.caddy)) {
+        const { caddy } = binaryPaths(config);
+
+        if (existsSync(caddy)) {
             this.supervisor.startCaddy(this.caddy.configPath);
         } else {
-            logger.warn(`no Caddy at ${config.binaries.caddy}: fleets run, but nothing serves them publicly`);
+            logger.warn(`no Caddy at ${caddy}: fleets run, but nothing serves them publicly`);
         }
 
         await this.caddy.listenAsk();
@@ -252,6 +266,10 @@ class Daemon {
 
     /** Start the fleets the box ran before it stopped; the routing table then says which stay up. */
     private restoreFleets(): void {
+        if (this.isolation?.report.startsFleets === false) {
+            return;
+        }
+
         for (const [alias, record] of Object.entries(this.state.fleets)) {
             if (record.state !== "stopped") {
                 this.supervisor.startFleet({ alias, internalPort: record.internalPort, publicPort: record.publicPort });
@@ -291,7 +309,7 @@ class Daemon {
                 // eslint-disable-next-line no-await-in-loop -- one fleet at a time
                 await this.supervisor.stopFleet(alias);
                 this.state.fleets[alias] = { ...record, state: "stopped", updatedAt: Date.now() };
-            } else if (routed.has(alias) && record.state === "stopped") {
+            } else if (routed.has(alias) && record.state === "stopped" && this.isolation?.report.startsFleets !== false) {
                 this.supervisor.startFleet({ alias, internalPort: record.internalPort, publicPort: record.publicPort });
                 this.state.fleets[alias] = { ...record, state: "running", updatedAt: Date.now() };
             }
@@ -324,6 +342,7 @@ class Daemon {
         saveState(this.options.config.dataDir, this.state);
         await this.supervisor.shutdown();
         await this.caddy.close();
+        this.isolation?.stop();
     }
 }
 
@@ -336,6 +355,8 @@ const statusText = (config: HostdConfig): string => {
         `bucket:        s3://${config.bucket.name}${config.bucket.endpoint === undefined ? "" : ` via ${config.bucket.endpoint}`}`,
         `data:          ${config.dataDir}`,
         `single-trust:  ${config.singleTrust ? "yes" : "no"}`,
+        `fleet user:    ${config.fleetUser}`,
+        `install:       ${config.installDir}`,
         `fleets:        ${String(Object.keys(state.fleets).length)}`,
         ...Object.entries(state.fleets)
             .toSorted(([a], [b]) => a.localeCompare(b))

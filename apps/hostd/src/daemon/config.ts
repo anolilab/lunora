@@ -20,6 +20,18 @@ const DEFAULT_CONFIG_PATH = "/etc/lunora-hostd/config.json";
 /** Where fleets, releases and state live by default. */
 const DEFAULT_DATA_DIR = "/var/lib/lunora-hostd";
 
+/** Where `install.sh` and `upgrade` put each release's binaries (`{installDir}/{releaseId}/`) and the `current` link. */
+const DEFAULT_INSTALL_DIR = "/opt/lunora-hostd";
+
+/** The link in the install directory naming the release that runs. */
+const CURRENT_RELEASE_LINK = "current";
+
+/** The file name of each binary inside a release directory. */
+const RELEASE_BINARY_NAMES = { caddy: "caddy", celld: "celld", hostd: "lunora-hostd" } as const;
+
+/** The user every fleet runs as (plan 458 W8); `install.sh` creates it, with no shell and no home. */
+const DEFAULT_FLEET_USER = "lunora-fleet";
+
 /** The ports fleets are given from by default: two per fleet (public and internal), all on loopback. */
 const DEFAULT_PORTS = { first: 20_000, last: 20_999 } as const;
 
@@ -47,18 +59,16 @@ interface CaddyConfig {
     tls: boolean;
 }
 
-/** The binaries hostd runs, and replaces on an `upgrade`. */
+/** The binaries the box runs: always those of the `current` release in the install directory. */
 interface BinaryPaths {
     caddy: string;
     celld: string;
-    /** This daemon's own executable, when it runs as one (a single executable). Absent: `upgrade` leaves hostd alone. */
-    hostd?: string;
+    hostd: string;
 }
 
 interface HostdConfig {
     /** Run as root anyway. Off by default: hostd runs as its own user, and fleets (W8) as `lunora-fleet`. */
     allowRoot: boolean;
-    binaries: BinaryPaths;
     boxId: string;
     bucket: BucketConfig;
     caddy: CaddyConfig;
@@ -67,8 +77,14 @@ interface HostdConfig {
     /** The environment file holding the bucket credentials, mode 0600. */
     credentialsFile: string;
     dataDir: string;
+    /** Each fleet's cgroup `memory.max`, in MiB. Absent: the box's memory less a reserve for hostd, Caddy and the system. */
+    fleetMemoryMaxMb?: number;
+    /** The user fleets run as (W8). */
+    fleetUser: string;
     /** The box's own hostname, `{slug}.{box domain}`: its aliases answer under it. */
     hostname: string;
+    /** Where the releases live: `{installDir}/{releaseId}/` each, `{installDir}/current` the one that runs. */
+    installDir: string;
     /** The box's Ed25519 private key (PKCS#8 PEM), mode 0600. */
     keyFile: string;
     ports: { first: number; last: number };
@@ -113,6 +129,13 @@ const isAbsolutePath = (value: unknown): value is string => isString(value) && i
 
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
 
+const USER_NAME_PATTERN = /^[a-z_][\w-]{0,31}$/u;
+
+const isUserName = (value: unknown): value is string => typeof value === "string" && USER_NAME_PATTERN.test(value);
+
+const isOptionalMemoryMb = (value: unknown): value is number | undefined =>
+    value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 64);
+
 const isPort = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535;
 
 const LOOPBACK_ADDRESS_PATTERN = /^127\.0\.0\.1:\d{1,5}$/u;
@@ -136,8 +159,6 @@ const isOrigin = (value: unknown): value is string => {
 
 const isOptionalString = (value: unknown): value is string | undefined => value === undefined || isString(value);
 
-const isOptionalAbsolutePath = (value: unknown): value is string | undefined => value === undefined || isAbsolutePath(value);
-
 const optional = <T>(key: string, value: T | undefined): Record<string, T> => (value === undefined ? {} : { [key]: value });
 
 /** `record[key]` checked, or `fallback` when it is absent. */
@@ -153,17 +174,6 @@ const readCaddy = (raw: Record<string, unknown>): CaddyConfig => {
         httpPort: readOr(caddy, "httpPort", 80, isPort, "a port", "$.caddy"),
         httpsPort: readOr(caddy, "httpsPort", 443, isPort, "a port", "$.caddy"),
         tls: readOr(caddy, "tls", true, isBoolean, "a boolean", "$.caddy"),
-    };
-};
-
-const readBinaries = (raw: Record<string, unknown>, dataDirectory: string): BinaryPaths => {
-    const binaries = readOr(raw, "binaries", {}, isRecord, "an object", "$");
-    const hostd = readField(binaries, "hostd", isOptionalAbsolutePath, "an absolute path", "$.binaries");
-
-    return {
-        caddy: readOr(binaries, "caddy", join(dataDirectory, "bin", "caddy"), isAbsolutePath, "an absolute path", "$.binaries"),
-        celld: readOr(binaries, "celld", join(dataDirectory, "bin", "celld"), isAbsolutePath, "an absolute path", "$.binaries"),
-        ...optional("hostd", hostd),
     };
 };
 
@@ -193,7 +203,6 @@ const parseHostdConfig = (raw: unknown): HostdConfig => {
 
     return {
         allowRoot: readOr(raw, "allowRoot", false, isBoolean, "a boolean", "$"),
-        binaries: readBinaries(raw, dataDirectory),
         boxId: readField(raw, "boxId", isProtocolId, "a box id", "$"),
         bucket: {
             name: readField(bucket, "name", isString, "a bucket name", "$.bucket"),
@@ -204,7 +213,10 @@ const parseHostdConfig = (raw: unknown): HostdConfig => {
         controlPlane: readField(raw, "controlPlane", isOrigin, "an http(s) origin with no path", "$"),
         credentialsFile: readField(raw, "credentialsFile", isAbsolutePath, "an absolute path", "$"),
         dataDir: dataDirectory,
+        ...optional("fleetMemoryMaxMb", readField(raw, "fleetMemoryMaxMb", isOptionalMemoryMb, "a whole number of MiB, at least 64", "$")),
+        fleetUser: readOr(raw, "fleetUser", DEFAULT_FLEET_USER, isUserName, "a user name", "$"),
         hostname: readField(raw, "hostname", isString, "the box's hostname", "$"),
+        installDir: readOr(raw, "installDir", DEFAULT_INSTALL_DIR, isAbsolutePath, "an absolute path", "$"),
         keyFile: readField(raw, "keyFile", isAbsolutePath, "an absolute path", "$"),
         ports: readPorts(raw),
         singleTrust: readOr(raw, "singleTrust", false, isBoolean, "a boolean", "$"),
@@ -302,6 +314,17 @@ const saveBucketCredentials = (path: string, credentials: Readonly<Record<string
     writeFileAtomic(path, `# lunora-hostd bucket credentials — never shared with Lunora Cloud\n${lines.join("\n")}\n`, 0o600);
 };
 
+/** The binaries of the release `{installDir}/current` names. */
+const binaryPaths = (config: Pick<HostdConfig, "installDir">): BinaryPaths => {
+    const current = join(config.installDir, CURRENT_RELEASE_LINK);
+
+    return {
+        caddy: join(current, RELEASE_BINARY_NAMES.caddy),
+        celld: join(current, RELEASE_BINARY_NAMES.celld),
+        hostd: join(current, RELEASE_BINARY_NAMES.hostd),
+    };
+};
+
 /** The bucket prefix a fleet's objects live under, with its trailing slash dropped. */
 const fleetPrefix = (alias: string): string => `fleets/${alias}`;
 
@@ -310,11 +333,15 @@ const fleetBucketUrl = (bucket: BucketConfig, alias: string): string => `s3://${
 
 export type { BinaryPaths, BucketConfig, CaddyConfig, HostdConfig };
 export {
+    binaryPaths,
     ConfigError,
     configPathOf,
     CREDENTIAL_NAMES,
+    CURRENT_RELEASE_LINK,
     DEFAULT_CONFIG_PATH,
     DEFAULT_DATA_DIR,
+    DEFAULT_FLEET_USER,
+    DEFAULT_INSTALL_DIR,
     DEFAULT_PORTS,
     fleetBucketUrl,
     fleetPrefix,
@@ -324,6 +351,7 @@ export {
     parseEnvironmentFile,
     parseHostdConfig,
     permissionsOf,
+    RELEASE_BINARY_NAMES,
     saveBucketCredentials,
     saveHostdConfig,
     writeFileAtomic,

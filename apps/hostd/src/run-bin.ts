@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { ConfigError, configPathOf, loadHostdConfig } from "./daemon/config";
@@ -5,6 +6,10 @@ import { enrol } from "./daemon/enrol";
 import { createLogger } from "./daemon/log";
 import type { DaemonOptions } from "./daemon/run";
 import { Daemon, statusText } from "./daemon/run";
+import { currentPlatform } from "./daemon/upgrade";
+import type { HostdReleasePlatform, TrustedReleaseKey } from "./release";
+import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "./release";
+import { verifyArtifact } from "./release-verify";
 import HOSTD_VERSION from "./version";
 
 /** Where the binary writes; injected so tests need no real process streams. */
@@ -21,6 +26,8 @@ interface BinDependencies {
     fetch?: typeof fetch;
     /** Register a handler for SIGTERM/SIGINT; the real binary uses `process.once`. */
     onSignal?: (handler: () => void) => void;
+    /** The release keys `verify-release` trusts: the compiled-in set unless a test injects its own. */
+    trustedKeys?: Readonly<Record<string, TrustedReleaseKey>>;
 }
 
 const HELP = `lunora-hostd — runs Lunora Cloud fleets on your own server.
@@ -37,6 +44,8 @@ Usage:
         --ipv6 <address>
         --single-trust             run fleets without the isolation self-check
         --data-dir <path>          default /var/lib/lunora-hostd
+        --install-dir <path>       where install.sh put the releases,
+                                   default /opt/lunora-hostd
         --force                    enrol again as a new box
         --skip-bucket-check        do not probe the bucket with celld first
       The token may also come from LUNORA_HOSTD_ENROL_TOKEN, and the bucket
@@ -45,6 +54,12 @@ Usage:
       only this box can read and never sent to Lunora Cloud.
   lunora-hostd run         Run the daemon in the foreground (systemd runs this)
   lunora-hostd status      Show this box's enrolment and fleets
+  lunora-hostd verify-release <manifest.json> [--platform <p>]
+               [--hostd <file>] [--celld <file>] [--caddy <file>]
+      Verify a release manifest against the release keys compiled into this
+      binary, and each downloaded file against the size and SHA-256 it pins
+      for this platform (linux-x64 or linux-arm64). Prints the release id.
+      install.sh runs it.
   lunora-hostd --version   Print the version
   lunora-hostd --help      Print this help
 
@@ -59,6 +74,7 @@ const ENROL_OPTIONS = {
     "data-dir": { type: "string" },
     endpoint: { type: "string" },
     force: { type: "boolean" },
+    "install-dir": { type: "string" },
     ipv4: { type: "string" },
     ipv6: { type: "string" },
     region: { type: "string" },
@@ -68,6 +84,15 @@ const ENROL_OPTIONS = {
 } as const;
 
 const CONFIG_ONLY = { config: { type: "string" } } as const;
+
+const VERIFY_OPTIONS = {
+    caddy: { type: "string" },
+    celld: { type: "string" },
+    hostd: { type: "string" },
+    platform: { type: "string" },
+} as const;
+
+const PLATFORMS: ReadonlySet<string> = new Set<HostdReleasePlatform>(["linux-arm64", "linux-x64"]);
 
 const optional = <K extends string>(key: K, value: string | undefined): Partial<Record<K, string>> =>
     (value === undefined ? {} : { [key]: value }) as Partial<Record<K, string>>;
@@ -92,6 +117,7 @@ const runEnrol = async (args: ReadonlyArray<string>, output: BinOutput, dependen
             ...optional("dataDir", values["data-dir"]),
             ...optional("endpoint", values.endpoint),
             force: values.force === true,
+            ...optional("installDir", values["install-dir"]),
             ...optional("ipv4", values.ipv4),
             ...optional("ipv6", values.ipv6),
             ...optional("region", values.region),
@@ -125,6 +151,67 @@ const runDaemon = async (args: ReadonlyArray<string>, output: BinOutput, depende
     });
 
     return daemon.run();
+};
+
+/** `verify-release`: what install.sh trusts a release by, checked by the binary it just verified by hash. */
+const runVerifyRelease = async (args: ReadonlyArray<string>, output: BinOutput, dependencies: BinDependencies): Promise<number> => {
+    const { positionals, values } = parseArgs({ allowPositionals: true, args: [...args], options: VERIFY_OPTIONS, strict: true });
+    const [manifestPath] = positionals;
+    const platform = values.platform ?? currentPlatform();
+
+    if (manifestPath === undefined || positionals.length !== 1 || platform === undefined || !PLATFORMS.has(platform)) {
+        output.stderr("lunora-hostd verify-release needs one manifest file, on linux-x64 or linux-arm64 (or --platform)\n");
+
+        return 1;
+    }
+
+    let envelope: unknown;
+
+    try {
+        envelope = JSON.parse(await readFile(manifestPath, "utf8"));
+    } catch {
+        output.stderr(`lunora-hostd: ${manifestPath} is not a readable JSON file\n`);
+
+        return 1;
+    }
+
+    const verified = await verifyReleaseManifest(envelope, dependencies.trustedKeys ?? HOSTD_TRUSTED_RELEASE_KEYS);
+
+    if (!verified.ok) {
+        output.stderr(`lunora-hostd: the release manifest does not verify: ${verified.error.code}: ${verified.error.message}\n`);
+
+        return 1;
+    }
+
+    const { manifest } = verified.envelope;
+
+    for (const component of ["hostd", "celld", "caddy"] as const) {
+        const file = values[component];
+        const artifact = manifest[component].artifacts.find((entry) => entry.platform === platform);
+
+        if (file === undefined) {
+            continue;
+        }
+
+        if (artifact === undefined) {
+            output.stderr(`lunora-hostd: release ${manifest.releaseId} ships no ${component} for ${platform}\n`);
+
+            return 1;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- one file at a time, in a fixed order
+        const checked = await verifyArtifact(file, artifact.sha256, artifact.size);
+
+        if (!checked.ok) {
+            output.stderr(`lunora-hostd: ${component} (${file}) does not match the manifest: ${checked.error.code}: ${checked.error.message}\n`);
+
+            return 1;
+        }
+    }
+
+    output.stdout(`${manifest.releaseId}\n`);
+
+    return 0;
 };
 
 const runStatus = (args: ReadonlyArray<string>, output: BinOutput, dependencies: BinDependencies): number => {
@@ -165,6 +252,9 @@ const runBin = async (argv: ReadonlyArray<string>, output: BinOutput, dependenci
             }
             case "status": {
                 return runStatus(rest, output, dependencies);
+            }
+            case "verify-release": {
+                return await runVerifyRelease(rest, output, dependencies);
             }
             default: {
                 output.stderr(HELP);

@@ -34,6 +34,8 @@ interface EnrolInput {
     endpoint?: string;
     /** Overwrite an existing enrolment. */
     force: boolean;
+    /** Where the releases live (`{installDir}/current/…` are the binaries); `/opt/lunora-hostd` by default. */
+    installDir?: string;
     ipv4?: string;
     ipv6?: string;
     region?: string;
@@ -155,6 +157,7 @@ const draftConfig = (input: EnrolInput, controlPlane: string): HostdConfig => {
         credentialsFile: join(configDirectory, "bucket.env"),
         dataDir: input.dataDir ?? DEFAULT_DATA_DIR,
         hostname: "pending",
+        ...(input.installDir === undefined ? {} : { installDir: input.installDir }),
         keyFile: join(configDirectory, "box.key"),
         ports: DEFAULT_PORTS,
         singleTrust: input.singleTrust,

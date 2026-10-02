@@ -3,7 +3,7 @@
  * control plane: what it sends, what it writes, and that the token never
  * appears in anything it prints.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,8 @@ describe("lunora-hostd enrol", () => {
         join(root, "etc", "config.json"),
         "--data-dir",
         join(root, "data"),
+        "--install-dir",
+        join(root, "opt"),
         "--control-plane",
         plane.origin,
         "--bucket",
@@ -58,8 +60,9 @@ describe("lunora-hostd enrol", () => {
         await plane.listen();
         root = mkdtempSync(join(tmpdir(), "lunora-hostd-enrol-"));
         mkdirSync(join(root, "data"), { recursive: true });
-        // celld's bucket probe runs the installed celld: here, the fake.
-        writeFakeBinaries(join(root, "data", "bin"), join(root, "records"));
+        // celld's bucket probe runs the installed celld: here, the fake, as install.sh lays it out.
+        writeFakeBinaries(join(root, "opt", "hostd-v0_0_0"), join(root, "records"));
+        symlinkSync("hostd-v0_0_0", join(root, "opt", "current"));
         output = { stderr: "", stdout: "" };
     });
 

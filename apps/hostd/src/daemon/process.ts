@@ -48,6 +48,8 @@ interface SupervisedOptions {
     name: string;
     /** Each line the child prints, as it prints it. */
     onLine?: (line: string) => void;
+    /** Called with each child's pid as soon as it is spawned (W8 moves a fleet's node into its cgroup). */
+    onSpawn?: (pid: number) => void;
     spawn?: SpawnFunction;
     timers?: Timers;
     uid?: number;
@@ -157,6 +159,10 @@ class SupervisedProcess {
 
         this.child = child;
         this.startedAt = this.timers.now();
+
+        if (child.pid !== undefined) {
+            this.options.onSpawn?.(child.pid);
+        }
 
         for (const stream of [child.stdout, child.stderr]) {
             if (stream) {

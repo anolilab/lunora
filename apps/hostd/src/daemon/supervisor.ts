@@ -15,8 +15,12 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { DIRECT_LAUNCH, launchCommand, launchIdentity } from "./capabilities";
 import type { HostdConfig } from "./config";
-import { fleetBucketUrl } from "./config";
+import { binaryPaths, fleetBucketUrl } from "./config";
+import { CHILD_PATH, fleetEnvironment } from "./fleet-environment";
+import type { Isolation } from "./isolation";
+import { ensureFleetDirectory } from "./isolation";
 import { JobError } from "./job-error";
 import type { Logger } from "./log";
 import type { SpawnFunction, Timers } from "./process";
@@ -30,9 +34,6 @@ const CADDY_STOP_BUDGET_MS = 10_000;
 
 /** The path every celld node answers readiness on: 200 `{"ok":true}` once ready, 503 while booting or draining. */
 const CELLD_HEALTH_PATH = "/.well-known/celld/health";
-
-/** A minimal `PATH` for children: nothing of the daemon's own environment leaks into a fleet. */
-const CHILD_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 interface FleetPorts {
     internalPort: number;
@@ -53,6 +54,12 @@ const allocatePorts = (range: { first: number; last: number }, used: ReadonlySet
 
     throw new JobError("PORTS_EXHAUSTED", `every port pair in ${String(range.first)}-${String(range.last)} is taken; widen ports in the hostd config`);
 };
+
+/** How the supervisor starts its children (W8): the fleets as their own user, Caddy without spare capabilities, each fleet in its cgroup. */
+type ChildIsolation = Pick<Isolation, "account" | "caddy" | "cgroups" | "fleet">;
+
+/** No isolation: every child runs directly as the daemon's user (tests, development boxes). */
+const NO_ISOLATION: ChildIsolation = { caddy: DIRECT_LAUNCH, fleet: DIRECT_LAUNCH };
 
 interface SupervisorOptions {
     config: HostdConfig;
@@ -85,17 +92,6 @@ const celldNodeArgs = (config: HostdConfig, launch: FleetLaunch): string[] => [
     "--trust-forwarded-headers",
 ];
 
-/** The environment of a celld child: cleared, then only what celld needs. */
-const celldEnvironment = (config: HostdConfig, credentials: Readonly<Record<string, string>>): NodeJS.ProcessEnv => {
-    return {
-        ...credentials,
-        ...(config.bucket.region === undefined ? {} : { AWS_REGION: config.bucket.region }),
-        CELLD_DURABILITY: "bucket",
-        PATH: CHILD_PATH,
-        RUST_LOG: "error,celld=warn",
-    };
-};
-
 const pause = async (ms: number): Promise<void> =>
     new Promise((resolve) => {
         setTimeout(resolve, ms);
@@ -105,6 +101,8 @@ class Supervisor {
     private caddy: SupervisedProcess | undefined;
 
     private readonly fleets = new Map<string, { launch: FleetLaunch; process: SupervisedProcess }>();
+
+    private childIsolation: ChildIsolation = NO_ISOLATION;
 
     private readonly options: SupervisorOptions;
 
@@ -132,6 +130,16 @@ class Supervisor {
         return this.caddy?.recentOutput ?? [];
     }
 
+    /** How children are started: {@link NO_ISOLATION} until {@link isolate} is called. */
+    public get isolation(): ChildIsolation {
+        return this.childIsolation;
+    }
+
+    /** Start every child from now on as `isolation` says (the daemon calls this once, before starting any). */
+    public isolate(isolation: ChildIsolation): void {
+        this.childIsolation = isolation;
+    }
+
     /** Start `alias`'s node on its ports; a no-op while it already runs on them. */
     public startFleet(launch: FleetLaunch): void {
         const existing = this.fleets.get(launch.alias);
@@ -142,18 +150,35 @@ class Supervisor {
             return;
         }
 
-        const { config } = this.options;
-        const directory = join(config.dataDir, "fleets", launch.alias);
-
-        mkdirSync(directory, { mode: 0o750, recursive: true });
+        const { config, logger } = this.options;
+        const { account, cgroups, fleet } = this.isolation;
+        const directory = ensureFleetDirectory(config.dataDir, launch.alias, account);
+        const command = launchCommand(fleet, binaryPaths(config).celld, celldNodeArgs(config, launch));
 
         const process = new SupervisedProcess({
-            args: celldNodeArgs(config, launch),
-            command: config.binaries.celld,
+            args: command.args,
+            command: command.command,
             cwd: directory,
-            env: celldEnvironment(config, this.options.credentials()),
-            logger: this.options.logger,
+            env: fleetEnvironment({
+                credentials: this.options.credentials(),
+                directory,
+                kind: "node",
+                ...(config.bucket.region === undefined ? {} : { region: config.bucket.region }),
+            }),
+            ...launchIdentity(fleet),
+            logger,
             name: `celld ${launch.alias}`,
+            ...(cgroups === undefined
+                ? {}
+                : {
+                      onSpawn: (pid: number) => {
+                          try {
+                              cgroups.attach(launch.alias, pid);
+                          } catch (error) {
+                              logger.warn(`could not put ${launch.alias}'s node into its cgroup: ${(error as Error).message}`);
+                          }
+                      },
+                  }),
             ...(this.options.spawn === undefined ? {} : { spawn: this.options.spawn }),
             ...(this.options.timers === undefined ? {} : { timers: this.options.timers }),
         });
@@ -172,6 +197,7 @@ class Supervisor {
 
         this.fleets.delete(alias);
         await fleet.process.stop(CELLD_STOP_BUDGET_MS);
+        this.isolation.cgroups?.release(alias);
     }
 
     /** Restart `alias`'s node in place (`reload`): stop it, then start it on the same ports. */
@@ -237,9 +263,11 @@ class Supervisor {
 
         mkdirSync(home, { mode: 0o750, recursive: true });
 
+        const command = launchCommand(this.isolation.caddy, binaryPaths(config).caddy, ["run", "--config", configPath]);
+
         this.caddy ??= new SupervisedProcess({
-            args: ["run", "--config", configPath],
-            command: config.binaries.caddy,
+            args: command.args,
+            command: command.command,
             cwd: home,
             // Certificates and Caddy's own state stay under the data directory.
             env: { HOME: home, PATH: CHILD_PATH, XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data") },
@@ -275,5 +303,5 @@ class Supervisor {
     }
 }
 
-export type { FleetLaunch, FleetPorts, SupervisorOptions };
-export { allocatePorts, CADDY_STOP_BUDGET_MS, CELLD_HEALTH_PATH, CELLD_STOP_BUDGET_MS, celldEnvironment, celldNodeArgs, CHILD_PATH, Supervisor };
+export type { ChildIsolation, FleetLaunch, FleetPorts, SupervisorOptions };
+export { allocatePorts, CADDY_STOP_BUDGET_MS, CELLD_HEALTH_PATH, CELLD_STOP_BUDGET_MS, celldNodeArgs, NO_ISOLATION, Supervisor };

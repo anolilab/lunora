@@ -1,7 +1,11 @@
 /**
- * The `upgrade` job (plan 458 W7, protocol §8.3): replace the box's binaries —
- * celld, Caddy and `lunora-hostd` itself — with the ones a signed release
- * manifest pins, then restart every child onto them.
+ * The `upgrade` job (plan 458 W7, protocol §8.3): install the release a signed
+ * manifest pins — `lunora-hostd`, celld and Caddy — and switch the box to it.
+ *
+ * Releases live side by side, as `install.sh` lays them out:
+ * `{installDir}/{releaseId}/{lunora-hostd,celld,caddy,manifest.json}`, with
+ * `{installDir}/current` a symlink to the one that runs. The systemd unit
+ * starts `current/lunora-hostd`, and every child is started from `current/`.
  *
  * It refuses at the first failure and changes nothing until every artifact is
  * in hand and checked. The manifest is fetched with a signed request (its URL
@@ -9,14 +13,30 @@
  * COMPILED INTO this binary — never a key the manifest or the control plane
  * brings; a placeholder key verifies nothing. A manifest for another release
  * than the job names is refused. Each artifact for this platform is
- * downloaded, its size and then its SHA-256 checked before it is decompressed,
- * and it is run once (`--version`) to prove it starts here. Then each binary is
- * swapped in with a rename, the fleets restart one at a time, then Caddy; when
- * `lunora-hostd` itself changed, the daemon exits for systemd to start the new
- * one.
+ * downloaded into `{releaseId}.partial/`, its size and then its SHA-256
+ * checked before it is decompressed, and it is run once (`--version`) to
+ * prove it starts here. Then the directory is renamed into place and
+ * `current` swapped to it in one rename. When `lunora-hostd` itself changed,
+ * the daemon exits and systemd starts the new one, which starts every child
+ * on the new binaries; otherwise the fleets restart one at a time, then
+ * Caddy. The release that ran before stays, for a manual rollback (point
+ * `current` back at it); older ones are removed.
  */
 import { execFile } from "node:child_process";
-import { chmodSync, createReadStream, createWriteStream, renameSync, rmSync } from "node:fs";
+import {
+    chmodSync,
+    createReadStream,
+    createWriteStream,
+    existsSync,
+    mkdirSync,
+    readdirSync,
+    readlinkSync,
+    renameSync,
+    rmSync,
+    symlinkSync,
+    writeFileSync,
+} from "node:fs";
+import { basename, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 
@@ -26,6 +46,7 @@ import { verifyArtifact } from "../release-verify";
 import HOSTD_VERSION from "../version";
 import type { UpgradeJob } from "../wire/types";
 import type { HostdConfig } from "./config";
+import { binaryPaths, CURRENT_RELEASE_LINK, RELEASE_BINARY_NAMES } from "./config";
 import { JobError } from "./job-error";
 import type { SignedFetch } from "./signed-fetch";
 import type { Supervisor } from "./supervisor";
@@ -75,10 +96,8 @@ const versionToken = (output: string | undefined): string => {
 
 /** The installed versions of celld and Caddy, as `hello.versions` reports them. */
 const installedVersions = async (config: HostdConfig): Promise<{ caddy: string; celld: string; hostd: string }> => {
-    const [celld, caddy] = await Promise.all([
-        versionOutput(config.binaries.celld, VERSION_ARGS.celld),
-        versionOutput(config.binaries.caddy, VERSION_ARGS.caddy),
-    ]);
+    const binaries = binaryPaths(config);
+    const [celld, caddy] = await Promise.all([versionOutput(binaries.celld, VERSION_ARGS.celld), versionOutput(binaries.caddy, VERSION_ARGS.caddy)]);
 
     return { caddy: versionToken(caddy), celld: versionToken(celld), hostd: HOSTD_VERSION };
 };
@@ -138,17 +157,17 @@ const download = async (fetcher: typeof fetch, artifact: HostdReleaseArtifact, p
     await pipeline(response.body.pipeThrough(capped), createWriteStream(path, { mode: 0o600 }));
 };
 
-/** One component to install: where it goes, and the artifact that replaces it. */
+/** One component to install: where it goes, and the artifact that holds it. */
 interface Install {
     artifact: HostdReleaseArtifact;
     component: "caddy" | "celld" | "hostd";
     target: string;
 }
 
-/** Download, check and stage one component next to its target as `{target}.new`. */
-const stage = async (fetcher: typeof fetch, install: Install, progress: (line: string) => void): Promise<string> => {
+/** Download and check one component, and leave the binary at `install.target`. */
+const stage = async (fetcher: typeof fetch, install: Install, progress: (line: string) => void): Promise<void> => {
     const downloaded = `${install.target}.download`;
-    const staged = `${install.target}.new`;
+    const staged = install.target;
 
     progress(`downloading ${install.component} ${install.artifact.url}`);
     await download(fetcher, install.artifact, downloaded);
@@ -177,8 +196,40 @@ const stage = async (fetcher: typeof fetch, install: Install, progress: (line: s
     }
 
     progress(`${install.component} verified: ${printed}`);
+};
 
-    return staged;
+const RELEASE_ID_PATTERN = /^[\w-]{1,128}$/u;
+
+/** The release `{installDir}/current` points at, or `undefined` when there is none. */
+const currentRelease = (installDirectory: string): string | undefined => {
+    try {
+        return basename(readlinkSync(join(installDirectory, CURRENT_RELEASE_LINK)));
+    } catch {
+        return undefined;
+    }
+};
+
+/** Point `{installDir}/current` at `releaseId` in one rename, so it never dangles. */
+const switchCurrent = (installDirectory: string, releaseId: string): void => {
+    const next = join(installDirectory, `${CURRENT_RELEASE_LINK}.next`);
+
+    rmSync(next, { force: true });
+    symlinkSync(releaseId, next);
+    renameSync(next, join(installDirectory, CURRENT_RELEASE_LINK));
+};
+
+/** Remove every installed release but `keep` — only directories that hold a `manifest.json`, so nothing else there is touched. */
+const pruneReleases = (installDirectory: string, keep: ReadonlySet<string>): void => {
+    for (const entry of readdirSync(installDirectory, { withFileTypes: true })) {
+        if (
+            entry.isDirectory() &&
+            RELEASE_ID_PATTERN.test(entry.name) &&
+            !keep.has(entry.name) &&
+            existsSync(join(installDirectory, entry.name, "manifest.json"))
+        ) {
+            rmSync(join(installDirectory, entry.name), { force: true, recursive: true });
+        }
+    }
 };
 
 /**
@@ -234,45 +285,52 @@ const runUpgrade = async (job: UpgradeJob, options: UpgradeOptions, progress: (l
         return found;
     };
 
-    const { binaries } = options.config;
-    const installs: Install[] = [
-        { artifact: artifactOf("celld"), component: "celld", target: binaries.celld },
-        { artifact: artifactOf("caddy"), component: "caddy", target: binaries.caddy },
-    ];
+    const { installDir } = options.config;
+    const running = currentRelease(installDir);
 
-    // hostd replaces itself only when it runs as an installed binary, and only for a new version.
-    if (binaries.hostd !== undefined && manifest.hostd.version !== HOSTD_VERSION) {
-        installs.push({ artifact: artifactOf("hostd"), component: "hostd", target: binaries.hostd });
+    if (running === manifest.releaseId) {
+        progress(`release ${manifest.releaseId} is the one running; nothing to install`);
+
+        return;
     }
 
+    const target = join(installDir, manifest.releaseId);
+    const staging = `${target}.partial`;
     const fetcher = options.fetch ?? globalThis.fetch;
-    const staged: { install: Install; path: string }[] = [];
+
+    rmSync(staging, { force: true, recursive: true });
+    mkdirSync(staging, { recursive: true });
+    // Not left to the umask: the fleet user executes celld from here.
+    chmodSync(staging, 0o755);
 
     try {
-        for (const install of installs) {
+        for (const component of ["hostd", "celld", "caddy"] as const) {
             // eslint-disable-next-line no-await-in-loop -- one download at a time on a small box
-            staged.push({ install, path: await stage(fetcher, install, progress) });
-        }
-    } catch (error) {
-        for (const { path } of staged) {
-            rmSync(path, { force: true });
+            await stage(fetcher, { artifact: artifactOf(component), component, target: join(staging, RELEASE_BINARY_NAMES[component]) }, progress);
         }
 
+        writeFileSync(join(staging, "manifest.json"), `${JSON.stringify(verified.envelope)}\n`, { mode: 0o644 });
+    } catch (error) {
+        rmSync(staging, { force: true, recursive: true });
         throw error;
     }
 
-    for (const { install, path } of staged) {
-        renameSync(path, install.target);
-        progress(`installed ${install.component} at ${install.target}`);
+    rmSync(target, { force: true, recursive: true });
+    renameSync(staging, target);
+    switchCurrent(installDir, manifest.releaseId);
+    progress(`installed release ${manifest.releaseId} at ${target}; ${CURRENT_RELEASE_LINK} -> ${manifest.releaseId}`);
+    pruneReleases(installDir, new Set([manifest.releaseId, ...(running === undefined ? [] : [running])]));
+
+    if (manifest.hostd.version !== HOSTD_VERSION) {
+        // The new lunora-hostd starts every child from current/ when systemd restarts it.
+        progress(`lunora-hostd ${manifest.hostd.version} installed; restarting into it`);
+        options.onSelfReplaced();
+
+        return;
     }
 
     await options.supervisor.restartAll(progress);
-
-    if (staged.some(({ install }) => install.component === "hostd")) {
-        progress(`lunora-hostd ${manifest.hostd.version} installed; restarting into it`);
-        options.onSelfReplaced();
-    }
 };
 
 export type { UpgradeOptions };
-export { currentPlatform, installedVersions, runUpgrade, versionToken };
+export { currentPlatform, currentRelease, installedVersions, runUpgrade, switchCurrent, versionToken };

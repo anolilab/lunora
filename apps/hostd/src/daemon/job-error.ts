@@ -13,6 +13,7 @@ type JobErrorCode =
     | "CELLD_FAILED"
     | "FETCH_FAILED"
     | "HEALTH_TIMEOUT"
+    | "ISOLATION_FAILED"
     | "JOB_FAILED"
     | "NO_FLEET"
     | "ORIGIN_REFUSED"

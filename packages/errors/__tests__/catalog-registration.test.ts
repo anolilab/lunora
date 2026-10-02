@@ -119,6 +119,7 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     ["HASH_MISMATCH", "apps/hostd/src/release-verify.ts"],
     ["HEALTH_TIMEOUT", "apps/hostd/src/daemon/job-error.ts"],
     ["INVALID_EXPECTATION", "apps/hostd/src/release-verify.ts"],
+    ["ISOLATION_FAILED", "apps/hostd/src/daemon/job-error.ts"],
     ["JOB_FAILED", "apps/hostd/src/daemon/job-error.ts"],
     ["JOB_TIMEOUT", "apps/cloud/src/boxes/jobs.ts"],
     ["NO_FLEET", "apps/hostd/src/daemon/job-error.ts"],
@@ -276,7 +277,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(31);
+        expect.assertions(32);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");

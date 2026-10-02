@@ -13,7 +13,7 @@ import { Daemon } from "../../src/daemon/run";
 import { loadState } from "../../src/daemon/state";
 import type { DeployJob } from "../../src/wire/types";
 import type { TestBox } from "./helpers/box";
-import { createTestBox } from "./helpers/box";
+import { createTestBox, unisolatedSystem } from "./helpers/box";
 import { caddyInvocations, caddyLoads, celldInvocations, setFakeFlag } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
 
@@ -60,7 +60,7 @@ describe("the daemon", () => {
         await plane.listen();
         box = await createTestBox(plane);
         plane.releases.set("dep_1", storedRelease());
-        daemon = new Daemon({ config: box.config, logger: silentLogger, reportTickMs: 100 });
+        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger, reportTickMs: 100 });
         running = daemon.run();
         await plane.authenticated();
     });
@@ -81,6 +81,40 @@ describe("the daemon", () => {
         expect(plane.received.some((message) => message.type === "auth")).toBe(true);
     });
 
+    it("reports its isolation self-check in hello: single-trust, naming each failed check", () => {
+        expect.assertions(1);
+
+        expect(plane.received.find((message) => message.type === "hello")).toMatchObject({
+            isolation: {
+                problems: [
+                    "fleet user: no local user lunora-fleet (install.sh creates it)",
+                    "egress policy: not applied: fleets do not run as their own user",
+                    expect.stringMatching(/^memory limits: not running as a systemd service/u),
+                ],
+                status: "single-trust",
+            },
+        });
+    });
+
+    it("starts no fleet when the self-check fails on a box not enrolled --single-trust", async () => {
+        expect.assertions(4);
+
+        daemon.stop();
+        await running;
+        daemon = new Daemon({ config: { ...box.config, singleTrust: false }, isolation: unisolatedSystem(), logger: silentLogger });
+        running = daemon.run();
+        await plane.authenticated(2);
+
+        expect(plane.received.findLast((message) => message.type === "hello")).toMatchObject({ isolation: { status: "refused" } });
+
+        const { result } = await plane.dispatch(deployJob(plane));
+        const diagnosis = await plane.dispatch({ kind: "diagnose" });
+
+        expect(result.error).toMatchObject({ code: "ISOLATION_FAILED", message: expect.stringMatching(/no local user lunora-fleet/u) });
+        expect(celldInvocations(box.records).some((run) => run.argv[0] === "--bucket" || run.argv[0] === "deploy")).toBe(false);
+        expect(diagnosis.progress).toContain("isolation: refused (no fleet starts)");
+    });
+
     it("answers a ping with a pong", async () => {
         expect.assertions(1);
 
@@ -92,7 +126,7 @@ describe("the daemon", () => {
     });
 
     it("deploys a release end to end", async () => {
-        expect.assertions(14);
+        expect.assertions(15);
 
         plane.pushRoutes([{ alias: "my-app", hostname: `my-app.${plane.hostname}` }]);
 
@@ -152,15 +186,23 @@ describe("the daemon", () => {
             `127.0.0.1:${String(first + 1)}`,
             "--trust-forwarded-headers",
         ]);
-        // The fleet's environment is cleared to what celld needs: no daemon variable leaks in.
+
+        // The fleet's environment is the allowlist, built from nothing: no daemon variable leaks in.
+        const fleetDirectory = join(box.config.dataDir, "fleets", "my-app");
+
         expect(node?.env).toStrictEqual({
             AWS_ACCESS_KEY_ID: "test-key",
             AWS_REGION: "us-east-1",
             AWS_SECRET_ACCESS_KEY: "test-secret",
             CELLD_DURABILITY: "bucket",
+            HOME: fleetDirectory,
+            LANG: "C.UTF-8",
             PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             RUST_LOG: "error,celld=warn",
+            TMPDIR: fleetDirectory,
         });
+        // `celld deploy` gets the same environment, without the node's durability mode.
+        expect(deploy?.env).toStrictEqual(Object.fromEntries(Object.entries(node?.env ?? {}).filter(([name]) => name !== "CELLD_DURABILITY")));
 
         // Caddy now proxies the alias's hostname to the fleet.
         const load = caddyLoads(box.records).at(-1);
@@ -263,7 +305,7 @@ describe("the daemon", () => {
     });
 
     it("diagnoses the box and each fleet with celld diagnose", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         await plane.dispatch(deployJob(plane));
 
@@ -271,6 +313,7 @@ describe("the daemon", () => {
 
         expect(result.ok).toBe(true);
         expect(progress[0]).toMatch(/^lunora-hostd .+, box box_test_1/u);
+        expect(progress[1]).toBe("isolation: single-trust");
         expect(progress.some((line) => line.startsWith('my-app| {"check":"bucket'))).toBe(true);
     });
 
@@ -359,7 +402,7 @@ describe("the daemon", () => {
         daemon.stop();
         await running;
 
-        daemon = new Daemon({ config: box.config, logger: silentLogger });
+        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger });
         running = daemon.run();
         await plane.authenticated(2);
 

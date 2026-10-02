@@ -32,10 +32,27 @@ export interface BoxResources {
     memMb: number;
 }
 
+/**
+ * Whether the box isolates its fleets (plan 458 W8): `enforced` when every
+ * self-check passed; `single-trust` when one failed but the box was enrolled
+ * with `--single-trust`, so fleets run anyway; `refused` when one failed and
+ * the box therefore starts no fleet.
+ */
+export type IsolationStatus = "enforced" | "refused" | "single-trust";
+
+/** The box's isolation self-check, reported in {@link HelloMessage.isolation}. */
+export interface BoxIsolation {
+    /** Each failed check, as a sentence for the studio. Absent when every check passed. */
+    problems?: string[];
+    status: IsolationStatus;
+}
+
 /** First frame on every connection: who the box is, what it speaks, and what it runs. */
 export interface HelloMessage {
     boxId: string;
     fleets: FleetSummary[];
+    /** The isolation self-check (W8). Absent from a box that has not run one. */
+    isolation?: BoxIsolation;
     /** The protocol version the box speaks. See `negotiateProtocolVersion`. */
     protocol: number;
     resources: BoxResources;

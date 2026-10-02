@@ -18,6 +18,8 @@ import type { CaddyController } from "./caddy";
 import { celldDeploy, celldDiagnose } from "./celld-cli";
 import type { HostdConfig } from "./config";
 import { fleetPrefix } from "./config";
+import type { IsolationReport } from "./isolation";
+import { ensureFleetDirectory, removeFleetDirectory, shareWithFleet } from "./isolation";
 import { JobError, jobFailure, truncateUtf8 } from "./job-error";
 import type { Logger } from "./log";
 import { fetchRelease, writeReleaseDirectory } from "./release-files";
@@ -46,6 +48,8 @@ interface JobContext {
     dropRoutes: (alias: string) => void;
     /** Injected for tests. */
     fetch?: typeof fetch;
+    /** The isolation self-check: a `deploy` or `reload` is refused while it says no fleet may start. */
+    isolation: IsolationReport;
     logger: Logger;
     /** Persist `state` after a change. */
     saveState: () => void;
@@ -75,9 +79,24 @@ const setFleet = (context: JobContext, alias: string, record: FleetRecord): void
 /** The ports every fleet on the box holds. */
 const usedPorts = (state: HostdState): Set<number> => new Set(Object.values(state.fleets).flatMap((record) => [record.publicPort, record.internalPort]));
 
+/**
+ * Refuse to start a fleet while the isolation self-check says none may start.
+ * @throws {JobError} `ISOLATION_FAILED`, naming each failed check.
+ */
+const assertFleetsMayStart = (context: JobContext): void => {
+    if (!context.isolation.startsFleets) {
+        throw new JobError(
+            "ISOLATION_FAILED",
+            `this box cannot isolate its fleets, so it starts none (${context.isolation.problems.join("; ")}). Fix that, or enrol the box with --single-trust`,
+        );
+    }
+};
+
 const deploy = async (context: JobContext, job: DeployJob, progress: Progress): Promise<string> => {
     const { config } = context;
+    const { account, fleet } = context.supervisor.isolation;
 
+    assertFleetsMayStart(context);
     progress(`fetching release ${job.deploymentId}`);
 
     const { bytes, release } = await fetchRelease(context.signedFetch, job.releaseUrl);
@@ -89,10 +108,18 @@ const deploy = async (context: JobContext, job: DeployJob, progress: Progress): 
     const directory = join(config.dataDir, "releases", job.deploymentId);
 
     writeReleaseDirectory(directory, release, job);
+
+    // `celld deploy` runs as the fleet user, which reads the release through the fleet group.
+    if (account !== undefined) {
+        shareWithFleet(directory, account);
+    }
+
     progress(`wrote ${directory}`);
 
     const version = await celldDeploy(config, job.alias, directory, {
         credentials: context.credentials(),
+        directory: ensureFleetDirectory(config.dataDir, job.alias, account),
+        launch: fleet,
         onLine: (line) => {
             progress(`celld: ${line}`);
         },
@@ -143,7 +170,7 @@ const destroy = async (context: JobContext, job: DestroyJob, progress: Progress)
         context.saveState();
     }
 
-    rmSync(join(config.dataDir, "fleets", job.alias), { force: true, recursive: true });
+    await removeFleetDirectory(config.dataDir, job.alias, context.supervisor.isolation.fleet, context.supervisor.isolation.account);
 
     if (record?.deploymentId !== undefined) {
         rmSync(join(config.dataDir, "releases", record.deploymentId), { force: true, recursive: true });
@@ -171,6 +198,7 @@ const reload = async (context: JobContext, job: ReloadJob, progress: Progress): 
         throw new JobError("NO_FLEET", `no fleet for ${job.alias} on this box`);
     }
 
+    assertFleetsMayStart(context);
     progress(`restarting fleet ${job.alias}`);
 
     if (context.supervisor.isRunning(job.alias)) {
@@ -189,6 +217,12 @@ const diagnose = async (context: JobContext, progress: Progress): Promise<void> 
     const { config } = context;
 
     progress(`lunora-hostd ${HOSTD_VERSION}, box ${config.boxId} (${config.hostname})`);
+    progress(`isolation: ${context.isolation.status}${context.isolation.startsFleets ? "" : " (no fleet starts)"}`);
+
+    for (const problem of context.isolation.problems) {
+        progress(`isolation| ${problem}`);
+    }
+
     progress(context.caddy?.lastError === undefined ? "caddy: config loaded" : `caddy: ${context.caddy.lastError}`);
 
     for (const line of context.supervisor.caddyOutput.slice(-5)) {
@@ -209,7 +243,10 @@ const diagnose = async (context: JobContext, progress: Progress): Promise<void> 
         );
 
         // eslint-disable-next-line no-await-in-loop -- one fleet's probe at a time keeps the output in order
-        const run = await celldDiagnose(config, alias, context.credentials()).catch((error: unknown) => {
+        const run = await celldDiagnose(config, alias, context.credentials(), {
+            directory: ensureFleetDirectory(config.dataDir, alias, context.supervisor.isolation.account),
+            launch: context.supervisor.isolation.fleet,
+        }).catch((error: unknown) => {
             return { code: undefined, lines: [`celld diagnose failed: ${(error as Error).message}`] };
         });
 

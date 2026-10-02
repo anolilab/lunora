@@ -2,20 +2,32 @@
  * One-shot celld commands a job runs: `celld deploy` (write a release to a
  * fleet's bucket prefix) and `celld diagnose --json`. Their output streams
  * line by line to the job's progress, and a command that hangs is killed.
+ * In the daemon they run like the fleet's node (W8): as the fleet user, in its
+ * working directory, with the fleet's allowlisted environment.
  */
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 
+import type { ChildLaunch } from "./capabilities";
+import { DIRECT_LAUNCH, launchCommand, launchIdentity } from "./capabilities";
 import type { HostdConfig } from "./config";
-import { fleetBucketUrl } from "./config";
+import { binaryPaths, fleetBucketUrl } from "./config";
+import { fleetEnvironment } from "./fleet-environment";
 import { JobError } from "./job-error";
-import { CHILD_PATH } from "./supervisor";
 
 /** How long `celld deploy` may take: it uploads the bundle and assets to the bucket. */
 const DEPLOY_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** How long `celld diagnose` may take: it probes the bucket and every live node. */
 const DIAGNOSE_TIMEOUT_MS = 60_000;
+
+/** Where and how a one-shot celld runs: the fleet's directory and launch in the daemon, the caller's own elsewhere (enrol). */
+interface CelldPlacement {
+    /** The working directory, `HOME` and `TMPDIR`; the system's temporary directory when absent. */
+    directory?: string;
+    launch?: ChildLaunch;
+}
 
 interface CelldRun {
     /** The exit code; `undefined` when celld was killed by a signal. */
@@ -39,18 +51,23 @@ const bucketArgs = (config: HostdConfig, alias: string): string[] => [
 const runCelld = async (
     config: HostdConfig,
     args: ReadonlyArray<string>,
-    options: { credentials: Readonly<Record<string, string>>; cwd?: string; onLine?: (line: string) => void; timeoutMs: number },
+    options: CelldPlacement & { credentials: Readonly<Record<string, string>>; onLine?: (line: string) => void; timeoutMs: number },
 ): Promise<CelldRun> =>
     new Promise((resolve, reject) => {
-        const child = spawn(config.binaries.celld, args, {
-            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-            env: {
-                ...options.credentials,
-                ...(config.bucket.region === undefined ? {} : { AWS_REGION: config.bucket.region }),
-                PATH: CHILD_PATH,
-                RUST_LOG: "error,celld=warn",
-            },
+        const directory = options.directory ?? tmpdir();
+        const launch = options.launch ?? DIRECT_LAUNCH;
+        const { celld } = binaryPaths(config);
+        const command = launchCommand(launch, celld, args);
+        const child = spawn(command.command, command.args, {
+            cwd: directory,
+            env: fleetEnvironment({
+                credentials: options.credentials,
+                directory,
+                kind: "command",
+                ...(config.bucket.region === undefined ? {} : { region: config.bucket.region }),
+            }),
             stdio: ["ignore", "pipe", "pipe"],
+            ...launchIdentity(launch),
         });
         const lines: string[] = [];
         const timer = setTimeout(() => {
@@ -69,7 +86,7 @@ const runCelld = async (
 
         child.once("error", (error) => {
             clearTimeout(timer);
-            reject(new JobError("CELLD_FAILED", `could not run ${config.binaries.celld}: ${error.message}`));
+            reject(new JobError("CELLD_FAILED", `could not run ${celld}: ${error.message}`));
         });
 
         child.once("exit", (code, signal) => {
@@ -96,11 +113,10 @@ const celldDeploy = async (
     config: HostdConfig,
     alias: string,
     directory: string,
-    options: { credentials: Readonly<Record<string, string>>; onLine: (line: string) => void },
+    options: CelldPlacement & { credentials: Readonly<Record<string, string>>; onLine: (line: string) => void },
 ): Promise<string | undefined> => {
     const run = await runCelld(config, ["deploy", directory, ...bucketArgs(config, alias), "--json"], {
-        credentials: options.credentials,
-        onLine: options.onLine,
+        ...options,
         timeoutMs: DEPLOY_TIMEOUT_MS,
     });
 
@@ -123,8 +139,12 @@ const celldDeploy = async (
 };
 
 /** `celld diagnose --json` for `alias`'s fleet: one JSON object per line, per check. */
-const celldDiagnose = async (config: HostdConfig, alias: string, credentials: Readonly<Record<string, string>>): Promise<CelldRun> =>
-    runCelld(config, ["diagnose", "--json", ...bucketArgs(config, alias)], { credentials, timeoutMs: DIAGNOSE_TIMEOUT_MS });
+const celldDiagnose = async (
+    config: HostdConfig,
+    alias: string,
+    credentials: Readonly<Record<string, string>>,
+    placement: CelldPlacement = {},
+): Promise<CelldRun> => runCelld(config, ["diagnose", "--json", ...bucketArgs(config, alias)], { ...placement, credentials, timeoutMs: DIAGNOSE_TIMEOUT_MS });
 
-export type { CelldRun };
+export type { CelldPlacement, CelldRun };
 export { bucketArgs, celldDeploy, celldDiagnose, runCelld };
