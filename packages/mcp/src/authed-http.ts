@@ -19,14 +19,17 @@
  * import { jwt, mcp, requireMcpAuth } from "@lunora/auth/plugins";
  * import { createAuthedMcpFetchHandler, mcpTokenScopes } from "@lunora/mcp";
  *
+ * const resource = "https://api.example.com/mcp";
+ *
  * const auth = createAuth({
  *     database: env.DB,
  *     secret: env.AUTH_SECRET,
- *     plugins: [jwt(), mcp({ loginPage: "/login", consentPage: "/consent", resource: "https://api.example.com/mcp" })],
+ *     plugins: [jwt(), mcp({ loginPage: "/login", consentPage: "/consent", resource, scopes: ["lunora:read", "lunora:write"] })],
  * });
  *
  * export const handleMcp = createAuthedMcpFetchHandler({
- *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
+ *     // `resource` is required: tokens are audience-bound to it.
+ *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource }),
  *     server: (claims) => ({
  *         // Writes need a second scope the read-only token does not carry.
  *         allowWrites: mcpTokenScopes(claims).has("lunora:write"),
@@ -35,6 +38,24 @@
  *     }),
  * });
  * ```
+ *
+ * `mcp()` must declare the `lunora:*` scopes: left out, it falls back to the
+ * OIDC defaults and no client can be granted `lunora:read` at all. The
+ * protected-resource and authorization-server metadata the 401 challenge sends
+ * clients to sit outside `/api/auth/*`; a worker built with `.auth(...)` serves
+ * them itself (after the app's own routes), and a hand-composed one routes the
+ * paths `mcpDiscoveryPaths(resource)` returns to `auth.handler`.
+ * `__tests__/authed-http.e2e.test.ts` runs this exact wiring against a real
+ * better-auth instance.
+ *
+ * # Step-up for writes
+ *
+ * With `stepUp: { scope, challenge }` (`challenge` being
+ * `createInsufficientScopeError` from `@lunora/auth/plugins`) a token lacking the
+ * scope still lists the write and agent tools, and a `tools/call` to one throws
+ * the challenge, which the gate answers with a 403 `insufficient_scope` naming
+ * the scope — so the client can re-authorize instead of never learning the
+ * tools exist.
  *
  * `protect` is a lambda rather than an `auth` instance on purpose. better-auth
  * is not a dependency of this package (see the note on {@link McpAuthProtect}),
@@ -53,10 +74,15 @@
  * omitted from `tools/list` *and* refused at dispatch for the former, because
  * `allowWrites` is resolved per request rather than per deployment.
  */
+import { LunoraError } from "@lunora/errors";
+
+import { isAgentToolName } from "./agent-tools";
 import type { McpFetchHandler } from "./serve-stateless";
-import { serveStateless } from "./serve-stateless";
+import { readScreenedBody, serveStateless } from "./serve-stateless";
 import type { LunoraMcpServerOptions } from "./server";
 import { createLunoraMcpServer, resolveClient } from "./server";
+import callToolName from "./tool-call";
+import { WRITE_TOOL_NAMES } from "./tools";
 
 /**
  * The verified access-token payload better-auth hands a protected handler.
@@ -115,6 +141,28 @@ interface AuthedMcpFetchHandlerOptions {
      * exposure can follow the scopes the token actually carries.
      */
     server: AuthedMcpServerOptions;
+
+    /**
+     * Step-up for the side-effecting tools: the write tools
+     * (`lunora_run_mutation` / `lunora_run_action`) and the agent tools (each
+     * `agent_<name>` and `lunora_agent_status`, since starting a durable run is a
+     * side effect). A token without `scope` still sees them in `tools/list`, and
+     * a `tools/call` to one throws `challenge([scope])` instead of running, so the
+     * client can re-authorize for the scope and retry. Unset, tools follow
+     * `allowWrites` / `allowAgents` alone.
+     */
+    stepUp?: {
+        /**
+         * Build the error that makes the gate answer 403 `insufficient_scope`
+         * naming `scopes`. Pass `createInsufficientScopeError` from
+         * `@lunora/auth/plugins`: better-auth only turns an error that factory
+         * created into the challenge.
+         */
+        challenge: (scopes: string[]) => unknown;
+
+        /** The scope a call to a side-effecting tool needs, e.g. `"lunora:write"`. */
+        scope: string;
+    };
 }
 
 /**
@@ -151,12 +199,50 @@ const mcpTokenScopes = (claims: McpAccessTokenClaims): ReadonlySet<string> => {
  * deployment and token to use — so it keeps a client per request.
  */
 const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): McpFetchHandler => {
+    const { maxRequestBytes, stepUp } = options;
+
+    // For a caller the type cannot see (plain JS, a cast): a scope that cannot
+    // raise its challenge would let every side-effecting call through.
+    if (stepUp !== undefined && (typeof stepUp.scope !== "string" || stepUp.scope === "" || typeof stepUp.challenge !== "function")) {
+        throw new LunoraError("MCP_STEP_UP_MISCONFIGURED", "createAuthedMcpFetchHandler: `stepUp` needs a non-empty `scope` and a `challenge` function.");
+    }
+
     const sharedClient = typeof options.server === "function" ? undefined : resolveClient(options.server);
 
     return options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
         const resolved = typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient };
+        let parsedBody: unknown;
 
-        return await serveStateless(createLunoraMcpServer(resolved), request, { maxRequestBytes: options.maxRequestBytes });
+        if (stepUp !== undefined) {
+            // Peek the message through the same bounded read the transport uses, and
+            // hand it on so the stream is read once. A body that is too large or not
+            // JSON is refused here, before any tool can run.
+            const screened = await readScreenedBody(request, maxRequestBytes);
+
+            if ("response" in screened) {
+                return screened.response;
+            }
+
+            ({ parsedBody } = screened);
+
+            // A batch is refused by the transport whatever it holds; the check is per
+            // message so a call tucked inside one is challenged rather than relying
+            // on that. The agent tool names come from the resolved server, since a
+            // `toolName` override renames them.
+            const agents = resolved.agents ?? [];
+            const messages: unknown[] = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+            const hasSideEffect = messages.some((message) => {
+                const name = callToolName(message);
+
+                return name !== undefined && (WRITE_TOOL_NAMES.has(name) || isAgentToolName(name, agents));
+            });
+
+            if (hasSideEffect && !mcpTokenScopes(claims).has(stepUp.scope)) {
+                throw stepUp.challenge([stepUp.scope]);
+            }
+        }
+
+        return await serveStateless(createLunoraMcpServer(resolved), request, { maxRequestBytes, parsedBody });
     });
 };
 

@@ -28,6 +28,10 @@ interface AuthedMcpFetchHandlerOptions {
     maxRequestBytes?: number;
     protect: McpAuthProtect;
     server: AuthedMcpServerOptions;
+    stepUp?: {
+        challenge: (scopes: string[]) => unknown;
+        scope: string;
+    };
 }
 ```
 

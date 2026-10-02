@@ -803,6 +803,71 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("cimd", () => {
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const seedCimdUsage = (dir: string): void => {
+            mkdirSync(join(dir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(dir, "lunora", "auth.ts"),
+                `import workersCimdFetch from "@lunora/auth/cimd/workers";\n\nexport const transport = workersCimdFetch;\n`,
+                "utf8",
+            );
+        };
+
+        const cimdFinding = (result: Awaited<ReturnType<typeof runDoctor>>) =>
+            result.findings.find((finding) => finding.code === "cimd-fetch-not-strictly-public");
+
+        it("warns when the Workers CIMD transport is imported without global_fetch_strictly_public", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedCimdUsage(workdir);
+
+            const finding = cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("the top level");
+        });
+
+        it("is quiet when the flag is set", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"] }));
+            seedCimdUsage(workdir);
+
+            expect(cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        // An env that declares its own `compatibility_flags` replaces the top-level
+        // list, so the flag set at the top does not reach that deploy.
+        it("names an env whose own compatibility_flags drop the flag", async () => {
+            expect.assertions(2);
+
+            seed(
+                workdir,
+                wranglerWith({
+                    compatibility_flags: ["global_fetch_strictly_public"],
+                    env: { production: { compatibility_flags: ["nodejs_compat"] }, staging: {} },
+                }),
+            );
+            seedCimdUsage(workdir);
+
+            const finding = cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("env.production");
+            expect(finding?.message).not.toContain("env.staging");
+        });
+
+        it("says nothing for a project that does not import the transport", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The

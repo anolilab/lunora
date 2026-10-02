@@ -324,6 +324,26 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Auth admin operation not supported";
     };
+    readonly AUTH_CIMD_FETCH_NOT_PUBLIC: {
+        readonly hint: "Add \"global_fetch_strictly_public\" to \"compatibility_flags\" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.";
+        readonly status: 500;
+        readonly title: "CIMD transport needs the global_fetch_strictly_public flag";
+    };
+    readonly AUTH_MCP_RESOURCE_AMBIGUOUS: {
+        readonly hint: "Use `mcp` from \"@lunora/auth/plugins\" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.";
+        readonly status: 500;
+        readonly title: "MCP resource cannot be told apart from the provider's other resources";
+    };
+    readonly AUTH_MCP_RESOURCE_INVALID: {
+        readonly hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.";
+        readonly status: 500;
+        readonly title: "MCP resource missing or not an absolute URL";
+    };
+    readonly MCP_STEP_UP_MISCONFIGURED: {
+        readonly hint: "Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.";
+        readonly status: 500;
+        readonly title: "MCP step-up misconfigured";
+    };
     readonly BACKUP_NOT_CONFIGURED: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";

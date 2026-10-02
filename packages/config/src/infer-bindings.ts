@@ -100,6 +100,14 @@ const CAPABILITY_SOURCES = {
     usesArtifacts: { contextProperty: "artifacts", source: "@lunora/bindings/artifacts" },
     usesAuth: { pattern: /\bfrom\s+["']@lunora\/auth["']/, source: "@lunora/auth" },
     usesBrowser: { pattern: /\bfrom\s+["']@lunora\/browser["']/, source: "@lunora/browser" },
+    // The Workers CIMD transport (plan 461). No binding and no signal: it needs a
+    // compatibility flag, which `lunora doctor` checks against the wrangler config
+    // this inference never reads. The pattern also matches a dynamic `import()`,
+    // since the transport is commonly loaded lazily where the auth instance is built.
+    usesCimdWorkers: {
+        pattern: /(?:\bfrom\s+|\bimport\s*\(\s*)["']@lunora\/auth\/cimd\/workers["']/,
+        source: "@lunora/auth/cimd/workers",
+    },
     usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
     usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
     usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
@@ -255,6 +263,8 @@ interface InferredBindings {
     usesAuth: boolean;
     /** `@lunora/browser` is imported → self-describing `browser` binding (auto-writeable). */
     usesBrowser: boolean;
+    /** `@lunora/auth/cimd/workers` is imported → needs the `global_fetch_strictly_public` compatibility flag (no binding; `lunora doctor` checks it). */
+    usesCimdWorkers: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
     /** `@lunora/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */

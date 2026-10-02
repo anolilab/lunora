@@ -4,6 +4,7 @@ import { betterAuth } from "better-auth";
 import { getIP } from "better-auth/api";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
+import { authDiscoveryPaths } from "./discovery";
 import { validateSessionPolicy } from "./session";
 
 /**
@@ -514,6 +515,10 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
     if (options.session) {
         validateSessionPolicy(options.session);
     }
+
+    // Fail at construction, not on the first discovery request, when the MCP
+    // resource of an unmarked `mcp()` plugin cannot be told apart.
+    authDiscoveryPaths(options);
 
     return betterAuth(resolveAuthOptions(options));
 };

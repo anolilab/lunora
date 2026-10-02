@@ -3170,3 +3170,94 @@ describe("withFrameworkWorker — `scheduled` ownership", () => {
         expect(hostScheduled).not.toHaveBeenCalled();
     });
 });
+
+describe("createWorker — auth discovery fallback (plan 461 B)", () => {
+    const PRM_PATH = "/.well-known/oauth-protected-resource/mcp";
+
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    /** A discovery handler that owns exactly {@link PRM_PATH}, the way `@lunora/auth`'s does. */
+    const discoveryHandler = () =>
+        vi.fn<(request: Request) => Promise<Response | undefined>>(async (request) =>
+            new URL(request.url).pathname === PRM_PATH ? Response.json({ resource: "https://app.example/mcp" }) : undefined,
+        );
+
+    it("serves the document when no httpRouter is configured", async () => {
+        expect.assertions(2);
+
+        const authDiscoveryHandler = discoveryHandler();
+        const worker = createWorker({ authDiscoveryHandler, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request(`https://app.example${PRM_PATH}`), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toStrictEqual({ resource: "https://app.example/mcp" });
+    });
+
+    it("serves the document once the httpRouter answers 404", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            authDiscoveryHandler: discoveryHandler(),
+            httpRouter: honoApp((app) => app.get("/about", () => new Response("about"))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request(`https://app.example${PRM_PATH}`), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+    });
+
+    // Option (b) of the plan: an app that already routes the path keeps it.
+    it("lets an httpRouter route at the same path win, without consulting the handler", async () => {
+        expect.assertions(3);
+
+        const authDiscoveryHandler = discoveryHandler();
+        const worker = createWorker({
+            authDiscoveryHandler,
+            httpRouter: honoApp((app) => app.get(PRM_PATH, () => new Response("app's own", { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request(`https://app.example${PRM_PATH}`), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("app's own");
+        expect(authDiscoveryHandler).not.toHaveBeenCalled();
+    });
+
+    it("lets an explicit route at the same path win", async () => {
+        expect.assertions(2);
+
+        const authDiscoveryHandler = discoveryHandler();
+        const worker = createWorker({
+            authDiscoveryHandler,
+            routes: { [`GET ${PRM_PATH}`]: async () => new Response("explicit") },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request(`https://app.example${PRM_PATH}`), {}, fakeContext);
+
+        await expect(res.text()).resolves.toBe("explicit");
+        expect(authDiscoveryHandler).not.toHaveBeenCalled();
+    });
+
+    it("keeps the router's own 404 for a path the handler does not own", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            authDiscoveryHandler: discoveryHandler(),
+            httpRouter: honoApp((app) => app.notFound(() => new Response("app 404 page", { status: 404 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/.well-known/security.txt"), {}, fakeContext);
+
+        expect(res.status).toBe(404);
+        await expect(res.text()).resolves.toBe("app 404 page");
+    });
+});

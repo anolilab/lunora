@@ -2139,7 +2139,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2151,14 +2151,17 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
+            // The OAuth discovery documents (plan 461 B): served by the auth instance
+            // as the worker's last matcher, after the app's own routes.
+            expect(result.generated.app).toContain("return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);");
             expect(result.generated.app).toContain("await ensureMigrated(");
         });
 
         it("emits the Durable-Object-backed auth branch alongside the D1 one", () => {
-            expect.assertions(7);
+            expect.assertions(9);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2184,6 +2187,10 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             expect(app).toContain("options.authAuditReader = authWiring.auditReader;");
             // The copy/purge admin ops for a jurisdiction move; `undefined` until pinned.
             expect(app).toContain("options.authJurisdictionMove = authWiring.jurisdictionMove;");
+            // Discovery paths are derived in the worker, so only those exact paths
+            // cost a round-trip to the object.
+            expect(app).toContain("discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),");
+            expect(app).toContain("options.authDiscoveryHandler = authWiring.discoveryHandler;");
 
             // Both modes must be rejected together — silently doing nothing is worse.
             expect(app).toContain("pass either `d1` or `namespace`, not both");

@@ -696,6 +696,7 @@ interface InferredBindings {
     usesArtifacts: boolean;
     usesAuth: boolean;
     usesBrowser: boolean;
+    usesCimdWorkers: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
@@ -1803,6 +1804,12 @@ interface ExportGap {
     kind: "agent" | "container" | "workflow";
     module: GeneratedClassModule;
 }
+```
+
+### `GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG` (const)
+
+```ts
+const GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
 ```
 
 ### `ManifestConfigShape` (interface)

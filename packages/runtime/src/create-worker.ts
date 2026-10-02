@@ -882,6 +882,23 @@ interface WorkerOptions {
     authBasePath?: string;
 
     /**
+     * Optional prebound `@lunora/auth` handler for the OAuth discovery documents
+     * that live OUTSIDE the auth base path — the RFC 9728 protected-resource
+     * metadata of an `mcp({ resource })` and the RFC 8414 authorization-server
+     * metadata of the issuer (`handleAuthDiscoveryRequest(auth, …)`, or
+     * `createDoAuthWiring(...).discoveryHandler` for DO-backed auth). It returns a
+     * `Response` for one of the exact paths it derives and `undefined` otherwise.
+     *
+     * Unlike {@link WorkerOptions.authHandler} it is the LAST matcher, consulted
+     * only for a request every other route missed: no explicit route, no
+     * reserved endpoint, and either no {@link WorkerOptions.httpRouter} or a
+     * router answer of 404. So an app that already serves these paths itself keeps
+     * serving them, and the documents never shadow an app route. Which methods it
+     * answers is the handler's call (`@lunora/auth`'s answers `GET`/`HEAD` only).
+     */
+    authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
+
+    /**
      * Optional prebound `@lunora/auth` handler (`handleAuthRequest(auth, …)`
      * with its `auth` argument already bound) the worker dispatches BEFORE its
      * own routing — auth runs as a top-level `/api/auth/*` route, not through
@@ -5760,16 +5777,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return new Response("Not found", { status: 404 });
         }
 
-        // HTTP actions are the lowest-priority matcher: explicit routes and the
+        // HTTP actions are the lowest-priority app matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
-        // reaches the router, hono owns routing — its 404 is the terminal 404.
+        // reaches the router, hono owns routing.
         const httpRouteResponse = await dispatchHttpRoute(request, env, context);
 
-        if (httpRouteResponse) {
+        if (httpRouteResponse && httpRouteResponse.status !== 404) {
             return httpRouteResponse;
         }
 
-        return new Response("Not found", { status: 404 });
+        // Only a 404 — the router's own, or none at all — leaves room for the auth
+        // discovery documents, so an app route at the same path always wins.
+        const discoveryResponse = await options.authDiscoveryHandler?.(request);
+
+        if (discoveryResponse) {
+            await httpRouteResponse?.body?.cancel();
+
+            return discoveryResponse;
+        }
+
+        return httpRouteResponse ?? new Response("Not found", { status: 404 });
     };
 
     return {

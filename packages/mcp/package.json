@@ -74,10 +74,12 @@
         "@modelcontextprotocol/sdk": "catalog:mcp"
     },
     "devDependencies": {
+        "@lunora/auth": "1.0.0-alpha.181",
         "@lunora/x402": "1.0.0-alpha.80",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "better-auth": "catalog:auth",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",

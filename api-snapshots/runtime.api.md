@@ -2241,6 +2241,7 @@ interface WorkerOptions {
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
+    authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
     authHandler?: (request: Request) => Promise<Response | undefined>;
     authJurisdictionMove?: AuthJurisdictionMove;
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
