@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.168...@lunora/server@1.0.0-alpha.169) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
 ## @lunora/server [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.167...@lunora/server@1.0.0-alpha.168) (2026-10-02)
 
 
