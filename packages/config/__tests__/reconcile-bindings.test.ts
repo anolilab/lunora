@@ -708,6 +708,13 @@ describe("reconcileWranglerBindings", () => {
         ["a KV namespace", `    "kv_namespaces": [{ "binding": "AI_SEARCH", "id": "abc" }],\n`, "kv_namespaces"],
         ["a queue producer", `    "queues": { "producers": [{ "binding": "AI_SEARCH", "queue": "search-jobs" }] },\n`, "queues.producers"],
         ["a var", `    "vars": { "AI_SEARCH": "on" },\n`, "vars"],
+        ["a rate limiter", `    "ratelimits": [{ "name": "AI_SEARCH", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],\n`, "ratelimits"],
+        ["an unsafe binding", `    "unsafe": { "bindings": [{ "name": "AI_SEARCH", "type": "metadata" }] },\n`, "unsafe.bindings"],
+        ["a logfwdr binding", `    "logfwdr": { "bindings": [{ "name": "AI_SEARCH", "destination": "logs" }] },\n`, "logfwdr.bindings"],
+        ["a wasm module", `    "wasm_modules": { "AI_SEARCH": "./search.wasm" },\n`, "wasm_modules"],
+        ["a text blob", `    "text_blobs": { "AI_SEARCH": "./search.txt" },\n`, "text_blobs"],
+        ["a data blob", `    "data_blobs": { "AI_SEARCH": "./search.bin" },\n`, "data_blobs"],
+        ["a required secret", `    "secrets": { "required": ["AI_SEARCH"] },\n`, "secrets.required"],
     ])("does not write AI_SEARCH when %s already holds the name, and says why", (_label, block, owner) => {
         expect.assertions(4);
 
@@ -720,6 +727,24 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().ai_search_namespaces).toBeUndefined();
         expect(result.warnings.some((warning) => warning.startsWith("ai_search_namespaces: not adding"))).toBe(true);
         expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
+    });
+
+    it("does not write AI_SEARCH when a Durable Object binding already holds the name", () => {
+        expect.assertions(3);
+
+        // `durable_objects` is already in the base config, so the name goes into its existing list.
+        const config = MINIMAL_WRANGLER.replace(
+            `"bindings": [{ "name": "SHARD"`,
+            `"bindings": [{ "name": "AI_SEARCH", "class_name": "Search" }, { "name": "SHARD"`,
+        );
+
+        writeFileSync(join(root, "wrangler.jsonc"), config, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.includes("already bound by `durable_objects.bindings`"))).toBe(true);
     });
 
     it("auto-writes the LOADER worker_loaders binding when jsCodeTool is inferred, idempotently", () => {

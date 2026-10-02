@@ -215,7 +215,7 @@ const CAPABILITY_ROWS = [
         },
         tier: "action",
     },
-    // `ctx.analytics` —Analytics Engine write helper. EVERY ctx: a write-only,
+    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
     // fire-and-forget side effect, not a determinism hazard for reads.
     // `createAnalytics` takes the binding POSITIONALLY.
     {
