@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
+import type { CloudflareAccountRow } from "../src/cloudflare-accounts/store";
+import { cloudflareAccountStore } from "../src/cloudflare-accounts/store";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
@@ -28,20 +30,6 @@ import { boundedString, LIMITS } from "./validators";
  * no query ever returns either.
  */
 
-/** A `cloudflareAccounts` row as the store returns it. `.global()` rows answer SQL NULL for an unset column. */
-interface AccountRow {
-    _id: Id<"cloudflareAccounts">;
-    accountId: string;
-    createdAt: number;
-    displayName?: null | string;
-    label: string;
-    organizationId: Id<"organizations">;
-    permissions: string[];
-    tokenExpiresAt?: null | number;
-    verifiedAt: number;
-    workersSubdomain: string;
-}
-
 /** A connected account as the studio sees it — explicitly projected, so the ciphertext can never ride along. */
 export interface CloudflareAccountView {
     _id: Id<"cloudflareAccounts">;
@@ -57,13 +45,13 @@ export interface CloudflareAccountView {
     workersSubdomain: string;
 }
 
-export const toCloudflareAccountView = (row: AccountRow): CloudflareAccountView => {
+export const toCloudflareAccountView = (row: CloudflareAccountRow): CloudflareAccountView => {
     return {
-        _id: row._id,
+        _id: row._id as Id<"cloudflareAccounts">,
         accountId: row.accountId,
         createdAt: row.createdAt,
         label: row.label,
-        organizationId: row.organizationId,
+        organizationId: row.organizationId as Id<"organizations">,
         permissions: [...row.permissions],
         verifiedAt: row.verifiedAt,
         workersSubdomain: row.workersSubdomain,
@@ -78,9 +66,9 @@ export const list = query
     .query(async ({ ctx: context, args: { organizationId } }): Promise<CloudflareAccountView[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.cloudflareAccounts.findMany({ where: { organizationId } });
+        const rows = await cloudflareAccountStore(context.db.cloudflareAccounts).ofOrganization(organizationId);
 
-        return (page as AccountRow[]).map((row) => toCloudflareAccountView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
+        return rows.map((row) => toCloudflareAccountView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
 /** What still deploys into a connected account, so disconnecting it would strand a tenant. */
@@ -143,10 +131,12 @@ export const connect = internalMutation
             workersSubdomain: verified.workersSubdomain,
         };
 
+        const accounts = cloudflareAccountStore(context.db.cloudflareAccounts);
+
         if (id !== undefined) {
             await assertRowInOrg(context, id, organizationId, "Cloudflare account");
 
-            const row = (await context.db.get(id)) as AccountRow;
+            const row = (await accounts.lookup(id)) as CloudflareAccountRow;
 
             if (row.accountId !== verified.accountId) {
                 throw new LunoraError(
@@ -167,16 +157,24 @@ export const connect = internalMutation
             return id;
         }
 
-        const { page } = await context.db.cloudflareAccounts.findMany({ where: { organizationId } });
+        const connected = await accounts.ofOrganization(organizationId);
 
-        if ((page as AccountRow[]).some((row) => row.accountId === verified.accountId)) {
+        if (connected.some((row) => row.accountId === verified.accountId)) {
             throw new LunoraError("CONFLICT", `Cloudflare account ${verified.accountId} is already connected; rotate its token instead`);
         }
 
-        await assertWithinQuota(context, organizationId, "cloudflareAccounts", page.length);
+        await assertWithinQuota(context, organizationId, "cloudflareAccounts", connected.length);
+
+        const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
+
+        if (organization === null) {
+            throw new LunoraError("NOT_FOUND", "organization not found");
+        }
 
         const created = await context.db.insert("cloudflareAccounts", {
             ...fields,
+            // Its organization's cell converges and meters it; an organization never changes cell.
+            cellId: organization.cellId,
             createdAt: context.now,
             createdBy: member.userId,
             label: label.trim() === "" ? verified.accountId : label.trim(),
@@ -212,7 +210,7 @@ export const disconnect = mutation
 
         await assertRowInOrg(context, id, organizationId, "Cloudflare account");
 
-        const row = (await context.db.get(id)) as AccountRow;
+        const row = (await cloudflareAccountStore(context.db.cloudflareAccounts).lookup(id)) as CloudflareAccountRow;
         const users = await usersOf(context, organizationId, id);
 
         if (users.projects > 0 || users.deployments > 0) {

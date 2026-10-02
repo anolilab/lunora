@@ -135,6 +135,7 @@ const account = (overrides: Row = {}): Row => {
     return {
         _id: "cfa_1",
         accountId: ACCOUNT,
+        cellId: "cell_1",
         ciphertext: "sealed",
         createdAt: NOW,
         createdBy: "usr_1",
@@ -187,11 +188,21 @@ describe("cloudflareAccounts", () => {
     });
 
     it("connects an account, audits it, and refuses the same account twice", async () => {
-        const fake = makeCtx({ cloudflareAccounts: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+        const fake = makeCtx(
+            { cloudflareAccounts: [], members: [owner("org_1")], organizations: [{ _id: "org_1", cellId: "cell_1" }], subscriptions: [] },
+            { now: NOW },
+        );
 
         await connect.handler(fake.ctx, connectArgs() as never);
 
-        expect(fake.ops).toContainEqual(expect.objectContaining({ kind: "insert", table: "cloudflareAccounts" }));
+        // Stamped with its organization's cell, which converges and meters it.
+        expect(fake.ops).toContainEqual(
+            expect.objectContaining({
+                document: expect.objectContaining({ accountId: ACCOUNT, cellId: "cell_1" }),
+                kind: "insert",
+                table: "cloudflareAccounts",
+            }),
+        );
         expect(fake.ops).toContainEqual(
             expect.objectContaining({ document: expect.objectContaining({ action: "cloudflare_account.connect", target: ACCOUNT }), table: "auditLog" }),
         );

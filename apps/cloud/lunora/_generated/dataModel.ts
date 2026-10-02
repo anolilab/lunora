@@ -320,6 +320,7 @@ export interface Doc_cloudflareAccounts {
     _id: Id<"cloudflareAccounts">;
     _creationTime: number;
     accountId: string;
+    cellId: Id<"cells">;
     ciphertext: string;
     createdAt: number;
     createdBy: string;
@@ -687,7 +688,7 @@ export interface IndexNamesByTable {
     boxes: "by_slug" | "by_org";
     boxEnrolments: "by_org" | "by_hash";
     hostdReleases: "by_release";
-    cloudflareAccounts: "by_org_account" | "by_org";
+    cloudflareAccounts: "by_org_account" | "by_org" | "by_cell";
     metricPoints: "by_org_name_at" | "by_org_at";
     tenantLogs: "by_trace" | "by_script_time";
     observations: "by_org_deployment_started" | "by_org_session" | "by_org_started" | "by_trace";
@@ -1151,6 +1152,7 @@ export interface Insert_cloudflareAccounts {
     _id?: Id<"cloudflareAccounts">;
     _creationTime?: number;
     accountId: string;
+    cellId: Id<"cells">;
     ciphertext: string;
     createdAt: number;
     createdBy: string;

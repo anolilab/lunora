@@ -348,6 +348,7 @@ export const cloudflareAccounts = sqliteTable("cloudflareAccounts", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     accountId: text("accountId").notNull(),
+    cellId: text("cellId").references((): AnySQLiteColumn => cells._id).notNull(),
     ciphertext: text("ciphertext").notNull(),
     createdAt: real("createdAt").notNull(),
     createdBy: text("createdBy").notNull(),
@@ -363,6 +364,7 @@ export const cloudflareAccounts = sqliteTable("cloudflareAccounts", {
 }, (t) => ({
     by_org_account: uniqueIndex("by_org_account").on(t.organizationId, t.accountId),
     by_org: index("by_org").on(t.organizationId),
+    by_cell: index("by_cell").on(t.cellId),
 }));
 
 export const metricPoints = sqliteTable("metricPoints", {

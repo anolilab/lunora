@@ -33,6 +33,7 @@
  */
 import { LunoraError } from "@lunora/server";
 
+import { lookupAccount } from "../cloudflare-accounts/store";
 import type { AccountTargetId, BoxTargetId, CellTargetId, TargetDescriptor, TargetId } from "../provision-contract";
 import { storedTarget, TARGET_IDS, TARGETS } from "../provision-contract";
 
@@ -142,20 +143,13 @@ interface BoxRow {
     status: string;
 }
 
-interface AccountRow {
-    _id: string;
-    accountId: string;
-    organizationId: string;
-    workersSubdomain: string;
-}
-
 /** Every kind of host, keyed by `placedOn` — the one place "box or account" is decided. */
 export const PLACEMENT_HOSTS: { readonly [P in HostedOn]: PlacementHost<HostOf[P]> } = {
     account: {
         gone: () => "its Cloudflare account is no longer connected; the Worker and its data stay in that account",
         label: "connected Cloudflare account",
         lookup: async (read, ref) => {
-            const row = (await read("cloudflareAccounts", ref)) as AccountRow | null;
+            const row = await lookupAccount(async (id) => read("cloudflareAccounts", id), ref);
 
             return row === null
                 ? null

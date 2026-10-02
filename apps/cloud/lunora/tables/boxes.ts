@@ -115,6 +115,10 @@ export const boxesTables = {
     cloudflareAccounts: defineTable({
         // The Cloudflare account id (32 hex) — the account's own, not this row's.
         accountId: v.string(),
+        // The cell of the organization that connected it, copied at connect time
+        // (`organizations.cellId` never changes): the cell's control plane
+        // converges and meters it, and reads its accounts in one query (`by_cell`).
+        cellId: v.id("cells"),
         ciphertext: v.string(),
         createdAt: v.number(),
         createdBy: v.string(),
@@ -135,6 +139,7 @@ export const boxesTables = {
         workersSubdomain: v.string(),
     })
         .global()
+        .index("by_cell", ["cellId"])
         .index("by_org", ["organizationId"])
         // One connection per account per organization: a second token for the same account is a rotation.
         .index("by_org_account", ["organizationId", "accountId"], { unique: true }),

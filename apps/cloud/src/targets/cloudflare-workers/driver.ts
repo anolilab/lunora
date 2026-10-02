@@ -25,9 +25,10 @@ import type { D1DatabaseLike } from "@lunora/d1";
 import { LunoraError } from "@lunora/server";
 
 import { tenantSender } from "../../backup/tenant-transport";
+import type { CloudflareAccountStore } from "../../cloudflare-accounts/store";
+import { accountTableIn, cloudflareAccountStore } from "../../cloudflare-accounts/store";
 import { controlPlaneDatabase } from "../../d1-store";
 import { BINDING_SUPPORT } from "../../provision-contract";
-import { decryptSecret } from "../../secrets/crypto";
 import type { ProgressLine, TargetDriver, TargetFleet } from "../driver";
 import type { AccountHost } from "../placement";
 import { resourceRefOf } from "../placement";
@@ -156,69 +157,51 @@ export type CloudflareWorkersEnvironment = {
     SECRET_ENCRYPTION_KEY?: string;
 };
 
-interface AccountRow {
-    _id: string;
-    accountId: string;
-    ciphertext: string;
-    iv: string;
-    organizationId: string;
-    permissions: string[];
-}
+/** The connected accounts off the control-plane store, or `undefined` when this deployment cannot unseal them. */
+const accountsOf = (environment: CloudflareWorkersEnvironment): undefined | { encryptionKey: string; store: CloudflareAccountStore } =>
+    environment.DB == null || !environment.SECRET_ENCRYPTION_KEY
+        ? undefined
+        : {
+              encryptionKey: environment.SECRET_ENCRYPTION_KEY,
+              store: cloudflareAccountStore(accountTableIn(controlPlaneDatabase(environment.DB as D1DatabaseLike))),
+          };
 
 /** Unseal a connected account's token off the control-plane store. */
 const credentialsFrom =
     (environment: CloudflareWorkersEnvironment): AccountCredentials =>
     async (accountRowId) => {
-        if (environment.DB == null || !environment.SECRET_ENCRYPTION_KEY) {
+        const accounts = accountsOf(environment);
+
+        if (accounts === undefined) {
             throw new LunoraError(
                 "SERVICE_UNAVAILABLE",
                 "this control plane cannot unseal connected Cloudflare accounts (DB or SECRET_ENCRYPTION_KEY missing)",
             );
         }
 
-        const row = (await controlPlaneDatabase(environment.DB as D1DatabaseLike).get(accountRowId, "cloudflareAccounts")) as AccountRow | null;
-
-        if (row === null) {
-            throw new LunoraError(
-                "CONFLICT",
-                "this project's Cloudflare account is no longer connected; connect it again and choose it in the project's settings",
-            );
-        }
-
-        return { accountId: row.accountId, apiToken: await decryptSecret(environment.SECRET_ENCRYPTION_KEY, { ciphertext: row.ciphertext, iv: row.iv }) };
+        return accounts.store.credentials(accountRowId, accounts.encryptionKey);
     };
 
-/**
- * The connected accounts THIS control plane meters: those of organizations
- * placed on its cell (every cell runs the same sweep, and an account read by
- * two would be counted twice), whose token was seen to hold Account Analytics
- * Read. An account without it is never read — its usage chart stays empty
- * rather than an hourly failure.
- */
+/** The connected accounts THIS control plane meters (`meteredFor` its cell), by row id. */
 const meteredAccountsFrom = (environment: CloudflareWorkersEnvironment) => async (): Promise<string[]> => {
-    if (environment.DB == null || !environment.SECRET_ENCRYPTION_KEY) {
+    const accounts = accountsOf(environment);
+
+    if (accounts === undefined) {
         return [];
     }
 
-    const database = controlPlaneDatabase(environment.DB as D1DatabaseLike);
-    const { page: cells } = await database.findMany("cells", { where: { name: environment.LUNORA_CELL ?? "default" } });
+    const { page: cells } = await controlPlaneDatabase(environment.DB as D1DatabaseLike).findMany("cells", {
+        where: { name: environment.LUNORA_CELL ?? "default" },
+    });
     const cell = (cells as { _id: string }[]).at(0);
 
     if (cell === undefined) {
         return [];
     }
 
-    const { page: organizations } = await database.findMany("organizations", { where: { cellId: cell._id } });
-    const scopes: string[] = [];
+    const metered = await accounts.store.meteredFor(cell._id);
 
-    for (const organization of organizations as { _id: string }[]) {
-        // eslint-disable-next-line no-await-in-loop -- one indexed read per organization of this cell; an hourly sweep
-        const { page } = await database.findMany("cloudflareAccounts", { where: { organizationId: organization._id } });
-
-        scopes.push(...(page as AccountRow[]).filter((row) => row.permissions.includes("analytics")).map((row) => row._id));
-    }
-
-    return scopes;
+    return metered.map((row) => row._id);
 };
 
 /** This cell's Alchemy state store, when both halves are configured. */
