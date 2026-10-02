@@ -497,6 +497,31 @@ describe(setUpIsolation, () => {
         expect(isolation.fleet).toStrictEqual({ prefix: dropCapabilitiesPrefix("/usr/bin/setpriv") });
     });
 
+    it("starts children through setpriv even when the daemon holds no capabilities, so they run with no_new_privs", async () => {
+        expect.assertions(2);
+
+        const isolation = await setUpIsolation(
+            configFor(false),
+            silentLogger,
+            system({
+                readText: (path) => {
+                    const files: Record<string, string> = {
+                        "/etc/passwd": `lunora-fleet:x:${String(uid)}:${String(gid)}::/nonexistent:/usr/sbin/nologin\n`,
+                        "/proc/self/cgroup": `0::${service}\n`,
+                        "/proc/self/status": status(0, "000001ffffffffff", "0000000000000000"),
+                    };
+
+                    return files[path];
+                },
+            }),
+        );
+
+        isolation.stop();
+
+        expect(isolation.fleet.prefix).toStrictEqual(dropCapabilitiesPrefix("/usr/bin/setpriv"));
+        expect(isolation.caddy.prefix).toStrictEqual(dropCapabilitiesPrefix("/usr/bin/setpriv"));
+    });
+
     it("refuses when setpriv is missing, since children would inherit the daemon's capabilities", async () => {
         expect.assertions(1);
 

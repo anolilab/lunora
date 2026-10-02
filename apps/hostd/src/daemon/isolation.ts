@@ -295,10 +295,14 @@ const checkFleetUser = async (system: IsolationSystem, launch: ChildLaunch, acco
     return { ok: true };
 };
 
-/** The `setpriv` prefixes for fleets (drop everything) and Caddy (keep port binding), when the daemon holds ambient capabilities. */
+/**
+ * The `setpriv` prefixes for fleets (drop everything) and Caddy (keep port
+ * binding when the daemon holds it). Used whenever setpriv is installed, so
+ * every child runs with `no_new_privs`; essential when the daemon holds
+ * ambient capabilities (the systemd unit's), which children would inherit.
+ */
 const childPrefixes = (system: IsolationSystem, ambient: bigint): { caddy: string[]; fleet: string[] } => {
-    // Without ambient capabilities there is nothing to inherit; without setpriv, nothing to drop them with.
-    if (ambient === 0n || system.setpriv === undefined) {
+    if (system.setpriv === undefined) {
         return { caddy: [], fleet: [] };
     }
 
