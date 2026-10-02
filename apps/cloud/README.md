@@ -60,13 +60,23 @@ src/
   client/            studio React components the routes render (sections, command
                      palette, dashboards, styles.css)
                      — components only; routing and data loading live above
-  provision.ts       @lunora/provision seam over the Cloudflare REST port
+  provision-contract.ts the deploy contract: manifest, per-target BINDING_SUPPORT,
+                     target ids, the target-neutral TenantDeploymentSpec
+  targets/
+    driver.ts        TargetDriver — the one seam to a deploy target (see below)
+    registry.ts      target id → driver, built over the Worker env
+    placement.ts     a project's placement: its target, and its org's cell
+    cloudflare-wfp/  the Workers-for-Platforms driver: provision-box client + job
+                     contract, dispatch-namespace sender, hostname grammar,
+                     Analytics Engine writer/reader
   cloudflare/
-    api.ts           Cloudflare REST port: D1/R2 create, dispatch-script upload, secrets
+    api.ts           Cloudflare REST port: D1 export (the control plane's own
+                     backup) and custom hostnames
+    billable-usage.ts an org's own Cloudflare billing, for the cost overview
   secrets/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
   metering/
-    analytics.ts     Analytics Engine writer (dispatcher) + reader port (rollup, §4)
+    rollback.ts      request-count readback → platformUsage, over a driver's `usage`
   fanout/
     cron.ts          tenant cron fan-out: cron-expression matching + due ticks (§2.4)
     queue.ts         tenant queue fan-out: group a shared-queue batch by tenant (§2.4)
@@ -82,8 +92,8 @@ src/
     router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,usage,
                      invitations/send,secrets,admin,tenants/plan} + per-IP rate limiting
   dispatcher/
-    route.ts         hostname → tenant script (+ plan) resolution; cached plan resolver
     worker.ts        WfP dispatcher Worker — per-plan limits + per-request usage emit
+                     (routing lives in targets/cloudflare-wfp/route.ts)
   builds/
     paths.ts         monorepo settings: rootDirectory / watchPaths validation + push path filter
     runner.ts        one build: fetch → execute → release → complete/fail (pure over ports)
@@ -144,17 +154,29 @@ action context (`env.__lunoraCtx.runMutation`); they stay **public** (not
 function would 404 at the RPC visibility gate — so authorization is enforced
 inside each mutation (deploy key or membership).
 
-### The provisioning seam (`src/provision.ts`)
+### The target seam (`src/targets/`)
 
-The control plane's only coupling to the deploy substrate is the `Provisioner`
-interface. `createAlchemyProvisioner` implements it by posting a `ProvisionJob`
-(`src/provision-contract.ts`) to the **provision box** — a trusted container
-declared in `lunora/containers.ts` running **Alchemy 2** — and reading its NDJSON
-reply: `log` lines go to Workers Logs, and exactly one `result` or `error` ends
-the job. `deploy` converges the project's resources and uploads the release into
-the dispatch namespace; `destroy` removes a release, and the project's resources
-with its last one. One box instance per project (`.get(alias)`) serializes a
-project's jobs; a busy box answers 409, surfaced as a retryable error.
+The control plane's coupling to the deploy substrate is the `TargetDriver`
+interface (`src/targets/driver.ts`, MULTIPLATFORM.md §5.1) — not only converge
+and destroy, but everything that reaches a running tenant: its binding table,
+routing, request-count readback, log source, custom-domain targets, admin
+`reach`, the in-network `dispatch` the cron and queue fan-out use, and the
+tenant URL. The driver for a project comes from its `target` column
+(`src/targets/registry.ts`; absent means `cloudflare-wfp`), and a
+`cloudflare-wfp` project deploys only from the control plane of its
+organization's cell (`src/targets/placement.ts`). Every driver must pass the
+conformance suite in `__tests__/support/target-conformance.ts`; ESLint fences
+the Cloudflare-specific modules so nothing else imports them.
+
+The one driver today, `cloudflare-wfp` (`src/targets/cloudflare-wfp/`),
+converges by posting a `ProvisionJob` (`box-contract.ts`) to the **provision
+box** — a trusted container declared in `lunora/containers.ts` running
+**Alchemy 2** — and reading its NDJSON reply: `log` lines go to Workers Logs,
+and exactly one `result` or `error` ends the job. `deploy` converges the
+project's resources and uploads the release into the dispatch namespace;
+`destroy` removes the project's Worker and its resources. One box instance per
+project (`.get(alias)`) serializes a project's jobs; a busy box answers 409,
+surfaced as a retryable error.
 
 Why a container and not the Worker: Alchemy wants a Node process with a
 filesystem for its state and the full SDK surface, and a converge over many
@@ -170,7 +192,8 @@ Secrets Store edit and Workers subdomain read for Alchemy's state store. Run
 do not race to create that store (details in `containers/provision/README.md`).
 
 What each binding type gets (provisioned, bound, routed or refused) is
-`BINDING_SUPPORT` in the contract; GAPS.md has the table. Queue consumers are
+`BINDING_SUPPORT` in the contract, one table per target; GAPS.md has the
+`cloudflare-wfp` table. Queue consumers are
 routed: the box attaches this Worker as the consumer of each per-project queue,
 and `queue()` in `src/server.ts` forwards the batch to the owning project's live
 release.
@@ -193,7 +216,7 @@ entitlements from its synced `subscriptions` (the single source of truth), and
 raises the limits immediately, with no column to keep in sync.
 
 Platform **metering** is end-to-end: the dispatcher emits one Analytics Engine
-data point per tenant request (`src/metering/analytics.ts`, the source) and
+data point per tenant request (`src/targets/cloudflare-wfp/analytics.ts`, the source) and
 applies **per-plan runtime limits** (`limitsForPlan` → `env.DISPATCHER.get`,
 resolved via the cached `GET /v1/tenants/plan` lookup). Events also land in the
 `platformUsage` ledger via `usage.ingest` (`POST /v1/usage`, deploy-key auth);

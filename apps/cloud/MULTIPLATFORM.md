@@ -407,6 +407,96 @@ local bundle upload.
 and the dispatcher Worker. Enforceable with an ESLint `no-restricted-imports`
 boundary — add it in this phase, not later.
 
+**Status: ✅ Done (2026-10-02)** — `11b541d73`, `100d758d6`, `93803df29`,
+`d66cd836d`, `6b42bb0d5` on `work/cloud-vps-gaps` (plan 458 G3–G10).
+
+What shipped:
+
+1. `src/targets/driver.ts` — `TargetDriver` + `TargetCapabilities`. Members:
+   `id`, `capabilities` (`fanout: "dispatcher" | "native"`, `metering:
+"readback" | "pushed"`), `bindingSupport` / `unsupportedReasons`, `deploy`
+   (converge), `destroy`, `tenantUrl(alias, kind)`, `route(hostname, lookup)`,
+   `usage?(sinceMs)`, `logs`, `domains` (`platformTargets`, optional `issue`),
+   `reach(tenant)` (admin / backup calls) and `dispatch?(tenant)` (the
+   in-network path the cron and queue fan-out need).
+2. `src/targets/cloudflare-wfp/` — the provision-box client and its job contract
+   (was `src/provision.ts` + the job half of `provision-contract.ts`), the
+   hostname grammar (was `src/dispatcher/route.ts`), the Analytics Engine
+   writer/reader (was `src/metering/analytics.ts`) and the dispatch-namespace
+   sender (was `tenantSender`'s dispatcher branch). Pure over ports
+   (`createCloudflareWfpDriver`); `cloudflareWfpDriverFromEnv` is the one place
+   they are read off the Worker env.
+3. `src/targets/registry.ts` — id → driver, with `DEFAULT_TARGET`
+   (`cloudflare-wfp`) for rows that predate targets, and a `NOT_IMPLEMENTED`
+   refusal (never a fallback) for a target that has a binding table but no
+   driver yet (`celld-vps`).
+4. Schema, additive: `projects.target`, `deployments.target` +
+   `deployments.resourceRef` (written on create, copied from the project),
+   `cells.target` + `cells.config`. Placement is read per project
+   (`src/targets/placement.ts`): `LUNORA_CELL` now only names the cell this
+   control plane runs in, and a `cloudflare-wfp` project whose organization is
+   placed on another cell is refused with 409.
+5. The conformance suite — `describeTargetConformance` in
+   `__tests__/support/target-conformance.ts`, run by
+   `__tests__/target-conformance.test.ts` against the in-memory reference driver
+   (`__tests__/support/memory-driver.ts`) and `cloudflare-wfp` over a fake
+   provision box. Legs: idempotent converge, idempotent destroy,
+   converge-after-destroy, not-found routing for an unknown or destroyed alias,
+   custom-domain routing, no double-count across a usage checkpoint, refusal of
+   an unsupported binding before any side effect, stable tenant URL.
+6. Per-target binding support (`BINDING_SUPPORT` / `UNSUPPORTED_REASONS` keyed by
+   target), with the `celld-vps` row held to `@lunora/platform`'s celld matrix by
+   `__tests__/binding-support.test.ts`.
+7. The ESLint boundary (`eslint.config.js`): only the registry, the
+   `cloudflare-wfp` driver, the dispatcher and tail Workers and tests may import
+   `src/targets/cloudflare-wfp/` or `src/cloudflare/`.
+
+Where each row of the §3 table lives now:
+
+| §3 location                              | Now                                                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora/schema.ts` `cells`               | unchanged columns, documented as `cloudflare-wfp` encodings; new `target` + `config` for everything else                                                   |
+| `lunora/schema.ts` `deployments`         | `target` + `resourceRef` added; `scriptName` kept as the WfP encoding; `cronSpecs` read only for `fanout: "dispatcher"` targets                            |
+| `src/provision-contract.ts`              | per-target `BINDING_SUPPORT`; neutral `TenantDeploymentSpec` (no cell / namespace / tail consumers); the box job moved to `cloudflare-wfp/box-contract.ts` |
+| `containers/provision/`                  | unchanged; driven only by `cloudflare-wfp/provision-box.ts`                                                                                                |
+| `src/cloudflare/api.ts`                  | stays (see deviations); fenced by the boundary                                                                                                             |
+| `src/dispatcher/{route,worker}.ts`       | grammar in `cloudflare-wfp/route.ts`, shared by the dispatcher Worker and the driver's `route`; the Worker itself stays WfP's data plane                   |
+| `src/metering/analytics.ts`              | `cloudflare-wfp/analytics.ts`, read through `driver.usage`; `src/metering/rollback.ts` is target-neutral                                                   |
+| `src/deploy/teardown.ts`                 | `TeardownTarget.target` → that driver's `destroy`; rows of a target that cannot converge here stay pending                                                 |
+| `src/fanout/{cron,queue}.ts`             | run only for `fanout: "dispatcher"` drivers with a bound `dispatch`; the queue consumer serves targets whose `queue_consumer` is `routed`                  |
+| `lunora/logs.ts` + `tail.wrangler.jsonc` | `driver.logs` (`tail-consumer` for WfP); the driver attaches it when the release resolved telemetry                                                        |
+| `src/fleet/upgrade.ts`                   | untouched (no production caller yet)                                                                                                                       |
+
+Deviations from the §5.1 sketch, and why:
+
+- **No `plan` / `converge` split.** `deploy(spec)` is the converge; planning
+  happens inside the provision box today. Splitting it is Phase 2's job, when
+  Alchemy's plan becomes visible to the control plane.
+- **`route(hostname, lookup)`, not `route(alias)`.** Custom domains and liveness
+  live in the control plane's own tables; the driver contributes its hostname
+  grammar and reads them through the lookup. A box target answers from the same
+  tables (plan 458 W5).
+- **`usage(sinceMs)` without a cell argument**, and optional: a driver is built
+  for one cell's env, and a WfP deployment without account credentials has no
+  reader. The readback checkpoint stays the cell's (`cells.usageReadAtMs`); a
+  second `readback` target needs its own before it is swept.
+- **Added members** the sketch did not have: `bindingSupport` /
+  `unsupportedReasons`, `tenantUrl`, `reach`, `dispatch`, and
+  `capabilities.fanout` / `metering` — each replaced a Cloudflare assumption a
+  sweep or route had inlined.
+- **`src/cloudflare/api.ts` did not move.** What is left in it is the control
+  plane's own D1 export (its host, not a target — now behind
+  `src/backup/control-plane-export.ts`) and `createCustomHostname`, which still
+  has no caller (so `domains.issue` is unset for WfP). `billable-usage.ts` is the
+  BYO cost overview. All three are named exceptions in the boundary.
+- **Not added from §5.2:** `cells.credentialsRef` and
+  `deployments.convergeState` have no consumer until Phases 2–3;
+  `cloudflareAccountId` stays a column rather than migrating into `config`.
+- **The `CellScheduler`** (Cloudflare's API budget) still paces every converge
+  from the deploy deps rather than per driver.
+- **The reference driver** lives in `__tests__/support/`, not `src/targets/`,
+  so it never ships in the Worker.
+
 ### Phase 2 — Alchemy inside the converge half (🔨 + 🌐)
 
 1. `src/targets/alchemy/` — a thin port over Alchemy: app/scope construction,

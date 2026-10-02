@@ -136,6 +136,11 @@ box** (`containers/provision/`, driven by `createAlchemyProvisioner` in
 against `BINDING_SUPPORT` in `src/provision-contract.ts`, which is the
 authoritative matrix:
 
+> Since 2026-10-02 (MULTIPLATFORM.md Phase 1) the box client is the
+> `cloudflare-wfp` target driver (`src/targets/cloudflare-wfp/`), and this
+> matrix is `BINDING_SUPPORT["cloudflare-wfp"]` — one row of a per-target table
+> that also carries `celld-vps`.
+
 | Binding type       | Support        | How                                                                     |
 | ------------------ | -------------- | ----------------------------------------------------------------------- |
 | `d1`               | provisioned    | per project, `tenantResourceName(alias, binding)`                       |
