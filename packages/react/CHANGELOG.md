@@ -1,3 +1,9 @@
+## @lunora/react [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.177...@lunora/react@1.0.0-alpha.178) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
 ## @lunora/react [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.176...@lunora/react@1.0.0-alpha.177) (2026-10-02)
 
 
