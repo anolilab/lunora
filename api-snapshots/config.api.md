@@ -1016,6 +1016,7 @@ interface SchemaIndex {
 interface SchemaInfo {
     hasD1GlobalTable: boolean;
     hasHyperdriveGlobalTable: boolean;
+    jurisdiction?: "eu" | "fedramp" | "us";
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
@@ -2225,6 +2226,7 @@ interface WranglerConfig {
     r2_buckets?: ReadonlyArray<{
         binding?: string;
         bucket_name?: string;
+        jurisdiction?: string;
     } | null | undefined>;
     secrets?: {
         required?: unknown;

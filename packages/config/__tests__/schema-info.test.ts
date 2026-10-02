@@ -160,6 +160,26 @@ describe("schema info", () => {
             expect(d1?.hasHyperdriveGlobalTable).toBe(false);
         });
 
+        it("reports the schema's data-residency jurisdiction, and none when it declares none", () => {
+            expect.assertions(2);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    }).jurisdiction("eu");
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info?.jurisdiction).toBe("eu");
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    });
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info).not.toHaveProperty("jurisdiction");
+        });
+
         it("degrades to empty information on a schema it cannot make sense of, rather than throwing", () => {
             expect.assertions(3);
 

@@ -575,13 +575,27 @@ const SECRETS_STORE_RULE: RequiredFieldsRule = {
  * a warning — the binding can't resolve/connect without it, but only the user
  * can supply it. One descriptor table replaces four near-identical validators.
  */
+interface HintBindingRule {
+    arrayMessage: string;
+    bindingMessage: (label: string) => string;
+    /** Field carrying the un-mintable remote id, or every accepted spelling of it. */
+    hintField: ReadonlyArray<string> | string;
+    /** `jurisdiction` is the schema's data-residency jurisdiction, when it declares one. */
+    hintMessage: (label: string, binding: string, jurisdiction: string | undefined) => string;
+    key: keyof WranglerConfig;
+}
+
 const HINT_BINDING_RULES = [
     {
         arrayMessage: "kv_namespaces must be an array of { binding, id } entries",
         bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the KV namespace binding`,
         hintField: "id",
-        hintMessage: (label: string, binding: string) =>
-            `${label} ("${binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
+        // A KV namespace's jurisdiction can only be set when it is created, so
+        // the creation hint is the one moment to carry the schema's residency.
+        hintMessage: (label: string, binding: string, jurisdiction: string | undefined) =>
+            jurisdiction === undefined
+                ? `${label} ("${binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`
+                : `${label} ("${binding}") has no "id" — the schema pins data to the "${jurisdiction}" jurisdiction, so run \`wrangler kv namespace create <name> --jurisdiction=${jurisdiction}\` and set the namespace id (a namespace's jurisdiction cannot be changed after creation)`,
         key: "kv_namespaces",
     },
     {
@@ -619,21 +633,14 @@ const HINT_BINDING_RULES = [
             `${label} ("${binding}") has no "dataset" — it defaults to the binding name; set it explicitly to avoid drift`,
         key: "analytics_engine_datasets",
     },
-] as const satisfies ReadonlyArray<{
-    arrayMessage: string;
-    bindingMessage: (label: string) => string;
-    /** Field carrying the un-mintable remote id, or every accepted spelling of it. */
-    hintField: ReadonlyArray<string> | string;
-    hintMessage: (label: string, binding: string) => string;
-    key: keyof WranglerConfig;
-}>;
+] as const satisfies ReadonlyArray<HintBindingRule>;
 
 /**
  * Validate one hint-style binding array (see {@link HINT_BINDING_RULES}): a
  * non-object entry or one missing a non-empty `binding` errors; an entry whose
  * hint field is absent warns.
  */
-const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDING_RULES)[number], errors: string[], warnings: string[]): void => {
+const validateHintBinding = (wrangler: WranglerConfig, rule: HintBindingRule, errors: string[], warnings: string[], jurisdiction: string | undefined): void => {
     const value = wrangler[rule.key];
 
     if (value === undefined) {
@@ -662,7 +669,7 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
         const hintFields = typeof rule.hintField === "string" ? [rule.hintField] : rule.hintField;
 
         if (!hintFields.some((field) => isNonEmptyString(entry[field]))) {
-            warnings.push(rule.hintMessage(label, entry.binding));
+            warnings.push(rule.hintMessage(label, entry.binding, jurisdiction));
         }
     }
 };
@@ -771,6 +778,35 @@ const REQUIRED_FIELD_BINDING_RULES = [
         objectMessage: (label: string) => `${label} must be a { binding, namespace } object`,
     },
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
+
+/**
+ * A schema `.jurisdiction("…")` pins the app's Durable Objects, not its R2
+ * buckets: a bucket's jurisdiction is fixed when it is created, and the binding
+ * has to name it (`r2_buckets[].jurisdiction`) to reach a bucket created inside
+ * one. A binding that names none — or another one — means the bucket's data
+ * sits outside the residency the schema promises. A warning, not an error: the
+ * data may legitimately be non-personal, and only the app owner knows that.
+ */
+const validateR2Jurisdiction = (wrangler: WranglerConfig, schema: SchemaInfo | undefined, warnings: string[]): void => {
+    const jurisdiction = schema?.jurisdiction;
+
+    if (jurisdiction === undefined) {
+        return;
+    }
+
+    for (const [index, entry] of objectBindingEntries(wrangler.r2_buckets).entries()) {
+        if (entry.jurisdiction === jurisdiction) {
+            continue;
+        }
+
+        const label = `r2_buckets[${String(index)}] ("${entry.binding ?? ""}")`;
+        const current = entry.jurisdiction === undefined ? "names no jurisdiction" : `names the "${entry.jurisdiction}" jurisdiction`;
+
+        warnings.push(
+            `${label} ${current}, but the schema pins data to "${jurisdiction}" — create the bucket with \`wrangler r2 bucket create <name> --jurisdiction=${jurisdiction}\` and set "jurisdiction": "${jurisdiction}" on the binding`,
+        );
+    }
+};
 
 /**
  * The binding each `.global()` backend needs in order to exist at all — the
@@ -905,6 +941,7 @@ export {
     validateGlobalBackendBindings,
     validateHintBinding,
     validateQueues,
+    validateR2Jurisdiction,
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,

@@ -189,7 +189,9 @@ interface WranglerConfig {
     // consumer can name the real bucket in a diagnostic instead of the binding
     // alias. Entries stay nullable: the shared array validator reports a
     // non-object entry itself, so narrowing here would only move the failure.
-    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
+    // `jurisdiction` addresses a bucket created inside a data-residency
+    // jurisdiction (`wrangler r2 bucket create --jurisdiction`).
+    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string; jurisdiction?: string } | null | undefined>;
     // The secret names the Worker requires (`wrangler dev` loads only these from
     // `.dev.vars`; `wrangler deploy` fails while one is unset). Untrusted JSONC,
     // so `validateSecretsRequired` checks it is a list of names.
