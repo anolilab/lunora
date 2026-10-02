@@ -419,7 +419,7 @@ describe("createAi", () => {
         });
 
         it("maps HTTP failures onto LunoraError codes", async () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             const codeFor = async (status: number): Promise<string | undefined> => {
                 const error: unknown = await createAi({ binding: searchBinding(new Response("nope", { status })) })
@@ -433,6 +433,7 @@ describe("createAi", () => {
             await expect(codeFor(401)).resolves.toBe("UNAUTHORIZED");
             await expect(codeFor(403)).resolves.toBe("FORBIDDEN");
             await expect(codeFor(404)).resolves.toBe("NOT_FOUND");
+            await expect(codeFor(408)).resolves.toBe("SERVICE_UNAVAILABLE");
             await expect(codeFor(429)).resolves.toBe("RATE_LIMITED");
             await expect(codeFor(502)).resolves.toBe("SERVICE_UNAVAILABLE");
         });

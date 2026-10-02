@@ -505,7 +505,7 @@ identical text.
 
 `webSearchTool(opts?)` lets the model search the web through the Cloudflare
 Web Search API (`ctx.ai.websearch` in `@lunora/ai`). The model passes a
-`query`; the tool returns up to `limit` results (default 5, max 20), each with
+`query`; the tool returns up to `limit` results (default 5, max 10), each with
 a `url`, a `title` and, when the provider has one, a `description`.
 
 ```ts
@@ -523,7 +523,9 @@ to register. A missing binding, a rejected request or an unreadable response
 comes back to the model as the tool result, so the run carries on; a throttled
 or failed search throws and is retried, and a gateway or credential problem
 (`UNAUTHORIZED` / `FORBIDDEN` / `NOT_FOUND`) fails the run so you see it.
-Searches are billed to AI Gateway credits (`gatewayId` overrides the gateway).
+A search bills a provider key stored on the gateway (`byokAlias`, else the
+`default` alias) or, without one, AI Gateway credits; `gatewayId` overrides
+the gateway.
 
 ## Code mode (`codeTool`)
 

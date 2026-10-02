@@ -206,7 +206,9 @@ export interface LunoraAiOptions {
 
 /**
  * A search provider the Web Search API brokers. Each one runs under Cloudflare's
- * Zero Data Retention terms and is billed to AI Gateway credits at list price.
+ * Zero Data Retention terms. A search bills a provider key stored on the gateway
+ * when there is one (the `default` alias unless `byokAlias` names another),
+ * otherwise AI Gateway credits at list price.
  * @experimental
  */
 export type AiWebSearchProvider = "ceramic" | "exa" | "linkup";
@@ -216,7 +218,7 @@ export type AiWebSearchProvider = "ceramic" | "exa" | "linkup";
  * @experimental
  */
 export interface AiWebSearchOptions {
-    /** Alias of a provider key stored on the gateway, to bill the provider directly instead of gateway credits. */
+    /** Alias of a provider key stored on the gateway to bill instead of the `default` alias. Without a stored key, gateway credits pay. */
     byokAlias?: string;
 
     /**
@@ -225,7 +227,7 @@ export interface AiWebSearchOptions {
      * account's `default` gateway.
      */
     gatewayId?: string;
-    /** Maximum results, 1–20. Defaults to 10. */
+    /** Maximum results, 1–10. Defaults to 10. */
     limit?: number;
     /** Defaults to `"ceramic"`. */
     provider?: AiWebSearchProvider;
@@ -307,7 +309,8 @@ export interface LunoraAi {
 
     /**
      * Search the web through the binding's Web Search API (beta) to ground a
-     * response in live information. Billed to AI Gateway credits. Throws if no
+     * response in live information. Billed to a stored provider key or AI Gateway
+     * credits (see {@link AiWebSearchProvider}). Throws if no
      * binding was supplied, or if the runtime's binding has no `websearch()`.
      */
     websearch: (query: string, options?: AiWebSearchOptions) => Promise<AiWebSearchResult>;

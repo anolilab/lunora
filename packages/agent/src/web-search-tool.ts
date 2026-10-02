@@ -10,6 +10,9 @@ import type { AgentToolDefinition } from "./types";
  * @experimental
  */
 interface WebSearchToolOptions {
+    /** Alias of a provider key stored on the gateway to bill instead of the `default` alias. */
+    byokAlias?: string;
+
     /** Overrides the description shown to the model. */
     description?: string;
 
@@ -18,7 +21,7 @@ interface WebSearchToolOptions {
      * `LUNORA_AI_GATEWAY_ID`, else the account's `default` gateway.
      */
     gatewayId?: string;
-    /** Maximum results per search, 1–20. Defaults to 5: every result is prompt the next turn pays for. */
+    /** Maximum results per search, 1–10. Defaults to 5: every result is prompt the next turn pays for. */
     limit?: number;
     /** Defaults to the Web Search API's own default (`"ceramic"`). */
     provider?: AiWebSearchProvider;
@@ -56,8 +59,9 @@ const DETERMINISTIC_CODES = new Set(["BAD_REQUEST", "INTERNAL", "NOT_IMPLEMENTED
 /**
  * A batteries-included agent tool over the Cloudflare Web Search API (beta,
  * `ctx.ai.websearch`), so an agent can ground an answer in live results.
- * Searches are billed to AI Gateway credits; every provider runs under Zero
- * Data Retention.
+ * A search bills a provider key stored on the gateway (`byokAlias`, else the
+ * `default` alias) when there is one, otherwise AI Gateway credits; every
+ * provider runs under Zero Data Retention.
  *
  * It calls the `AI` binding straight from the tool's durable step: a search
  * is a read, so the at-least-once step retry repeats nothing but a query, and

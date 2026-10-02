@@ -79,12 +79,13 @@ const DEFAULT_GATEWAY_ID = "default";
 /**
  * 401 / 403 / 404 are the deployment's configuration (credentials, gateway),
  * so they keep their own codes and reach the developer; any other 4xx is the
- * request itself. 429 and 5xx are retryable.
+ * request itself. 408 (a timeout), 429 and 5xx are retryable.
  */
-const WEBSEARCH_STATUS_CODES: ReadonlyMap<number, "FORBIDDEN" | "NOT_FOUND" | "RATE_LIMITED" | "UNAUTHORIZED"> = new Map([
+const WEBSEARCH_STATUS_CODES: ReadonlyMap<number, "FORBIDDEN" | "NOT_FOUND" | "RATE_LIMITED" | "SERVICE_UNAVAILABLE" | "UNAUTHORIZED"> = new Map([
     [401, "UNAUTHORIZED"],
     [403, "FORBIDDEN"],
     [404, "NOT_FOUND"],
+    [408, "SERVICE_UNAVAILABLE"],
     [429, "RATE_LIMITED"],
 ]);
 
