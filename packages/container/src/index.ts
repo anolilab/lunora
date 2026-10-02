@@ -21,8 +21,10 @@ export type {
     DurableObjectJurisdiction,
     InstanceRetryOptions,
     PoolOptions,
+    SandboxContainerAccessor,
+    SandboxContainerInstanceHandle,
 } from "./client";
-export { createContainerContext, createContainerTestContext } from "./client";
+export { createContainerContext, createContainerTestContext, getContainer } from "./client";
 export {
     containerBindingName,
     containerBuildTag,
@@ -38,7 +40,23 @@ export {
 export type { ContainerExecOptions, ContainerExecResult } from "./exec";
 export { CONTAINER_EXEC_PATH } from "./exec";
 export type {
+    ContainerBackupOptions,
+    ContainerFileContent,
+    ContainerFileOptions,
+    ContainerFiles,
+    ContainerMountCredentials,
+    ContainerMountRequest,
+    ContainerSandboxControls,
+    DirectoryBackupRecord,
+    S3MountInspection,
+    SandboxDirectoryEntry,
+    SandboxFileStat,
+} from "./sandbox-types";
+export type { ContainerProcess, ContainerSpawnOptions } from "./spawn";
+export type { ContainerTerminalOptions } from "./terminal";
+export type {
     BuildImageSource,
+    ContainerBackupStorage,
     ContainerConfig,
     ContainerConfigBase,
     ContainerDefinition,

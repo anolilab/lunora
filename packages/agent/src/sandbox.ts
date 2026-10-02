@@ -162,6 +162,28 @@ interface FsToolOptions {
 }
 
 /**
+ * Author-supplied config for `containerFsTool`.
+ * @experimental
+ */
+interface ContainerFsToolOptions {
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to gating the writing ops
+     * (`write`, `rm`), as `fsTool` does. Pass a boolean or a predicate
+     * (evaluated from replay-stable input, so keep it deterministic).
+     */
+    needsApproval?: ((input: FsToolInput) => boolean) | boolean;
+
+    /**
+     * The absolute directory inside the container every path is scoped under.
+     * Default `"/workspace"`. The dispatcher rejects any `..` that would escape it.
+     */
+    root?: string;
+}
+
+/**
  * Author-supplied config for `containerTool`.
  * @experimental
  */
@@ -193,6 +215,13 @@ const DEFAULT_CONTAINER_DESCRIPTION =
 const DEFAULT_FS_DESCRIPTION =
     "Read and write files in a persistent sandbox filesystem. " +
     'Set `op` to "ls" (list a directory), "read", "write" (with `content`), "rm", or "stat", and pass `path`.';
+
+const DEFAULT_CONTAINER_FS_DESCRIPTION =
+    "Read and write files on the sandboxed container's own disk — the same disk its commands run against. " +
+    'Set `op` to "ls" (list a directory), "read", "write" (with `content`), "rm", or "stat", and pass `path`.';
+
+/** The directory `containerFsTool` scopes paths under when the author names none. */
+const DEFAULT_CONTAINER_FS_ROOT = "/workspace";
 
 /** The default gate for `fsTool` — writing ops (`write`/`rm`) pause for approval; reads run unattended. */
 const defaultFsGate = (input: FsToolInput): boolean => input.op === "write" || input.op === "rm";
@@ -448,7 +477,70 @@ const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinitio
     };
 };
 
-export type { BrowserRenderResult, BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions };
-export { browserTool, containerTool, fsTool };
+/**
+ * A batteries-included agent tool for files on a container's OWN disk —
+ * `name` is the `ctx.containers.<name>` key of a `defineContainer({ sandbox:
+ * true })` container. Same `ls`/`read`/`write`/`rm`/`stat` ops and the same
+ * default approval gate as {@link fsTool}, but backed by the container's
+ * filesystem (through `@cloudflare/sandbox`'s `Files`) instead of R2, and
+ * addressed to the same per-thread instance {@link containerTool} uses. So a
+ * file the model writes here is the file its next `exec` sees, which is not
+ * true of `fsTool`.
+ *
+ * Every path is scoped under `opts.root` (default `/workspace`); a `..` that
+ * would escape it is rejected. A `write` creates missing parent directories.
+ *
+ * ```ts
+ * import { containerFsTool, containerTool, defineAgent } from "@lunora/agent/sandbox";
+ *
+ * export const coder = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { files: containerFsTool("sandbox"), shell: containerTool("sandbox") },
+ * });
+ * ```
+ * @experimental
+ */
+const containerFsTool = (name: string, options: ContainerFsToolOptions = {}): AgentToolDefinition<FsToolInput> => {
+    if (typeof name !== "string" || name.length === 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/agent: containerFsTool requires a container `name` (the ctx.containers.<name> key from lunora/containers.ts)",
+        );
+    }
+
+    const root = options.root ?? DEFAULT_CONTAINER_FS_ROOT;
+
+    if (!root.startsWith("/")) {
+        throw new LunoraError("INTERNAL", `@lunora/agent: containerFsTool \`root\` must be an absolute path inside the container (got "${root}")`);
+    }
+
+    return {
+        description: options.description ?? DEFAULT_CONTAINER_FS_DESCRIPTION,
+        // Pin kind/name/instance/root LAST so out-of-schema model input can never
+        // override them. `instance` is the thread's own container, the same one
+        // `containerTool` addresses — that shared disk is the point of the tool.
+        execute: (input, context: AgentToolContext) =>
+            context.run(
+                SANDBOX_REF,
+                { ...input, instance: context.threadKey, kind: "containerFs", name, root },
+                { timeoutMs: SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS },
+            ),
+        inputSchema: FS_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        needsApproval: options.needsApproval ?? defaultFsGate,
+    };
+};
+
+export type {
+    BrowserRenderResult,
+    BrowserToolInput,
+    BrowserToolOptions,
+    ContainerFsToolOptions,
+    ContainerToolInput,
+    ContainerToolOptions,
+    FsToolInput,
+    FsToolOptions,
+};
+export { browserTool, containerFsTool, containerTool, fsTool };
 export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
 export { jsCodeTool } from "./js-code-tool";

@@ -105,12 +105,16 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",
-            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec)",
+            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec). spawn() and terminal() stream a process (stdin, a PTY, kill and resize) through the same native exec, and have no fallback on a runtime without it",
         },
         containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
         containerRuntimeScheduling: {
             level: "native",
             note: "Cloudflare Containers' durable_object scheduling policy and container snapshots (both public beta): LunoraContainer resolves the named image through ctx.container.images and forwards image / instance / containerSnapshot to ctx.container.start() through the patched @cloudflare/containers base",
+        },
+        containerSandboxTools: {
+            level: "native",
+            note: "@cloudflare/sandbox (Sandbox SDK 1.0): Files, DirectoryBackup and S3Mount drive the sandbox-shim helper in the image through the native ctx.container.exec(), and the backup and mount gateways are WorkerEntrypoints the container reaches through interceptOutboundHttp. The image must ship /usr/local/bin/sandbox-shim, copied from Cloudflare's shim-only cloudflare/sandbox image",
         },
         analytics: { level: "native", note: "Analytics Engine" },
         edgeRequestMetadata: {

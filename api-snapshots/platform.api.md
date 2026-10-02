@@ -285,6 +285,7 @@ interface PlatformCapabilities {
         containerEgressPolicy?: Capability;
         containerRuntimeScheduling?: Capability;
         containers?: Capability;
+        containerSandboxTools?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;

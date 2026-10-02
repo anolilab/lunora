@@ -29,9 +29,12 @@ const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: J
             assertIdentifier(container.exportName, `container export "${container.exportName}"`);
             assertIdentifier(container.className, `container class "${container.className}"`);
 
+            // A `sandbox: true` container gets the Sandbox SDK helpers from its base.
+            const base = container.sandbox === true ? "LunoraSandboxContainer" : "LunoraContainer";
+
             return `/** Container DO for the \`${container.exportName}\` definition (binding \`${container.bindingName}\`). */
-export class ${container.className} extends LunoraContainer {
-    public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
+export class ${container.className} extends ${base} {
+    public constructor(ctx: ConstructorParameters<typeof ${base}>[0], env: Record<string, unknown>) {
         super(ctx, env, ${container.exportName}, "${container.exportName}"${jurisdictionArgument});
     }
 }
@@ -40,6 +43,20 @@ export class ${container.className} extends LunoraContainer {
         .join("\n");
 
     const imports = containers.map((container) => container.exportName).join(", ");
+    // Only when a container opts in, so an app that never does neither exports
+    // the gateways nor loads `@cloudflare/sandbox`.
+    const hasSandbox = containers.some((container) => container.sandbox === true);
+    const plainImport = containers.some((container) => container.sandbox !== true) ? `import { LunoraContainer } from "@lunora/container/do";\n` : "";
+    const sandboxImport = hasSandbox ? `import { LunoraSandboxContainer } from "@lunora/container/sandbox";\n` : "";
+    const sandboxExports = hasSandbox
+        ? `
+/**
+ * \`DirectoryBackup\` and \`S3Mount\` route a \`sandbox: true\` container's storage
+ * traffic through these WorkerEntrypoints, so the deployed worker must export them.
+ */
+export { DirectoryBackupGateway, S3Gateway } from "@lunora/container/sandbox";
+`
+        : "";
 
     return `${GENERATED_HEADER}/**
  * Container-enabled Durable Object classes for the containers declared in
@@ -53,12 +70,11 @@ export class ${container.className} extends LunoraContainer {
  * \`handle.egress\` controls) routes container outbound traffic through this
  * WorkerEntrypoint, so it too must be exported by the deployed worker.
  */
-import { LunoraContainer } from "@lunora/container/do";
-
+${plainImport}${sandboxImport}
 import { ${imports} } from "../containers.js";
 
 export { ContainerProxy } from "@lunora/container/do";
-
+${sandboxExports}
 ${classes}`;
 };
 

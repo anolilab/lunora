@@ -152,6 +152,9 @@ catalogs:
     '@cloudflare/playwright':
       specifier: 1.3.6
       version: 1.3.6
+    '@cloudflare/sandbox':
+      specifier: 1.0.0
+      version: 1.0.0
     '@cloudflare/vitest-plugin':
       specifier: ^1.3.2
       version: 1.3.2
@@ -3244,6 +3247,9 @@ importers:
 
   packages/container:
     dependencies:
+      '@cloudflare/sandbox':
+        specifier: catalog:cloudflare
+        version: 1.0.0
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
@@ -6757,6 +6763,9 @@ packages:
     peerDependenciesMeta:
       playwright-core:
         optional: true
+
+  '@cloudflare/sandbox@1.0.0':
+    resolution: {integrity: sha512-+TZVuCey6OBDTvPLWisq4Ie7/R5Zy3zFyYOFCNRpdEIyQsKq3xwzpctonE43DfZ+wYZvvu6QYpR138PayDjF+A==}
 
   '@cloudflare/unenv-preset@2.16.2':
     resolution: {integrity: sha512-JBP1+Z7ZSNG/d4mRP+y8VC5dka3tZVMLEZRvS+rzQ4DGV1EoxRFQckcJTTkXbHSQiTj0DtNI01Zwb/V2fX0mvQ==}
@@ -26955,6 +26964,11 @@ snapshots:
     optionalDependencies:
       playwright-core: 1.63.0
 
+  '@cloudflare/sandbox@1.0.0':
+    dependencies:
+      aws4fetch: 1.0.20
+      zod: 4.5.4
+
   '@cloudflare/unenv-preset@2.16.2(unenv@2.0.0-rc.24)(workerd@1.20260926.1)':
     dependencies:
       unenv: 2.0.0-rc.24
@@ -27729,7 +27743,7 @@ snapshots:
       eslint: 10.10.0(jiti@2.7.0)(supports-color@10.2.2)
       ts-pattern: 5.9.0
       typescript: 6.0.3
-      zod: 4.4.3
+      zod: 4.5.4
     transitivePeerDependencies:
       - supports-color
 
@@ -34193,7 +34207,7 @@ snapshots:
       ufo: 1.6.4
       vitefu: 1.1.3(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
       xmlbuilder2: 4.0.3
-      zod: 4.4.3
+      zod: 4.5.4
     optionalDependencies:
       '@rsbuild/core': 2.2.10(core-js@3.49.0)
       vite: 8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0)

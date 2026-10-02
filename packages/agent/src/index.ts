@@ -23,12 +23,13 @@ export type {
     BrowserRenderResult,
     BrowserToolInput,
     BrowserToolOptions,
+    ContainerFsToolOptions,
     ContainerToolInput,
     ContainerToolOptions,
     FsToolInput,
     FsToolOptions,
 } from "./sandbox";
-export { browserTool, containerTool, fsTool } from "./sandbox";
+export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentApprovalContext,
