@@ -8,11 +8,10 @@ import { fakeDriver } from "./support/memory-driver";
 
 describe(teardownPorts, () => {
     const noop = {
-        accounts: () => Promise.resolve(null),
-        boxes: { byId: () => Promise.resolve(null), forAlias: () => Promise.resolve(null) },
         deleteRelease: () => Promise.resolve(),
         driverFor: () => fakeDriver(),
         log: () => undefined,
+        read: () => Promise.resolve(null),
     };
     const everyTarget = (): boolean => true;
 
@@ -99,8 +98,26 @@ describe(teardownPorts, () => {
     it("hands a celld-vps alias's teardown the box its newest deployment names, whatever became of the project", async () => {
         const database = fakeControlPlaneDb({
             deployments: [
-                { _id: "old", alias: "web", boxId: "box_old", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
-                { _id: "new", alias: "web", boxId: "box_new", createdAt: 2, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
+                {
+                    _id: "old",
+                    alias: "web",
+                    createdAt: 1,
+                    placementRef: "box_old",
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "celld-vps",
+                },
+                {
+                    _id: "new",
+                    alias: "web",
+                    createdAt: 2,
+                    placementRef: "box_new",
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "celld-vps",
+                },
                 { _id: "wfp", alias: "a", kind: "production", scriptName: "a", status: "destroyed" },
             ],
         });
@@ -108,8 +125,8 @@ describe(teardownPorts, () => {
         const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         expect(pending).toStrictEqual([
-            { alias: "web", boxId: "box_new", destroyWorker: true, id: "old", target: "celld-vps" },
-            { alias: "web", boxId: "box_new", destroyWorker: false, id: "new", target: "celld-vps" },
+            { alias: "web", destroyWorker: true, id: "old", placementRef: "box_new", target: "celld-vps" },
+            { alias: "web", destroyWorker: false, id: "new", placementRef: "box_new", target: "celld-vps" },
             { alias: "a", destroyWorker: true, id: "wfp", target: "cloudflare-wfp" },
         ]);
     });
@@ -120,9 +137,9 @@ describe(teardownPorts, () => {
                 {
                     _id: "byo",
                     alias: "web",
-                    cloudflareAccountId: "cfa_1",
                     createdAt: 1,
                     kind: "production",
+                    placementRef: "cfa_1",
                     scriptName: "web",
                     status: "destroyed",
                     target: "cloudflare-workers",
@@ -131,11 +148,12 @@ describe(teardownPorts, () => {
         });
         const destroyed: unknown[] = [];
         const account = { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" };
+        const row = { _id: "cfa_1", accountId: account.accountId, organizationId: "org_1", workersSubdomain: "acme" };
         const ports = teardownPorts(
             database,
             {
                 ...noop,
-                accounts: (id) => Promise.resolve(id === "cfa_1" ? account : null),
+                read: (table, id) => Promise.resolve(table === "cloudflareAccounts" && id === "cfa_1" ? row : null),
                 driverFor: (placement) =>
                     fakeDriver({
                         destroy: (alias) => {
@@ -150,11 +168,11 @@ describe(teardownPorts, () => {
         );
         const [pending] = await ports.listPending();
 
-        expect(pending).toStrictEqual({ alias: "web", cloudflareAccountId: "cfa_1", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+        expect(pending).toStrictEqual({ alias: "web", destroyWorker: true, id: "byo", placementRef: "cfa_1", target: "cloudflare-workers" });
 
         await ports.destroy(pending);
 
-        expect(destroyed).toStrictEqual([{ alias: "web", placement: { account, target: "cloudflare-workers" } }]);
+        expect(destroyed).toStrictEqual([{ alias: "web", placement: { host: account, target: "cloudflare-workers" } }]);
     });
 
     it("releases a cloudflare-workers alias whose account is gone — its Worker and data stay in the customer's account", async () => {
@@ -172,7 +190,7 @@ describe(teardownPorts, () => {
             everyTarget,
         );
 
-        await ports.destroy({ alias: "web", cloudflareAccountId: "cfa_gone", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+        await ports.destroy({ alias: "web", destroyWorker: true, id: "byo", placementRef: "cfa_gone", target: "cloudflare-workers" });
 
         expect(log).toStrictEqual([
             'alias "web": its Cloudflare account is no longer connected; the Worker and its data stay in that account, releasing the alias',
@@ -270,8 +288,8 @@ describe(usageRollbackPorts, () => {
                 deployments: [
                     {
                         _id: "dep_byo",
-                        cloudflareAccountId: "cfa_1",
                         organizationId: "org_a",
+                        placementRef: "cfa_1",
                         resourceRef: "cfa_1/web",
                         scriptName: "web",
                         status: "live",
@@ -290,7 +308,10 @@ describe(usageRollbackPorts, () => {
 
         await ports.record({ attribution: attribution as NonNullable<typeof attribution>, quantity: 5 });
 
-        expect(insert).toHaveBeenCalledWith("platformUsage", expect.objectContaining({ cloudflareAccountId: "cfa_1", deploymentId: "dep_byo", quantity: 5 }));
+        expect(insert).toHaveBeenCalledWith(
+            "platformUsage",
+            expect.objectContaining({ billable: false, deploymentId: "dep_byo", placementRef: "cfa_1", quantity: 5 }),
+        );
     });
 
     it("starts a scope with no checkpoint row from nothing, so the rollback reads its bootstrap window", async () => {

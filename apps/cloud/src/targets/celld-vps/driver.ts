@@ -25,7 +25,7 @@ import type { BoxSession, BoxSessionNamespace } from "../../boxes/session-client
 import { boxSession } from "../../boxes/session-client";
 import { boxDomainOf, boxReleaseUrlOf } from "../../boxes/urls";
 import type { ConvergeOptions, TargetDriver, TargetFleet } from "../driver";
-import type { BoxPlacement } from "../placement";
+import type { BoxHost } from "../placement";
 import type { BoxDnsEnvironment } from "./dns";
 
 /** How long a box may take to fetch, deploy and health-check a release. */
@@ -36,7 +36,7 @@ const DESTROY_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface CelldVpsPorts {
     /** The box this driver converges on — the project's placement. */
-    box: BoxPlacement;
+    box: BoxHost;
     /** The apex box hostnames live under (`LUNORA_BOX_DOMAIN`). */
     boxDomain: string;
     /** This control plane's public origin (`LUNORA_ORIGIN_URL`): where a box fetches a release from. */
@@ -132,7 +132,7 @@ export const celldVpsCanConverge = (environment: CelldVpsEnvironment): boolean =
     environment.BOX_SESSION != null && environment.DB != null && environment.LUNORA_ORIGIN_URL != null;
 
 /** Build the driver for one box off the Worker env. Lazy: nothing is touched until a member is called. */
-export const celldVpsDriverFromEnv = (box: BoxPlacement, environment: CelldVpsEnvironment): TargetDriver =>
+export const celldVpsDriverFromEnv = (box: BoxHost, environment: CelldVpsEnvironment): TargetDriver =>
     createCelldVpsDriver({
         box,
         boxDomain: boxDomainOf(environment),

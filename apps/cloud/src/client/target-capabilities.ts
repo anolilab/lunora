@@ -1,5 +1,6 @@
 import type { BindingType, TargetId } from "../provision-contract";
-import { BINDING_SUPPORT, TARGET_IDS, TARGETS, unsupportedReason } from "../provision-contract";
+import { BINDING_SUPPORT, isTargetId, TARGET_IDS, TARGETS, unsupportedReason } from "../provision-contract";
+import type { PlacedOn } from "../targets/placement";
 
 /**
  * What a project's deploy target can and cannot give it, as the studio states it
@@ -96,4 +97,59 @@ export const TARGET_PROPERTIES: Readonly<Partial<Record<TargetId, ReadonlyArray<
 export const TARGET_CAPABILITIES_INTRO: Readonly<Partial<Record<TargetId, string>>> = {
     "celld-vps": "This project runs on celld on your own box.",
     "cloudflare-workers": "This project runs as a plain Worker in your own Cloudflare account, outside Lunora Cloud's dispatcher.",
+};
+
+/** The names of the projects placed on each host (a box, a connected account), by the host's id — what the Boxes and Cloudflare accounts tabs list. */
+export const projectNamesByHost = (projects: ReadonlyArray<{ name: string; placementRef?: string }> | undefined): Map<string, string[]> => {
+    const byHost = new Map<string, string[]>();
+
+    for (const project of projects ?? []) {
+        if (project.placementRef !== undefined) {
+            byHost.set(project.placementRef, [...(byHost.get(project.placementRef) ?? []), project.name]);
+        }
+    }
+
+    return byHost;
+};
+
+/** The deploy-target form's draft: a target, and the host it names (`""` for none yet). */
+export interface TargetDraft {
+    placementRef: string;
+    target: string;
+}
+
+/** What a drafted target places its project on, or `undefined` for a value no target answers to. */
+const placedOnOfDraft = (target: string): PlacedOn | undefined => (isTargetId(target) ? TARGETS[target].placedOn : undefined);
+
+/**
+ * The draft after choosing `target`: its host is kept while the new target
+ * names the same kind of host, comes back to the saved one when it names the
+ * saved target's kind, and is cleared otherwise — a box id is never sent as an
+ * account's, or the other way round.
+ */
+export const retargetDraft = (draft: TargetDraft, target: string, saved: TargetDraft): TargetDraft => {
+    const placedOn = placedOnOfDraft(target);
+
+    if (placedOn === placedOnOfDraft(draft.target)) {
+        return { ...draft, target };
+    }
+
+    return { placementRef: placedOn === placedOnOfDraft(saved.target) ? saved.placementRef : "", target };
+};
+
+/**
+ * What the deploy-target form may do with its draft: which kind of host it
+ * names (`placedOn`, which picker to show), whether it differs from what is
+ * saved, and whether it is complete enough to send (`projects.setTarget`
+ * refuses a hosted target without its host).
+ */
+export const assessTargetDraft = (draft: TargetDraft, saved: TargetDraft): { changed: boolean; complete: boolean; placedOn: PlacedOn | undefined } => {
+    const placedOn = placedOnOfDraft(draft.target);
+    const namesHost = placedOn !== undefined && placedOn !== "cell";
+
+    return {
+        changed: draft.target !== saved.target || (namesHost && draft.placementRef !== saved.placementRef),
+        complete: placedOn !== undefined && (!namesHost || draft.placementRef !== ""),
+        placedOn,
+    };
 };

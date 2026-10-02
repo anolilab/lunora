@@ -9,22 +9,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import type { TargetId } from "../provision-contract";
-import { isAccountTarget, isBoxTarget, isTargetId } from "../provision-contract";
+import { isTargetId, TARGETS } from "../provision-contract";
+import type { PlacedOn } from "../targets/placement";
 import type { BoxView } from "./boxes";
-import { assessTargetDraft, assignableBoxes, BOX_STATUS, canManage } from "./boxes";
+import { assignableBoxes, BOX_STATUS, canManage } from "./boxes";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { accountTitle } from "./cloudflare-accounts";
 import { Field, FormError } from "./section-ui";
-import { TARGET_OPTIONS, targetLabel } from "./target-capabilities";
+import type { TargetDraft } from "./target-capabilities";
+import { assessTargetDraft, retargetDraft, TARGET_OPTIONS, targetLabel } from "./target-capabilities";
 import type { BoxId, CloudflareAccountId, OrgId, ProjectId } from "./types";
 import { useMyRole } from "./use-boxes";
 
 interface ProjectTargetCardProps {
-    /** The box the project is on now, for a `celld-vps` project. */
-    boxId?: string;
-    /** The connected account the project deploys into now, for a `cloudflare-workers` project. */
-    cloudflareAccountId?: string;
     organizationId: OrgId;
+    /** The host the project is placed on now — a box or a connected account, as its target's `placedOn` says. */
+    placementRef?: string;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     target: TargetId;
 }
@@ -154,32 +154,46 @@ const AccountPicker = ({
  * no data: the server refuses it while the project still has deployments on its
  * current target, so the operator learns that here rather than from the error.
  *
- * The draft starts from the saved target and box; the parent keys this card on
- * both, so a save (or a change made elsewhere) remounts it from the new values.
+ * Which host the form asks for follows the drafted target's `placedOn` — one
+ * picker per kind of host, chosen by it. The draft starts from the saved
+ * target and host; the parent keys this card on both, so a save (or a change
+ * made elsewhere) remounts it from the new values.
  */
-export const ProjectTargetCard = ({ boxId, cloudflareAccountId, organizationId, projectId, target }: ProjectTargetCardProps): ReactElement => {
+export const ProjectTargetCard = ({ organizationId, placementRef, projectId, target }: ProjectTargetCardProps): ReactElement => {
     const boxes = useQuery(api.boxes.list, { organizationId });
     const accounts = useQuery(api.cloudflare_accounts.list, { organizationId });
     const manage = canManage(useMyRole(organizationId));
     const setTarget = useMutation(api.projects.setTarget);
-    const saved = { boxId: boxId ?? "", cloudflareAccountId: cloudflareAccountId ?? "", target };
+    const saved: TargetDraft = { placementRef: placementRef ?? "", target };
 
     // Plain strings: Base UI's Select is generic over its value, and a branded id
-    // collapses that inference. The brands are reapplied at the mutation boundary.
-    // react-doctor-disable-next-line react-doctor/no-derived-useState -- an editable draft seeded from the saved value; the parent remounts this card (key = target|box) whenever the saved value changes
+    // collapses that inference. The brand is reapplied at the mutation boundary.
+    // react-doctor-disable-next-line react-doctor/no-derived-useState -- an editable draft seeded from the saved value; the parent remounts this card (key = target|host) whenever the saved value changes
     const [draft, setDraft] = useState(saved);
     const [error, setError] = useState<null | string>(null);
 
-    const { changed, complete, needsAccount, needsBox } = assessTargetDraft(draft, saved);
-    const currentBox = boxes?.find((box) => box._id === boxId)?.name ?? "a box";
-    const currentAccount = accounts?.find((account) => account._id === cloudflareAccountId);
-    let now = targetLabel(target);
+    const { changed, complete, placedOn } = assessTargetDraft(draft, saved);
+    const savedPlacedOn = TARGETS[target].placedOn;
+    const currentAccount = accounts?.find((account) => account._id === placementRef);
+    const currentHost: Record<PlacedOn, string | undefined> = {
+        account: currentAccount === undefined ? "an account" : accountTitle(currentAccount),
+        box: boxes?.find((box) => box._id === placementRef)?.name ?? "a box",
+        cell: undefined,
+    };
+    const hostNow = currentHost[savedPlacedOn];
+    const now = hostNow === undefined ? targetLabel(target) : `${targetLabel(target)} — ${hostNow}`;
 
-    if (isBoxTarget(target)) {
-        now = `${now} — ${currentBox}`;
-    } else if (isAccountTarget(target)) {
-        now = `${now} — ${currentAccount === undefined ? "an account" : accountTitle(currentAccount)}`;
-    }
+    const pick = (value: string): void => {
+        setDraft((current) => {
+            return { ...current, placementRef: value };
+        });
+        setError(null);
+    };
+    const pickers: Record<PlacedOn, null | ReactElement> = {
+        account: <AccountPicker accounts={accounts} disabled={!manage} onChange={pick} organizationId={organizationId} value={draft.placementRef} />,
+        box: <BoxPicker boxes={boxes} disabled={!manage} onChange={pick} organizationId={organizationId} value={draft.placementRef} />,
+        cell: null,
+    };
 
     const save = (): void => {
         if (!isTargetId(draft.target)) {
@@ -192,9 +206,9 @@ export const ProjectTargetCard = ({ boxId, cloudflareAccountId, organizationId, 
         void (async () => {
             try {
                 await setTarget.mutate({
-                    ...(isBoxTarget(next) ? { boxId: draft.boxId as BoxId } : {}),
-                    ...(isAccountTarget(next) ? { cloudflareAccountId: draft.cloudflareAccountId as CloudflareAccountId } : {}),
                     organizationId,
+                    // The picker offered only rows of the table this target's `placedOn` names.
+                    ...(TARGETS[next].placedOn === "cell" ? {} : { placementRef: draft.placementRef as BoxId | CloudflareAccountId }),
                     projectId,
                     target: next,
                 });
@@ -218,9 +232,7 @@ export const ProjectTargetCard = ({ boxId, cloudflareAccountId, organizationId, 
                     <Select
                         disabled={!manage}
                         onValueChange={(value) => {
-                            setDraft((current) => {
-                                return { ...current, target: value ?? target };
-                            });
+                            setDraft((current) => retargetDraft(current, value ?? target, saved));
                             setError(null);
                         }}
                         value={draft.target}
@@ -239,35 +251,7 @@ export const ProjectTargetCard = ({ boxId, cloudflareAccountId, organizationId, 
                 </Field>
                 <p className="m-0 text-xs text-muted-foreground">{TARGET_OPTIONS.find((option) => option.id === draft.target)?.description}</p>
 
-                {needsBox ? (
-                    <BoxPicker
-                        boxes={boxes}
-                        disabled={!manage}
-                        onChange={(value) => {
-                            setDraft((current) => {
-                                return { ...current, boxId: value };
-                            });
-                            setError(null);
-                        }}
-                        organizationId={organizationId}
-                        value={draft.boxId}
-                    />
-                ) : null}
-
-                {needsAccount ? (
-                    <AccountPicker
-                        accounts={accounts}
-                        disabled={!manage}
-                        onChange={(value) => {
-                            setDraft((current) => {
-                                return { ...current, cloudflareAccountId: value };
-                            });
-                            setError(null);
-                        }}
-                        organizationId={organizationId}
-                        value={draft.cloudflareAccountId}
-                    />
-                ) : null}
+                {placedOn === undefined ? null : pickers[placedOn]}
 
                 {manage ? (
                     <Button className="justify-self-start" disabled={!changed || !complete || setTarget.pending} onClick={save} type="button">

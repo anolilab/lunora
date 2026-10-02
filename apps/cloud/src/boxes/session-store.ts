@@ -161,7 +161,7 @@ const projectRoutes = async (database: ControlPlaneStore, project: ProjectRow, d
  * production alias. Capped at the protocol's table size; hostnames unique.
  */
 export const routesForBox = async (database: ControlPlaneStore, box: { _id: string; slug: string }, boxDomain: string): Promise<RouteEntry[]> => {
-    const { page: projects } = await database.findMany("projects", { where: { boxId: box._id } });
+    const { page: projects } = await database.findMany("projects", { where: { placementRef: box._id } });
     const perProject = await Promise.all(
         (projects as ProjectRow[]).map((project) => projectRoutes(database, project, (alias) => `${alias}.${box.slug}.${boxDomain}`.toLowerCase())),
     );

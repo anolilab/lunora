@@ -6,7 +6,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget } from "./shared";
+import { deployTarget, placementHost } from "./shared";
 
 const deploymentKind = v.union(v.literal("production"), v.literal("preview"), v.literal("dev"));
 
@@ -35,15 +35,12 @@ export const deployTables = {
         // The project's stable label — its public subdomain and the name of its
         // one dispatch-namespace script, which every release updates in place.
         alias: v.optional(v.string()),
-        // The box a `celld-vps` release was converged on, copied from the
-        // project's placement when the row is created. Teardown reads it here,
-        // not through the project: deleting a project removes the row that
-        // would have named the box, while its fleet and data still run on it.
-        boxId: v.optional(v.id("boxes")),
-        // The connected Cloudflare account a `cloudflare-workers` release was
-        // converged into, copied from the project like `boxId`: teardown and
-        // usage readback reach the account through it after the project is gone.
-        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
+        // The host a hosted release was converged on (`projects.placementRef`),
+        // copied from the project when the row is created. Teardown and usage
+        // readback read it here, not through the project: deleting a project
+        // removes the row that would have named the host, while its tenant and
+        // data still live there.
+        placementRef: v.optional(placementHost),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP
@@ -105,8 +102,8 @@ export const deployTables = {
         teardownAt: v.optional(v.number()),
     })
         .global()
-        // A connected account's deployments: disconnecting it reads them.
-        .index("by_cloudflare_account", ["cloudflareAccountId"])
+        // A host's deployments: disconnecting an account reads them.
+        .index("by_placement", ["placementRef"])
         .index("by_kind", ["kind"])
         // Every read that scopes deployments to an ORG went unindexed: the Traffic
         // tab, the onboarding checklist and the org purge all filtered on

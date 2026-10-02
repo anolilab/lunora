@@ -4,9 +4,9 @@ import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import { productionAliasCandidates } from "../src/deploy/production-alias";
 import type { TargetId } from "../src/provision-contract";
-import { DEFAULT_TARGET, isAccountTarget, isBoxTarget, storedTarget } from "../src/provision-contract";
+import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
-import { revokedBoxError } from "../src/targets/placement";
+import { assertPlacementRef, hostsOf, isCellPlaced, rowReaderOf } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
@@ -14,7 +14,7 @@ import { claimFirstFreeAlias, pendingTeardown } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
-import { deployTarget } from "./tables/shared";
+import { deployTarget, placementHost } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 /** Shortest preview password accepted — a gate this weak is theatre below it. */
@@ -24,14 +24,13 @@ interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: string;
     activeScriptName?: null | string;
-    /** `.global()` rows answer SQL NULL for an unset column. */
-    boxId?: Id<"boxes"> | null;
-    cloudflareAccountId?: Id<"cloudflareAccounts"> | null;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+    /** `.global()` rows answer SQL NULL for an unset column. */
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
     previewPasswordHash?: string;
     previewPasswordSalt?: string;
     productionAlias?: null | string;
@@ -55,15 +54,18 @@ export interface ProjectView {
     _id: Id<"projects">;
     /** The production release currently on the project's Worker, when one has been activated. */
     activeDeploymentId?: string;
-    /** The box a `celld-vps` project deploys to (plan 458 G12); absent on every other target. */
-    boxId?: Id<"boxes">;
-    /** The connected account a `cloudflare-workers` project deploys into; absent on every other target. */
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
     name: string;
     organizationId: Id<"organizations">;
+
+    /**
+     * The host the project's target places it on — a box (`celld-vps`, plan 458
+     * G12) or a connected Cloudflare account (`cloudflare-workers`); which one
+     * is `TARGETS[target].placedOn`. Absent on a cell-placed target.
+     */
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     /** Whether preview deployments for this project require a password. */
     previewProtected: boolean;
 
@@ -100,8 +102,7 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         slug: row.slug,
         // A row from before targets, or a value this build does not know, reads as the default.
         target: storedTarget(row.target) ?? DEFAULT_TARGET,
-        ...(row.boxId == null ? {} : { boxId: row.boxId }),
-        ...(row.cloudflareAccountId == null ? {} : { cloudflareAccountId: row.cloudflareAccountId }),
+        ...(row.placementRef == null ? {} : { placementRef: row.placementRef }),
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
         ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),
@@ -143,28 +144,28 @@ export const byGithubRepo = internalQuery
         return project ? { organizationId: project.organizationId, projectId: project._id, slug: project.slug } : null; // secret-scanner:allow -- domain field name
     });
 
-/** Where a project deploys, as stored — the edge turns this into a placement (`src/targets/placement.ts`). */
+/** Where a project deploys, as stored — the edge turns this into a placement (`src/targets/placement.ts` `resolvePlacement`). */
 interface StoredPlacement {
-    /** The connected account a `cloudflare-workers` project names, when it is its organization's. Never the token. */
-    account?: { accountId: string; id: string; workersSubdomain: string };
-    /** The box a `celld-vps` project names, when that box exists. */
-    box?: { id: string; revoked: boolean; slug: string };
     /** The name of the cell the project's organization is placed on; absent when that cell row is gone. */
     cellName?: string;
+    /** The host `placementRef` names, when it is its organization's. A connected account's carries no token. */
+    host?: { accountId: string; id: string; workersSubdomain: string } | { id: string; slug: string };
+    /** Whether that host is revoked. */
+    hostRevoked?: boolean;
     /** `projects.target`; absent on projects that predate it. */
     target?: string;
 }
 
 /**
- * Read a project's placement: its target and its organization's cell. The deploy
- * path asks this BEFORE validating a release, because the target's binding table
- * is what the release is validated against, and the cell decides whether this
- * control plane may converge it at all.
+ * Read a project's placement: its target, its organization's cell and the host
+ * it names. The deploy path asks this BEFORE validating a release, because the
+ * target's binding table is what the release is validated against, and the
+ * cell decides whether this control plane may converge it at all.
  *
  * `internal`, reached only from the deploy edge, which holds the verified
  * organization (from the deploy key or the member session) and passes it here.
  * The project must belong to that organization; nothing more is disclosed than
- * a target id and a cell name.
+ * a target id, a cell name and the host's address.
  */
 export const placement = internalQuery
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
@@ -177,18 +178,15 @@ export const placement = internalQuery
 
         const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
         const cell = organization ? ((await context.db.get(organization.cellId)) as { name: string } | null) : null;
-        // A box (or account) of another organization is none at all: `setTarget` never writes one, so this only guards drift.
-        const box = project.boxId == null ? null : ((await context.db.get(project.boxId)) as { organizationId: string; slug: string; status: string } | null);
-        const account =
-            project.cloudflareAccountId == null
+        const target = storedTarget(project.target);
+        // A host of another organization is none at all: `setTarget` never writes one, so this only guards drift.
+        const host =
+            target === undefined || project.placementRef == null || isCellPlaced(target)
                 ? null
-                : ((await context.db.get(project.cloudflareAccountId)) as { accountId: string; organizationId: string; workersSubdomain: string } | null);
+                : await hostsOf(target).lookup(rowReaderOf(context.db), project.placementRef);
 
         return {
-            ...(account?.organizationId === organizationId
-                ? { account: { accountId: account.accountId, id: project.cloudflareAccountId as string, workersSubdomain: account.workersSubdomain } }
-                : {}),
-            ...(box?.organizationId === organizationId ? { box: { id: project.boxId as string, revoked: box.status === "revoked", slug: box.slug } } : {}),
+            ...(host?.organizationId === organizationId ? { host: host.host, hostRevoked: host.revoked } : {}),
             ...(cell ? { cellName: cell.name } : {}),
             // `!= null`: a `.global()` row answers SQL NULL, not undefined, for an unset column.
             ...(project.target == null ? {} : { target: project.target }),
@@ -239,76 +237,34 @@ export const create = mutation
         return projectId;
     });
 
-/** What a target needs the project to name: its box, its connected account, or neither. */
-const assertPlacementArguments = async (
-    context: Parameters<typeof assertRowInOrg>[0],
-    organizationId: Id<"organizations">,
-    target: TargetId,
-    named: { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts"> },
-): Promise<void> => {
-    const { boxId, cloudflareAccountId } = named;
-
-    if (isBoxTarget(target)) {
-        if (boxId === undefined) {
-            throw new LunoraError("BAD_REQUEST", `a ${target} project needs a box (boxId)`);
-        }
-
-        const box = (await context.db.get(boxId)) as { name: string; organizationId: string; status: string } | null;
-
-        if (box?.organizationId !== organizationId) {
-            throw new LunoraError("NOT_FOUND", "box not found in this organization");
-        }
-
-        if (box.status === "revoked") {
-            throw revokedBoxError(box.name);
-        }
-    } else if (boxId !== undefined) {
-        throw new LunoraError("BAD_REQUEST", `a ${target} project has no box`);
-    }
-
-    if (isAccountTarget(target)) {
-        if (cloudflareAccountId === undefined) {
-            throw new LunoraError("BAD_REQUEST", `a ${target} project needs a connected Cloudflare account (cloudflareAccountId)`);
-        }
-
-        await assertRowInOrg(context, cloudflareAccountId, organizationId, "Cloudflare account");
-    } else if (cloudflareAccountId !== undefined) {
-        throw new LunoraError("BAD_REQUEST", `a ${target} project has no Cloudflare account`);
-    }
-};
-
 /**
  * Point a project at a deploy target (owner/admin) — the one writer of
- * `projects.target` and the placement columns it implies: `boxId` for a
- * box-placed target, `cloudflareAccountId` for an account-placed one, neither
- * otherwise. Each must be the organization's own, and a revoked box is refused.
+ * `projects.target` and the host it implies (`placementRef`): a row of the
+ * table the target's `placedOn` names, of the organization's own, and usable
+ * (a revoked box is refused); none for a cell-placed target.
  *
  * Refused while the project still has a deployment the teardown sweep has not
- * reclaimed: its tenant (and its data) lives on the CURRENT target, and the
+ * reclaimed: its tenant (and its data) lives on the CURRENT placement, and the
  * sweep would send that teardown — keyed by alias — to the new one.
  */
 export const setTarget = mutation
     .use(rateLimit("sensitive"))
     .input({
-        boxId: v.optional(v.id("boxes")),
-        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         organizationId: v.id("organizations"),
+        placementRef: v.optional(placementHost),
         projectId: v.id("projects"),
         target: deployTarget,
     })
-    .mutation(async ({ ctx: context, args: { boxId, cloudflareAccountId, organizationId, projectId, target } }): Promise<void> => {
+    .mutation(async ({ ctx: context, args: { organizationId, placementRef, projectId, target } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
         await assertRowInOrg(context, projectId, organizationId, "project");
-        await assertPlacementArguments(context, organizationId, target, {
-            ...(boxId === undefined ? {} : { boxId }),
-            ...(cloudflareAccountId === undefined ? {} : { cloudflareAccountId }),
-        });
+        await assertPlacementRef(rowReaderOf(context.db), organizationId, target, placementRef);
 
         const project = (await context.db.get(projectId)) as ProjectRow;
         const currentTarget = storedTarget(project.target) ?? DEFAULT_TARGET;
 
-        if (currentTarget === target && (project.boxId ?? undefined) === boxId && (project.cloudflareAccountId ?? undefined) === cloudflareAccountId) {
+        if (currentTarget === target && (project.placementRef ?? undefined) === placementRef) {
             return;
         }
 
@@ -322,13 +278,13 @@ export const setTarget = mutation
             );
         }
 
-        await context.db.patch(projectId, { boxId: boxId ?? null, cloudflareAccountId: cloudflareAccountId ?? null, target });
+        await context.db.patch(projectId, { placementRef: placementRef ?? null, target });
         await context.db.insert("auditLog", {
             action: "project.target.set",
             actorUserId: member.userId,
             createdAt: context.now,
             organizationId,
-            target: [target, boxId ?? cloudflareAccountId].filter((part) => part !== undefined).join(":"),
+            target: placementRef === undefined ? target : `${target}:${placementRef}`,
         });
     });
 

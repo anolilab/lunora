@@ -1088,12 +1088,12 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
-        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ account?: { accountId: string; id: string; workersSubdomain: string; }; box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
+        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ cellName?: string; host?: { accountId: string; id: string; workersSubdomain: string; } | { id: string; slug: string; }; hostRevoked?: false | true; target?: string }>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
-        setTarget: (args: { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<void>;
+        setTarget: (args: { organizationId: Id<"organizations">; placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<void>;
         updateBuildSettings: (args: { id: Id<"projects">; organizationId: Id<"organizations">; rootDirectory: unknown; watchPaths: Array<unknown> }) => Promise<{ rootDirectory: string; watchPaths: string[]; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };

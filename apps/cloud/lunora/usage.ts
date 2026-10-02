@@ -139,13 +139,13 @@ export const ingest = mutation
 
 interface PlatformUsageRow {
     _id: Id<"platformUsage">;
-    /** Set on box-reported rows — display only, never billed (plan 458 D12). */
-    boxId?: Id<"boxes"> | null;
-    cloudflareAccountId?: Id<"cloudflareAccounts"> | null;
+    /** `false` on a row that is displayed and never billed (`isBillableUsage`). */
+    billable?: boolean | null;
     createdAt: number;
     kind: UsageMeter;
     organizationId: Id<"organizations">;
     periodStart: number;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
     quantity: number;
 }
 
@@ -193,10 +193,10 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
     const groups = new Map<string, PlatformUsageRow[]>();
 
     for (const row of closed) {
-        // Box and connected-account rows compact among themselves, per box or
-        // account: folding one into a billable row would bill it, and folding it
-        // away would lose what the studio shows.
-        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}|${row.boxId ?? ""}|${row.cloudflareAccountId ?? ""}`;
+        // Display-only rows compact among themselves, per host: folding one into
+        // a billable row would bill it, and folding it away would lose what the
+        // studio shows.
+        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}|${String(isBillableUsage(row))}|${row.placementRef ?? ""}`;
         const group = groups.get(groupKey) ?? [];
 
         group.push(row);
@@ -239,7 +239,7 @@ export const summary = query
         // `rollup`, and one page stops at 1000 rows — a busy org would under-report.
         const rows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { organizationId, periodStart } }));
 
-        // What the org is billed on: box-reported counts are display only (plan 458 D12).
+        // What the org is billed on: counts from a host the org owns are display only.
         return aggregateUsage(
             rows.filter((row) => isBillableUsage(row)),
             periodStart,

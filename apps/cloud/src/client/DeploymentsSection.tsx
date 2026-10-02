@@ -33,14 +33,12 @@ import { TargetCapabilitiesCard } from "./TargetCapabilitiesCard";
 import type { OrgId, ProjectId } from "./types";
 
 interface DeploymentsSectionProps {
-    /** The box a `celld-vps` project deploys to. */
-    boxId?: string;
-    /** The connected account a `cloudflare-workers` project deploys into. */
-    cloudflareAccountId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
     organizationId: OrgId;
+    /** The host the project's target places it on (`projects.placementRef`). */
+    placementRef?: string;
     /** Whether preview deployments for this project currently require a password. */
     previewProtected?: boolean;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
@@ -485,12 +483,11 @@ const requestRollback = async (deploymentId: string, organizationId: OrgId): Pro
 };
 
 export const DeploymentsSection = ({
-    boxId,
-    cloudflareAccountId,
     gitProvider,
     githubRepo,
     onBack,
     organizationId,
+    placementRef,
     previewProtected = false,
     projectId,
     projectName,
@@ -525,10 +522,9 @@ export const DeploymentsSection = ({
     const targetSettings = (
         <>
             <ProjectTargetCard
-                boxId={boxId}
-                cloudflareAccountId={cloudflareAccountId}
-                key={`${target}|${boxId ?? ""}|${cloudflareAccountId ?? ""}`}
+                key={`${target}|${placementRef ?? ""}`}
                 organizationId={organizationId}
+                placementRef={placementRef}
                 projectId={projectId}
                 target={target}
             />

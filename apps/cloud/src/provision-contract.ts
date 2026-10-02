@@ -157,10 +157,12 @@ export interface TargetDescriptor {
     /**
      * Where a project of this target is placed. `cell` — in its organization's
      * cell (one Cloudflare account, one dispatch namespace, one control plane).
-     * `box` — on a machine its organization enrolled (`projects.boxId`).
-     * `account` — in a Cloudflare account its organization connected
-     * (`projects.cloudflareAccountId`), converged by its organization's cell,
-     * whose provision box holds the convergence state.
+     * `box` — on a machine its organization enrolled. `account` — in a
+     * Cloudflare account its organization connected, converged by its
+     * organization's cell, whose provision box holds the convergence state. A
+     * box or an account is the host row `projects.placementRef` names; which
+     * table that is, and how every layer reads it, is `PLACEMENT_HOSTS` in
+     * `src/targets/placement.ts`.
      */
     placedOn: "account" | "box" | "cell";
 }
@@ -262,12 +264,6 @@ export type AccountTargetId = { [T in TargetId]: (typeof TARGETS)[T]["placedOn"]
 
 /** The targets whose projects are placed in their organization's cell. */
 export type CellTargetId = Exclude<TargetId, AccountTargetId | BoxTargetId>;
-
-/** Whether a project of `target` is placed on a box, and so must name one. */
-export const isBoxTarget = (target: TargetId): target is BoxTargetId => TARGETS[target].placedOn === "box";
-
-/** Whether a project of `target` is placed in a connected Cloudflare account, and so must name one. */
-export const isAccountTarget = (target: TargetId): target is AccountTargetId => TARGETS[target].placedOn === "account";
 
 export type DeployKind = "dev" | "preview" | "production";
 

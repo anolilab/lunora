@@ -8,10 +8,10 @@ import type { Placement } from "../src/targets/placement";
 
 const WFP: Placement = { target: "cloudflare-wfp" };
 const box = (id: string): Placement => {
-    return { box: { id, slug: `b${id}` }, target: "celld-vps" };
+    return { host: { id, slug: `b${id}` }, target: "celld-vps" };
 };
 const account = (id: string, accountId: string): Placement => {
-    return { account: { accountId, id, workersSubdomain: "acme" }, target: "cloudflare-workers" };
+    return { host: { accountId, id, workersSubdomain: "acme" }, target: "cloudflare-workers" };
 };
 
 /** A frozen clock whose sleeps never end: a scheduler out of tokens queues for good, so a test sees exactly what ran. */

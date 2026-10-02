@@ -5914,20 +5914,24 @@
                 "properties": {
                   "args": {
                     "properties": {
-                      "boxId": {
-                        "description": "Id<\"boxes\">",
-                        "type": "string",
-                        "x-lunora-table": "boxes"
-                      },
-                      "cloudflareAccountId": {
-                        "description": "Id<\"cloudflareAccounts\">",
-                        "type": "string",
-                        "x-lunora-table": "cloudflareAccounts"
-                      },
                       "organizationId": {
                         "description": "Id<\"organizations\">",
                         "type": "string",
                         "x-lunora-table": "organizations"
+                      },
+                      "placementRef": {
+                        "anyOf": [
+                          {
+                            "description": "Id<\"boxes\">",
+                            "type": "string",
+                            "x-lunora-table": "boxes"
+                          },
+                          {
+                            "description": "Id<\"cloudflareAccounts\">",
+                            "type": "string",
+                            "x-lunora-table": "cloudflareAccounts"
+                          }
+                        ]
                       },
                       "projectId": {
                         "description": "Id<\"projects\">",

@@ -12,13 +12,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { BoxView, MemberRole } from "./boxes";
-import { canDiagnose, canManage, projectNamesByBox } from "./boxes";
+import { canDiagnose, canManage } from "./boxes";
 import { BoxListItem } from "./BoxListItem";
 import { DiagnoseBoxDialog } from "./DiagnoseBoxDialog";
 import { EnrolBoxDialog } from "./EnrolBoxDialog";
 import { RenameBoxDialog } from "./RenameBoxDialog";
 import { RevokeBoxDialog } from "./RevokeBoxDialog";
 import type { SectionProps } from "./tabs";
+import { projectNamesByHost } from "./target-capabilities";
 import { useBoxDomain, useMyRole } from "./use-boxes";
 
 /** Stable empty list for a box with no projects (a fresh `[]` per row trips react-perf). */
@@ -80,7 +81,7 @@ export const BoxesSection = ({ organizationId, preloaded }: SectionProps<ReturnO
     const [diagnosing, setDiagnosing] = useState<BoxView | null>(null);
     const [notice, setNotice] = useState<null | string>(null);
 
-    const projectsByBox = projectNamesByBox(projects);
+    const projectsByBox = projectNamesByHost(projects);
 
     const openEnrol = (): void => {
         setEnrolDialog((current) => {

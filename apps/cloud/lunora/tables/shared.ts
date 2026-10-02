@@ -70,3 +70,11 @@ export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.lite
  * `__tests__/placement.test.ts` fails the type check when the two drift.
  */
 export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"), v.literal("cloudflare-workers"));
+
+/**
+ * A placement's host (`projects.placementRef`, `src/targets/placement.ts`
+ * `PLACEMENT_HOSTS`): a row of the table its target's `placedOn` implies — a box
+ * the organization enrolled, or a Cloudflare account it connected. One column
+ * for every kind of host, so no layer threads one nullable reference per kind.
+ */
+export const placementHost = v.union(v.id("boxes"), v.id("cloudflareAccounts"));

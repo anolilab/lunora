@@ -4,9 +4,10 @@
  * requests in the window, attributed to that alias's live deployment.
  *
  * Displayed, never billed (D12): the customer has root on the box, so its
- * counts are not billing evidence. Every row carries `boxId`, which is what
- * keeps it out of the spend cap, the overage debit and the invoice summary
- * (`isBillableUsage` in `src/billing/usage.ts`).
+ * counts are not billing evidence. Every row is written `billable: false`,
+ * which keeps it out of the spend cap, the overage debit and the invoice
+ * summary (`isBillableUsage` in `src/billing/usage.ts`), and carries the box as
+ * its `placementRef`.
  *
  * A report is untrusted input (plan 458 §8). Only aliases of projects placed on
  * THIS box, in its organization, are counted; a window too long, too old or in
@@ -47,7 +48,7 @@ export const periodStartOf = (at: number): number => {
  * many aliases the box chose to name in it.
  */
 const liveAliasesOn = async (database: ControlPlaneStore, box: { _id: string; organizationId: string }): Promise<Map<string, string>> => {
-    const { page: projects } = await database.findMany("projects", { where: { boxId: box._id, organizationId: box.organizationId } });
+    const { page: projects } = await database.findMany("projects", { where: { organizationId: box.organizationId, placementRef: box._id } });
     const live = new Map<string, string>();
 
     for (const project of projects as { _id: string }[]) {
@@ -77,7 +78,7 @@ export const recordBoxReport = async (
         return { dropped: "out-of-range" };
     }
 
-    const { page: seen } = await database.findMany("platformUsage", { limit: 1, where: { boxId: box._id, windowStart } });
+    const { page: seen } = await database.findMany("platformUsage", { limit: 1, where: { placementRef: box._id, windowStart } });
 
     if (seen.length > 0) {
         return { dropped: "duplicate" };
@@ -103,12 +104,13 @@ export const recordBoxReport = async (
 
         // eslint-disable-next-line no-await-in-loop -- one insert per alias the box actually serves
         await database.insert("platformUsage", {
-            boxId: box._id,
+            billable: false,
             createdAt: now,
             deploymentId,
             kind: "requests",
             organizationId: box.organizationId,
             periodStart: periodStartOf(windowStart),
+            placementRef: box._id,
             quantity: entry.requests,
             windowStart,
         });

@@ -3,7 +3,8 @@ import { LunoraError } from "@lunora/server";
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { TargetId } from "../src/provision-contract";
-import { DEFAULT_TARGET, isAccountTarget, isBoxTarget, storedTarget } from "../src/provision-contract";
+import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
+import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -323,25 +324,17 @@ export const listByProject = query
  * Where a release's tenant lives, copied from its project when the row is
  * created — so its teardown and usage readback still reach it once the project
  * (and with it the placement) is gone — and the tenant's handle there
- * (`resourceRef`): the alias, which is its script name, qualified by the
- * account on `cloudflare-workers`, where the usage readback reads a whole
- * customer account and must attribute a script only to a deployment placed in
- * THAT account.
+ * (`resourceRefOf`).
  */
 const placementColumns = (
     target: TargetId,
-    project: { boxId?: Id<"boxes"> | null; cloudflareAccountId?: Id<"cloudflareAccounts"> | null },
+    project: { placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null },
     alias: string,
-): { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; resourceRef: string } => {
-    if (isBoxTarget(target) && project.boxId != null) {
-        return { boxId: project.boxId, resourceRef: alias };
-    }
+): { placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; resourceRef: string } => {
+    // A cell-placed target names no host; a stale reference left on its project is not copied.
+    const placementRef = isCellPlaced(target) ? undefined : (project.placementRef ?? undefined);
 
-    if (isAccountTarget(target) && project.cloudflareAccountId != null) {
-        return { cloudflareAccountId: project.cloudflareAccountId, resourceRef: `${project.cloudflareAccountId}/${alias}` };
-    }
-
-    return { resourceRef: alias };
+    return { ...(placementRef === undefined ? {} : { placementRef }), resourceRef: resourceRefOf({ placementRef, target }, alias) };
 };
 
 /**

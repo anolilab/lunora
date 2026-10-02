@@ -3,6 +3,7 @@
 
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "@lunora/server/drizzle";
 import type { AnySQLiteColumn } from "@lunora/server/drizzle";
+import type { Id } from "./dataModel.js";
 
 export const cells = sqliteTable("cells", {
     _id: text("_id").primaryKey(),
@@ -65,14 +66,12 @@ export const projects = sqliteTable("projects", {
     rootDirectory: text("rootDirectory"),
     slug: text("slug").notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
-    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
-    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
+    placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
     by_github_repo: index("by_github_repo").on(t.githubRepo),
-    by_box: index("by_box").on(t.boxId),
-    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
+    by_placement: index("by_placement").on(t.placementRef),
 }));
 
 export const invitations = sqliteTable("invitations", {
@@ -123,8 +122,7 @@ export const deployments = sqliteTable("deployments", {
     adminTokenCiphertext: text("adminTokenCiphertext"),
     adminTokenIv: text("adminTokenIv"),
     alias: text("alias"),
-    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
-    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
+    placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
     bindings: text("bindings", { mode: "json" }).$type<Array<{ name: string; target?: string; type: string }>>(),
@@ -157,7 +155,7 @@ export const deployments = sqliteTable("deployments", {
     by_project: index("by_project").on(t.projectId),
     by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
-    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
+    by_placement: index("by_placement").on(t.placementRef),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {
@@ -591,17 +589,17 @@ export const overageDebits = sqliteTable("overageDebits", {
 export const platformUsage = sqliteTable("platformUsage", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
-    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
-    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
+    billable: integer("billable", { mode: "boolean" }),
     createdAt: real("createdAt").notNull(),
     deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
     kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     periodStart: real("periodStart").notNull(),
+    placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     quantity: real("quantity").notNull(),
     windowStart: real("windowStart"),
 }, (t) => ({
-    by_box_window: index("by_box_window").on(t.boxId, t.windowStart),
+    by_placement_window: index("by_placement_window").on(t.placementRef, t.windowStart),
     by_org: index("by_org").on(t.organizationId),
 }));
 

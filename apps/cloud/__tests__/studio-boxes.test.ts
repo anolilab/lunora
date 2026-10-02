@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { BoxView } from "../src/client/boxes";
 import {
-    assessTargetDraft,
     assignableBoxes,
     BOX_STATUS,
     boxHostname,
@@ -13,10 +12,10 @@ import {
     FLEET_STATE,
     formatDiagnoseOutput,
     formatMegabytes,
-    projectNamesByBox,
     roleOf,
 } from "../src/client/boxes";
 import { formatRelativeTime } from "../src/client/format";
+import { assessTargetDraft, projectNamesByHost, retargetDraft } from "../src/client/target-capabilities";
 
 /**
  * The Boxes tab's decisions (plan 458 W9), tested without a DOM: how each box
@@ -139,57 +138,47 @@ describe(formatRelativeTime, () => {
 });
 
 describe(assessTargetDraft, () => {
-    const saved = { boxId: "", cloudflareAccountId: "", target: "cloudflare-wfp" };
+    const saved = { placementRef: "", target: "cloudflare-wfp" };
 
-    it("needs a box for celld-vps, and is incomplete without one", () => {
-        expect(assessTargetDraft({ ...saved, target: "celld-vps" }, saved)).toStrictEqual({
-            changed: true,
-            complete: false,
-            needsAccount: false,
-            needsBox: true,
-        });
-        expect(assessTargetDraft({ ...saved, boxId: "box_1", target: "celld-vps" }, saved)).toStrictEqual({
-            changed: true,
-            complete: true,
-            needsAccount: false,
-            needsBox: true,
-        });
+    it("asks for the host the target's placedOn names, and is incomplete without one", () => {
+        expect(assessTargetDraft({ ...saved, target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: false, placedOn: "box" });
+        expect(assessTargetDraft({ placementRef: "box_1", target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: true, placedOn: "box" });
+        expect(assessTargetDraft({ ...saved, target: "cloudflare-workers" }, saved)).toStrictEqual({ changed: true, complete: false, placedOn: "account" });
+        expect(assessTargetDraft({ placementRef: "cfa_1", target: "cloudflare-workers" }, saved).complete).toBe(true);
     });
 
-    it("needs a connected account for cloudflare-workers, and is incomplete without one", () => {
-        expect(assessTargetDraft({ ...saved, target: "cloudflare-workers" }, saved)).toStrictEqual({
-            changed: true,
-            complete: false,
-            needsAccount: true,
-            needsBox: false,
-        });
-        expect(assessTargetDraft({ ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" }, saved).complete).toBe(true);
-    });
-
-    it("treats the saved value as unchanged, and a different box or account as a change", () => {
+    it("treats the saved value as unchanged, and a different host as a change", () => {
         expect(assessTargetDraft(saved, saved).changed).toBe(false);
 
-        const onBox = { ...saved, boxId: "box_1", target: "celld-vps" };
+        const onBox = { placementRef: "box_1", target: "celld-vps" };
 
         expect(assessTargetDraft(onBox, onBox).changed).toBe(false);
-        expect(assessTargetDraft({ ...onBox, boxId: "box_2" }, onBox).changed).toBe(true);
-
-        const inAccount = { ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" };
-
-        expect(assessTargetDraft({ ...inAccount, cloudflareAccountId: "cfa_2" }, inAccount).changed).toBe(true);
+        expect(assessTargetDraft({ ...onBox, placementRef: "box_2" }, onBox).changed).toBe(true);
     });
 
-    it("ignores a stale box or account once the target is back on Lunora Cloud", () => {
-        expect(assessTargetDraft({ boxId: "box_1", cloudflareAccountId: "cfa_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({
+    it("ignores a stale host once the target is back on Lunora Cloud", () => {
+        expect(assessTargetDraft({ placementRef: "box_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({
             changed: false,
             complete: true,
-            needsAccount: false,
-            needsBox: false,
+            placedOn: "cell",
         });
     });
 
     it("never calls an unknown target complete", () => {
-        expect(assessTargetDraft({ ...saved, target: "aws" }, saved).complete).toBe(false);
+        expect(assessTargetDraft({ ...saved, target: "aws" }, saved)).toStrictEqual({ changed: true, complete: false, placedOn: undefined });
+    });
+});
+
+describe(retargetDraft, () => {
+    const onBox = { placementRef: "box_1", target: "celld-vps" };
+
+    it("never carries a host into a target that names another kind", () => {
+        expect(retargetDraft(onBox, "cloudflare-workers", onBox)).toStrictEqual({ placementRef: "", target: "cloudflare-workers" });
+        expect(retargetDraft(onBox, "cloudflare-wfp", onBox)).toStrictEqual({ placementRef: "", target: "cloudflare-wfp" });
+    });
+
+    it("brings the saved host back when the saved kind is chosen again", () => {
+        expect(retargetDraft({ placementRef: "", target: "cloudflare-wfp" }, "celld-vps", onBox)).toStrictEqual(onBox);
     });
 });
 
@@ -245,16 +234,21 @@ describe(describeDiagnose, () => {
     });
 });
 
-describe(projectNamesByBox, () => {
-    it("groups project names under the box each is placed on, and skips projects on no box", () => {
+describe(projectNamesByHost, () => {
+    it("groups project names under the host each is placed on, and skips projects on none", () => {
         expect(
-            projectNamesByBox([{ boxId: "box_1", name: "web" }, { name: "cloud-only" }, { boxId: "box_1", name: "api" }, { boxId: "box_2", name: "docs" }]),
+            projectNamesByHost([
+                { name: "web", placementRef: "box_1" },
+                { name: "cloud-only" },
+                { name: "api", placementRef: "box_1" },
+                { name: "byo", placementRef: "cfa_1" },
+            ]),
         ).toStrictEqual(
             new Map([
                 ["box_1", ["web", "api"]],
-                ["box_2", ["docs"]],
+                ["cfa_1", ["byo"]],
             ]),
         );
-        expect(projectNamesByBox(undefined)).toStrictEqual(new Map());
+        expect(projectNamesByHost(undefined)).toStrictEqual(new Map());
     });
 });

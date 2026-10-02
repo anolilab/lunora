@@ -7,7 +7,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget, memberRole, plan } from "./shared";
+import { deployTarget, memberRole, placementHost, plan } from "./shared";
 
 const cellStatus = v.union(v.literal("active"), v.literal("draining"), v.literal("suspended"));
 
@@ -119,22 +119,18 @@ export const platformTables = {
         // the project, never of a deploy request. Absent → `cloudflare-wfp`,
         // in the org's cell — which is what every project before targets did.
         target: v.optional(deployTarget),
-        // The customer box a `celld-vps` project deploys to (plan 458 G12).
-        // Required when `target` is `celld-vps` and absent otherwise — enforced
-        // by `projects.setTarget`, the one writer of the placement columns.
-        boxId: v.optional(v.id("boxes")),
-        // The connected Cloudflare account a `cloudflare-workers` project deploys
-        // into. Required for that target and absent otherwise — enforced by
-        // `projects.setTarget`, the one writer of the placement columns.
-        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
+        // The host row the project's target places it on (`src/targets/placement.ts`):
+        // a box its organization enrolled (`placedOn: "box"`, plan 458 G12) or a
+        // Cloudflare account it connected (`placedOn: "account"`) — the table is
+        // the one the target's `placedOn` implies. Required for those targets and
+        // absent for a cell-placed one — enforced by `projects.setTarget`, its one writer.
+        placementRef: v.optional(placementHost),
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
-        // A connected account's projects: disconnecting it reads them.
-        .index("by_cloudflare_account", ["cloudflareAccountId"])
-        // A box's projects: its routing table and every usage report it sends
-        // read them, so neither may scan the whole table.
-        .index("by_box", ["boxId"])
+        // A host's projects: a box's routing table and every usage report it sends
+        // read them, and disconnecting an account does, so none may scan the table.
+        .index("by_placement", ["placementRef"])
         .index("by_github_repo", ["githubRepo"])
         // Per-org slug uniqueness, enforced by the composite unique index.
         .index("by_org_slug", ["organizationId", "slug"], { unique: true }),

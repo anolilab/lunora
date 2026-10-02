@@ -29,7 +29,7 @@ import { controlPlaneDatabase } from "../../d1-store";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import { decryptSecret } from "../../secrets/crypto";
 import type { ProgressLine, TargetDriver, TargetFleet } from "../driver";
-import type { AccountPlacement } from "../placement";
+import type { AccountHost } from "../placement";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
 import type { PlatformStateStore, ProvisionTarget } from "../provision-box/contract";
@@ -41,7 +41,7 @@ export type AccountCredentials = (accountRowId: string) => Promise<{ accountId: 
 
 export interface CloudflareWorkersPorts {
     /** The connected account this driver converges into — the project's placement. */
-    account: AccountPlacement;
+    account: AccountHost;
     /** The provision box, reached lazily: a driver that never converges never touches it. */
     box: () => ProvisionBox;
     /** Unseal the account's token (`cloudflareAccounts` → `SECRET_ENCRYPTION_KEY`). */
@@ -233,7 +233,7 @@ export const cloudflareWorkersCanConverge = (environment: CloudflareWorkersEnvir
     stateStoreOf(environment) !== undefined;
 
 /** Build the driver for one connected account off the Worker env. Lazy: nothing is touched until a member is called. */
-export const cloudflareWorkersDriverFromEnv = (account: AccountPlacement, environment: CloudflareWorkersEnvironment): TargetDriver =>
+export const cloudflareWorkersDriverFromEnv = (account: AccountHost, environment: CloudflareWorkersEnvironment): TargetDriver =>
     createCloudflareWorkersDriver({
         account,
         box: () => provisionBoxFrom(environment),

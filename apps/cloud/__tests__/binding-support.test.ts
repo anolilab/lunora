@@ -162,12 +162,12 @@ describe("the box's celld config agrees with the celld-vps row", () => {
 describe("the registry", () => {
     it("builds each placement's driver, and each target's fleet, without touching an unconfigured env", () => {
         expect(resolveTargetDriver({ target: "cloudflare-wfp" }, {}).id).toBe("cloudflare-wfp");
-        expect(resolveTargetDriver({ box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" }, {}).id).toBe("celld-vps");
+        expect(resolveTargetDriver({ host: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" }, {}).id).toBe("celld-vps");
         expect(targetFleet("cloudflare-wfp", {}).id).toBe("cloudflare-wfp");
         expect(targetFleet("celld-vps", {}).id).toBe("celld-vps");
-        expect(
-            resolveTargetDriver({ account: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" }, {}).id,
-        ).toBe("cloudflare-workers");
+        expect(resolveTargetDriver({ host: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" }, {}).id).toBe(
+            "cloudflare-workers",
+        );
         expect(targetFleet("cloudflare-workers", {}).id).toBe("cloudflare-workers");
     });
 });
@@ -183,9 +183,9 @@ describe("the deploy handler validates against the project's target", () => {
     };
 
     const placements: Record<TargetId, Placement> = {
-        "celld-vps": { box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" },
+        "celld-vps": { host: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" },
         "cloudflare-wfp": { target: "cloudflare-wfp" },
-        "cloudflare-workers": { account: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" },
+        "cloudflare-workers": { host: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" },
     };
 
     const startOn = (target: TargetId, bindings: unknown[]) =>

@@ -19,6 +19,7 @@ import { DisconnectCloudflareAccountDialog } from "./DisconnectCloudflareAccount
 import { COLUMN_LABEL } from "./section-styles";
 import { RelativeTime, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
+import { projectNamesByHost } from "./target-capabilities";
 import { useMyRole } from "./use-boxes";
 
 /** Stable empty list for an account no project uses (a fresh `[]` per row trips react-perf). */
@@ -111,13 +112,7 @@ export const CloudflareAccountsSection = ({ organizationId, preloaded }: Section
     const [dialog, setDialog] = useState<ConnectDialog>({ mode: "closed" });
     const [disconnecting, setDisconnecting] = useState<CloudflareAccountView | null>(null);
 
-    const projectsByAccount = new Map<string, string[]>();
-
-    for (const project of projects ?? []) {
-        if (project.cloudflareAccountId !== undefined) {
-            projectsByAccount.set(project.cloudflareAccountId, [...(projectsByAccount.get(project.cloudflareAccountId) ?? []), project.name]);
-        }
-    }
+    const projectsByAccount = projectNamesByHost(projects);
 
     const connectButton = manage ? (
         <Button

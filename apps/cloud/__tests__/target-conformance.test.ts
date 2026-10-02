@@ -192,7 +192,7 @@ describeTargetConformance("celld-vps", () => {
         aliasOwnership: [{ _id: "own_app", alias: "app", projectId: "proj_app" }],
         deployments: [{ _id: "dep_app", alias: "app", projectId: "proj_app", status: "live" }],
         domains: [],
-        projects: [{ _id: "proj_app", boxId: "box_1", organizationId: "org_1" }],
+        projects: [{ _id: "proj_app", organizationId: "org_1", placementRef: "box_1" }],
     });
     const state = fakeState();
     const session = new TestBoxSession(state, store, { LUNORA_BOX_DOMAIN: "boxes.test" });

@@ -2,7 +2,6 @@ import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
 import type { DiagnoseReport } from "../boxes/diagnose";
-import { isAccountTarget, isBoxTarget, isTargetId } from "../provision-contract";
 import { formatBytes } from "./format";
 
 /**
@@ -73,19 +72,6 @@ export const describeEnrolError = (message: string): { message: string; quota: b
           }
         : { message, quota: false };
 
-/** The names of the projects placed on each box, by box id — what the Boxes tab lists under "Projects". */
-export const projectNamesByBox = (projects: ReadonlyArray<{ boxId?: string; name: string }> | undefined): Map<string, string[]> => {
-    const byBox = new Map<string, string[]>();
-
-    for (const project of projects ?? []) {
-        if (project.boxId !== undefined) {
-            byBox.set(project.boxId, [...(byBox.get(project.boxId) ?? []), project.name]);
-        }
-    }
-
-    return byBox;
-};
-
 /** One celld fleet on a box, as the box last reported it. */
 export type BoxFleet = NonNullable<BoxView["fleets"]>[number];
 
@@ -130,35 +116,3 @@ export const describeDiagnose = (report: DiagnoseReport): string => {
 
 /** Megabytes as the studio prints sizes (`3.9 GB`). */
 export const formatMegabytes = (megabytes: number): string => formatBytes(megabytes * 1024 * 1024);
-
-/** The deploy-target form's draft against what is saved. */
-export interface TargetDraft {
-    boxId: string;
-    cloudflareAccountId: string;
-    target: string;
-}
-
-/**
- * What the deploy-target form may do with its draft: whether it needs a box or
- * a connected Cloudflare account, whether it differs from what is saved, and
- * whether it is complete enough to send (`projects.setTarget` refuses a
- * `celld-vps` target without a box and a `cloudflare-workers` one without an account).
- */
-export const assessTargetDraft = (
-    draft: TargetDraft,
-    saved: TargetDraft,
-): { changed: boolean; complete: boolean; needsAccount: boolean; needsBox: boolean } => {
-    const target = isTargetId(draft.target) ? draft.target : undefined;
-    const needsBox = target !== undefined && isBoxTarget(target);
-    const needsAccount = target !== undefined && isAccountTarget(target);
-
-    return {
-        changed:
-            draft.target !== saved.target ||
-            (needsBox && draft.boxId !== saved.boxId) ||
-            (needsAccount && draft.cloudflareAccountId !== saved.cloudflareAccountId),
-        complete: target !== undefined && (!needsBox || draft.boxId !== "") && (!needsAccount || draft.cloudflareAccountId !== ""),
-        needsAccount,
-        needsBox,
-    };
-};

@@ -10,7 +10,7 @@ import { runTeardownSweep } from "../src/deploy/teardown";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
 import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
-import { boxLookupsIn } from "../src/targets/placement";
+import { storeRowReader } from "../src/targets/placement";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeSessionNamespace } from "./support/box-session-fakes";
 import { memoryStore } from "./support/memory-store";
@@ -162,7 +162,16 @@ describe("celld-vps teardown after the project is gone", () => {
             aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
             boxes: [{ _id: "box_1", slug: "bslug000001", ...box }],
             deployments: [
-                { _id: "dep_1", alias: "web", boxId: "box_1", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
+                {
+                    _id: "dep_1",
+                    alias: "web",
+                    createdAt: 1,
+                    placementRef: "box_1",
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "celld-vps",
+                },
             ],
             projects,
         });
@@ -172,17 +181,16 @@ describe("celld-vps teardown after the project is gone", () => {
             teardownPorts(
                 store,
                 {
-                    accounts: () => Promise.resolve(null),
-                    boxes: boxLookupsIn(store),
                     deleteRelease: () => Promise.resolve(),
                     driverFor: (placement) =>
                         createCelldVpsDriver({
-                            box: "box" in placement ? placement.box : BOX,
+                            box: placement.target === "celld-vps" ? placement.host : BOX,
                             boxDomain: "boxes.test",
                             controlPlaneOrigin: "https://cloud.test",
                             session: () => session,
                         }),
                     log: (line) => log.push(line),
+                    read: storeRowReader(store),
                 },
                 1000,
                 () => true,
@@ -205,7 +213,7 @@ describe("celld-vps teardown after the project is gone", () => {
     });
 
     it("stops an expired preview's fleet on its box while the project lives on", async () => {
-        const store = world({ status: "online" }, [{ _id: "proj_1", boxId: "box_1", organizationId: "org_1" }]);
+        const store = world({ status: "online" }, [{ _id: "proj_1", organizationId: "org_1", placementRef: "box_1" }]);
         const { jobs, session } = recordingSession();
 
         await sweep(store, session);
@@ -240,9 +248,9 @@ describe("celld-vps teardown after the project is gone", () => {
                 {
                     _id: "dep_1",
                     alias: "web",
-                    boxId: "box_gone",
                     createdAt: 1,
                     kind: "production",
+                    placementRef: "box_gone",
                     scriptName: "web",
                     status: "destroyed",
                     target: "celld-vps",
@@ -259,7 +267,7 @@ describe("celld-vps teardown after the project is gone", () => {
         await expect(claimed(store)).resolves.toBe(0);
     });
 
-    it("keeps the alias claimed when a row that predates deployments.boxId has no box to resolve", async () => {
+    it("keeps the alias claimed when a celld-vps row names no box", async () => {
         const store = memoryStore({
             aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
             boxes: [],
@@ -274,27 +282,11 @@ describe("celld-vps teardown after the project is gone", () => {
     });
 });
 
-describe("celld-vps box lookups", () => {
-    it("finds an alias's box through its owning project", async () => {
-        const store = memoryStore({
-            aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
-            boxes: [{ _id: "box_1", slug: "bslug000001", status: "revoked" }],
-            projects: [
-                { _id: "proj_1", boxId: "box_1" },
-                { _id: "proj_2", boxId: null },
-            ],
-        });
-
-        await expect(boxLookupsIn(store).forAlias("web")).resolves.toStrictEqual({ id: "box_1", revoked: true, slug: "bslug000001" });
-        await expect(boxLookupsIn(store).forAlias("nobody")).resolves.toBeNull();
-    });
-});
-
 describe("the deploy stream", () => {
     it("carries a driver's progress lines as log frames, between the release's own phases", async () => {
         const backend: DeployBackend = {
             createDeployment: () => Promise.resolve({ deploymentId: "dep_1" }),
-            placement: () => Promise.resolve({ box: BOX, target: "celld-vps" }),
+            placement: () => Promise.resolve({ host: BOX, target: "celld-vps" }),
             releaseTarget: () => Promise.reject(new Error("unused")),
             rollbackDeployment: () => Promise.reject(new Error("unused")),
             updateStatus: () => Promise.resolve(),
@@ -306,7 +298,7 @@ describe("the deploy stream", () => {
             { key: "k", organizationId: "org_1" },
             {
                 backend,
-                driverFor: (placement) => driverWith(session, "box" in placement ? { box: placement.box } : {}),
+                driverFor: (placement) => driverWith(session, placement.target === "celld-vps" ? { box: placement.host } : {}),
                 releases: memoryReleaseStore().store,
                 pacer: createDeployPacer(),
             },

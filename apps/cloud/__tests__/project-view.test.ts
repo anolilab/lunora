@@ -53,8 +53,8 @@ describe(toProjectView, () => {
 
     it("reports the deploy target, defaulting a row from before targets to cloudflare-wfp", () => {
         expect(toProjectView({ ...row, target: null }).target).toBe("cloudflare-wfp");
-        expect(toProjectView({ ...row, boxId: "box_1" as never, target: "celld-vps" })).toMatchObject({ boxId: "box_1", target: "celld-vps" });
-        expect(toProjectView({ ...row, boxId: null })).not.toHaveProperty("boxId");
+        expect(toProjectView({ ...row, placementRef: "box_1" as never, target: "celld-vps" })).toMatchObject({ placementRef: "box_1", target: "celld-vps" });
+        expect(toProjectView({ ...row, placementRef: null })).not.toHaveProperty("placementRef");
     });
 
     it("omits optional fields rather than emitting undefined", () => {

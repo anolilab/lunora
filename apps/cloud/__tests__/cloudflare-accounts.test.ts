@@ -235,8 +235,8 @@ describe("cloudflareAccounts", () => {
             {
                 cloudflareAccounts: [account()],
                 deployments: [
-                    { _id: "dep_1", cloudflareAccountId: "cfa_1", status: "failed", teardownAt: NOW },
-                    { _id: "dep_2", cloudflareAccountId: "cfa_1", status: "destroyed", teardownAt: NOW },
+                    { _id: "dep_1", placementRef: "cfa_1", status: "failed", teardownAt: NOW },
+                    { _id: "dep_2", placementRef: "cfa_1", status: "destroyed", teardownAt: NOW },
                 ],
                 members: [owner("org_1")],
                 projects: [],
@@ -263,7 +263,7 @@ describe("cloudflareAccounts", () => {
                 cloudflareAccounts: [account()],
                 deployments: [],
                 members: [owner("org_1")],
-                projects: [{ _id: "proj_1", cloudflareAccountId: "cfa_1", organizationId: "org_1" }],
+                projects: [{ _id: "proj_1", placementRef: "cfa_1", organizationId: "org_1" }],
             },
             { now: NOW },
         );
@@ -275,7 +275,7 @@ describe("cloudflareAccounts", () => {
         const withDeployment = makeCtx(
             {
                 cloudflareAccounts: [account()],
-                deployments: [{ _id: "dep_1", cloudflareAccountId: "cfa_1", status: "destroyed", teardownAt: null }],
+                deployments: [{ _id: "dep_1", placementRef: "cfa_1", status: "destroyed", teardownAt: null }],
                 members: [owner("org_1")],
                 projects: [],
             },

@@ -168,7 +168,7 @@ describe("boxes.ownsDeployment", () => {
         return {
             boxes: [{ _id: "box_1", organizationId: "org_1", status: "online" }],
             deployments: [{ _id: "dep_1", organizationId: "org_1", projectId: "proj_1", target: "celld-vps", ...deployment }],
-            projects: [{ _id: "proj_1", boxId: "box_1", organizationId: "org_1", ...project }],
+            projects: [{ _id: "proj_1", organizationId: "org_1", placementRef: "box_1", ...project }],
         };
     };
 
@@ -177,7 +177,7 @@ describe("boxes.ownsDeployment", () => {
 
         await expect(run(tables())).resolves.toBe(true);
         await expect(run(tables({ target: "cloudflare-wfp" }))).resolves.toBe(false);
-        await expect(run(tables({}, { boxId: "box_2" }))).resolves.toBe(false);
+        await expect(run(tables({}, { placementRef: "box_2" }))).resolves.toBe(false);
         await expect(run(tables({ organizationId: "org_2" }))).resolves.toBe(false);
     });
 });

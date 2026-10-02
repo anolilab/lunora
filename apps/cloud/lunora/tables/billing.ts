@@ -6,7 +6,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget, usageMeter } from "./shared";
+import { deployTarget, placementHost, usageMeter } from "./shared";
 
 export const billingTables = {
     // Overage-debit watermarks (GAPS.md C3 follow-up): cumulative credits
@@ -31,28 +31,30 @@ export const billingTables = {
     // dimension in `usageMeter`, not just compute, so a storage- or
     // DO-duration-shaped runaway is visible to the spend cap.
     platformUsage: defineTable({
-        // Set on rows a customer box reported (plan 458 G15): request counts its
-        // `hostd` read off Caddy's access log. Displayed, NEVER billed (D12) —
-        // the customer has root on the box, so its counts are not billing
-        // evidence. `src/billing/usage.ts` `isBillableUsage` is the one test.
-        boxId: v.optional(v.id("boxes")),
-        // Set on rows read back from a customer's own Cloudflare account
-        // (`cloudflare-workers`): displayed, NEVER billed — Cloudflare bills those
-        // requests to the customer, and Lunora Cloud charges for the control plane.
-        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
+        // `false` on a row that is displayed and NEVER billed (`src/billing/usage.ts`
+        // `isBillableUsage` is the one test): counts a customer box reported
+        // (plan 458 G15/D12 — the customer has root on the box, so they are not
+        // billing evidence) and counts read back from a customer's own
+        // Cloudflare account (`cloudflare-workers` — Cloudflare bills those to
+        // the customer). Absent on every row the platform meters itself.
+        billable: v.optional(v.boolean()),
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
         kind: usageMeter,
         organizationId: v.id("organizations"),
         periodStart: v.number(),
+        // The host that reported (or was read for) this row — a box, or a
+        // connected account — so the studio shows it per host and the roll-up
+        // compacts it only with its own host's rows. Absent on platform-metered rows.
+        placementRef: v.optional(placementHost),
         quantity: v.number(),
-        // The report window a box row counts (epoch ms) — with `boxId`, the key
-        // that makes a replayed report a no-op instead of a double count.
+        // The report window a box row counts (epoch ms) — with `placementRef`,
+        // the key that makes a replayed report a no-op instead of a double count.
         windowStart: v.optional(v.number()),
     })
         .global()
         .index("by_org", ["organizationId"])
-        .index("by_box_window", ["boxId", "windowStart"]),
+        .index("by_placement_window", ["placementRef", "windowStart"]),
 
     // Metering readback checkpoints (§4), one per (target, scope): the epoch-ms
     // boundary a `metering: "readback"` target's source has been folded into

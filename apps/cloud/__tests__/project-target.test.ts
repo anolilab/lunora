@@ -35,23 +35,23 @@ describe("projects.setTarget", () => {
     };
 
     it("places a project on a box of its own org", async () => {
-        const { ops, run } = call({ boxes: [box()], deployments: [] }, { boxId: "box_1", target: "celld-vps" });
+        const { ops, run } = call({ boxes: [box()], deployments: [] }, { placementRef: "box_1", target: "celld-vps" });
 
         await run();
 
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: "box_1", cloudflareAccountId: null, target: "celld-vps" } });
+        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { placementRef: "box_1", target: "celld-vps" } });
     });
 
-    it("requires a box for celld-vps and refuses one for cloudflare-wfp", async () => {
+    it("requires a box for celld-vps and refuses any host for cloudflare-wfp", async () => {
         await expect(call({ boxes: [box()] }, { target: "celld-vps" }).run()).rejects.toThrow("needs a box");
-        await expect(call({ boxes: [box()] }, { boxId: "box_1", target: "cloudflare-wfp" }).run()).rejects.toThrow("has no box");
+        await expect(call({ boxes: [box()] }, { placementRef: "box_1", target: "cloudflare-wfp" }).run()).rejects.toThrow("names no host");
     });
 
     it("refuses another org's box and a revoked box", async () => {
-        await expect(call({ boxes: [box({ organizationId: "org_2" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
+        await expect(call({ boxes: [box({ organizationId: "org_2" })] }, { placementRef: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
             code: "NOT_FOUND",
         });
-        await expect(call({ boxes: [box({ status: "revoked" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
+        await expect(call({ boxes: [box({ status: "revoked" })] }, { placementRef: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
             code: "CONFLICT",
         });
     });
@@ -59,7 +59,7 @@ describe("projects.setTarget", () => {
     it("refuses to move a project whose deployments are not torn down yet", async () => {
         const { ops, run } = call(
             { boxes: [box()], deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: null }] },
-            { boxId: "box_1", target: "celld-vps" },
+            { placementRef: "box_1", target: "celld-vps" },
         );
 
         await expect(run()).rejects.toMatchObject({ code: "CONFLICT" });
@@ -69,11 +69,11 @@ describe("projects.setTarget", () => {
     it("refuses while a failed deployment waits for the sweep, and moves once the sweep stamped it", async () => {
         const failed = (teardownAt: null | number): Row[] => [{ _id: "dep_1", projectId: "proj_1", status: "failed", teardownAt }];
 
-        await expect(call({ boxes: [box()], deployments: failed(null) }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
+        await expect(call({ boxes: [box()], deployments: failed(null) }, { placementRef: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
             code: "CONFLICT",
         });
 
-        const { ops, run } = call({ boxes: [box()], deployments: failed(NOW) }, { boxId: "box_1", target: "celld-vps" });
+        const { ops, run } = call({ boxes: [box()], deployments: failed(NOW) }, { placementRef: "box_1", target: "celld-vps" });
 
         await run();
 
@@ -84,22 +84,22 @@ describe("projects.setTarget", () => {
         const { ops, run } = call(
             {
                 deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: NOW }],
-                projects: [project({ boxId: "box_1", target: "celld-vps" })],
+                projects: [project({ placementRef: "box_1", target: "celld-vps" })],
             },
             { target: "cloudflare-wfp" },
         );
 
         await run();
 
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: null, cloudflareAccountId: null, target: "cloudflare-wfp" } });
+        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { placementRef: null, target: "cloudflare-wfp" } });
     });
 
     it("places a project in a connected account of its own org", async () => {
-        const { ops, run } = call({ cloudflareAccounts: [account()], deployments: [] }, { cloudflareAccountId: "cfa_1", target: "cloudflare-workers" });
+        const { ops, run } = call({ cloudflareAccounts: [account()], deployments: [] }, { placementRef: "cfa_1", target: "cloudflare-workers" });
 
         await run();
 
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: null, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" } });
+        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { placementRef: "cfa_1", target: "cloudflare-workers" } });
         expect(ops).toContainEqual(
             expect.objectContaining({
                 document: expect.objectContaining({ action: "project.target.set", target: "cloudflare-workers:cfa_1" }),
@@ -110,17 +110,16 @@ describe("projects.setTarget", () => {
 
     it("requires a connected account for cloudflare-workers, and refuses one anywhere else", async () => {
         await expect(call({ cloudflareAccounts: [account()] }, { target: "cloudflare-workers" }).run()).rejects.toThrow("needs a connected Cloudflare account");
-        await expect(call({ cloudflareAccounts: [account()] }, { cloudflareAccountId: "cfa_1", target: "cloudflare-wfp" }).run()).rejects.toThrow(
-            "has no Cloudflare account",
-        );
-        await expect(
-            call({ boxes: [box()], cloudflareAccounts: [account()] }, { boxId: "box_1", cloudflareAccountId: "cfa_1", target: "celld-vps" }).run(),
-        ).rejects.toThrow("has no Cloudflare account");
+        await expect(call({ cloudflareAccounts: [account()] }, { placementRef: "cfa_1", target: "cloudflare-wfp" }).run()).rejects.toThrow("names no host");
+        // A connected account is no box: the reference is read in the target's own host table.
+        await expect(call({ boxes: [box()], cloudflareAccounts: [account()] }, { placementRef: "cfa_1", target: "celld-vps" }).run()).rejects.toMatchObject({
+            code: "NOT_FOUND",
+        });
     });
 
     it("refuses another org's connected account", async () => {
         await expect(
-            call({ cloudflareAccounts: [account({ organizationId: "org_2" })] }, { cloudflareAccountId: "cfa_1", target: "cloudflare-workers" }).run(),
+            call({ cloudflareAccounts: [account({ organizationId: "org_2" })] }, { placementRef: "cfa_1", target: "cloudflare-workers" }).run(),
         ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 });

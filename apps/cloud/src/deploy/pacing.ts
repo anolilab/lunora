@@ -23,6 +23,7 @@
 import type { TargetDescriptor } from "../provision-contract";
 import { TARGETS } from "../provision-contract";
 import type { Placement } from "../targets/placement";
+import { hostsOf, placedOnOf } from "../targets/placement";
 import { ConvergeScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -50,15 +51,11 @@ export interface Pacing {
 export const pacingOf = (placement: Placement): Pacing => {
     const budget = TARGETS[placement.target].convergeBudget;
 
-    if ("box" in placement) {
-        return { budget, key: `box:${placement.box.id}` };
+    if (!("host" in placement)) {
+        return { budget, key: "platform" };
     }
 
-    if ("account" in placement) {
-        return { budget, key: `account:${placement.account.accountId}` };
-    }
-
-    return { budget, key: "platform" };
+    return { budget, key: `${placedOnOf(placement.target)}:${hostsOf(placement.target).paceKey(placement.host)}` };
 };
 
 /** Picks the scheduler a converge runs on. */

@@ -22,10 +22,6 @@ import type { TargetId } from "../provision-contract";
 export interface TeardownTarget {
     /** The project's stable label — names its tenant and its per-project resources. */
     alias: string;
-    /** The box the alias runs on (`celld-vps`), from its deployment rows — the project may be gone. */
-    boxId?: string;
-    /** The connected Cloudflare account the alias runs in (`cloudflare-workers`), from its deployment rows. */
-    cloudflareAccountId?: string;
 
     /**
      * Whether to destroy the alias's tenant and its resources (D1, R2, KV,
@@ -36,6 +32,8 @@ export interface TeardownTarget {
     destroyWorker: boolean;
     /** Deployment row id — its stored release key, stamped `teardownAt` once reclaimed. */
     id: string;
+    /** The host the alias runs on (a box, a connected account), from its deployment rows — the project may be gone. */
+    placementRef?: string;
     /** The target the row was deployed to — whose driver destroys it. */
     target: TargetId;
 }

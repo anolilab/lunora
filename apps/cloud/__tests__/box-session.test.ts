@@ -247,7 +247,7 @@ describe("boxSessionDO", () => {
     it("records an authenticated box online with what it reported, and pushes its routing table", async () => {
         const { key, session, state, store } = await setup();
 
-        store.tables["projects"] = [{ _id: "proj_1", activeScriptName: "web", boxId: "box_1", organizationId: "org_1" }];
+        store.tables["projects"] = [{ _id: "proj_1", activeScriptName: "web", organizationId: "org_1", placementRef: "box_1" }];
         store.tables["deployments"] = [
             { _id: "dep_1", alias: "web", projectId: "proj_1", status: "live" },
             { _id: "dep_2", alias: "web-pr-7", projectId: "proj_1", status: "verifying" },

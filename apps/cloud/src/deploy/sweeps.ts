@@ -10,23 +10,23 @@
  * Every row is read with its `target` (absent on rows that predate it, which
  * are `cloudflare-wfp`), so each sweep acts through the right driver.
  */
+import { isBilledTarget } from "../billing/usage";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import type { TargetId } from "../provision-contract";
 import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { ProgressLine, TargetDriver, UsageRow } from "../targets/driver";
-import type { AccountLookup, BoxLookups, Placement } from "../targets/placement";
+import type { Placement, RowReader } from "../targets/placement";
 import { placementOfDeployment } from "../targets/placement";
 import type { TeardownPorts, TeardownTarget } from "./teardown";
 
 interface TeardownRow {
     _id: string;
     alias?: string;
-    boxId?: null | string;
-    cloudflareAccountId?: null | string;
     createdAt?: number;
     kind: string;
+    placementRef?: null | string;
     scriptName: string;
     status: string;
     target?: string;
@@ -40,9 +40,9 @@ interface TeardownRow {
  * the caller (the `RELEASES` bucket and the target registry).
  *
  * `destroy` places each alias off its deployment rows (`placementOfDeployment`)
- * and destroys it through that placement's driver. An alias whose box is gone
+ * and destroys it through that placement's driver. An alias whose host is gone
  * or revoked is beyond reach for good: it is logged and its alias released. One
- * whose box cannot be resolved at all throws, which keeps the row pending and
+ * whose host cannot be named at all throws, which keeps the row pending and
  * the alias claimed.
  *
  * `destroyWorker` is true only when the alias has no deployment left that is not
@@ -58,10 +58,10 @@ interface TeardownRow {
 export const teardownPorts = (
     database: ControlPlaneDatabase,
     ports: Pick<TeardownPorts, "deleteRelease"> & {
-        accounts: AccountLookup;
-        boxes: BoxLookups;
         driverFor: (placement: Placement) => TargetDriver;
         log: ProgressLine;
+        /** Reads the host rows deployments name (`storeRowReader`). */
+        read: RowReader;
     },
     now: number,
     canConverge: (target: TargetId) => boolean,
@@ -69,7 +69,7 @@ export const teardownPorts = (
     return {
         deleteRelease: ports.deleteRelease,
         destroy: async (target) => {
-            const placed = await placementOfDeployment(target, ports.boxes, ports.accounts);
+            const placed = await placementOfDeployment(target, ports.read);
 
             if ("unplaced" in placed) {
                 if (!placed.settled) {
@@ -105,27 +105,19 @@ export const teardownPorts = (
                 }
             }
 
-            // The box (or connected account) each alias was last converged on: its
-            // newest row that names one. A project that moved leaves older rows
-            // naming the old one.
-            const newestNaming = (column: "boxId" | "cloudflareAccountId"): Map<string, string> => {
-                const newest = new Map<string, { at: number; value: string }>();
+            // The host each alias was last converged on: its newest row that names
+            // one. A project that moved leaves older rows naming the old one.
+            const newest = new Map<string, { at: number; placementRef: string }>();
 
-                for (const row of rows) {
-                    const alias = row.alias ?? row.scriptName;
-                    const at = row.createdAt ?? 0;
-                    const known = newest.get(alias);
-                    const value = row[column];
+            for (const row of rows) {
+                const alias = row.alias ?? row.scriptName;
+                const at = row.createdAt ?? 0;
+                const known = newest.get(alias);
 
-                    if (value != null && (known === undefined || at >= known.at)) {
-                        newest.set(alias, { at, value });
-                    }
+                if (row.placementRef != null && (known === undefined || at >= known.at)) {
+                    newest.set(alias, { at, placementRef: row.placementRef });
                 }
-
-                return new Map([...newest].map(([alias, { value }]) => [alias, value]));
-            };
-            const boxes = newestNaming("boxId");
-            const accounts = newestNaming("cloudflareAccountId");
+            }
 
             const elected = new Set<string>();
 
@@ -140,15 +132,13 @@ export const teardownPorts = (
                             elected.add(alias);
                         }
 
-                        const boxId = boxes.get(alias);
-                        const cloudflareAccountId = accounts.get(alias);
+                        const placementRef = newest.get(alias)?.placementRef;
 
                         return {
                             alias,
-                            ...(boxId === undefined ? {} : { boxId }),
-                            ...(cloudflareAccountId === undefined ? {} : { cloudflareAccountId }),
                             destroyWorker,
                             id: row._id,
+                            ...(placementRef === undefined ? {} : { placementRef }),
                             target: storedTarget(row.target),
                         };
                     })
@@ -175,8 +165,8 @@ export const teardownPorts = (
 
 interface AttributionRow {
     _id: string;
-    cloudflareAccountId?: null | string;
     organizationId: string;
+    placementRef?: null | string;
     resourceRef?: string;
     scriptName: string;
     status: string;
@@ -223,6 +213,7 @@ export const usageRollbackPorts = async (
     // missing from it is usage that lands on nobody's bill.
     const deploymentRows = await drainTable<AttributionRow>(database, "deployments");
     const byResource = new Map<string, UsageAttribution>();
+    const billable = isBilledTarget(options.target);
 
     // Every release of an alias shares its one tenant, so the resource's usage is
     // attributed to the live release when there is one.
@@ -236,9 +227,9 @@ export const usageRollbackPorts = async (
 
         if (!byResource.has(resourceRef) || row.status === "live") {
             byResource.set(resourceRef, {
-                ...(row.cloudflareAccountId == null ? {} : { cloudflareAccountId: row.cloudflareAccountId }),
                 deploymentId: row._id,
                 organizationId: row.organizationId,
+                ...(row.placementRef == null ? {} : { placementRef: row.placementRef }),
             });
         }
     }
@@ -249,14 +240,16 @@ export const usageRollbackPorts = async (
         read,
         record: async ({ attribution, quantity }) => {
             await database.insert("platformUsage", {
-                // A tenant in the customer's own account: its requests are on the
-                // customer's Cloudflare bill, so the row is shown and never billed.
-                ...(attribution.cloudflareAccountId === undefined ? {} : { cloudflareAccountId: attribution.cloudflareAccountId }),
+                // A tenant on a host its organization owns (its own Cloudflare
+                // account): its requests are on the customer's bill, so the row is
+                // shown and never billed.
+                ...(billable ? {} : { billable: false }),
                 createdAt: options.now,
                 deploymentId: attribution.deploymentId,
                 kind: "requests",
                 organizationId: attribution.organizationId,
                 periodStart: options.periodStart,
+                ...(attribution.placementRef === undefined ? {} : { placementRef: attribution.placementRef }),
                 quantity,
             });
         },

@@ -89,8 +89,8 @@ const usersOf = async (
     organizationId: Id<"organizations">,
     id: Id<"cloudflareAccounts">,
 ): Promise<{ deployments: number; projects: number }> => {
-    const { page: projects } = await context.db.projects.findMany({ where: { cloudflareAccountId: id, organizationId } });
-    const { page: deployments } = await context.db.deployments.findMany({ where: { cloudflareAccountId: id } });
+    const { page: projects } = await context.db.projects.findMany({ where: { organizationId, placementRef: id } });
+    const { page: deployments } = await context.db.deployments.findMany({ where: { placementRef: id } });
     // A deployment counts until the teardown sweep has reclaimed it: its Worker and
     // data still live in the account, and only this token can remove them.
     return { deployments: pendingTeardown(deployments).length, projects: projects.length };

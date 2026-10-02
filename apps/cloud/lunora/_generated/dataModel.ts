@@ -76,8 +76,7 @@ export interface Doc_projects {
     rootDirectory?: string;
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
 }
 
@@ -130,8 +129,7 @@ export interface Doc_deployments {
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
     alias?: string;
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     branch?: string;
     cronSpecs?: Array<string>;
     bindings?: Array<{ name: string; target?: string; type: string }>;
@@ -527,13 +525,13 @@ export interface Doc_overageDebits {
 export interface Doc_platformUsage {
     _id: Id<"platformUsage">;
     _creationTime: number;
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    billable?: boolean;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths";
     organizationId: Id<"organizations">;
     periodStart: number;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     quantity: number;
     windowStart?: number;
 }
@@ -673,12 +671,12 @@ export interface IndexNamesByTable {
     cells: "by_name";
     organizations: "by_slug";
     members: "by_user" | "by_org_user";
-    projects: "by_org_slug" | "by_github_repo" | "by_box" | "by_cloudflare_account";
+    projects: "by_org_slug" | "by_github_repo" | "by_placement";
     invitations: "by_token" | "by_org";
     auditLog: "by_org";
     githubInstallations: "by_org" | "by_installation";
     rateLimits: "by_key";
-    deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind" | "by_cloudflare_account";
+    deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind" | "by_placement";
     aliasOwnership: "by_project" | "by_alias";
     deployKeys: "by_org" | "by_hash";
     builds: "by_org" | "by_project_commit";
@@ -702,7 +700,7 @@ export interface IndexNamesByTable {
     uptimeState: "by_org" | "by_deployment";
     dashboards: "by_org";
     overageDebits: "by_org_period";
-    platformUsage: "by_box_window" | "by_org";
+    platformUsage: "by_placement_window" | "by_org";
     usageCheckpoints: "by_target_scope";
     cloudflareBilling: "by_org";
     customers: "by_reference" | "by_provider_customer";
@@ -909,8 +907,7 @@ export interface Insert_projects {
     rootDirectory?: string;
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
 }
 
@@ -963,8 +960,7 @@ export interface Insert_deployments {
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
     alias?: string;
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     branch?: string;
     cronSpecs?: Array<string>;
     bindings?: Array<{ name: string; target?: string; type: string }>;
@@ -1360,13 +1356,13 @@ export interface Insert_overageDebits {
 export interface Insert_platformUsage {
     _id?: Id<"platformUsage">;
     _creationTime?: number;
-    boxId?: Id<"boxes">;
-    cloudflareAccountId?: Id<"cloudflareAccounts">;
+    billable?: boolean;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths";
     organizationId: Id<"organizations">;
     periodStart: number;
+    placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     quantity: number;
     windowStart?: number;
 }

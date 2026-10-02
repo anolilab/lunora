@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { rollup, summary } from "../lunora/usage";
 import { buildOverageReconcileData } from "../src/billing/reconcile";
-import { isBillableUsage } from "../src/billing/usage";
+import { isBillableUsage, isBilledTarget } from "../src/billing/usage";
 import { MAX_PENDING_REPORTS, MAX_REPORTS_PER_MINUTE } from "../src/boxes/session-do";
 import { MAX_REPORT_AGE_MS, periodStartOf, recordBoxReport } from "../src/boxes/usage";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
@@ -78,8 +78,8 @@ const seeded = () =>
         ],
         platformUsage: [],
         projects: [
-            { _id: "proj_web", boxId: "box_1", organizationId: "org_1" },
-            { _id: "proj_api", boxId: "box_2", organizationId: "org_1" },
+            { _id: "proj_web", organizationId: "org_1", placementRef: "box_1" },
+            { _id: "proj_api", organizationId: "org_1", placementRef: "box_2" },
         ],
     });
 
@@ -115,12 +115,13 @@ describe("recording a box's usage report", () => {
         expect(store.tables["platformUsage"]).toStrictEqual([
             {
                 _id: "platformUsage_1",
-                boxId: "box_1",
+                billable: false,
                 createdAt: NOW,
                 deploymentId: "dep_web",
                 kind: "requests",
                 organizationId: "org_1",
                 periodStart: periodStartOf(windowStart),
+                placementRef: "box_1",
                 quantity: 42,
                 windowStart,
             },
@@ -299,15 +300,19 @@ describe("report cost over the box's session", () => {
 
 describe("box usage is never billed (plan 458 D12)", () => {
     const billable = { _id: "u_bill", createdAt: NOW, kind: "requests", organizationId: "org_1", periodStart: periodStartOf(NOW), quantity: 100 };
-    const boxed = { ...billable, _id: "u_box", boxId: "box_1", quantity: 1_000_000_000, windowStart: NOW - MINUTE };
+    const boxed = { ...billable, _id: "u_box", billable: false, placementRef: "box_1", quantity: 1_000_000_000, windowStart: NOW - MINUTE };
 
-    it("tells box rows apart, NULL included", () => {
+    it("reads the explicit billable flag, NULL included", () => {
         expect(isBillableUsage({})).toBe(true);
-        expect(isBillableUsage({ boxId: null })).toBe(true);
-        expect(isBillableUsage({ boxId: "box_1" })).toBe(false);
-        // A connected Cloudflare account's requests are on the customer's own Cloudflare bill.
-        expect(isBillableUsage({ cloudflareAccountId: null })).toBe(true);
-        expect(isBillableUsage({ cloudflareAccountId: "cfa_1" })).toBe(false);
+        expect(isBillableUsage({ billable: null })).toBe(true);
+        expect(isBillableUsage({ billable: true })).toBe(true);
+        expect(isBillableUsage({ billable: false })).toBe(false);
+    });
+
+    it("bills only a cell-placed target's requests: a box's and a connected account's are the customer's", () => {
+        expect(isBilledTarget("cloudflare-wfp")).toBe(true);
+        expect(isBilledTarget("celld-vps")).toBe(false);
+        expect(isBilledTarget("cloudflare-workers")).toBe(false);
     });
 
     /** A ctx whose `platformUsage` reads answer `rows` as one finished page, whatever the filter. */

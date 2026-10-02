@@ -44,7 +44,7 @@ interface TargetEntry<T extends TargetId> {
 const TARGET_DRIVERS: { readonly [T in TargetId]?: TargetEntry<T> } = {
     "celld-vps": {
         canConverge: celldVpsCanConverge,
-        driver: (placement, environment) => celldVpsDriverFromEnv(placement.box, environment),
+        driver: (placement, environment) => celldVpsDriverFromEnv(placement.host, environment),
         fleet: () => celldVpsFleet,
     },
     "cloudflare-wfp": {
@@ -54,7 +54,7 @@ const TARGET_DRIVERS: { readonly [T in TargetId]?: TargetEntry<T> } = {
     },
     "cloudflare-workers": {
         canConverge: cloudflareWorkersCanConverge,
-        driver: (placement, environment) => cloudflareWorkersDriverFromEnv(placement.account, environment),
+        driver: (placement, environment) => cloudflareWorkersDriverFromEnv(placement.host, environment),
         fleet: cloudflareWorkersFleetFromEnv,
     },
 };

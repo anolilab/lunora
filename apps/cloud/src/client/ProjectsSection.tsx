@@ -113,14 +113,13 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
 
         return (
             <DeploymentsSection
-                boxId={project?.boxId}
-                cloudflareAccountId={project?.cloudflareAccountId}
                 githubRepo={project?.githubRepo}
                 gitProvider={gitProviderOf(project?.githubRepo)}
                 onBack={() => {
                     setActiveProject(null);
                 }}
                 organizationId={organizationId}
+                placementRef={project?.placementRef}
                 previewProtected={project?.previewProtected ?? false}
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}

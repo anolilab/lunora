@@ -9,7 +9,8 @@ import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
-import { isBoxTarget, storedTarget } from "../src/provision-contract";
+import { storedTarget } from "../src/provision-contract";
+import { placedOnOf } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -486,19 +487,19 @@ export const ownsDeployment = internalQuery
         const deployment = (await context.db.get(deploymentId)) as null | { organizationId: string; projectId: Id<"projects">; target?: null | string };
         const target = deployment ? storedTarget(deployment.target) : undefined;
 
-        if (deployment === null || target === undefined || !isBoxTarget(target)) {
+        if (deployment === null || target === undefined || placedOnOf(target) !== "box") {
             return false;
         }
 
         const [box, project] = await Promise.all([
             context.db.get(boxId) as Promise<BoxRow | null>,
-            context.db.get(deployment.projectId) as Promise<null | { boxId?: null | string; organizationId: string }>,
+            context.db.get(deployment.projectId) as Promise<null | { organizationId: string; placementRef?: null | string }>,
         ]);
 
         return (
             box !== null &&
             box.status !== "revoked" &&
-            project?.boxId === boxId &&
+            project?.placementRef === boxId &&
             project.organizationId === box.organizationId &&
             deployment.organizationId === box.organizationId
         );
