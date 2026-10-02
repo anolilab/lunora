@@ -404,6 +404,19 @@ If an inbound `traceparent` is dropped while this option is unset, Lunora logs a
 one-time hint naming it, because a broken waterfall shouldn't be silent. Setting
 the option to `false` keeps the behaviour and silences the hint.
 
+:::note[Cloudflare Traces and its incoming propagation policy]
+[Cloudflare Traces](https://blog.cloudflare.com/cloudflare-tracing/) adds a
+zone-level _incoming propagation policy_ that decides whether the edge accepts a
+W3C `traceparent` from upstream. Lunora still treats the `traceparent` that
+reaches the worker as caller-controlled: Cloudflare does not document a
+forge-proof header the edge mints, so the worker cannot tell an edge-issued
+context from one a client sent. Keep `trustInboundTraceContext` off unless the
+zone policy guarantees that no client-supplied `traceparent` reaches the worker
+(for example, the zone strips or replaces it and the worker has no other route
+in). Adopting Cloudflare's native OpenTelemetry API is tracked in
+[#939](https://github.com/anolilab/lunora/issues/939).
+:::
+
 :::tip[Keep span names low-cardinality]
 Put the varying part in the attributes, not the name: `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
 built from an id makes every span its own group in a collector, which is exactly
@@ -536,6 +549,14 @@ a regression against. Reach for `sampling` first; use `onlyErrors` on a sink who
 only job is failures (a Sentry or alerting destination sitting alongside a
 sampled `otlpSink`).
 :::
+
+`sampling` is Lunora's own export decision. Cloudflare's Workers Logs and Traces
+sample separately, through `observability.head_sampling_rate` and
+`observability.traces.head_sampling_rate` in `wrangler.jsonc`. Lunora writes
+`head_sampling_rate: 1` by default and never lowers a rate you set. Workers
+Observability is billed from 2026-12-01 (Free caps ingestion at 0.5 GB/day; Paid
+includes 50 GB per billing cycle, then $0.25/GB), so `lunora doctor` reports an
+`observability-full-sampling` info finding while either rate is still 1.
 
 ### Traces are kept or dropped whole
 
