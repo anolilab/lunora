@@ -140,7 +140,7 @@ for this plan.
 | G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6 — ✅ `f87b67285` (the session writes the ledger directly, as the sweeps do) |
 | G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6 — ✅ `ed8b6b8ce`                                                            |
 | G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a, see W7); control-plane store + rollout `85c5f6c91`   |
-| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9                                                                             |
+| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9 — ✅ `325453eb7`, `115a677e9` (no Diagnose yet)                             |
 
 **Already target-neutral (no gap):**
 
@@ -549,6 +549,23 @@ IP and a sibling fleet; every attempt must fail.
 **Gate:** component tests for each state (pending, online, offline, revoked,
 outdated). Note the studio jsdom sandbox caveat in the repo memory: verify with
 tsc + eslint where jsdom cannot run.
+
+**Status (`325453eb7`, `115a677e9`).** Built: the Boxes tab
+(`src/client/BoxesSection.tsx`; enrol / rename / revoke dialogs; revoke goes
+through `POST /v1/boxes/revoke`), the project's Deploy target card
+(`ProjectTargetCard.tsx`, `boxes.setProjectTarget`) and target gating
+(`target-capabilities.ts`: the bindings graph marks refused types with the
+contract's reason; `TargetCapabilitiesCard.tsx` lists refused bindings, the
+per-plan runtime limits that do not apply and PITR, quoting celld's matrix note;
+the backups card names snapshots as the recovery tier). `projects.listByOrg`
+now returns `target` / `boxId`, and `boxes.domain` answers `LUNORA_BOX_DOMAIN`.
+The per-state decisions (status → chip, role gating, target draft, refusal
+wording, capability lists) are node-tested as pure modules
+(`__tests__/studio-boxes.test.ts`, `target-capabilities.test.ts`); `apps/cloud`
+has no DOM test environment, so the components are verified with tsc, eslint,
+react-doctor and `vite build`. **Not built:** the Diagnose button, because no
+route or job runs `celld diagnose` on a box yet, and the box's fleets list
+(the box row does not carry them; the tab shows the projects placed on it).
 
 ### W10 — Docs and positioning (S)
 

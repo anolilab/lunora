@@ -247,6 +247,13 @@ public key and nothing else (plan 458 §3).
   release's is flagged `outdated`.
 - **Revocation.** `POST /v1/boxes/revoke` (owner/admin session) marks the box
   revoked, closes its session with `BOX_REVOKED` and removes its DNS records.
+- **Studio.** The org's **Boxes** tab (`src/client/BoxesSection.tsx`) lists
+  boxes and lets owners/admins enrol, rename and revoke (through the revoke
+  route above); hostnames come from `boxes.domain`. A project's **Deploy
+  target** card calls `boxes.setProjectTarget`, and a `celld-vps` project's
+  view marks what that target refuses, with the reason, from
+  `src/client/target-capabilities.ts` (the contract's `UNSUPPORTED_REASONS`
+  plus celld's capability notes).
 
 | Route                                        | Auth             |
 | -------------------------------------------- | ---------------- |
