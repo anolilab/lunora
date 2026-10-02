@@ -22,7 +22,6 @@
  * Caddy. The release that ran before stays, for a manual rollback (point
  * `current` back at it); older ones are removed.
  */
-import { execFile } from "node:child_process";
 import {
     chmodSync,
     createReadStream,
@@ -45,8 +44,11 @@ import { verifyReleaseManifest } from "../release";
 import { verifyArtifact } from "../release-verify";
 import HOSTD_VERSION from "../version";
 import type { UpgradeJob } from "../wire/types";
+import { DIRECT_LAUNCH } from "./capabilities";
+import { runChild } from "./child";
 import type { HostdConfig } from "./config";
 import { binaryPaths, CURRENT_RELEASE_LINK, RELEASE_BINARY_NAMES } from "./config";
+import { CHILD_PATH } from "./fleet-environment";
 import { JobError } from "./job-error";
 import type { SignedFetch } from "./signed-fetch";
 import type { Supervisor } from "./supervisor";
@@ -67,13 +69,16 @@ const currentPlatform = (): HostdReleasePlatform | undefined => {
     return process.arch === "arm64" ? "linux-arm64" : undefined;
 };
 
-/** `binary {args}`'s first output line, or `undefined` when it does not run. */
-const versionOutput = async (binary: string, args: ReadonlyArray<string>): Promise<string | undefined> =>
-    new Promise((resolve) => {
-        execFile(binary, args, { timeout: 10_000 }, (error, stdout) => {
-            resolve(error === null ? stdout.split("\n")[0]?.trim() : undefined);
-        });
-    });
+/** `binary {args}`'s first output line, or `undefined` when it does not run (or exits non-zero, or hangs). */
+const versionOutput = async (binary: string, args: ReadonlyArray<string>): Promise<string | undefined> => {
+    try {
+        const result = await runChild(DIRECT_LAUNCH, binary, args, { env: { PATH: CHILD_PATH }, timeoutMs: 10_000 });
+
+        return result.code === 0 && !result.timedOut ? result.stdout.split("\n")[0]?.trim() : undefined;
+    } catch {
+        return undefined;
+    }
+};
 
 const WHITESPACE = /\s+/u;
 

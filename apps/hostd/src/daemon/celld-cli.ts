@@ -5,12 +5,12 @@
  * In the daemon they run like the fleet's node (W8): as the fleet user, in its
  * working directory, with the fleet's allowlisted environment.
  */
-import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { createInterface } from "node:readline";
 
 import type { ChildLaunch } from "./capabilities";
-import { DIRECT_LAUNCH, launchCommand, launchIdentity } from "./capabilities";
+import { DIRECT_LAUNCH } from "./capabilities";
+import type { ChildResult } from "./child";
+import { runChild } from "./child";
 import type { HostdConfig } from "./config";
 import { binaryPaths, fleetBucketUrl } from "./config";
 import { fleetEnvironment } from "./fleet-environment";
@@ -44,21 +44,23 @@ const bucketArgs = (config: HostdConfig, alias: string): string[] => [
 ];
 
 /**
- * Run celld with `args`, handing each output line to `onLine` as it arrives.
- * Never rejects for a non-zero exit — the caller decides what that means.
+ * Run celld with `args`, handing each output line (stdout and stderr, as they
+ * arrive) to `onLine`. Never rejects for a non-zero exit — the caller decides
+ * what that means.
  * @throws {JobError} `CELLD_FAILED` when celld cannot be started or outlives `timeoutMs`.
  */
 const runCelld = async (
     config: HostdConfig,
     args: ReadonlyArray<string>,
     options: CelldPlacement & { credentials: Readonly<Record<string, string>>; onLine?: (line: string) => void; timeoutMs: number },
-): Promise<CelldRun> =>
-    new Promise((resolve, reject) => {
-        const directory = options.directory ?? tmpdir();
-        const launch = options.launch ?? DIRECT_LAUNCH;
-        const { celld } = binaryPaths(config);
-        const command = launchCommand(launch, celld, args);
-        const child = spawn(command.command, command.args, {
+): Promise<CelldRun> => {
+    const directory = options.directory ?? tmpdir();
+    const { celld } = binaryPaths(config);
+    const lines: string[] = [];
+    let result: ChildResult;
+
+    try {
+        result = await runChild(options.launch ?? DIRECT_LAUNCH, celld, args, {
             cwd: directory,
             env: fleetEnvironment({
                 credentials: options.credentials,
@@ -66,42 +68,22 @@ const runCelld = async (
                 kind: "command",
                 ...(config.bucket.region === undefined ? {} : { region: config.bucket.region }),
             }),
-            stdio: ["ignore", "pipe", "pipe"],
-            ...launchIdentity(launch),
-        });
-        const lines: string[] = [];
-        const timer = setTimeout(() => {
-            child.kill("SIGKILL");
-        }, options.timeoutMs);
-        let timedOut = false;
-
-        timer.unref();
-
-        for (const stream of [child.stdout, child.stderr]) {
-            createInterface({ input: stream }).on("line", (line) => {
+            onLine: (line) => {
                 lines.push(line);
                 options.onLine?.(line);
-            });
-        }
-
-        child.once("error", (error) => {
-            clearTimeout(timer);
-            reject(new JobError("CELLD_FAILED", `could not run ${celld}: ${error.message}`));
+            },
+            timeoutMs: options.timeoutMs,
         });
+    } catch (error) {
+        throw new JobError("CELLD_FAILED", (error as Error).message);
+    }
 
-        child.once("exit", (code, signal) => {
-            clearTimeout(timer);
-            timedOut = signal === "SIGKILL";
+    if (result.timedOut) {
+        throw new JobError("CELLD_FAILED", `celld ${args[0] ?? ""} did not finish within ${String(options.timeoutMs)} ms`);
+    }
 
-            if (timedOut) {
-                reject(new JobError("CELLD_FAILED", `celld ${args[0] ?? ""} did not finish within ${String(options.timeoutMs)} ms`));
-
-                return;
-            }
-
-            resolve({ code: code ?? undefined, lines });
-        });
-    });
+    return { code: result.code ?? undefined, lines };
+};
 
 /**
  * `celld deploy {directory} --bucket s3://{bucket}/fleets/{alias} …`: write the

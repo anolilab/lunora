@@ -23,19 +23,19 @@
  * The outcome, with each failed check, goes to the control plane in every
  * `hello` and to `diagnose`.
  */
-import { spawn } from "node:child_process";
-import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { totalmem } from "node:os";
-import { join } from "node:path";
 
 import { HOSTD_PROTOCOL_LIMITS } from "../wire/constants";
 import type { BoxIsolation, IsolationStatus } from "../wire/types";
 import type { Account } from "./accounts";
 import { lookupAccount } from "./accounts";
 import type { ChildLaunch } from "./capabilities";
-import { dropCapabilitiesPrefix, hasCapability, launchCommand, launchIdentity, parseProcessStatus } from "./capabilities";
+import { dropCapabilitiesPrefix, hasCapability, parseProcessStatus } from "./capabilities";
 import { CgroupManager, fleetMemoryMax } from "./cgroups";
+import { describeFailure, runChild } from "./child";
 import type { HostdConfig } from "./config";
+import { prepareDataDirectory } from "./fleet-directories";
 import { CHILD_PATH } from "./fleet-environment";
 import { truncateUtf8 } from "./job-error";
 import type { Logger } from "./log";
@@ -115,30 +115,15 @@ interface IsolationSystem {
 }
 
 /** Run `cat /proc/self/status` under `launch`. */
-const probeLaunch = async (launch: ChildLaunch): Promise<string> =>
-    new Promise((resolve, reject) => {
-        const { args, command } = launchCommand(launch, "cat", ["/proc/self/status"]);
-        const child = spawn(command, args, { env: { PATH: CHILD_PATH }, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, ...launchIdentity(launch) });
-        let output = "";
-        let errors = "";
+const probeLaunch = async (launch: ChildLaunch): Promise<string> => {
+    const result = await runChild(launch, "cat", ["/proc/self/status"], { env: { PATH: CHILD_PATH }, timeoutMs: 10_000 });
 
-        child.stdout.on("data", (chunk: Buffer) => {
-            output += chunk.toString();
-        });
-        child.stderr.on("data", (chunk: Buffer) => {
-            errors += chunk.toString();
-        });
-        child.once("error", (error) => {
-            reject(error);
-        });
-        child.once("exit", (code) => {
-            if (code === 0) {
-                resolve(output);
-            } else {
-                reject(new Error(`${command} exited ${String(code)}: ${errors.trim().slice(0, 300)}`));
-            }
-        });
-    });
+    if (result.code !== 0 || result.timedOut) {
+        throw new Error(describeFailure("cat", result));
+    }
+
+    return result.stdout;
+};
 
 const readTextOrUndefined = (path: string): string | undefined => {
     try {
@@ -159,96 +144,6 @@ const realIsolationSystem = (): IsolationSystem => {
         setpriv: SETPRIV_CANDIDATES.find((path) => existsSync(path)),
         totalMemoryBytes: totalmem(),
     };
-};
-
-/**
- * Give the fleet group passage through the data directory: `dataDir`,
- * `fleets/` and `releases/` become `{owner}:{fleet group}` 0710 — the fleet
- * user can reach its own working directory and the release it deploys, and
- * list neither.
- */
-const prepareDataDirectory = (dataDirectory: string, account: Account): void => {
-    for (const path of [dataDirectory, join(dataDirectory, "fleets"), join(dataDirectory, "releases")]) {
-        mkdirSync(path, { mode: 0o710, recursive: true });
-        chownSync(path, -1, account.gid);
-        chmodSync(path, 0o710);
-    }
-};
-
-/** Make a release directory readable to the fleet group (`celld deploy` runs as the fleet user): dirs 0750, files 0640. */
-const shareWithFleet = (directory: string, account: Account): void => {
-    chownSync(directory, -1, account.gid);
-    chmodSync(directory, 0o750);
-
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        const path = join(directory, entry.name);
-
-        if (entry.isDirectory()) {
-            shareWithFleet(path, account);
-        } else if (entry.isFile()) {
-            chownSync(path, -1, account.gid);
-            chmodSync(path, 0o640);
-        }
-    }
-};
-
-/**
- * A fleet's working directory (`{dataDir}/fleets/{alias}`), created when
- * missing: the fleet user's own, mode 0700, when fleets run as one.
- * @returns its path
- */
-const ensureFleetDirectory = (dataDirectory: string, alias: string, account: Account | undefined): string => {
-    const directory = join(dataDirectory, "fleets", alias);
-
-    if (!existsSync(directory)) {
-        mkdirSync(directory, { mode: 0o700, recursive: true });
-
-        if (account !== undefined) {
-            chownSync(directory, account.uid, account.gid);
-        }
-    }
-
-    return directory;
-};
-
-/** Run `command args` under `launch` to completion; rejects on a non-zero exit. */
-const runUnder = async (launch: ChildLaunch, command: string, args: ReadonlyArray<string>): Promise<void> =>
-    new Promise((resolve, reject) => {
-        const launched = launchCommand(launch, command, args);
-        const child = spawn(launched.command, launched.args, {
-            env: { PATH: CHILD_PATH },
-            stdio: ["ignore", "ignore", "pipe"],
-            timeout: 120_000,
-            ...launchIdentity(launch),
-        });
-        let errors = "";
-
-        child.stderr.on("data", (chunk: Buffer) => {
-            errors += chunk.toString();
-        });
-        child.once("error", reject);
-        child.once("exit", (code) => {
-            if (code === 0) {
-                resolve();
-            } else {
-                reject(new Error(`${command} exited ${String(code)}: ${errors.trim().slice(0, 300)}`));
-            }
-        });
-    });
-
-/**
- * Delete a fleet's working directory. A fleet user's directory is emptied as
- * that user (the daemon may not read it), then removed by the daemon, which
- * owns `fleets/`.
- */
-const removeFleetDirectory = async (dataDirectory: string, alias: string, launch: ChildLaunch, account: Account | undefined): Promise<void> => {
-    const directory = join(dataDirectory, "fleets", alias);
-
-    if (account !== undefined && existsSync(directory)) {
-        await runUnder(launch, "find", [directory, "-mindepth", "1", "-delete"]);
-    }
-
-    rmSync(directory, { force: true, recursive: true });
 };
 
 /** The box's isolation, as set up at start. */
@@ -428,13 +323,4 @@ const setUpIsolation = async (config: HostdConfig, logger: Logger, system: Isola
 };
 
 export type { CheckResult, Isolation, IsolationChecks, IsolationReport, IsolationSystem };
-export {
-    decideIsolation,
-    ensureFleetDirectory,
-    helloIsolation,
-    prepareDataDirectory,
-    realIsolationSystem,
-    removeFleetDirectory,
-    setUpIsolation,
-    shareWithFleet,
-};
+export { decideIsolation, helloIsolation, realIsolationSystem, setUpIsolation };
