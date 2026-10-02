@@ -281,7 +281,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  `import { authDiscoveryPaths, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
@@ -957,12 +957,17 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
             const authWiring = createDoAuthWiring({
+                // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
+                // issuer's) are derived here from the declared options, so the worker
+                // forwards only those exact paths and no other probe reaches the object.
+                discoveryPaths: authDiscoveryPaths(authDeclaration.options(env)),
                 internalSecret: authDeclaration.internalSecret?.(env),${doAuthJurisdictionLine(options)}
                 namespace: authNamespace(env),
                 objectName: authDeclaration.objectName?.(env),
             });
 
             options.authHandler = authWiring.authHandler;
+            options.authDiscoveryHandler = authWiring.discoveryHandler;
             options.resolveIdentity = authWiring.resolveIdentity;
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
@@ -979,6 +984,13 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                 const auth = getAuth();
 
                 return auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined);
+            };
+            // The OAuth discovery documents outside \`/api/auth\` (served only with an
+            // \`mcp()\` or \`oauthProvider()\` plugin, and only after the app's own routes).
+            options.authDiscoveryHandler = (request) => {
+                const auth = getAuth();
+
+                return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);
             };
             options.resolveIdentity = async (request) => {
                 const auth = getAuth();
