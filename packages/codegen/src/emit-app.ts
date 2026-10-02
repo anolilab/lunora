@@ -1,4 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
+import type { CapabilityKey } from "./capabilities";
 import { APP_METHOD_CAPABILITIES } from "./capabilities";
 import { GENERATED_HEADER } from "./emit";
 import type { IdentityIR, JurisdictionIR, TableIR } from "./ir";
@@ -6,6 +7,17 @@ import { isShardByTable } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
+    /**
+     * The package-backed capabilities the app uses (post platform gate). Every
+     * used row of the `CAPABILITIES` table with an `appMethod` gets its fluent
+     * `defineApp` method (`.ai()`, `.kv()`, `.payment()`, …), which sets the
+     * matching `createShardDO` config key. Usage-driven on purpose: each method's
+     * parameter reads `ShardConfig[configKey]`, and the shard emits that config
+     * field on the same usage signal. `vectors` is the exception — its method
+     * follows {@link EmitAppOptions.hasVectors} + `vectorIndexCount`, not usage.
+     */
+    capabilities: ReadonlySet<CapabilityKey>;
+
     /**
      * Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
      * top-level `email()` handler to `dispatchAgentEmail(...)` (from
@@ -15,33 +27,21 @@ interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
-    /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
-    hasAi: boolean;
-    /** App uses `@lunora/bindings/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
-    hasAnalytics: boolean;
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
-    /** App uses `@lunora/browser` / `ctx.browser` → emit `.browser()`. */
-    hasBrowser: boolean;
     /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`), or hand-composes one in `src/worker.ts` → emit `.buildFrameworkWorker(host)`. */
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;
-    /** App uses `@lunora/hyperdrive` / `ctx.sql` → emit `.hyperdrive()`. */
-    hasHyperdrive: boolean;
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
-    /** App uses `@lunora/bindings/images` / `ctx.images` → emit `.images()`. */
-    hasImages: boolean;
-    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. Usage-only, because the method's parameter type reads `ShardConfig["kv"]`, and that config field is emitted on the same usage signal. */
-    hasKv: boolean;
 
     /**
      * Wire the studio's zero-config KV introspector. Gated on `studioFeatures.kv`
-     * (usage OR a declared `@lunora/bindings` dependency), NOT on {@link EmitAppOptions.hasKv},
+     * (usage OR a declared `@lunora/bindings` dependency), NOT on the `kv` capability,
      * so a visible KV tab always has a working backend — never the reverse.
      *
-     * Kept separate from `hasKv` deliberately: the two were accidentally equal
+     * Kept separate from the `kv` usage flag deliberately: the two were accidentally equal
      * while the dependency arm in `discover/studio-features.ts` matched a subpath
      * and could never fire. Fixing that arm made them diverge, and the shared flag
      * emitted a `.kv()` builder whose `ShardConfig["kv"]` type did not exist.
@@ -49,12 +49,8 @@ interface EmitAppOptions {
     hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
-    /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
-    hasPayments: boolean;
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
-    /** App uses `@lunora/bindings/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
-    hasR2sql: boolean;
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
 
@@ -85,8 +81,6 @@ interface EmitAppOptions {
     hasVectors?: boolean;
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
-    /** App uses `@lunora/x402/pay` / `ctx.x402` → emit `.x402()` (wire the agent-wallet pay rail). */
-    hasX402: boolean;
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
     identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth, `@lunora/mail` shard RPC) to the Cloudflare data-residency jurisdiction. */
@@ -137,30 +131,28 @@ interface EmitAppOptions {
  * `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` / `payment`
  * need explicit construction. Each method's parameter is derived from the
  * generated config type, so no per-capability type imports are needed.
- *
- * Derived from the single {@link APP_METHOD_CAPABILITIES} table (so it can't
- * drift from the usage probe / ctx-field seam) into the `[flag, methodName,
- * configKey, doc]` shape the emitters below consume — the flag is the capability
- * key's `has<Capitalized>` option (`ai` → `hasAi`, `payments` → `hasPayments`).
+ * {@link APP_METHOD_CAPABILITIES} lists them in table order; the used ones are
+ * those in `options.capabilities`.
  */
+const usedLongTail = (options: EmitAppOptions): typeof APP_METHOD_CAPABILITIES => APP_METHOD_CAPABILITIES.filter(({ key }) => options.capabilities.has(key));
 
 /**
- * The capability key's `has<Capitalized>` option name (`ai` → `hasAi`, `payments`
- * → `hasPayments`). The internal `as` is a narrow, provably-correct cast — the
- * runtime string equals the `has${Capitalize<K>}` template; string methods just
- * don't preserve the literal type. Correctness of the *flag* (that it names a real
- * `EmitAppOptions` key) is enforced at {@link LONG_TAIL}'s type annotation below,
- * not here — so a capability whose flag is missing from `EmitAppOptions` is a
- * compile error rather than a silently dropped method.
+ * The usage set with its `vectors` entry replaced by the normalised gate verdict:
+ * the `.vectors()` method follows the platform verdict AND the declared index
+ * count, never the `@lunora/bindings/vectors` import probe.
  */
-const hasFlagKey = <K extends string>(key: K): `has${Capitalize<K>}` => `has${key.charAt(0).toUpperCase()}${key.slice(1)}` as `has${Capitalize<K>}`;
+const withVectorsVerdict = (capabilities: ReadonlySet<CapabilityKey>, hasVectors: boolean): ReadonlySet<CapabilityKey> => {
+    const verdict = new Set<CapabilityKey>([...capabilities].filter((key) => key !== "vectors"));
 
-const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = APP_METHOD_CAPABILITIES.map(
-    ({ appMethod, key }): readonly [keyof EmitAppOptions, string, string, string] => [hasFlagKey(key), appMethod.method, appMethod.configKey, appMethod.doc],
-);
+    if (hasVectors) {
+        verdict.add("vectors");
+    }
+
+    return verdict;
+};
 
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
-const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);
+const hasAnyLongTail = (options: EmitAppOptions): boolean => usedLongTail(options).length > 0;
 
 /**
  * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
@@ -442,10 +434,10 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
  * `Selector` returns `T | undefined` and these factories do not.
  */
 const buildLongTailMethods = (options: EmitAppOptions): string[] =>
-    LONG_TAIL.filter(([flag]) => options[flag]).map(
-        ([, name, key, document_]) => `    /** ${document_} */
-    public ${name}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${key}"]>>): this {
-        this.shardExtras.${key} = factory as NonNullable<ShardConfig["${key}"]>;
+    usedLongTail(options).map(
+        ({ appMethod: { configKey, doc, method } }) => `    /** ${doc} */
+    public ${method}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${configKey}"]>>): this {
+        this.shardExtras.${configKey} = factory as NonNullable<ShardConfig["${configKey}"]>;
 
         return this;
     }`,
@@ -1539,13 +1531,16 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
  * internal subpath, so re-check on a minor bump.
  */
 const emitApp = (rawOptions: EmitAppOptions): string => {
-    // `hasVectors` arrives as the platform gate's VERDICT and is consumed (via
-    // `LONG_TAIL`'s `options[flag]` lookup) as "emit `.vectors()`" — the AND with
-    // the app's own declaration happens once, here, exactly as `emitServer` and
-    // `emitShard` make it against their `schema`. Normalising up front keeps the
-    // three emitters on one convention instead of leaving the conjunction to
-    // whichever call site remembered to make it.
-    const options: EmitAppOptions = { ...rawOptions, hasVectors: (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0 };
+    // `hasVectors` arrives as the platform gate's VERDICT and is consumed as
+    // "emit `.vectors()`" — the AND with the app's own declaration happens once,
+    // here, exactly as `emitServer` and `emitShard` make it against their
+    // `schema`. Normalising up front keeps the three emitters on one convention
+    // instead of leaving the conjunction to whichever call site remembered to
+    // make it. The `vectors` usage flag (an `@lunora/bindings/vectors` import)
+    // does not decide the method; the normalised verdict replaces it in the set
+    // the long-tail methods are read from.
+    const hasVectors = (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0;
+    const options: EmitAppOptions = { ...rawOptions, capabilities: withVectorsVerdict(rawOptions.capabilities, hasVectors), hasVectors };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);

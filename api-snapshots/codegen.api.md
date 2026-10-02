@@ -232,32 +232,24 @@ interface DurableObjectScheduledContainerIR extends ContainerIRBase {
 
 ```ts
 interface EmitAppOptions {
+    capabilities: ReadonlySet<CapabilityKey>;
     emailAgents?: ReadonlyArray<{
         className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
-    hasAi: boolean;
-    hasAnalytics: boolean;
     hasAuth: boolean;
-    hasBrowser: boolean;
     hasFramework: boolean;
     hasGlobal: boolean;
-    hasHyperdrive: boolean;
     hasHyperdriveGlobal: boolean;
-    hasImages: boolean;
-    hasKv: boolean;
     hasKvIntrospector: boolean;
     hasNotify: boolean;
-    hasPayments: boolean;
     hasQueue: boolean;
-    hasR2sql: boolean;
     hasScheduler: boolean;
     hasSourcedTables: boolean;
     hasStorage: boolean;
     hasVectors?: boolean;
     hasWorkflow: boolean;
-    hasX402: boolean;
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
@@ -1374,13 +1366,13 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, generatedDirectory, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, generatedDirectory, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasVectors, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1701,6 +1693,9 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "access";
         readonly moduleSpecifier: "@lunora/cloudflare-access";
         readonly requiredPackage: "@lunora/cloudflare-access";
+        readonly serverCtxField: "\n    /** Verified Cloudflare Access identity — a synchronous facade over the resolved claims (email / groups / hasGroup / claims). Anonymous when no Access token is present. */\n    readonly access: import(\"@lunora/cloudflare-access/context\").AccessFacade;";
+        readonly shardBinding: "bespoke";
+        readonly tier: "every";
     },
     {
         readonly appMethod: {
@@ -1712,6 +1707,8 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "ai";
         readonly moduleSpecifier: "@lunora/ai";
         readonly requiredPackage: "@lunora/ai";
+        readonly shardBinding: "bespoke";
+        readonly tier: "action";
     },
     {
         readonly appMethod: {
@@ -1723,10 +1720,27 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "analytics";
         readonly moduleSpecifier: "@lunora/bindings/analytics";
         readonly requiredPackage: "@lunora/bindings";
-        readonly serverCtxField: {
-            readonly field: "\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import(\"@lunora/bindings/analytics\").AnalyticsClient;";
-            readonly tier: "every";
+        readonly serverCtxField: "\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import(\"@lunora/bindings/analytics\").AnalyticsClient;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "AnalyticsEngineDatasetLike";
+                readonly envName: "ANALYTICS";
+                readonly factory: {
+                    readonly name: "createAnalytics";
+                };
+            };
+            readonly clientType: "AnalyticsClient";
+            readonly missingMessage: "ctx.analytics: no Analytics Engine binding found. Add an \\`analytics_engine_datasets\\` binding (env.ANALYTICS) to wrangler.jsonc, or pass \\`analytics\\` to createShardDO().";
+            readonly stubMethods: readonly [
+                "track",
+                "writeDataPoint"
+            ];
+            readonly syncStubMethods: readonly [
+                "track",
+                "writeDataPoint"
+            ];
         };
+        readonly tier: "every";
     },
     {
         readonly appMethod: {
@@ -1738,10 +1752,25 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "browser";
         readonly moduleSpecifier: "@lunora/browser";
         readonly requiredPackage: "@lunora/browser";
-        readonly serverCtxField: {
-            readonly field: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
-            readonly tier: "action";
+        readonly serverCtxField: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
+        readonly shardBinding: {
+            readonly clientType: "Browser";
+            readonly missingMessage: "ctx.browser: provide a \\`browser\\` config thunk, e.g. \\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\` with \\`import { launch } from '@cloudflare/playwright'\\`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
+            readonly stubMethods: readonly [
+                "cancelCrawl",
+                "connect",
+                "content",
+                "crawl",
+                "crawlResult",
+                "launch",
+                "pdf",
+                "quickAction",
+                "scrape",
+                "screenshot",
+                "sessions"
+            ];
         };
+        readonly tier: "action";
     },
     {
         readonly contextProperty: "containers";
@@ -1763,10 +1792,15 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "hyperdrive";
         readonly moduleSpecifier: "@lunora/hyperdrive";
         readonly requiredPackage: "@lunora/hyperdrive";
-        readonly serverCtxField: {
-            readonly field: "\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import(\"@lunora/hyperdrive\").SqlClient;";
-            readonly tier: "action";
+        readonly serverCtxField: "\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import(\"@lunora/hyperdrive\").SqlClient;";
+        readonly shardBinding: {
+            readonly clientType: "SqlClient";
+            readonly missingMessage: "ctx.sql: provide a \\`sql\\` config thunk that builds a SqlClient from your driver, e.g. \\`sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))\\`.";
+            readonly stubMethods: readonly [
+                "query"
+            ];
         };
+        readonly tier: "action";
     },
     {
         readonly appMethod: {
@@ -1778,10 +1812,24 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "images";
         readonly moduleSpecifier: "@lunora/bindings/images";
         readonly requiredPackage: "@lunora/bindings";
-        readonly serverCtxField: {
-            readonly field: "\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import(\"@lunora/bindings/images\").Images;";
-            readonly tier: "action";
+        readonly serverCtxField: "\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import(\"@lunora/bindings/images\").Images;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "ImagesBindingLike";
+                readonly envName: "IMAGES";
+                readonly factory: {
+                    readonly name: "createImages";
+                    readonly option: "binding";
+                };
+            };
+            readonly clientType: "Images";
+            readonly missingMessage: "ctx.images: no Images binding found. Add an \\`images\\` binding (env.IMAGES) to wrangler.jsonc, or pass \\`images\\` to createShardDO().";
+            readonly stubMethods: readonly [
+                "info",
+                "transform"
+            ];
         };
+        readonly tier: "action";
     },
     {
         readonly appMethod: {
@@ -1793,10 +1841,34 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "kv";
         readonly moduleSpecifier: "@lunora/bindings/kv";
         readonly requiredPackage: "@lunora/bindings";
-        readonly serverCtxField: {
-            readonly field: "\n    readonly kv: import(\"@lunora/bindings/kv\").Kv;";
-            readonly tier: "every";
+        readonly serverCtxField: "\n    readonly kv: import(\"@lunora/bindings/kv\").Kv;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "KVNamespaceLike";
+                readonly envName: "KV";
+                readonly factory: {
+                    readonly name: "createKv";
+                    readonly option: "namespace";
+                };
+                readonly unvouchableReads: readonly [
+                    "get",
+                    "getRaw",
+                    "getWithMetadata",
+                    "list"
+                ];
+            };
+            readonly clientType: "Kv";
+            readonly missingMessage: "ctx.kv: no KV binding found. Add a \\`kv_namespaces\\` binding (env.KV) to wrangler.jsonc, or pass \\`kv\\` to createShardDO().";
+            readonly stubMethods: readonly [
+                "delete",
+                "get",
+                "getRaw",
+                "getWithMetadata",
+                "list",
+                "put"
+            ];
         };
+        readonly tier: "every";
     },
     {
         readonly key: "mail";
@@ -1834,10 +1906,23 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "pipelines";
         readonly moduleSpecifier: "@lunora/bindings/pipelines";
         readonly requiredPackage: "@lunora/bindings";
-        readonly serverCtxField: {
-            readonly field: "\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import(\"@lunora/bindings/pipelines\").PipelineClient;";
-            readonly tier: "action";
+        readonly serverCtxField: "\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import(\"@lunora/bindings/pipelines\").PipelineClient;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "PipelineBindingLike";
+                readonly envName: "PIPELINES";
+                readonly factory: {
+                    readonly name: "createPipelines";
+                    readonly option: "binding";
+                };
+            };
+            readonly clientType: "PipelineClient";
+            readonly missingMessage: "ctx.pipelines: no Pipelines binding found. Add a \\`pipelines\\` binding (env.PIPELINES) to wrangler.jsonc, or pass \\`pipelines\\` to createShardDO().";
+            readonly stubMethods: readonly [
+                "send"
+            ];
         };
+        readonly tier: "action";
     },
     {
         readonly appMethod: {
@@ -1849,10 +1934,9 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "r2sql";
         readonly moduleSpecifier: "@lunora/bindings/r2sql";
         readonly requiredPackage: "@lunora/bindings";
-        readonly serverCtxField: {
-            readonly field: "\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import(\"@lunora/bindings/r2sql\").R2SqlClient;";
-            readonly tier: "action";
-        };
+        readonly serverCtxField: "\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import(\"@lunora/bindings/r2sql\").R2SqlClient;";
+        readonly shardBinding: "bespoke";
+        readonly tier: "action";
     },
     {
         readonly contextProperty: "scheduler";
@@ -1986,23 +2070,13 @@ interface EmitFunctionsOptions {
 ```ts
 interface EmitServerOptions {
     agents?: ReadonlyArray<AgentIR>;
+    capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;
     generatedDirectory?: string;
-    hasAccessFacade?: boolean;
-    hasAi?: boolean;
-    hasAnalytics?: boolean;
-    hasBrowser?: boolean;
     hasFlags?: boolean;
-    hasHyperdrive?: boolean;
-    hasImages?: boolean;
-    hasKv?: boolean;
     hasNotify?: boolean;
-    hasPayments?: boolean;
-    hasPipelines?: boolean;
-    hasR2sql?: boolean;
     hasVectors?: boolean;
-    hasX402?: boolean;
     identity?: IdentityIR;
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
@@ -2021,26 +2095,16 @@ interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
     advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     agents?: ReadonlyArray<AgentIR>;
+    capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;
     flagKeys?: ReadonlyArray<{
         key: string;
         type: "boolean" | "number" | "object" | "string";
     }>;
-    hasAccessFacade?: boolean;
-    hasAi?: boolean;
-    hasAnalytics?: boolean;
-    hasBrowser?: boolean;
     hasFlags?: boolean;
-    hasHyperdrive?: boolean;
-    hasImages?: boolean;
-    hasKv?: boolean;
     hasNotify?: boolean;
-    hasPayments?: boolean;
-    hasPipelines?: boolean;
-    hasR2sql?: boolean;
     hasVectors?: boolean;
-    hasX402?: boolean;
     maskMetadata?: MaskMetadataIR;
     mutators?: ReadonlyArray<MutatorIR>;
     queues?: ReadonlyArray<QueueIR>;
