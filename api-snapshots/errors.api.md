@@ -324,6 +324,21 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Auth admin operation not supported";
     };
+    readonly AUTH_CIMD_FETCH_NOT_PUBLIC: {
+        readonly hint: "Add \"global_fetch_strictly_public\" to \"compatibility_flags\" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.";
+        readonly status: 500;
+        readonly title: "CIMD transport needs the global_fetch_strictly_public flag";
+    };
+    readonly AUTH_MCP_RESOURCE_INVALID: {
+        readonly hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.";
+        readonly status: 500;
+        readonly title: "MCP resource missing or not an absolute URL";
+    };
+    readonly MCP_STEP_UP_MISCONFIGURED: {
+        readonly hint: "Set `writeScope` (a non-empty scope such as `lunora:write`) and `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`) together on `createAuthedMcpFetchHandler`, or neither.";
+        readonly status: 500;
+        readonly title: "MCP write step-up misconfigured";
+    };
     readonly BACKUP_NOT_CONFIGURED: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";

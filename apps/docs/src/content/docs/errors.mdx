@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 157 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 160 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -100,6 +100,18 @@ Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 ### `AUTH_AUDIT_NOT_CONFIGURED`
 
 `400` — Auth audit reader not configured
+
+### `AUTH_CIMD_FETCH_NOT_PUBLIC`
+
+`500` — CIMD transport needs the global_fetch_strictly_public flag
+
+Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.
+
+### `AUTH_MCP_RESOURCE_INVALID`
+
+`500` — MCP resource missing or not an absolute URL
+
+Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.
 
 ### `AUTH_MIGRATOR_UNSUPPORTED`
 
@@ -470,6 +482,12 @@ Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of
 ### `MASK_UNSUPPORTED`
 
 `422` — Aggregation over a masked column is unsupported
+
+### `MCP_STEP_UP_MISCONFIGURED`
+
+`500` — MCP write step-up misconfigured
+
+Set `writeScope` (a non-empty scope such as `lunora:write`) and `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`) together on `createAuthedMcpFetchHandler`, or neither.
 
 ### `METHOD_NOT_ALLOWED`
 
