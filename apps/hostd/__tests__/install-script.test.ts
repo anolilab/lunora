@@ -8,7 +8,7 @@
  * all run as they do on a box.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -137,5 +137,55 @@ describe("install.sh, installing a release", () => {
         expect(result.code).toBe(1);
         expect(result.output).toMatch(/lunora-hostd: the download is not the \d+ bytes the manifest pins/u);
         expect(existsSync(join(box, "opt", "current"))).toBe(false);
+    });
+
+    describe("without --version, the newest release on the box's channel", () => {
+        const pointer = (latest: Record<string, unknown>): void => {
+            mkdirSync(join(root, "releases", "hostd-latest"), { recursive: true });
+            writeFileSync(join(root, "releases", "hostd-latest", "latest.json"), JSON.stringify({ schema: 1, ...latest }));
+        };
+
+        /** `resolve_tag` on the test box, with `flags` parsed first; prints the tag it chose. */
+        const resolve = (flags = ""): { code: number | null; output: string } =>
+            installFunctions(`parse_args ${flags}; WORK="$(mktemp -d)"; resolve_tag; printf 'TAG=%s\n' "$TAG"`);
+
+        it("takes the newest stable release on a new box", () => {
+            expect.assertions(1);
+
+            pointer({ prerelease: "1.1.0-alpha.2", stable: "1.0.0" });
+
+            expect(resolve().output).toMatch(/^TAG=hostd-v1\.0\.0$/mu);
+        });
+
+        it("takes the newest pre-release on a box that runs one, or when asked to", () => {
+            expect.assertions(2);
+
+            pointer({ prerelease: "1.1.0-alpha.2", stable: "1.0.0" });
+
+            expect(resolve("--prerelease").output).toMatch(/^TAG=hostd-v1\.1\.0-alpha\.2$/mu);
+
+            mkdirSync(join(box, "opt", "hostd-v1_1_0-alpha_1"), { recursive: true });
+            writeFileSync(join(box, "opt", "hostd-v1_1_0-alpha_1", "manifest.json"), JSON.stringify({ manifest: { hostd: { version: "1.1.0-alpha.1" } } }));
+            symlinkSync("hostd-v1_1_0-alpha_1", join(box, "opt", "current"));
+
+            expect(resolve().output).toMatch(/^TAG=hostd-v1\.1\.0-alpha\.2$/mu);
+        });
+
+        it("says what to do while no stable release exists", () => {
+            expect.assertions(2);
+
+            pointer({ prerelease: "1.0.0-alpha.1", stable: null });
+
+            const result = resolve();
+
+            expect(result.code).toBe(1);
+            expect(result.output).toMatch(/no stable hostd release is published yet; pass --version <version> or --prerelease/u);
+        });
+
+        it("installs exactly --version when given, without reading the pointer", () => {
+            expect.assertions(1);
+
+            expect(resolve("--version v2.0.0").output).toMatch(/^TAG=hostd-v2\.0\.0$/mu);
+        });
     });
 });

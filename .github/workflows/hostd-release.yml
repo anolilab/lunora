@@ -422,3 +422,68 @@
                       manifest.json lunora-hostd-linux-x64 lunora-hostd-linux-arm64 \
                       caddy-linux-x64.gz caddy-linux-arm64.gz \
                       install.sh lunora-hostd.service
+
+    # `install.sh` without `--version` installs the newest release on the box's
+    # channel, read from `latest.json` on the GitHub Release `hostd-latest` (one
+    # asset, replaced in place) rather than from the repository's release list,
+    # where a release per package per version pushes `hostd-v*` off the first
+    # page at once. Each channel only moves forward (scripts/latest-pointer.mjs),
+    # and runs queue on one group, so a release published late never moves it
+    # back. The pointer is a hint, not a trust root: a box verifies the manifest
+    # it leads to and refuses a release older than its own.
+    "pointer":
+        "name": "Move the hostd-latest pointer"
+        "needs": ["prepare", "release"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "concurrency":
+            "group": "hostd-latest-pointer"
+            "cancel-in-progress": false
+        "permissions":
+            "contents": "write" # to create the hostd-latest release and replace its latest.json
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "24.16"
+                  "cache-prefix": "hostd-release-pointer"
+                  "install-node-gyp": "false"
+                  "skip-playwright": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The pointer script orders versions with the built @lunora/hostd/release.
+            - "name": "Build @lunora/hostd"
+              "run": "pnpm --filter @lunora/hostd run build"
+
+            - "name": "Update latest.json"
+              "shell": "bash"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "SHA": "${{ github.sha }}"
+                  "VERSION": "${{ needs.prepare.outputs.version }}"
+              "run": |
+                  set -euo pipefail
+
+                  current="${RUNNER_TEMP}/current"
+                  mkdir -p "${current}"
+
+                  if gh release view hostd-latest > /dev/null 2>&1; then
+                      gh release download hostd-latest --pattern latest.json --dir "${current}" || true
+                  else
+                      gh release create hostd-latest --target "${SHA}" --prerelease --latest=false \
+                          --title "lunora-hostd: newest releases" \
+                          --notes "Not a release: latest.json names the newest hostd-v* release per channel, for install.sh."
+                  fi
+
+                  node apps/hostd/scripts/update-latest-pointer.mjs --version "${VERSION}" \
+                      --current "${current}/latest.json" --out "${RUNNER_TEMP}/latest.json"
+                  gh release upload hostd-latest "${RUNNER_TEMP}/latest.json" --clobber

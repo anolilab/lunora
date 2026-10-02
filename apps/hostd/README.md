@@ -35,13 +35,25 @@ it; writes `/etc/systemd/system/lunora-hostd.service`; runs `lunora-hostd enrol`
 **as `lunora-hostd`**, passing the flags through; and enables and starts the
 service. The token comes from `LUNORA_HOSTD_ENROL_TOKEN` (or `--token`) and the
 bucket credentials from `AWS_*`; both reach `enrol` through its environment,
-never a command line, and are never printed. Without `--version` it installs
-the newest stable `hostd-v*` release.
+never a command line, and are never printed.
 
-**Re-running it upgrades the box in place:** it installs the newest (or
-`--version`) release beside the running one, switches `current`, keeps the
-release that ran before (point `current` back at it to roll back), removes older
-ones, rewrites the unit and restarts the service. An enrolled box is not enrolled
+**Which release.** `--version <version>` installs exactly that one. Without it,
+`install.sh` installs the newest release on the box's channel: the newest
+stable release, or — on a box that runs a pre-release, or with `--prerelease` —
+the newest release of any kind. It reads that from `latest.json` on the GitHub
+Release `hostd-latest` (`{"schema":1,"stable":…,"prerelease":…}`), which the
+release workflow moves forward after each `hostd-v*` release
+([`scripts/update-latest-pointer.mjs`](./scripts/update-latest-pointer.mjs);
+each channel only ever moves forward), rather than from the repository's
+release list, where a release per package per version pushes `hostd-v*` off
+the first page at once. The pointer is a hint, not a trust root: the manifest
+it leads to is verified like any other, and a release older than the installed
+one is refused.
+
+**Re-running it upgrades the box in place:** it installs the newest release on
+the box's channel (or `--version`) beside the running one, switches `current`,
+keeps the release that ran before (point `current` back at it to roll back),
+removes older ones, rewrites the unit and restarts the service. An enrolled box is not enrolled
 again unless `--force` (and a new token) is given.
 
 **Uninstall:** `sudo bash install.sh --uninstall` stops and removes the unit,

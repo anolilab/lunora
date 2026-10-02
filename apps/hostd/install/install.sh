@@ -7,7 +7,8 @@
 #   sudo LUNORA_HOSTD_ENROL_TOKEN=lbe_... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
 #       bash install.sh --control-plane https://<cloud> --bucket <name> [--endpoint <url>]
 #
-# Re-running it upgrades the box in place to the latest release (or --version).
+# Re-running it upgrades the box in place to the newest release on its channel
+# (stable, or pre-release for a box on one), or to --version.
 # `--uninstall` removes hostd, its users, unit and files, and never the bucket.
 #
 # Trust: this script pins the Ed25519 release keys (TRUSTED RELEASE KEYS below,
@@ -71,7 +72,9 @@ Install or upgrade (run it again):
   --skip-bucket-check        do not probe the bucket with celld first
   --force                    enrol again, as a new box
   --token <token>            the enrolment token (or LUNORA_HOSTD_ENROL_TOKEN)
-  --version <version>        install this release instead of the latest
+  --version <version>        install this release instead of the newest
+  --prerelease               without --version: the newest pre-release too
+                             (a box on a pre-release stays on pre-releases)
   --allow-downgrade          install it even when it is older than the installed one
 
 Remove:
@@ -87,6 +90,7 @@ TOKEN="${LUNORA_HOSTD_ENROL_TOKEN:-}"
 UNINSTALL=0
 FORCE=0
 ALLOW_DOWNGRADE=0
+PRERELEASE=0
 ENROL_ARGS=()
 PLATFORM=""
 RELEASE_ID=""
@@ -125,6 +129,10 @@ parse_args() {
                 ;;
             --allow-downgrade)
                 ALLOW_DOWNGRADE=1
+                shift
+                ;;
+            --prerelease)
+                PRERELEASE=1
                 shift
                 ;;
             --uninstall)
@@ -260,17 +268,37 @@ as_hostd() {
     )
 }
 
+# The release to install: --version, else the newest on the box's channel, as the
+# release workflow records it in latest.json on the GitHub Release hostd-latest
+# (apps/hostd/scripts/update-latest-pointer.mjs). The repository's release list
+# is no help: it holds a release per package per version, and hostd's fall off
+# its first page at once. The pointer is only a hint — the manifest it leads to
+# is verified like any other, and lunora-hostd refuses a release older than the
+# installed one.
 resolve_tag() {
-    if [ -n "${VERSION}" ]; then
-        [[ "${VERSION}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]] || die "not a release version: ${VERSION}"
-        TAG="hostd-v${VERSION}"
+    local channel="stable" installed=""
 
-        return
+    if [ -z "${VERSION}" ]; then
+        # A box on a pre-release stays on pre-releases (it gets a newer stable one too).
+        installed="$(jq -r '.manifest.hostd.version // empty' "${INSTALL_DIR}/current/manifest.json" 2> /dev/null || true)"
+
+        if [ "${PRERELEASE}" -eq 1 ] || [[ "${installed%%+*}" == *-* ]]; then
+            channel="prerelease"
+        fi
+
+        fetch "https://github.com/${REPOSITORY}/releases/download/hostd-latest/latest.json" "${WORK}/latest.json" ||
+            die "could not read which hostd release is the newest; pass --version <version>"
+        VERSION="$(jq -r --arg channel "${channel}" '.[$channel] // empty' "${WORK}/latest.json")"
+
+        if [ -z "${VERSION}" ]; then
+            die "no ${channel} hostd release is published yet; pass --version <version>$([ "${channel}" = "prerelease" ] || printf ' or --prerelease')"
+        fi
+
+        say "the newest ${channel} release is ${VERSION}"
     fi
 
-    fetch "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100" "${WORK}/releases.json"
-    TAG="$(jq -r '[.[] | select(.draft == false and .prerelease == false and (.tag_name | startswith("hostd-v")))][0].tag_name // empty' "${WORK}/releases.json")"
-    [ -n "${TAG}" ] || die "no stable hostd release is published yet; pass --version <version>"
+    [[ "${VERSION}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]] || die "not a release version: ${VERSION}"
+    TAG="hostd-v${VERSION}"
 }
 
 # Verify manifest.json's Ed25519 signature against a pinned key (§8.2), with OpenSSL.
