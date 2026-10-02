@@ -70,29 +70,39 @@ imports and runs in workerd; `@lunora/hostd/release/verify` is Node only.
   the running `node` with postject (Node 24 has no built-in `--build-sea`). The
   binary embeds that exact Node, so build with the version boxes should run
   (CI uses the `.nvmrc` line). Linux only.
-- `scripts/make-release-manifest.mjs` writes and signs `manifest.json` from the
-  built binaries and [`release-pins.json`](./release-pins.json), and `--verify`
-  checks an envelope (and, with `--artifacts-dir`, the binaries). It refuses to
-  sign while a pin is still a placeholder, or when the signature does not
-  verify against a key pinned in `src/trusted-release-keys.ts`.
+- **Caddy is built from pinned source.** No upstream Caddy release includes the
+  `caddy-ratelimit` module the box edge needs, so the release workflow builds
+  it with xcaddy on each platform's runner: the Caddy version and each module's
+  commit come from [`release-pins.json`](./release-pins.json), Go and xcaddy are
+  pinned in the workflow. The build is reproducible (CGO off, `-trimpath`, no
+  VCS stamping, `gzip -n`), is smoke-tested with `caddy version` and
+  `caddy list-modules` (it must list `http.handlers.rate_limit`), and ships as
+  `caddy-<platform>.gz` on the same GitHub Release.
+- `scripts/make-release-manifest.mjs` writes and signs `manifest.json`: `hostd`
+  and Caddy entries are hashed from the built files in `--artifacts-dir`
+  (`lunora-hostd-<platform>`, `caddy-<platform>.gz`), celld entries and the
+  Caddy version + module list come from `release-pins.json`. `--verify` checks
+  an envelope (and, with `--artifacts-dir`, the hostd and Caddy files). It
+  refuses to sign while an input is missing or a placeholder, or when the
+  signature does not verify against a key pinned in
+  `src/trusted-release-keys.ts`.
 - `.github/workflows/hostd-release.yml` does all of it on a `hostd-v<version>`
-  tag or a manual dispatch: build and test, single executables on x64 and arm64
-  runners with a `--version` smoke test, sign, verify, attest, publish the
-  GitHub Release `hostd-v<version>`. The committed `package.json` version stays
+  tag or a manual dispatch: build and test, single executables and Caddy on x64
+  and arm64 runners with smoke tests, sign, verify, attest, publish the GitHub
+  Release `hostd-v<version>`. The committed `package.json` version stays
   `0.0.0`; the workflow stamps the released version before building.
+
+celld is pinned to `denoland/celld` v0.6.0, the release the celld CI lane tests.
+Keep the two in step.
 
 ### What is not real yet
 
 - **No release key is committed.** `src/trusted-release-keys.ts` holds a
-  placeholder, which verification and signing refuse.
-- **Caddy is not pinned.** No upstream Caddy release includes the
-  `caddy-ratelimit` module, so its entries in `release-pins.json` are
-  placeholders until Lunora builds Caddy with that module (xcaddy) and hosts it.
-  celld is pinned to `denoland/celld` v0.6.0, the release the celld CI lane
-  tests. Keep the two in step.
-
-Until both are done the release workflow builds and smoke-tests the binaries,
-then stops at the signing step.
+  placeholder, which verification and signing refuse. That is the only manual
+  step left before a first release: a maintainer generates the key, commits its
+  public half and sets the `hostd-release` environment secret (below). Until
+  then the release workflow builds and smoke-tests every binary, then stops at
+  the signing step.
 
 ### Setting up the release key (maintainers)
 

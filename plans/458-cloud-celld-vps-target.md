@@ -450,9 +450,18 @@ control-plane changes.
   and test, single executables on x64 and arm64 (`ubuntu-24.04-arm`) runners,
   sign in the `hostd-release` environment, attest, publish the GitHub Release.
 
+Caddy (follow-up, same day): the release workflow builds Caddy v2.11.6 with
+`github.com/mholt/caddy-ratelimit` from pinned source (xcaddy v0.4.7, Go 1.26.8,
+module commit pinned in `release-pins.json`), reproducibly, on both platforms,
+smoke-tests `http.handlers.rate_limit`, and publishes `caddy-<platform>.gz` on the
+`hostd-v*` release; the manifest hashes those built files. No Caddy placeholder
+remains.
+
 Still open: no release key is committed (a placeholder that verification
-refuses); Caddy with `caddy-ratelimit` needs our own xcaddy build before its
-pins are real, so the workflow stops at signing until then. Next in W7:
+refuses). The only manual step before a first release is a maintainer
+generating the Ed25519 release key, committing its public half to
+`trusted-release-keys.ts` and setting the `hostd-release` environment secret;
+the workflow stops at signing until then. Next in W7:
 `install.sh`, the control plane's `hostdReleases` table and `boxes.desiredReleaseId`,
 and the `upgrade` job on the box.
 
