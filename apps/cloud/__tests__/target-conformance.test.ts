@@ -128,13 +128,15 @@ describeTargetConformance("celld-vps", () => {
         },
         close: async (code, message) => {
             await connected;
-            await client.close(code, message);
+
+            return client.close(code, message);
         },
         dispatch: async (job, options) => {
             await connected;
 
             return client.dispatch(job, options);
         },
+        fetch: (request) => client.fetch(request),
         pushRoutes: async () => {
             await connected;
 

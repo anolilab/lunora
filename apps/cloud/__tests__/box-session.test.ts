@@ -4,7 +4,7 @@ import { randomBase64Url } from "../src/boxes/encoding";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "../src/boxes/jobs";
 import type { SessionAttachment, SessionEffect, SessionPorts } from "../src/boxes/session";
 import { FRAME_BUCKET, HANDSHAKE_TIMEOUT_MS, livenessOf, openSession, receiveFrame, SILENCE_LIMIT_MS } from "../src/boxes/session";
-import { boxSession, BoxSessionError } from "../src/boxes/session-client";
+import { boxSession } from "../src/boxes/session-client";
 import { TICK_MS } from "../src/boxes/session-do";
 import type { BoxKey } from "./support/box-session-fakes";
 import { authFrame, boxKey, boxRow, fakeSocket, fakeState, handshake, helloFrame, namespaceOver, TestBoxSession } from "./support/box-session-fakes";
@@ -272,9 +272,10 @@ describe("boxSessionDO", () => {
     it("fails a dispatch fast when the box is not connected (BOX_OFFLINE)", async () => {
         const { session } = await setup();
 
-        await expect(boxSession(namespaceOver(session), "box_1").dispatch({ kind: "diagnose" })).rejects.toStrictEqual(
-            new BoxSessionError("BOX_OFFLINE", "the box is not connected"),
-        );
+        await expect(boxSession(namespaceOver(session), "box_1").dispatch({ kind: "diagnose" })).resolves.toStrictEqual({
+            error: { code: "BOX_OFFLINE", message: "the box is not connected" },
+            ok: false,
+        });
     });
 
     it("dispatches a job, streams its progress, and resolves with the box's result", async () => {
@@ -312,8 +313,9 @@ describe("boxSessionDO", () => {
         const socket = await handshake(session, state, key, "box_1");
         const sentBefore = socket.sent.length;
 
-        await expect(boxSession(namespaceOver(session), "box_1").dispatch({ alias: "Not An Alias", kind: "reload" })).rejects.toMatchObject({
-            code: "BAD_JOB",
+        await expect(boxSession(namespaceOver(session), "box_1").dispatch({ alias: "Not An Alias", kind: "reload" })).resolves.toMatchObject({
+            error: { code: "BAD_JOB" },
+            ok: false,
         });
         expect(socket.sent).toHaveLength(sentBefore);
     });
@@ -399,5 +401,18 @@ describe("boxSessionDO", () => {
         await expect(client.claimNonce(nonce, expiresAt)).resolves.toBe(true);
         await expect(client.claimNonce(nonce, expiresAt)).resolves.toBe(false);
         await expect(client.claimNonce(randomBase64Url(), expiresAt)).resolves.toBe(true);
+        // A nonce of the wrong shape is never claimed: the signed request it came with is refused.
+        await expect(client.claimNonce("short", expiresAt)).resolves.toBe(false);
+    });
+
+    it("accepts only a WebSocket upgrade of a box id over fetch — the rest is RPC", async () => {
+        const { session } = await setup();
+
+        await expect(session.fetch(new Request("https://box-session.internal/connect?box=../x", { headers: { upgrade: "websocket" } }))).resolves.toMatchObject(
+            {
+                status: 400,
+            },
+        );
+        await expect(session.fetch(new Request("https://box-session.internal/dispatch?box=box_1", { method: "POST" }))).resolves.toMatchObject({ status: 426 });
     });
 });

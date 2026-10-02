@@ -17,7 +17,7 @@ import type { EnrolResult } from "../../../lunora/boxes";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";
 import { REVOKED_MESSAGE } from "../../boxes/session";
 import type { BoxSessionNamespace } from "../../boxes/session-client";
-import { boxSession } from "../../boxes/session-client";
+import { boxSession, retireBox } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
 import { BOX_RELEASE_PATH, boxDomainOf } from "../../boxes/urls";
@@ -162,10 +162,8 @@ export const handleBoxConnectRoute = (request: Request, environment: BoxRouterEn
         return Promise.resolve(jsonError(503, "this control plane does not accept boxes"));
     }
 
-    const stub = namespace.get(namespace.idFromName(boxId) as never);
-
-    // Only the upgrade crosses: the object's other paths are the control plane's own.
-    return stub.fetch(new Request(`https://box-session.internal/connect?box=${encodeURIComponent(boxId)}`, request));
+    // Only the upgrade crosses; the object's RPC methods are the control plane's own.
+    return boxSession(namespace, boxId).fetch(new Request(`https://box-session.internal/connect?box=${encodeURIComponent(boxId)}`, request));
 };
 
 interface RevokeBody {
@@ -201,14 +199,7 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
         return rejected(error, "revoke failed");
     }
 
-    const closed = environment.BOX_SESSION
-        ? await boxSession(environment.BOX_SESSION, body.id)
-              .close("BOX_REVOKED", REVOKED_MESSAGE)
-              .then(
-                  () => true,
-                  () => false,
-              )
-        : false;
+    const closed = (await retireBox(environment.BOX_SESSION, body.id, REVOKED_MESSAGE)) === null;
 
     // The box's hostnames go with it, so nothing under the platform's zone keeps pointing at a machine we no longer manage.
     const dnsError = await applyBoxDns(environment, revoked, "remove");

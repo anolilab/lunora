@@ -11,10 +11,14 @@ import { challengeSigningPayload, decodeCloudMessage, requestSigningPayload } fr
 import { toBase64Url } from "../../src/boxes/encoding";
 import type { SessionAttachment } from "../../src/boxes/session";
 import { openSession } from "../../src/boxes/session";
-import type { BoxSessionNamespace } from "../../src/boxes/session-client";
-import type { BoxSessionEnvironment, SessionSocket, SessionState } from "../../src/boxes/session-do";
+import type { BoxSession, BoxSessionNamespace } from "../../src/boxes/session-client";
+import type { BoxSessionEnvironment, SessionSocket } from "../../src/boxes/session-do";
 import { BoxSessionDO } from "../../src/boxes/session-do";
 import type { ControlPlaneStore } from "../../src/d1-store";
+
+const objectId = (name: string): DurableObjectId => {
+    return { equals: (other) => other.name === name, name, toString: () => name };
+};
 
 export interface FakeSocket extends SessionSocket {
     attachment: SessionAttachment;
@@ -57,9 +61,20 @@ export const fakeSocket = (attachment: SessionAttachment, onSend?: FrameListener
     return socket;
 };
 
-export interface FakeState extends SessionState {
+/** The slice of `DurableObjectState` the session uses, over fake sockets and an in-memory storage map. */
+export interface FakeState {
+    acceptWebSocket: (socket: SessionSocket) => void;
     alarmAt: null | number;
+    getWebSockets: () => SessionSocket[];
     sockets: FakeSocket[];
+    storage: {
+        delete: (key: string) => Promise<unknown>;
+        get: <T>(key: string) => Promise<T | undefined>;
+        getAlarm: () => Promise<null | number>;
+        list: <T>(options: { limit?: number; prefix: string }) => Promise<Map<string, T>>;
+        put: (key: string, value: unknown) => Promise<void>;
+        setAlarm: (time: number) => Promise<void>;
+    };
     values: Map<string, unknown>;
 }
 
@@ -106,8 +121,9 @@ export const fakeState = (): FakeState => {
 export class TestBoxSession extends BoxSessionDO {
     private readonly store: ControlPlaneStore;
 
-    public constructor(state: SessionState, store: ControlPlaneStore, environment: BoxSessionEnvironment = {}) {
-        super(state, { DB: {}, ...environment });
+    public constructor(state: FakeState, store: ControlPlaneStore, environment: BoxSessionEnvironment = {}) {
+        // The fake is the slice of the runtime's state the session reads.
+        super(state as unknown as DurableObjectState, { DB: {}, ...environment });
         this.store = store;
     }
 
@@ -188,13 +204,20 @@ export const boxRow = (key: BoxKey, overrides: Record<string, unknown> = {}): Re
     };
 };
 
-/** A namespace binding whose every id resolves to `session` — what `boxSession` calls through. */
+/** A namespace binding whose every id resolves to `session` — what `boxSession` calls through, here without RPC in between. */
 export const namespaceOver = (session: BoxSessionDO): BoxSessionNamespace => {
+    return { get: () => session, idFromName: objectId };
+};
+
+/** A namespace binding over hand-written sessions, by box id: the methods a test cares about, every other one refusing. */
+export const fakeSessionNamespace = (session: (boxId: string) => Partial<BoxSession>): BoxSessionNamespace => {
+    const unused = (): Promise<never> => Promise.reject(new Error("not used by this test"));
+
     return {
-        get: () => {
-            return { fetch: (request: Request) => session.fetch(request) };
+        get: (id) => {
+            return { claimNonce: unused, close: unused, dispatch: unused, fetch: unused, pushRoutes: unused, ...session(id.name ?? "") };
         },
-        idFromName: (name) => name,
+        idFromName: objectId,
     };
 };
 

@@ -22,7 +22,7 @@ import type { DeployJob, HostdJob } from "@lunora/hostd/protocol";
 
 import { tenantSender } from "../../backup/tenant-transport";
 import type { BoxSession, BoxSessionNamespace } from "../../boxes/session-client";
-import { boxSession, BoxSessionError } from "../../boxes/session-client";
+import { boxSession } from "../../boxes/session-client";
 import { boxDomainOf, boxReleaseUrlOf } from "../../boxes/urls";
 import type { ConvergeOptions, TargetDriver, TargetFleet } from "../driver";
 import type { BoxPlacement } from "../placement";
@@ -46,13 +46,10 @@ export interface CelldVpsPorts {
 }
 
 /** Map a failed or refused box job onto the error the deploy stream shows. */
-const jobFailure = (slug: string, action: string, error: unknown): Error => {
-    if (error instanceof BoxSessionError && error.code === "BOX_OFFLINE") {
-        return new Error(`box "${slug}" is offline (BOX_OFFLINE): start lunora-hostd on it and ${action} again`);
-    }
-
-    return new Error(`box "${slug}" could not ${action}: ${error instanceof Error ? error.message : String(error)}`);
-};
+const jobFailure = (slug: string, action: string, error: { code: string; message: string } | undefined): Error =>
+    error?.code === "BOX_OFFLINE"
+        ? new Error(`box "${slug}" is offline (BOX_OFFLINE): start lunora-hostd on it and ${action} again`)
+        : new Error(`box "${slug}" could not ${action}: ${error?.code ?? "FAILED"}: ${error?.message ?? "no reason given"}`);
 
 export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
     const { box } = ports;
@@ -60,14 +57,10 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
 
     /** Run one job on the box, and turn anything but `ok` into a thrown error. */
     const run = async (action: string, job: HostdJob, timeoutMs: number, options: ConvergeOptions): Promise<void> => {
-        const outcome = await session()
-            .dispatch(job, { ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }), timeoutMs })
-            .catch((error: unknown) => {
-                throw jobFailure(box.slug, action, error);
-            });
+        const outcome = await session().dispatch(job, { ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }), timeoutMs });
 
         if (!outcome.ok) {
-            throw new Error(`box "${box.slug}" could not ${action}: ${outcome.error?.code ?? "FAILED"}: ${outcome.error?.message ?? "no reason given"}`);
+            throw jobFailure(box.slug, action, outcome.error);
         }
 
         // The box serves the hostname only once its routing table names it; a
@@ -142,7 +135,7 @@ export const celldVpsDriverFromEnv = (box: BoxPlacement, environment: CelldVpsEn
         controlPlaneOrigin: environment.LUNORA_ORIGIN_URL ?? "",
         session: (boxId) => {
             if (!environment.BOX_SESSION) {
-                throw new BoxSessionError("BOX_OFFLINE", "this control plane has no box sessions bound (BOX_SESSION)");
+                throw new Error("this control plane has no box sessions bound (BOX_SESSION)");
             }
 
             return boxSession(environment.BOX_SESSION, boxId);

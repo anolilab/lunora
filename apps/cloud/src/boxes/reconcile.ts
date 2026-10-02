@@ -50,13 +50,13 @@ interface SweepBoxRow {
 }
 
 export interface BoxSweepPorts {
-    /** Close every socket of a box's session (`BOX_REVOKED`); a box with no session is not an error. */
-    closeSession: (boxId: string) => Promise<void>;
     database: ControlPlaneDatabase;
     /** The box zone, or why this control plane cannot write it (`boxDnsFromEnv`). */
     dns: BoxDnsZone;
     log: (line: string) => void;
     now: number;
+    /** Close a revoked box's session (`retireBox`): `null` once closed, else why not. */
+    retire: (boxId: string) => Promise<null | string>;
 }
 
 export interface BoxSweepResult {
@@ -87,10 +87,12 @@ const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: Swe
         retired.add(box._id);
 
         // eslint-disable-next-line no-await-in-loop -- see above
-        await ports.closeSession(box._id).catch((error: unknown) => {
-            // The session also re-reads the row every liveness tick and closes on a revoked or missing one.
-            ports.log(`[boxes] could not close the session of box ${box._id}: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        const failure = await ports.retire(box._id);
+
+        // The session also re-reads the row every liveness tick and closes on a revoked or missing one.
+        if (failure !== null) {
+            ports.log(`[boxes] could not close the session of box ${box._id}: ${failure}`);
+        }
     }
 
     return retired;

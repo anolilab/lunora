@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import type { TestProjectInlineConfiguration } from "vitest/config";
 import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
@@ -30,6 +32,13 @@ const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 const nodeProject: TestProjectInlineConfiguration = {
     extends: true,
+    resolve: {
+        alias: {
+            // `BoxSessionDO` extends the workerd-only `cloudflare:workers` `DurableObject`;
+            // under node it is a minimal stub, so the session's logic tests with fakes.
+            "cloudflare:workers": fileURLToPath(new URL("__tests__/__stubs__/cloudflare-workers.ts", import.meta.url)),
+        },
+    },
     test: { environment: "node", exclude: [...configDefaults.exclude, "__tests__/workerd/**"], name: "node" },
 };
 

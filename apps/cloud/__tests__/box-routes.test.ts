@@ -4,6 +4,7 @@ import { sha256Hex } from "../src/deploy/keys";
 import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxRevokeRoute } from "../src/deploy/routes/boxes";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import readJson from "./_helpers/read-json";
+import { fakeSessionNamespace } from "./support/box-session-fakes";
 
 const TOKEN = `lbe_${"ab".repeat(32)}`;
 
@@ -65,28 +66,25 @@ describe("the enrol route, POST /v1/boxes/enrol", () => {
 describe("the session upgrade, GET /v1/boxes/connect", () => {
     const forwarded: Request[] = [];
     const environment = {
-        BOX_SESSION: {
-            get: (id: never) => {
-                return {
-                    fetch: (request: Request) => {
-                        forwarded.push(request);
+        BOX_SESSION: fakeSessionNamespace((boxId) => {
+            return {
+                fetch: (request: Request) => {
+                    forwarded.push(request);
 
-                        return Promise.resolve(new Response(String(id), { status: 200 }));
-                    },
-                };
-            },
-            idFromName: (name: string) => `id:${name}`,
-        },
+                    return Promise.resolve(new Response(`id:${boxId}`, { status: 200 }));
+                },
+            };
+        }),
     };
 
-    it("hands the upgrade to the box's own session object, and only to /connect", async () => {
+    it("hands the upgrade, and only the upgrade, to the box's own session object", async () => {
         const response = await handleBoxConnectRoute(
             new Request("https://cloud.test/v1/boxes/connect?box=box_1", { headers: { upgrade: "websocket" } }),
             environment,
         );
 
         await expect(response.text()).resolves.toBe("id:box_1");
-        expect(new URL(forwarded.at(-1)?.url ?? "").pathname).toBe("/connect");
+        expect(new URL(forwarded.at(-1)?.url ?? "").searchParams.get("box")).toBe("box_1");
         expect(forwarded.at(-1)?.headers.get("upgrade")).toBe("websocket");
     });
 
@@ -115,18 +113,15 @@ describe("the revoke route, POST /v1/boxes/revoke", () => {
             new Request("https://cloud.test/v1/boxes/revoke", { body: JSON.stringify({ id: "box_1", organizationId: "org_1" }), method: "POST" }),
             {
                 __lunoraCtx: context,
-                BOX_SESSION: {
-                    get: () => {
-                        return {
-                            fetch: async (request: Request) => {
-                                closes.push(`${new URL(request.url).pathname} ${await request.text()}`);
+                BOX_SESSION: fakeSessionNamespace((boxId) => {
+                    return {
+                        close: (code: string) => {
+                            closes.push(`${boxId} ${code}`);
 
-                                return Response.json({ closed: 1 });
-                            },
-                        };
-                    },
-                    idFromName: (name: string) => name,
-                },
+                            return Promise.resolve(1);
+                        },
+                    };
+                }),
             },
         );
 
@@ -136,7 +131,6 @@ describe("the revoke route, POST /v1/boxes/revoke", () => {
             sessionClosed: true,
         });
         expect(calls[0]?.args).toStrictEqual({ id: "box_1", organizationId: "org_1" });
-        expect(closes[0]).toContain("/close");
-        expect(closes[0]).toContain("BOX_REVOKED");
+        expect(closes).toStrictEqual(["box_1 BOX_REVOKED"]);
     });
 });

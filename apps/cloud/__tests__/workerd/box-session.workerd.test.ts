@@ -3,8 +3,9 @@
  * session with a fake state and fake sockets, so what only the runtime can
  * show is checked here — `acceptWebSocket` and the hibernation handlers, the
  * attachment surviving between events, WebCrypto Ed25519 in workerd, the
- * object reaching the control-plane D1, and the dispatch stream crossing the
- * namespace binding while the socket answers it.
+ * object reaching the control-plane D1, and a dispatch crossing the namespace
+ * binding as native RPC — its progress called back into the caller while the
+ * socket answers it.
  */
 import type { D1CtxDbOptions } from "@lunora/d1";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
@@ -152,6 +153,6 @@ describe("the box session object in workerd", () => {
         const key = await boxKey();
         const boxId = await enrolledBox(key.publicKey);
 
-        await expect(boxSession(env.BOX_SESSION, boxId).dispatch({ kind: "diagnose" })).rejects.toMatchObject({ code: "BOX_OFFLINE" });
+        await expect(boxSession(env.BOX_SESSION, boxId).dispatch({ kind: "diagnose" })).resolves.toMatchObject({ error: { code: "BOX_OFFLINE" }, ok: false });
     });
 });

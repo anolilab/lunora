@@ -13,7 +13,7 @@ import { planHostdRollout, resumeHostdRollouts, runHostdRollout } from "../src/b
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
-import { boxKey, boxRow, fakeState, handshake, namespaceOver, signedHeaders, TestBoxSession } from "./support/box-session-fakes";
+import { boxKey, boxRow, fakeSessionNamespace, fakeState, handshake, namespaceOver, signedHeaders, TestBoxSession } from "./support/box-session-fakes";
 import { memoryStore } from "./support/memory-store";
 
 const artifact = (platform: "linux-arm64" | "linux-x64", component: string) => {
@@ -254,18 +254,15 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
                 runMutation: <R>() => Promise.resolve(boxes as R),
                 runQuery: <R>() => Promise.resolve(release as R),
             },
-            BOX_SESSION: {
-                get: (id: never) => {
-                    return {
-                        fetch: (request: Request) => {
-                            dispatched.push(`${String(id)} ${new URL(request.url).pathname}`);
+            BOX_SESSION: fakeSessionNamespace((boxId) => {
+                return {
+                    dispatch: (job) => {
+                        dispatched.push(`${boxId} ${job.kind}`);
 
-                            return Promise.resolve(new Response(`${JSON.stringify({ ok: true, type: "result" })}\n`));
-                        },
-                    };
-                },
-                idFromName: (name: string) => name,
-            },
+                        return Promise.resolve({ ok: true });
+                    },
+                };
+            }),
             DB: {},
             LUNORA_ADMIN_TOKEN: "admin",
             LUNORA_ORIGIN_URL: "https://cloud.test",
@@ -292,7 +289,7 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
 
         await Promise.all(scheduled);
 
-        expect(dispatched).toStrictEqual(["box_a /dispatch", "box_b /dispatch"]);
+        expect(dispatched).toStrictEqual(["box_a upgrade", "box_b upgrade"]);
     });
 
     it("schedules nothing when no box is online to upgrade — the reconnects and the hourly sweep carry it", async () => {

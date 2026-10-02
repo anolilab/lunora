@@ -18,7 +18,7 @@ import { buildOverageReconcileData, overageFleetPorts } from "../billing/reconci
 import { runOutdatedBoxAlerts } from "../boxes/outdated";
 import { runBoxSweep, sixHourlyTickRunsBoxSweep } from "../boxes/reconcile";
 import { resumeHostdRollouts, upgradeDispatch } from "../boxes/rollout";
-import { boxSession } from "../boxes/session-client";
+import { retireBox } from "../boxes/session-client";
 import { manifestUrlOf } from "../boxes/urls";
 import type { ControlPlaneEnv } from "../control-plane-env";
 import { controlPlaneDatabase } from "../d1-store";
@@ -343,12 +343,8 @@ const sweepBoxes = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
-    const namespace = env.BOX_SESSION;
     const result = await runBoxSweep({
-        closeSession: (boxId) =>
-            namespace === undefined
-                ? Promise.resolve()
-                : boxSession(namespace, boxId).close("BOX_REVOKED", "this box's organization was deleted; the box is no longer managed"),
+        retire: (boxId) => retireBox(env.BOX_SESSION, boxId, "this box's organization was deleted; the box is no longer managed"),
         database: controlPlaneDatabase(env.DB as D1DatabaseLike),
         dns: boxDnsFromEnv(env),
         log: (line) => {

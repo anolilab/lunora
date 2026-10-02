@@ -9,23 +9,26 @@
  * - **Liveness.** An alarm every {@link TICK_MS} pings authenticated boxes,
  *   closes a box silent for 90 s (it goes `offline`), closes handshakes that
  *   stall, and re-reads the row so a revoke made anywhere cuts the box off.
- * - **Internal API.** `fetch` serves the control plane's own calls over the
- *   namespace binding — `/dispatch` (run a job and stream its progress),
- *   `/routes` (push the box's routing table), `/close` (revoke), `/nonce`
- *   (replay protection for box-signed requests). The public router forwards
- *   ONLY the upgrade (`GET /v1/boxes/connect` → `/connect`), so none of these
- *   is reachable from outside. `./session-client` is their typed caller.
+ * - **Internal API.** Native RPC over the namespace binding ({@link BoxSession}):
+ *   `dispatch` (run a job, its progress called back as it arrives),
+ *   `pushRoutes` (push the box's routing table), `close` (revoke) and
+ *   `claimNonce` (replay protection for box-signed requests). `fetch` takes
+ *   only the box's WebSocket upgrade — the one call the public router forwards
+ *   (`GET /v1/boxes/connect`) — so none of the rest is reachable from outside.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 import type { BoxVersions, CloudMessage, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
-import { encodeMessage, HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
+import { encodeMessage, HOSTD_PROTOCOL_LIMITS, isErrorCode, isNonce, isProtocolId } from "@lunora/hostd/protocol";
+import { DurableObject } from "cloudflare:workers";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
 import { versionKey } from "./hostd-releases";
+import type { JobOutcome } from "./jobs";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame, REVOKED_MESSAGE } from "./session";
+import type { BoxSession } from "./session-client";
 import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf } from "./session-store";
 import { boxDomainOf, manifestUrlOf } from "./urls";
 import { MAX_REPORT_AGE_MS, recordBoxReport } from "./usage";
@@ -48,20 +51,6 @@ export interface SessionSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
-/** The slice of `DurableObjectState` the session uses — structural, so the unit tests can drive it. */
-export interface SessionState {
-    acceptWebSocket: (socket: SessionSocket) => void;
-    getWebSockets: () => SessionSocket[];
-    storage: {
-        delete: (key: string) => Promise<unknown>;
-        get: <T>(key: string) => Promise<T | undefined>;
-        getAlarm: () => Promise<null | number>;
-        list: <T>(options: { limit?: number; prefix: string }) => Promise<Map<string, T>>;
-        put: (key: string, value: unknown) => Promise<void>;
-        setAlarm: (time: number) => Promise<void>;
-    };
-}
-
 /** The liveness tick: ping cadence, and how often stalled handshakes and silent boxes are found. */
 export const TICK_MS = 30_000;
 
@@ -72,10 +61,6 @@ export const MAX_SOCKETS = 4;
 const MIN_JOB_TIMEOUT_MS = 1000;
 
 const MAX_JOB_TIMEOUT_MS = 15 * 60 * 1000;
-
-const BOX_ID_PATTERN = /^[\w-]{1,128}$/u;
-
-const NONCE_PATTERN = /^[\w-]{22,128}$/u;
 
 /** A `report` window must start on a whole minute (README §5.1). */
 const REPORT_ALIGNMENT_MS = 60_000;
@@ -101,7 +86,10 @@ const NONCE_PREFIX = "nonce:";
 
 const json = (status: number, body: unknown): Response => Response.json(body, { status });
 
-const ERROR_CODE_PATTERN = /^[A-Z][A-Z\d_]{0,63}$/u;
+/** A job the session refuses before the box sees it. */
+const refusedJob = (code: string, message: string): JobOutcome => {
+    return { error: { code, message }, ok: false };
+};
 
 const attachmentOf = (socket: SessionSocket): SessionAttachment => socket.deserializeAttachment() as SessionAttachment;
 
@@ -139,7 +127,7 @@ const refuseSocket = (socket: SessionSocket, code: string, message: string): voi
     socket.serializeAttachment({ ...attachment, closed: true } satisfies SessionAttachment);
 };
 
-export class BoxSessionDO {
+export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implements BoxSession {
     private readonly jobs = new JobRegistry();
 
     /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. Never rejects. */
@@ -155,50 +143,28 @@ export class BoxSessionDO {
      */
     private readonly reportBudgets = new WeakMap<SessionSocket, { count: number; minute: number }>();
 
-    private readonly state: SessionState;
+    /**
+     * The box's WebSocket upgrade (`GET /v1/boxes/connect?box={id}`, forwarded
+     * as is). Remembers which box this object is, for the liveness tick.
+     */
+    public override async fetch(request: Request): Promise<Response> {
+        const boxId = new URL(request.url).searchParams.get("box") ?? "";
 
-    private readonly environment: BoxSessionEnvironment;
-
-    public constructor(state: SessionState, environment: BoxSessionEnvironment) {
-        this.state = state;
-        this.environment = environment;
-    }
-
-    /** The control plane's internal calls, and the box's upgrade. */
-    public async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
-        const boxId = url.searchParams.get("box") ?? "";
-
-        if (!BOX_ID_PATTERN.test(boxId)) {
+        if (!isProtocolId(boxId)) {
             return json(400, { code: "BAD_REQUEST", message: "box must be a box id" });
         }
 
-        await this.state.storage.put("boxId", boxId);
-
-        switch (url.pathname) {
-            case "/close": {
-                return this.closeAll(request);
-            }
-            case "/connect": {
-                return await this.connect(request, boxId);
-            }
-            case "/dispatch": {
-                return this.dispatch(request);
-            }
-            case "/nonce": {
-                return this.claimNonce(request);
-            }
-            case "/routes": {
-                return json(200, { pushed: await this.pushRoutes(boxId) });
-            }
-            default: {
-                return json(404, { code: "NOT_FOUND", message: "not found" });
-            }
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+            return json(426, { code: "UPGRADE_REQUIRED", message: "expected a WebSocket upgrade" });
         }
+
+        await this.ctx.storage.put("boxId", boxId);
+
+        return this.acceptSocket(boxId);
     }
 
     /** One frame from a box. */
-    public async webSocketMessage(socket: SessionSocket, message: ArrayBuffer | string): Promise<void> {
+    public override async webSocketMessage(socket: SessionSocket, message: ArrayBuffer | string): Promise<void> {
         const attachment = attachmentOf(socket);
         const database = this.database();
 
@@ -227,7 +193,7 @@ export class BoxSessionDO {
     }
 
     /** The box's socket closed. */
-    public async webSocketClose(socket: SessionSocket, code: number, reason: string): Promise<void> {
+    public override async webSocketClose(socket: SessionSocket, code: number, reason: string): Promise<void> {
         try {
             socket.close(code, reason);
         } catch {
@@ -238,14 +204,14 @@ export class BoxSessionDO {
     }
 
     /** The box's socket failed. */
-    public async webSocketError(socket: SessionSocket): Promise<void> {
+    public override async webSocketError(socket: SessionSocket): Promise<void> {
         await this.socketGone(socket);
     }
 
     /** The liveness tick. */
-    public async alarm(): Promise<void> {
-        const sockets = this.state.getWebSockets();
-        const boxId = await this.state.storage.get<string>("boxId");
+    public override async alarm(): Promise<void> {
+        const sockets = this.ctx.getWebSockets();
+        const boxId = await this.ctx.storage.get<string>("boxId");
         const database = this.database();
         const now = Date.now();
 
@@ -290,31 +256,124 @@ export class BoxSessionDO {
             await markOffline(database, boxId);
         }
 
-        if (this.state.getWebSockets().length > 0) {
-            await this.state.storage.setAlarm(now + TICK_MS);
+        if (this.ctx.getWebSockets().length > 0) {
+            await this.ctx.storage.setAlarm(now + TICK_MS);
         }
+    }
+
+    /** Run one job on the box; see {@link BoxSession.dispatch}. */
+    public async dispatch(job: HostdJob, options: { onProgress?: (line: string) => void; timeoutMs?: number } = {}): Promise<JobOutcome> {
+        const socket = this.readySockets().at(0);
+
+        if (socket === undefined) {
+            // Fail fast (plan 458 D14): a job is never queued for a box that is not there.
+            return refusedJob("BOX_OFFLINE", "the box is not connected");
+        }
+
+        if (this.jobs.size >= MAX_JOBS_IN_FLIGHT) {
+            return refusedJob("BOX_BUSY", `the box already runs ${String(MAX_JOBS_IN_FLIGHT)} jobs`);
+        }
+
+        const jobId = crypto.randomUUID();
+        let frame: string;
+
+        try {
+            frame = encodeMessage({ job, jobId, type: "job" });
+        } catch (error) {
+            return refusedJob("BAD_JOB", error instanceof Error ? error.message : "invalid job");
+        }
+
+        const { onProgress } = options;
+        // Settled by the box's `result`, a timeout, or the socket going away — never left hanging.
+        const outcome = this.jobs.start(jobId, {
+            onProgress: (line) => {
+                // Over RPC this calls back into the caller; one that stopped listening is not the box's problem.
+                Promise.resolve(onProgress?.(line)).catch(() => undefined);
+            },
+            owner: socket,
+            timeoutMs: Math.min(MAX_JOB_TIMEOUT_MS, Math.max(MIN_JOB_TIMEOUT_MS, options.timeoutMs ?? MAX_JOB_TIMEOUT_MS)),
+        });
+
+        socket.send(frame);
+
+        return outcome;
+    }
+
+    /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */
+    public async pushRoutes(): Promise<boolean> {
+        const database = this.database();
+        const sockets = this.readySockets();
+        const boxId = sockets.length === 0 ? undefined : attachmentOf(sockets[0]).boxId;
+
+        if (database === undefined || boxId === undefined) {
+            return false;
+        }
+
+        const box = await loadBox(database, boxId);
+
+        if (box === null) {
+            return false;
+        }
+
+        const table = await routesForBox(database, box, boxDomainOf(this.env));
+
+        for (const socket of sockets) {
+            sendFrame(socket, { table, type: "routes" });
+        }
+
+        return true;
+    }
+
+    /** Refuse every socket with `code` (revocation), and fail the jobs sent on them. */
+    public close(code: string, message: string): Promise<number> {
+        const reason = isErrorCode(code) ? code : "BOX_REVOKED";
+        const sockets = this.ctx.getWebSockets();
+
+        for (const socket of sockets) {
+            refuseSocket(socket, reason, message);
+        }
+
+        this.jobs.failAll(reason, message);
+
+        return Promise.resolve(sockets.length);
+    }
+
+    /** Claim a box-chosen request nonce until `expiresAt`; `false` for a nonce already claimed — the signed request is a replay. */
+    public async claimNonce(nonce: string, expiresAt: number): Promise<boolean> {
+        if (!isNonce(nonce) || !Number.isFinite(expiresAt)) {
+            return false;
+        }
+
+        const now = Date.now();
+        const key = `${NONCE_PREFIX}${nonce}`;
+        const seen = await this.ctx.storage.get<number>(key);
+
+        if (seen !== undefined && seen > now) {
+            return false;
+        }
+
+        await this.ctx.storage.put(key, expiresAt);
+        await this.sweepNonces(now);
+
+        return true;
     }
 
     /** The control-plane store, or `undefined` without a `DB` binding. Protected so the unit tests can hand in a fake. */
     protected database(): ControlPlaneStore | undefined {
-        return this.environment.DB === undefined ? undefined : controlPlaneDatabase(this.environment.DB as D1DatabaseLike);
+        return this.env.DB === undefined ? undefined : controlPlaneDatabase(this.env.DB as D1DatabaseLike);
     }
 
     /** Sockets of an authenticated box that the control plane has not refused. */
     private readySockets(): SessionSocket[] {
-        return this.state.getWebSockets().filter((socket) => {
+        return this.ctx.getWebSockets().filter((socket) => {
             const attachment = attachmentOf(socket);
 
             return attachment.phase === "ready" && attachment.closed !== true;
         });
     }
 
-    private async connect(request: Request, boxId: string): Promise<Response> {
-        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-            return json(426, { code: "UPGRADE_REQUIRED", message: "expected a WebSocket upgrade" });
-        }
-
-        const sockets = this.state.getWebSockets();
+    private async acceptSocket(boxId: string): Promise<Response> {
+        const sockets = this.ctx.getWebSockets();
 
         // Unauthenticated callers can open sockets for any box id. When the cap is
         // reached, make room by dropping the oldest socket still in its handshake —
@@ -335,11 +394,11 @@ export class BoxSessionDO {
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-        this.state.acceptWebSocket(server);
+        this.ctx.acceptWebSocket(server);
         server.serializeAttachment(openSession(boxId, Date.now()));
         // Armed for the handshake timeout; the tick re-arms itself while any socket is open.
-        if ((await this.state.storage.getAlarm()) === null) {
-            await this.state.storage.setAlarm(Date.now() + TICK_MS);
+        if ((await this.ctx.storage.getAlarm()) === null) {
+            await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
         }
 
         return new Response(null, { status: 101, webSocket: client });
@@ -365,17 +424,17 @@ export class BoxSessionDO {
                 }
 
                 await recordHello(database, attachment.boxId, effect.hello, now);
-                await this.state.storage.put("seenWrittenAt", now);
-                await this.pushRoutes(attachment.boxId);
+                await this.ctx.storage.put("seenWrittenAt", now);
+                await this.pushRoutes();
                 await this.replayDesiredRelease(database, socket, attachment.boxId, effect.hello.versions);
                 break;
             }
             case "pong": {
-                const writtenAt = (await this.state.storage.get<number>("seenWrittenAt")) ?? 0;
+                const writtenAt = (await this.ctx.storage.get<number>("seenWrittenAt")) ?? 0;
 
                 if (now - writtenAt >= SEEN_WRITE_INTERVAL_MS) {
                     await markSeen(database, attachment.boxId, now);
-                    await this.state.storage.put("seenWrittenAt", now);
+                    await this.ctx.storage.put("seenWrittenAt", now);
                 }
 
                 break;
@@ -416,59 +475,6 @@ export class BoxSessionDO {
         }
     }
 
-    /** `POST /dispatch` — run one job on the box and stream its progress, then its result, as NDJSON. */
-    private async dispatch(request: Request): Promise<Response> {
-        const body = (await request.json().catch(() => null)) as null | { job?: HostdJob; timeoutMs?: number };
-        const socket = this.readySockets().at(0);
-
-        if (socket === undefined) {
-            // Fail fast (plan 458 D14): a job is never queued for a box that is not there.
-            return json(409, { code: "BOX_OFFLINE", message: "the box is not connected" });
-        }
-
-        if (this.jobs.size >= MAX_JOBS_IN_FLIGHT) {
-            return json(429, { code: "BOX_BUSY", message: `the box already runs ${String(MAX_JOBS_IN_FLIGHT)} jobs` });
-        }
-
-        const jobId = crypto.randomUUID();
-        let frame: string;
-
-        try {
-            frame = encodeMessage({ job: body?.job as HostdJob, jobId, type: "job" });
-        } catch (error) {
-            return json(400, { code: "BAD_JOB", message: error instanceof Error ? error.message : "invalid job" });
-        }
-
-        const timeoutMs = Math.min(MAX_JOB_TIMEOUT_MS, Math.max(MIN_JOB_TIMEOUT_MS, body?.timeoutMs ?? MAX_JOB_TIMEOUT_MS));
-        const encoder = new TextEncoder();
-        const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-        const writer = writable.getWriter();
-        const write = (line: unknown): void => {
-            // A caller that stopped reading is not the box's problem; its job still settles.
-            writer.write(encoder.encode(`${JSON.stringify(line)}\n`)).catch(() => undefined);
-        };
-
-        const outcome = this.jobs.start(jobId, {
-            onProgress: (line) => {
-                write({ line, type: "progress" });
-            },
-            owner: socket,
-            timeoutMs,
-        });
-
-        socket.send(frame);
-
-        // Settled by the box's `result`, a timeout, or the socket going away — never left hanging.
-        const finish = async (): Promise<void> => {
-            write({ ...(await outcome), type: "result" });
-            await writer.close();
-        };
-
-        finish().catch(() => undefined);
-
-        return new Response(readable, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
-    }
-
     /**
      * Hand a box that just authenticated the `upgrade` it missed (plan 458 W2):
      * when its row names a desired release whose versions it does not run yet.
@@ -479,7 +485,7 @@ export class BoxSessionDO {
      */
     private async replayDesiredRelease(database: ControlPlaneStore, socket: SessionSocket, boxId: string, running: BoxVersions): Promise<void> {
         const box = await loadBox(database, boxId);
-        const origin = this.environment.LUNORA_ORIGIN_URL;
+        const origin = this.env.LUNORA_ORIGIN_URL;
 
         if (box?.desiredReleaseId == null || origin === undefined) {
             return;
@@ -541,7 +547,7 @@ export class BoxSessionDO {
 
         const key = `${REPORT_PREFIX}${String(report.windowStart)}`;
         const record = async (): Promise<void> => {
-            if ((await this.state.storage.get<number>(key)) !== undefined) {
+            if ((await this.ctx.storage.get<number>(key)) !== undefined) {
                 return;
             }
 
@@ -556,7 +562,7 @@ export class BoxSessionDO {
             // An out-of-range window cost nothing and is not remembered; anything
             // else — rows written, nothing countable, already in D1 — is done.
             if (!("dropped" in outcome && outcome.dropped === "out-of-range")) {
-                await this.state.storage.put(key, report.windowStart);
+                await this.ctx.storage.put(key, report.windowStart);
             }
         };
 
@@ -574,91 +580,24 @@ export class BoxSessionDO {
 
     /** Forget processed report windows too old to be recorded anyway, a bounded batch at a time. */
     private async sweepReportWindows(now: number): Promise<void> {
-        const windows = await this.state.storage.list<number>({ limit: 256, prefix: REPORT_PREFIX });
+        const windows = await this.ctx.storage.list<number>({ limit: 256, prefix: REPORT_PREFIX });
 
         for (const [key, windowStart] of windows) {
             if (windowStart < now - MAX_REPORT_AGE_MS) {
                 // eslint-disable-next-line no-await-in-loop -- bounded batch; storage deletes are local
-                await this.state.storage.delete(key);
+                await this.ctx.storage.delete(key);
             }
         }
     }
 
-    /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */
-    private async pushRoutes(boxId: string): Promise<boolean> {
-        const database = this.database();
-        const sockets = this.readySockets();
-
-        if (database === undefined || sockets.length === 0) {
-            return false;
-        }
-
-        const box = await loadBox(database, boxId);
-
-        if (box === null) {
-            return false;
-        }
-
-        const table = await routesForBox(database, box, boxDomainOf(this.environment));
-
-        for (const socket of sockets) {
-            sendFrame(socket, { table, type: "routes" });
-        }
-
-        return true;
-    }
-
-    /** `POST /close` — refuse every socket with the given code (revocation). */
-    private async closeAll(request: Request): Promise<Response> {
-        const body = (await request.json().catch(() => null)) as null | { code?: string; message?: string };
-        const code = typeof body?.code === "string" && ERROR_CODE_PATTERN.test(body.code) ? body.code : "BOX_REVOKED";
-        const message = typeof body?.message === "string" ? body.message : REVOKED_MESSAGE;
-        const sockets = this.state.getWebSockets();
-
-        for (const socket of sockets) {
-            refuseSocket(socket, code, message);
-        }
-
-        this.jobs.failAll(code, message);
-
-        return json(200, { closed: sockets.length });
-    }
-
-    /**
-     * `POST /nonce` — claim a box-chosen request nonce until `expiresAt`. `fresh:
-     * false` for a nonce already claimed: the signed request is a replay.
-     */
-    private async claimNonce(request: Request): Promise<Response> {
-        const body = (await request.json().catch(() => null)) as null | { expiresAt?: number; nonce?: string };
-        const nonce = body?.nonce;
-        const expiresAt = body?.expiresAt;
-
-        if (typeof nonce !== "string" || !NONCE_PATTERN.test(nonce) || typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
-            return json(400, { code: "BAD_REQUEST", message: "nonce and expiresAt are required" });
-        }
-
-        const now = Date.now();
-        const key = `${NONCE_PREFIX}${nonce}`;
-        const seen = await this.state.storage.get<number>(key);
-
-        if (seen !== undefined && seen > now) {
-            return json(200, { fresh: false });
-        }
-
-        await this.state.storage.put(key, expiresAt);
-        await this.sweepNonces(now);
-
-        return json(200, { fresh: true });
-    }
-
     /** Forget expired nonces, a bounded batch at a time. */
     private async sweepNonces(now: number): Promise<void> {
-        const nonces = await this.state.storage.list<number>({ limit: 256, prefix: NONCE_PREFIX });
+        const nonces = await this.ctx.storage.list<number>({ limit: 256, prefix: NONCE_PREFIX });
 
         for (const [key, expiresAt] of nonces) {
             if (expiresAt <= now) {
                 // eslint-disable-next-line no-await-in-loop -- bounded batch; storage deletes are local
-                await this.state.storage.delete(key);
+                await this.ctx.storage.delete(key);
             }
         }
     }

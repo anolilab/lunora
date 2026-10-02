@@ -180,10 +180,10 @@ describe(runBoxSweep, () => {
         const closed: string[] = [];
         const logs: string[] = [];
         const run = runBoxSweep({
-            closeSession: (boxId) => {
+            retire: (boxId) => {
                 closed.push(boxId);
 
-                return Promise.resolve();
+                return Promise.resolve(null);
             },
             database: fakeControlPlaneDb(tables, {
                 patch: (id, patch) => {
@@ -297,7 +297,7 @@ describe(runBoxSweep, () => {
 
         await expect(
             runBoxSweep({
-                closeSession: () => Promise.reject(new Error("no such object")),
+                retire: () => Promise.resolve("no such object"),
                 database: fakeControlPlaneDb({ boxes: [box({ organizationId: "org_gone" })], organizations: [{ _id: "org_gone", deletionRequestedAt: 1 }] }),
                 dns: { api: zone.api, domain: DOMAIN, zoneId: "zone" },
                 log: (line) => {

@@ -2,7 +2,6 @@ import type { HostdJob } from "@lunora/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
-import { BoxSessionError } from "../src/boxes/session-client";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
@@ -14,6 +13,7 @@ import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
 import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
 import { boxLookupsIn } from "../src/targets/placement";
 import memoryReleaseStore from "./_helpers/memory-release-store";
+import { fakeSessionNamespace } from "./support/box-session-fakes";
 import { memoryStore } from "./support/memory-store";
 
 const BOX = { id: "box_1", slug: "bslug000001" };
@@ -39,13 +39,14 @@ const recordingSession = (answer: (job: HostdJob) => Promise<Awaited<ReturnType<
     let pushes = 0;
     const session: BoxSession = {
         claimNonce: () => Promise.resolve(true),
-        close: () => Promise.resolve(),
+        close: () => Promise.resolve(0),
         dispatch: (job, options) => {
             jobs.push(job);
             options?.onProgress?.(`${job.kind} started`);
 
             return answer(job);
         },
+        fetch: () => Promise.reject(new Error("no upgrade in this test")),
         pushRoutes: () => {
             pushes += 1;
 
@@ -83,7 +84,7 @@ describe("the celld-vps driver", () => {
     });
 
     it("fails fast and says so when the box is offline", async () => {
-        const { session } = recordingSession(() => Promise.reject(new BoxSessionError("BOX_OFFLINE", "the box is not connected")));
+        const { session } = recordingSession(() => Promise.resolve({ error: { code: "BOX_OFFLINE", message: "the box is not connected" }, ok: false }));
 
         await expect(driverWith(session).deploy(spec())).rejects.toThrow(
             'box "bslug000001" is offline (BOX_OFFLINE): start lunora-hostd on it and deploy again',
@@ -127,23 +128,17 @@ describe("the celld-vps driver", () => {
         expect(celldVpsCanConverge({})).toBe(false);
         expect(
             celldVpsCanConverge({
-                BOX_SESSION: {
-                    get: () => {
-                        return { fetch: () => Promise.reject(new Error("x")) };
-                    },
-                    idFromName: () => "",
-                },
+                BOX_SESSION: fakeSessionNamespace(() => {
+                    return {};
+                }),
                 DB: {},
             }),
         ).toBe(false);
         expect(
             celldVpsCanConverge({
-                BOX_SESSION: {
-                    get: () => {
-                        return { fetch: () => Promise.reject(new Error("x")) };
-                    },
-                    idFromName: () => "",
-                },
+                BOX_SESSION: fakeSessionNamespace(() => {
+                    return {};
+                }),
                 DB: {},
                 LUNORA_ORIGIN_URL: "https://c",
             }),
@@ -214,7 +209,7 @@ describe("celld-vps teardown after the project is gone", () => {
 
     it("keeps the alias claimed, and the row pending, while the box cannot be reached", async () => {
         const store = world({ status: "offline" });
-        const { session } = recordingSession(() => Promise.reject(new BoxSessionError("BOX_OFFLINE", "the box is not connected")));
+        const { session } = recordingSession(() => Promise.resolve({ error: { code: "BOX_OFFLINE", message: "the box is not connected" }, ok: false }));
 
         await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 1, tornDown: 0 });
         await expect(claimed(store)).resolves.toBe(1);

@@ -92,13 +92,11 @@ const CODE_PATTERNS: ReadonlyArray<RegExp> = [
  */
 const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     // Lunora Cloud's per-box session (plan 458, apps/cloud/src/boxes): the
-    // refusal codes of the session object's internal JSON API, the job-outcome
-    // codes a job settles with when the box never answers (the shape of a hostd
-    // protocol `result.error`), and `BoxSessionError` — a plain `Error` subclass
-    // the control plane catches itself. None is ever a `LunoraError` or reaches
+    // codes a job settles with when the session refuses it or the box never
+    // answers (the shape of a hostd protocol `result.error`), and the refusals
+    // of the object's WebSocket upgrade. None is ever a `LunoraError` or reaches
     // a client's wire mapper. (Two more, sorted further down.)
     ["BAD_JOB", "apps/cloud/src/boxes/session-do.ts"],
-    ["BAD_RESPONSE", "apps/cloud/src/boxes/session-client.ts"],
     ["BOX_BUSY", "apps/cloud/src/boxes/session-do.ts"],
     ["BOX_OFFLINE", "apps/cloud/src/boxes/session-do.ts"],
     ["DISPATCH_FAILED", "apps/cloud/src/boxes/rollout.ts"],
@@ -256,7 +254,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(18);
+        expect.assertions(17);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
