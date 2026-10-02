@@ -23,6 +23,7 @@ import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
 import type { DeployTarget } from "./release-core";
+import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
@@ -712,11 +713,14 @@ export const createDeployRouter = (): HttpRouterLike => {
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can
     // never ship. The dispatch tables are derived from this one checked list.
-    type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;
+    // A handler takes the parameters its route pattern matched (`{}` for an
+    // exact path), so a `:parameter` route never re-matches its own path.
+    type RouteHandler = (request: Request, environment: RouterEnv, parameters: RouteParameters) => Promise<Response>;
 
     // The tool-eligible routes — everything except the `/v1/mcp` surface itself,
     // so the MCP handler (which dispatches into these) is never in its own table.
-    const toolRoutes: RegisteredRoute<RouteHandler>[] = [
+    // Exact paths all, which is what lets the MCP surface call them with two arguments.
+    const toolRoutes: RegisteredRoute<(request: Request, environment: RouterEnv) => Promise<Response>>[] = [
         // deployKey — CI/deploy callers (no session); the delegated mutation `authorizeDeployKey`s.
         { handler: handleDeployRoute, method: "POST", path: "/v1/deploy", spec: { auth: "deployKey" } },
         {
@@ -879,12 +883,21 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
 
             const routerEnv: RouterEnv = { ...(environment as RouterEnv | undefined), ...(context === undefined ? {} : { __executionCtx: context }) };
-            const table = methodTable(request.method);
-            const handler =
-                table?.get(url.pathname) ??
-                patternRoutes.find((route) => route.method === request.method && matchRoutePath(route.path, url.pathname) !== null)?.handler;
+            const exact = methodTable(request.method)?.get(url.pathname);
 
-            return handler ? handler(request, routerEnv) : jsonError(404, "not found");
+            if (exact) {
+                return exact(request, routerEnv, {});
+            }
+
+            for (const route of patternRoutes) {
+                const parameters = route.method === request.method ? matchRoutePath(route.path, url.pathname) : null;
+
+                if (parameters !== null) {
+                    return route.handler(request, routerEnv, parameters);
+                }
+            }
+
+            return jsonError(404, "not found");
         },
     };
 

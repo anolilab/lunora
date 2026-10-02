@@ -37,8 +37,11 @@ export const fillRoutePath = (pattern: string, parameters: Readonly<Record<strin
 /** Whether `path` is a pattern rather than an exact path. */
 export const isRoutePattern = (path: string): boolean => path.split("/").some((segment) => PARAMETER_SEGMENT.test(segment));
 
+/** A route's matched `:parameter` values, by name. */
+export type RouteParameters = Readonly<Record<string, string>>;
+
 /** Match `pathname` against `pattern`: its parameters by name, or `null` when it does not match. */
-export const matchRoutePath = (pattern: string, pathname: string): null | Record<string, string> => {
+export const matchRoutePath = (pattern: string, pathname: string): null | RouteParameters => {
     const expected = pattern.split("/");
     const actual = pathname.split("/");
 

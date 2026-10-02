@@ -101,11 +101,13 @@ describe("the release routes", () => {
                 headers: await signedHeaders(key, { boxId: "box_1", method: "GET", nonce: randomBase64Url(), path, timestamp: Date.now() }),
             });
 
-        const response = await handleHostdManifestRoute(await signed(), environment);
+        const response = await handleHostdManifestRoute(await signed(), environment, { releaseId: "hostd-v1_1_0" });
 
         expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe('{"signed":true}');
-        await expect(handleHostdManifestRoute(new Request(`https://cloud.test${path}`), environment)).resolves.toMatchObject({ status: 401 });
+        await expect(handleHostdManifestRoute(new Request(`https://cloud.test${path}`), environment, { releaseId: "hostd-v1_1_0" })).resolves.toMatchObject({
+            status: 401,
+        });
     });
 });
 

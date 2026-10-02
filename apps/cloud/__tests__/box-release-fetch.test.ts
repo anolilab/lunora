@@ -17,6 +17,9 @@ import { memoryStore } from "./support/memory-store";
 
 const NOW = 1_700_000_000_000;
 const PATH = "/v1/boxes/releases/dep_1";
+
+/** What the router hands the route for {@link PATH}. */
+const PARAMETERS = { deploymentId: "dep_1" };
 const BUNDLE = btoa("export default {}");
 
 const signedRequest = async (key: BoxKey, overrides: { boxId?: string; nonce?: string; path?: string; timestamp?: number } = {}): Promise<Request> => {
@@ -216,11 +219,11 @@ describe("the release download, GET /v1/boxes/releases/:deploymentId", () => {
         const request = async () =>
             new Request(`https://cloud.test${PATH}`, { headers: await signedHeaders(key, { boxId: "box_1", method: "GET", nonce, path: PATH, timestamp }) });
 
-        const response = await handleBoxReleaseRoute(await request(), environment);
+        const response = await handleBoxReleaseRoute(await request(), environment, PARAMETERS);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toStrictEqual({ bundle: BUNDLE, manifest: { bindings: [] } });
-        await expect(handleBoxReleaseRoute(await request(), environment)).resolves.toMatchObject({ status: 401 });
+        await expect(handleBoxReleaseRoute(await request(), environment, PARAMETERS)).resolves.toMatchObject({ status: 401 });
     });
 
     it("answers 404 for a release that is not this box's", async () => {
@@ -230,6 +233,7 @@ describe("the release download, GET /v1/boxes/releases/:deploymentId", () => {
                 headers: await signedHeaders(key, { boxId: "box_1", method: "GET", nonce: randomBase64Url(), path: PATH, timestamp: Date.now() }),
             }),
             environment,
+            PARAMETERS,
         );
 
         expect(response.status).toBe(404);
@@ -238,7 +242,7 @@ describe("the release download, GET /v1/boxes/releases/:deploymentId", () => {
     it("answers 401 to an unsigned request", async () => {
         const { environment } = await setup();
 
-        await expect(handleBoxReleaseRoute(new Request(`https://cloud.test${PATH}`), environment)).resolves.toMatchObject({ status: 401 });
+        await expect(handleBoxReleaseRoute(new Request(`https://cloud.test${PATH}`), environment, PARAMETERS)).resolves.toMatchObject({ status: 401 });
     });
 
     it("streams through the release store without parsing the release", async () => {

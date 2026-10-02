@@ -20,12 +20,12 @@ import type { BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession, retireBox } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
-import { BOX_RELEASE_PATH, boxDomainOf } from "../../boxes/urls";
+import { boxDomainOf } from "../../boxes/urls";
 import type { BoxDnsEnvironment } from "../../targets/celld-vps/dns";
 import { boxDnsFromEnv, MAX_DNS_ERROR, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
 import { sha256Hex } from "../keys";
 import { createReleaseStore } from "../release-store";
-import { matchRoutePath } from "../route-path";
+import type { RouteParameters } from "../route-path";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 
@@ -75,24 +75,24 @@ const applyBoxDns = async (
     }
 };
 
+/** The enrolment body, untrusted: `boxes.enrol` validates every field but the token, which only its hash reaches. */
 interface EnrolBody {
     ipv4?: unknown;
     ipv6?: unknown;
     publicKey?: unknown;
     singleTrust?: unknown;
     token?: unknown;
-    versions?: { caddy?: unknown; celld?: unknown; hostd?: unknown };
+    versions?: unknown;
 }
-
-const optionalString = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 /**
  * `POST /v1/boxes/enrol` — consume a one-time enrolment token (plan 458 D4).
  *
  * The token is the whole credential, so it is checked for shape here and
- * hashed at the edge: its plaintext never reaches the store or a log. The
- * mutation refuses expired, unknown and replayed tokens alike, and answers a
- * retry with the same key with the box it already created.
+ * hashed at the edge: its plaintext never reaches the store or a log. Every
+ * other field is validated once, by the mutation, which refuses expired,
+ * unknown and replayed tokens alike, and answers a retry with the same key with
+ * the box it already created.
  */
 export const handleBoxEnrolRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -102,23 +102,14 @@ export const handleBoxEnrolRoute = async (request: Request, environment: BoxRout
         return jsonError(403, "invalid or expired enrolment token");
     }
 
-    const { versions } = body;
-
-    if (typeof body.publicKey !== "string" || typeof versions?.caddy !== "string" || typeof versions.celld !== "string" || typeof versions.hostd !== "string") {
-        return jsonError(400, "publicKey and versions {hostd, celld, caddy} are required");
-    }
-
-    const ipv4 = optionalString(body.ipv4);
-    const ipv6 = optionalString(body.ipv6);
-
     try {
         const result = await context.runMutation<EnrolResult>(internal.boxes.enrol, {
             hashedToken: await sha256Hex(body.token),
-            ...(ipv4 === undefined ? {} : { ipv4 }),
-            ...(ipv6 === undefined ? {} : { ipv6 }),
+            ...(body.ipv4 === undefined ? {} : { ipv4: body.ipv4 }),
+            ...(body.ipv6 === undefined ? {} : { ipv6: body.ipv6 }),
             publicKey: body.publicKey,
             singleTrust: body.singleTrust === true,
-            versions: { caddy: versions.caddy, celld: versions.celld, hostd: versions.hostd },
+            versions: body.versions,
         });
 
         // Idempotent, so a retried enrolment re-converges the records too. A failure
@@ -245,9 +236,8 @@ export const verifiedBoxRequest = async (request: Request, environment: BoxRoute
  * a project placed on that very box — any other answers 404, so a box cannot
  * probe for, or read, another tenant's code.
  */
-export const handleBoxReleaseRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
+export const handleBoxReleaseRoute = async (request: Request, environment: BoxRouterEnv, { deploymentId }: RouteParameters): Promise<Response> => {
     const context = requireContext(environment);
-    const deploymentId = matchRoutePath(BOX_RELEASE_PATH, new URL(request.url).pathname)?.["deploymentId"];
 
     if (!environment.RELEASES || !environment.BOX_SESSION) {
         return jsonError(503, "this control plane does not serve box releases");
@@ -259,9 +249,8 @@ export const handleBoxReleaseRoute = async (request: Request, environment: BoxRo
         return jsonError(401, "invalid box signature");
     }
 
-    const allowed =
-        deploymentId !== undefined &&
-        (await context.runQuery<boolean>(internal.boxes.ownsDeployment, { boxId: verified.boxId, deploymentId }).catch(() => false));
+    // `deploymentId` is the route's own `:deploymentId`, an id segment by construction (`matchRoutePath`).
+    const allowed = await context.runQuery<boolean>(internal.boxes.ownsDeployment, { boxId: verified.boxId, deploymentId }).catch(() => false);
     const release = allowed ? await createReleaseStore(environment.RELEASES).open(deploymentId) : null;
 
     if (release === null) {

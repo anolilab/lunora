@@ -102,10 +102,10 @@ export const requireContext = (environment: RouterEnv): NonNullable<RouterEnv["_
  * every handler read the context as a plain non-null value.
  */
 export const withContext =
-    (handler: (request: Request, environment: RouterEnv) => Promise<Response>) =>
-    async (request: Request, environment: RouterEnv): Promise<Response> => {
+    <Rest extends unknown[]>(handler: (request: Request, environment: RouterEnv, ...rest: Rest) => Promise<Response>) =>
+    async (request: Request, environment: RouterEnv, ...rest: Rest): Promise<Response> => {
         try {
-            return await handler(request, environment);
+            return await handler(request, environment, ...rest);
         } catch (error) {
             if (error instanceof MissingContextError) {
                 return jsonError(500, error.message);

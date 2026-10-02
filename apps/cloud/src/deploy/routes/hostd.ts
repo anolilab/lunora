@@ -17,9 +17,9 @@ import type { RolloutBox } from "../../../lunora/boxes";
 import type { HostdReleaseView } from "../../../lunora/hostd-releases";
 import { versionsOf } from "../../boxes/hostd-releases";
 import { planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
-import { HOSTD_MANIFEST_PATH, manifestUrlOf } from "../../boxes/urls";
+import { manifestUrlOf } from "../../boxes/urls";
 import { controlPlaneDatabase } from "../../d1-store";
-import { matchRoutePath } from "../route-path";
+import type { RouteParameters } from "../route-path";
 import type { BoxRouteEnvironment } from "./boxes";
 import { verifiedBoxRequest } from "./boxes";
 import type { RouterEnv } from "./shared";
@@ -72,9 +72,8 @@ export const handleHostdReleaseRoute = async (request: Request, environment: Hos
 };
 
 /** `GET /v1/hostd/releases/:releaseId/manifest` — the signed envelope, to a box that signed its request. */
-export const handleHostdManifestRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
+export const handleHostdManifestRoute = async (request: Request, environment: HostdRouterEnv, { releaseId }: RouteParameters): Promise<Response> => {
     const context = requireContext(environment);
-    const releaseId = matchRoutePath(HOSTD_MANIFEST_PATH, new URL(request.url).pathname)?.["releaseId"];
 
     if (!environment.BOX_SESSION) {
         return jsonError(503, "this control plane does not serve boxes");
@@ -84,7 +83,8 @@ export const handleHostdManifestRoute = async (request: Request, environment: Ho
         return jsonError(401, "invalid box signature");
     }
 
-    const envelope = releaseId === undefined ? null : await context.runQuery<null | string>(internal.hostd_releases.envelope, { releaseId });
+    // `releaseId` is the route's own `:releaseId`, an id segment by construction (`matchRoutePath`).
+    const envelope = await context.runQuery<null | string>(internal.hostd_releases.envelope, { releaseId });
 
     return envelope === null
         ? jsonError(404, "no such hostd release")
