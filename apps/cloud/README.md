@@ -69,9 +69,14 @@ src/
     cloudflare-wfp/  the Workers-for-Platforms driver: provision-box client + job
                      contract, dispatch-namespace sender, hostname grammar,
                      Analytics Engine writer/reader
+    celld-vps/       the customer-box driver (plan 458): jobs over the box's session,
+                     box DNS in the platform's own zone
+  boxes/             customer boxes: the BoxSessionDO (session-do.ts) and its pure
+                     handshake (session.ts), job correlation, signed requests, usage
+                     reports, hostd releases + rollout
   cloudflare/
     api.ts           Cloudflare REST port: D1 export (the control plane's own
-                     backup) and custom hostnames
+                     backup), custom hostnames, and the box zone's DNS records
     billable-usage.ts an org's own Cloudflare billing, for the cost overview
   secrets/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
@@ -191,12 +196,77 @@ Secrets Store edit and Workers subdomain read for Alchemy's state store. Run
 `alchemy provider cloudflare bootstrap` once per new cell so two first deploys
 do not race to create that store (details in `containers/provision/README.md`).
 
+The second driver, `celld-vps` (`src/targets/celld-vps/`), is described under
+"Customer boxes" below.
+
 What each binding type gets (provisioned, bound, routed or refused) is
 `BINDING_SUPPORT` in the contract, one table per target; GAPS.md has the
 `cloudflare-wfp` table. Queue consumers are
 routed: the box attaches this Worker as the consumer of each per-project queue,
 and `queue()` in `src/server.ts` forwards the batch to the owning project's live
 release.
+
+### Customer boxes (`celld-vps`, plan 458)
+
+A project whose `target` is `celld-vps` runs as a celld fleet on a machine its
+organization enrolled — a **box** running `lunora-hostd` (`apps/hostd`). The
+control plane never holds a credential for the box; it holds the box's Ed25519
+public key and nothing else (plan 458 §3).
+
+- **Enrolment.** `boxes.createEnrolment` (owner/admin) mints a one-time token
+  (15 minutes, stored hashed, counted against the plan's `boxes` limit) and
+  shows `sudo lunora-hostd enrol --token …`. `hostd` generates its key and calls
+  `POST /v1/boxes/enrol` with the token, its raw public key (base64url), its
+  public IPs and versions; the box gets a random DNS label (`slug`) and A/AAAA
+  records `*.<slug>.<LUNORA_BOX_DOMAIN>` and `<slug>.<LUNORA_BOX_DOMAIN>` in the
+  box zone. `boxes.setProjectTarget` places a project on a box.
+- **Session.** `hostd` dials `GET /v1/boxes/connect?box=<id>`, forwarded to the
+  box's `BoxSessionDO` (binding `BOX_SESSION`, named by box id — the first
+  Durable Object of this app's own). Handshake: `hello` → `challenge` (a
+  single-use nonce) → `auth` (Ed25519 over the challenge, verified with
+  WebCrypto). Hibernatable WebSockets; a 30-second alarm pings, closes a box
+  silent for 90 seconds (it goes `offline`) and cuts a revoked box off. Every
+  frame is strictly decoded and rate-limited (`@lunora/hostd/protocol`).
+- **Deploy.** The driver hands the box a `deploy` job over the session; the box
+  downloads the stored release from `GET /v1/boxes/releases/:deploymentId`,
+  signed with its key (nonce replay-protected). Secrets ride as celld vars
+  (celld has no secret store — they persist in the customer's bucket). An
+  offline box fails the deploy at once (`BOX_OFFLINE`). The box's progress
+  appears in the deploy stream as `{ deploymentId, log }` frames; its routing
+  table is pushed after every job and on every connect.
+- **Usage.** Box `report` frames become `platformUsage` request rows tagged
+  with the box — shown in the studio, never billed. Billing is per box per
+  month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
+- **Releases.** Signed `lunora-hostd` releases are stored with
+  `POST /v1/hostd/releases` (admin token; verified against the pinned release
+  keys, so nothing is accepted until a real key replaces the placeholder) and
+  rolled out with `POST /v1/hostd/rollout` (canary, then batches, through
+  `src/fleet/upgrade.ts`); a box fetches the manifest from
+  `GET /v1/hostd/releases/:releaseId/manifest`. A box that is offline gets the
+  upgrade when it reconnects; one whose celld is not the newest stable
+  release's is flagged `outdated`.
+- **Revocation.** `POST /v1/boxes/revoke` (owner/admin session) marks the box
+  revoked, closes its session with `BOX_REVOKED` and removes its DNS records.
+
+| Route                                        | Auth             |
+| -------------------------------------------- | ---------------- |
+| `POST /v1/boxes/enrol`                       | `enrolmentToken` |
+| `GET /v1/boxes/connect?box=<id>`             | `boxKey`         |
+| `GET /v1/boxes/releases/:deploymentId`       | `boxKey`         |
+| `GET /v1/hostd/releases/:releaseId/manifest` | `boxKey`         |
+| `POST /v1/boxes/revoke`                      | `session`        |
+| `POST /v1/hostd/releases`                    | `adminToken`     |
+| `POST /v1/hostd/rollout`                     | `adminToken`     |
+
+Configuration: `BOX_SESSION` (Durable Object, declared in every env with
+migration `v5`), `LUNORA_BOX_DOMAIN` (var, default `boxes.lunora.app`),
+`LUNORA_BOX_ZONE_ID` (that domain's zone; unset → boxes enrol without
+hostnames and say so in `dnsError`), and `LUNORA_ORIGIN_URL` (already set per
+cell: the origin boxes fetch releases and manifests from).
+
+The node suite drives the session with fakes; a `workerd` vitest project boots
+the real object over a real socket:
+`LUNORA_WORKERD_TESTS=1 pnpm exec vitest run --project workerd --no-coverage`.
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 

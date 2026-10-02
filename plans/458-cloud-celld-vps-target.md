@@ -2,8 +2,10 @@
 
 **Baseline:** `f79680910` (`alpha`, 2026-10-02) + `48023e8e7` (PR
 [#85](https://github.com/anolilab/lunora/pull/85) head, `apps/cloud`)
-**Status:** TODO — gated on PR #85 merging. `MULTIPLATFORM.md` Phase 1 (the
-`TargetDriver` extraction, G3–G10) landed 2026-10-02 on `work/cloud-vps-gaps`. Decision recorded in
+**Status:** IN PROGRESS — gated on PR #85 merging. `MULTIPLATFORM.md` Phase 1 (the
+`TargetDriver` extraction, G3–G10) landed 2026-10-02 on `work/cloud-vps-gaps`,
+and so did the control-plane side of G11–G17 and the `celld-vps` driver
+(§1.5). W4 (`hostd`'s daemon side) is not started. Decision recorded in
 [`apps/cloud/MULTIPLATFORM.md` §7.9](../apps/cloud/MULTIPLATFORM.md).
 **Rulings (2026-10-02):**
 
@@ -129,16 +131,16 @@ for this plan.
 
 **Tier 2 — new for `celld-vps` (control-plane side only)**
 
-| #   | Gap                                                                                                                                                                                                                                           | Workstream |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| G11 | No WebSocket endpoint and no custom Durable Object; `RouteAuth` has no box-key class (`route-registry.ts:20-32`)                                                                                                                              | W2         |
-| G12 | No `boxes` / `boxEnrolments` tables, functions or `projects.boxId`                                                                                                                                                                            | W2         |
-| G13 | `CloudflareApi` has no DNS-record methods, only `createCustomHostname` and `exportD1Database` (`src/cloudflare/api.ts:12-21`). The cell token also lacks Zone → DNS:Edit (PR #85's token scope list), and there is no `boxes.lunora.app` zone | W5         |
-| G14 | No box-signed release route (`GET /v1/boxes/releases/:deploymentId`)                                                                                                                                                                          | W4         |
-| G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6         |
-| G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6         |
-| G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7         |
-| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9         |
+| #   | Gap                                                                                                                                                                                                                                           | Workstream                                                                     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| G11 | No WebSocket endpoint and no custom Durable Object; `RouteAuth` has no box-key class (`route-registry.ts:20-32`)                                                                                                                              | W2 — ✅ `3eb6ce077`; workerd project `58ab2d184`                               |
+| G12 | No `boxes` / `boxEnrolments` tables, functions or `projects.boxId`                                                                                                                                                                            | W2 — ✅ `c656aeec1`                                                            |
+| G13 | `CloudflareApi` has no DNS-record methods, only `createCustomHostname` and `exportD1Database` (`src/cloudflare/api.ts:12-21`). The cell token also lacks Zone → DNS:Edit (PR #85's token scope list), and there is no `boxes.lunora.app` zone | W5 — ✅ code `722b198e1`; the zone itself and the token scope are 🌐 ops       |
+| G14 | No box-signed release route (`GET /v1/boxes/releases/:deploymentId`)                                                                                                                                                                          | W4 — ✅ `b85e5c479`                                                            |
+| G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6 — ✅ `f87b67285` (the session writes the ledger directly, as the sweeps do) |
+| G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6 — ✅ `ed8b6b8ce`                                                            |
+| G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a, see W7); control-plane store + rollout `85c5f6c91`   |
+| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9                                                                             |
 
 **Already target-neutral (no gap):**
 
@@ -295,6 +297,20 @@ decode; unknown fields and kinds are rejected.
 - a `workerd` vitest project for the WebSocket path, because `pnpm run test`
   does not run `workerd` suites (CLAUDE.md).
 
+**Landed (2026-10-02, control plane, on `work/cloud-vps-gaps`):** G12
+`c656aeec1`, G11 `3eb6ce077`, the `celld-vps` driver `73a45c7cc`, and the
+`workerd` project `58ab2d184` (green locally; not in CI — the workerd job
+matrix covers `packages/*` only). As built:
+
+- The handshake follows `protocol/hostd/README.md` §2 — `challenge` answers
+  `hello`, not the upgrade — and the session writes `boxes` directly through the
+  control-plane D1, the posture of every scheduled sweep, rather than through
+  internal mutations a Durable Object cannot call.
+- `RouteAuth` gained two classes: `boxKey` (connect, signed release and manifest
+  fetches) and `enrolmentToken` (`POST /v1/boxes/enrol`). `POST /v1/boxes/revoke`
+  (session) closes the session and removes the DNS records.
+- Not yet: the `__bench__` for 1,000 hibernated sockets (§8 perf watch).
+
 ### W3 — Per-target binding support and celld config from a manifest (S–M)
 
 - `provision-contract.ts`: `BINDING_SUPPORT` becomes
@@ -389,6 +405,15 @@ package shape. Housekeeping:
 **Gate:** `test:hostd` serves an alias over HTTPS against a local ACME test CA
 (Pebble), and refuses a certificate for an unrouted host.
 
+**Landed (2026-10-02, control-plane half):** box DNS (`722b198e1`) — A/AAAA
+records for `*.<slug>` and `<slug>` written at enrolment and removed at
+revocation, idempotent, failures recorded on the box (`dnsError`); the `routes`
+table (live, provisioning and verifying aliases plus verified custom domains)
+pushed on connect, after every job and on domain verification; custom domains
+verify against `<slug>.<LUNORA_BOX_DOMAIN>`. Still open: the box zone and the
+token's Zone → DNS:Edit scope (🌐 ops), and everything on the box (Caddyfile
+generation, on-demand TLS) — that is W4.
+
 ### W6 — Telemetry, usage and logs (M)
 
 - **Tenant traces and logs:** unchanged. `LUNORA_OTLP_ENDPOINT` and the ingest
@@ -409,6 +434,15 @@ package shape. Housekeeping:
   `test:hostd` lane.
 - A unit test proves a replayed `report` window is not double-counted. This is
   the conformance leg "usage never double-counts across a checkpoint".
+
+**Landed (2026-10-02, control plane):** the report path (`f87b67285`) — rows
+idempotent per (box, `windowStart`), minute-aligned windows only, tagged
+`boxId` and kept out of the spend cap, the overage debit and the invoice
+summary; the conformance leg records `celld-vps` usage through it. Billing
+(`ed8b6b8ce`): a `boxes` plan limit (free 0, pro 3, enterprise 50) gating
+enrolment, and `BOX_CREDITS_PER_MONTH` (500 credits) per box billed in a period
+through the prepaid-credits debit. Still open: `hostd`'s own log forwarding and
+the `test:hostd` panel gate (W4).
 
 ### W7 — Install, upgrades and supply chain (M)
 
@@ -453,8 +487,19 @@ control-plane changes.
 Still open: no release key is committed (a placeholder that verification
 refuses); Caddy with `caddy-ratelimit` needs our own xcaddy build before its
 pins are real, so the workflow stops at signing until then. Next in W7:
-`install.sh`, the control plane's `hostdReleases` table and `boxes.desiredReleaseId`,
-and the `upgrade` job on the box.
+`install.sh`, and the `upgrade` job on the box.
+
+**Landed (2026-10-02, G17 control-plane half, `85c5f6c91`):** the
+`hostdReleases` table; `POST /v1/hostd/releases` (admin token) stores an
+envelope only once it verifies as a box would verify it — strict validator,
+pinned keys, placeholder refused, Ed25519 checked with WebCrypto — so until a
+real key is pinned every release is refused; `GET
+/v1/hostd/releases/:releaseId/manifest` (box-signed); `POST /v1/hostd/rollout`
+sets `boxes.desiredReleaseId` and rolls the release out through
+`planFleetUpgrade` / `runFleetUpgrade` (their first production caller) as
+`upgrade` jobs to online boxes, while an offline box gets the job when it
+reconnects; `boxes.list`/`get` flag a box `outdated` when its celld is not the
+newest stable release's. Still open: the 7-day alert on an outdated box.
 
 ### W8 — Hardening on the box (M)
 
