@@ -62,13 +62,17 @@ const isPublicWithoutRoute = (scope: ServiceWranglerScope, top: ServiceWranglerS
     return !routed && (scope.workers_dev ?? top.workers_dev) !== false;
 };
 
-const resolveService = (projectRoot: string, key: string, declaration: { dir: string; entrypoint?: string }): ServiceBindingIR => {
+const resolveService = (projectRoot: string, key: string, declaration: { dir: string; entrypoint?: string; rpc?: boolean }): ServiceBindingIR => {
     if (!IDENTIFIER_RE.test(key)) {
         throw new Error(`@lunora/codegen: service key "${key}" must be an identifier — it becomes ctx.services.${key}`);
     }
 
     if (declaration.entrypoint !== undefined && !IDENTIFIER_RE.test(declaration.entrypoint)) {
         throw new Error(`@lunora/codegen: service "${key}": entrypoint "${declaration.entrypoint}" must name an exported WorkerEntrypoint class`);
+    }
+
+    if (declaration.rpc === true && declaration.entrypoint === undefined) {
+        throw new Error(`@lunora/codegen: service "${key}": rpc: true needs an entrypoint — the RPC type is read from that exported WorkerEntrypoint class`);
     }
 
     const directory = isAbsolute(declaration.dir) ? declaration.dir : resolve(projectRoot, declaration.dir);
@@ -97,6 +101,8 @@ const resolveService = (projectRoot: string, key: string, declaration: { dir: st
             ...(isPublicWithoutRoute(config, config) ? [""] : []),
             ...environments.filter(([, scope]) => isPublicWithoutRoute(scope, config)).map(([environment]) => environment),
         ],
+        // A named entrypoint is RPC unless declared `rpc: false`.
+        rpc: declaration.entrypoint !== undefined && declaration.rpc !== false,
         worker: name,
         wranglerPath: path,
     };
@@ -114,7 +120,7 @@ const resolveServiceBindings = (projectRoot: string): ServiceBindingIR[] => {
 
     if (services?.unreadable === true) {
         throw new Error(
-            '@lunora/codegen: lunora.config `services` must be an inline object of { dir: "…", entrypoint?: "…" } string literals — codegen reads it without running the file',
+            '@lunora/codegen: lunora.config `services` must be an inline object of { dir: "…", entrypoint?: "…", rpc?: boolean } literals — codegen reads it without running the file',
         );
     }
 

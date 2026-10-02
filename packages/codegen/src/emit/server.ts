@@ -432,7 +432,9 @@ ${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueB
 
         return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
     };
-    const rpcServices = services.filter((service) => service.entrypoint !== undefined);
+    // Only an RPC service imports its sources; a fetch one (named entrypoint or
+    // not) is a `ServiceFetcher`, so the app's type check never reaches into it.
+    const rpcServices = services.filter((service) => service.rpc);
     const serviceTypeNames = rpcServices.length > 0 ? "ServiceFetcher, ServiceRpc" : "ServiceFetcher";
     const servicesTypeImport = hasServices
         ? `import type { ${serviceTypeNames} } from "${base.server}";\n${rpcServices
@@ -448,7 +450,7 @@ ${services
     .map((service) => {
         assertIdentifier(service.name, `service "${service.name}"`);
 
-        const type = service.entrypoint === undefined ? "ServiceFetcher" : `ServiceRpc<typeof lunoraService_${service.name}.${service.entrypoint}>`;
+        const type = service.rpc ? `ServiceRpc<typeof lunoraService_${service.name}.${String(service.entrypoint)}>` : "ServiceFetcher";
 
         return `    readonly ${service.name}: ${type};`;
     })

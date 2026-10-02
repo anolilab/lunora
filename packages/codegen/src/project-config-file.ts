@@ -89,6 +89,8 @@ interface ProjectConfigLiterals {
 interface ServiceLiteral {
     dir: string;
     entrypoint?: string;
+    /** `false` binds a named `entrypoint` as a plain fetcher, without RPC types (so without importing the service's sources). */
+    rpc?: boolean;
 }
 
 /** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
@@ -286,7 +288,20 @@ const stringMember = (object: ObjectLiteralExpression, name: string): string | f
     return value !== undefined && (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) ? value.getLiteralValue() : false;
 };
 
-/** `services: { key: { dir: "…", entrypoint?: "…" } }`, all literals, or `unreadable`. */
+/** A boolean-literal member's value, `undefined` when absent, or `"unreadable"` when present but not a literal. */
+const booleanMember = (object: ObjectLiteralExpression, name: string): boolean | "unreadable" | undefined => {
+    const member = object.getProperty(name);
+
+    if (member === undefined) {
+        return undefined;
+    }
+
+    const value = TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined;
+
+    return value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) ? TsNode.isTrueLiteral(value) : "unreadable";
+};
+
+/** `services: { key: { dir: "…", entrypoint?: "…", rpc?: boolean } }`, all literals, or `unreadable`. */
 const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
     const value = unwrapLiteral(wrapped);
 
@@ -314,12 +329,17 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
 
         const directory = stringMember(initializer, "dir");
         const entrypoint = stringMember(initializer, "entrypoint");
+        const rpc = booleanMember(initializer, "rpc");
 
-        if (typeof directory !== "string" || entrypoint === false) {
+        if (typeof directory !== "string" || entrypoint === false || rpc === "unreadable") {
             return { services: { unreadable: true } };
         }
 
-        declared[propertyKeyName(entry)] = entrypoint === undefined ? { dir: directory } : { dir: directory, entrypoint };
+        declared[propertyKeyName(entry)] = {
+            dir: directory,
+            ...(entrypoint === undefined ? {} : { entrypoint }),
+            ...(rpc === undefined ? {} : { rpc }),
+        };
     }
 
     return { services: { declared } };

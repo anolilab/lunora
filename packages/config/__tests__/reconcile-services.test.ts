@@ -56,6 +56,7 @@ describe("reconcileServices", () => {
             main: join(root, "services", name, "src/index.ts"),
             name,
             publicScopes: [],
+            rpc: entrypoint !== undefined,
             worker,
             wranglerPath: join(root, "services", name, "wrangler.jsonc"),
         };
