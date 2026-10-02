@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
+import { runReadbackUsageSweep, teardownPorts, USAGE_SCOPE_CONCURRENCY, usageAttributionOf, usageRollbackPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
+import type { TargetId } from "../src/provision-contract";
 import type { ControlPlaneDatabase } from "../src/store";
+import { drainTable } from "../src/store";
 import type { UsageRow } from "../src/targets/driver";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { fakeDriver } from "./support/memory-driver";
@@ -259,6 +261,9 @@ const reader =
     () =>
         Promise.resolve(rows);
 
+/** The attribution map the sweep builds, over the test's deployments. */
+const attributionOf = async (database: ControlPlaneDatabase, target: TargetId) => usageAttributionOf(await drainTable(database, "deployments"), target);
+
 describe(usageRollbackPorts, () => {
     it("resolves a script to its owning org/deployment from the deployments table", async () => {
         const database = fakeControlPlaneDb({
@@ -269,7 +274,13 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 500, scope: "default", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: await attributionOf(database, "cloudflare-wfp"),
+            now: 1000,
+            periodStart: 500,
+            scope: "default",
+            target: "cloudflare-wfp",
+        });
 
         // Every release shares the alias's script; its usage lands on the live one.
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
@@ -284,7 +295,13 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: await attributionOf(database, "cloudflare-wfp"),
+            now: 1000,
+            periodStart: 0,
+            scope: "default",
+            target: "cloudflare-wfp",
+        });
 
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_wfp", organizationId: "org_a" });
         // Another target's resource never lands on this target's bill.
@@ -296,7 +313,13 @@ describe(usageRollbackPorts, () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeControlPlaneDb({ deployments: [] }, { insert });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "default", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: new Map(),
+            now: 1000,
+            periodStart: 777,
+            scope: "default",
+            target: "cloudflare-wfp",
+        });
         await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, quantity: 12 });
 
         expect(insert).toHaveBeenCalledWith("platformUsage", {
@@ -328,7 +351,13 @@ describe(usageRollbackPorts, () => {
             },
             { insert },
         );
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "cfa_1", target: "cloudflare-workers" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: await attributionOf(database, "cloudflare-workers"),
+            now: 1000,
+            periodStart: 777,
+            scope: "cfa_1",
+            target: "cloudflare-workers",
+        });
         const attribution = ports.resolveResource("cfa_1/web");
 
         // A same-named script in another account is never this tenant's.
@@ -345,7 +374,13 @@ describe(usageRollbackPorts, () => {
     it("starts a scope with no checkpoint row from nothing, so the rollback reads its bootstrap window", async () => {
         const database = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: new Map(),
+            now: 1000,
+            periodStart: 0,
+            scope: "default",
+            target: "cloudflare-wfp",
+        });
 
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();
     });
@@ -359,7 +394,13 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: new Map(),
+            now: 1000,
+            periodStart: 0,
+            scope: "default",
+            target: "cloudflare-wfp",
+        });
 
         await expect(ports.getCheckpoint()).resolves.toBe(5000);
     });
@@ -369,7 +410,13 @@ describe(usageRollbackPorts, () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const first = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] }, { insert, patch });
 
-        const firstPorts = await usageRollbackPorts(first, reader([]), { now: 1000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+        const firstPorts = await usageRollbackPorts(first, reader([]), {
+            attribution: new Map(),
+            now: 1000,
+            periodStart: 0,
+            scope: "acct_1",
+            target: "cloudflare-wfp",
+        });
 
         await firstPorts.setCheckpoint(4242);
 
@@ -381,7 +428,13 @@ describe(usageRollbackPorts, () => {
             { insert, patch },
         );
 
-        const laterPorts = await usageRollbackPorts(later, reader([]), { now: 2000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+        const laterPorts = await usageRollbackPorts(later, reader([]), {
+            attribution: new Map(),
+            now: 2000,
+            periodStart: 0,
+            scope: "acct_1",
+            target: "cloudflare-wfp",
+        });
 
         await laterPorts.setCheckpoint(5000);
 
@@ -391,8 +444,92 @@ describe(usageRollbackPorts, () => {
     it("starts a scope with no checkpoint and no old cell column from nothing (the bootstrap window applies)", async () => {
         const database = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] });
 
-        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "ghost", target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), {
+            attribution: new Map(),
+            now: 1000,
+            periodStart: 0,
+            scope: "ghost",
+            target: "cloudflare-wfp",
+        });
 
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();
+    });
+});
+
+describe(runReadbackUsageSweep, () => {
+    const deployments = [
+        { _id: "dep_1", organizationId: "org_a", resourceRef: "cfa_1/web", scriptName: "web", status: "live", target: "cloudflare-workers" },
+        { _id: "dep_2", organizationId: "org_b", resourceRef: "cfa_2/api", scriptName: "api", status: "live", target: "cloudflare-workers" },
+    ];
+
+    it("drains the deployments once for every scope, and reads at most four scopes at a time", async () => {
+        const database = memoryStore({ deployments, usageCheckpoints: [] });
+        const findMany = vi.spyOn(database, "findMany");
+        const scopes = Array.from({ length: 10 }, (_, index) => `cfa_${String(index + 1)}`);
+        let inFlight = 0;
+        let peak = 0;
+
+        await runReadbackUsageSweep(
+            database,
+            [
+                {
+                    id: "cloudflare-workers",
+                    usage: {
+                        read: async (scope) => {
+                            inFlight += 1;
+                            peak = Math.max(peak, inFlight);
+                            await new Promise((resolve) => {
+                                setTimeout(resolve, 1);
+                            });
+                            inFlight -= 1;
+
+                            return scope === "cfa_1" ? [{ requests: 3, resourceRef: "cfa_1/web" }] : [];
+                        },
+                        scopes: () => Promise.resolve(scopes),
+                    },
+                },
+            ],
+            { now: 10_000, onScopeFailed: () => undefined, periodStart: 0 },
+        );
+
+        expect(findMany.mock.calls.filter(([table]) => table === "deployments")).toHaveLength(1);
+        expect(peak).toBe(USAGE_SCOPE_CONCURRENCY);
+        expect(USAGE_SCOPE_CONCURRENCY).toBe(4);
+        expect(database.tables["platformUsage"]).toStrictEqual([expect.objectContaining({ deploymentId: "dep_1", quantity: 3 })]);
+        // Every scope advanced its own checkpoint.
+        expect(database.tables["usageCheckpoints"]).toHaveLength(scopes.length);
+    });
+
+    it("reports a scope whose read fails, and still advances the others", async () => {
+        const database = memoryStore({ deployments, usageCheckpoints: [] });
+        const failed: string[] = [];
+
+        await runReadbackUsageSweep(
+            database,
+            [
+                {
+                    id: "cloudflare-workers",
+                    usage: {
+                        read: (scope) =>
+                            scope === "cfa_1" ? Promise.reject(new Error("token revoked")) : Promise.resolve([{ requests: 2, resourceRef: "cfa_2/api" }]),
+                        scopes: () => Promise.resolve(["cfa_1", "cfa_2"]),
+                    },
+                },
+            ],
+            { now: 10_000, onScopeFailed: (target, scope) => failed.push(`${target}/${scope}`), periodStart: 0 },
+        );
+
+        expect(failed).toStrictEqual(["cloudflare-workers/cfa_1"]);
+        expect(database.tables["platformUsage"]).toStrictEqual([expect.objectContaining({ deploymentId: "dep_2", quantity: 2 })]);
+        expect(database.tables["usageCheckpoints"]).toStrictEqual([expect.objectContaining({ scopeKey: "cfa_2" })]);
+    });
+
+    it("reads nothing, not even the deployments, without a fleet that reads usage", async () => {
+        const database = memoryStore({ deployments });
+        const findMany = vi.spyOn(database, "findMany");
+
+        await runReadbackUsageSweep(database, [{ id: "cloudflare-wfp" }], { now: 1, onScopeFailed: () => undefined, periodStart: 0 });
+
+        expect(findMany).not.toHaveBeenCalled();
     });
 });

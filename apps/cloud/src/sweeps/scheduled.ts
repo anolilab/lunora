@@ -24,7 +24,7 @@ import type { ControlPlaneEnv } from "../control-plane-env";
 import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
 import { createReleaseStore } from "../deploy/release-store";
-import { teardownPorts, usageRollbackPorts } from "../deploy/sweeps";
+import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import type { CronTarget, CronTick } from "../fanout/cron";
@@ -32,7 +32,6 @@ import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
 import { readLiveDeployments, resourceRefOf } from "../fanout/live";
 import { deliverAlert } from "../mail/notify";
-import { runUsageRollback } from "../metering/rollback";
 import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
@@ -134,48 +133,23 @@ const currentPeriodStart = (): number => {
  * the usage summary, and the usage chart have data to read — for every
  * `metering: "readback"` target whose fleet reads usage here, and every scope
  * of it (`cloudflare-wfp`: this cell's Analytics Engine dataset, and only with
- * account credentials configured). Each scope is delta-read off its own
- * `usageCheckpoints` row (no double counting), and isolated from the others: a
- * scope whose read throws keeps its checkpoint and is retried next hour, while
- * the rest advance.
+ * account credentials configured; `cloudflare-workers`: each connected account).
+ * `runReadbackUsageSweep` drains the deployments once, reads a bounded number
+ * of scopes at a time, and isolates each scope's failure.
  */
 const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     if (!env.DB) {
         return;
     }
 
-    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
-    const now = Date.now();
-    const periodStart = currentPeriodStart();
-
-    const swept = await Promise.allSettled(
-        registeredFleets(env, { metering: "readback" }).map(async ({ id: target, usage }) => {
-            if (!usage) {
-                return;
-            }
-
-            const scopes = await usage.scopes();
-            const results = await Promise.allSettled(
-                scopes.map(async (scope) => {
-                    await runUsageRollback(await usageRollbackPorts(database, (sinceMs) => usage.read(scope, sinceMs), { now, periodStart, scope, target }));
-                }),
-            );
-
-            for (const result of results) {
-                if (result.status === "rejected") {
-                    // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
-                    console.error(`[usage] ${target} readback failed for one scope`, result.reason);
-                }
-            }
-        }),
-    );
-
-    for (const result of swept) {
-        if (result.status === "rejected") {
-            // eslint-disable-next-line no-console -- see above
-            console.error("[usage] readback failed", result.reason);
-        }
-    }
+    await runReadbackUsageSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), registeredFleets(env, { metering: "readback" }), {
+        now: Date.now(),
+        onScopeFailed: (target, scope, reason) => {
+            // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
+            console.error(`[usage] ${target} readback failed for scope ${scope}`, reason);
+        },
+        periodStart: currentPeriodStart(),
+    });
 };
 
 /**

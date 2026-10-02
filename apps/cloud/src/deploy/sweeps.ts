@@ -12,11 +12,12 @@
  */
 import { isBilledTarget } from "../billing/usage";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
+import { runUsageRollback } from "../metering/rollback";
 import type { TargetId } from "../provision-contract";
 import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
-import type { ProgressLine, TargetDriver, UsageRow } from "../targets/driver";
+import type { ProgressLine, TargetDriver, UsageReadback, UsageRow } from "../targets/driver";
 import type { Placement, RowReader } from "../targets/placement";
 import { placementOfDeployment } from "../targets/placement";
 import type { TeardownPorts, TeardownTarget } from "./teardown";
@@ -201,28 +202,16 @@ const checkpointPorts = async (
 };
 
 /**
- * Build the {@link runUsageRollback} ports against the control-plane D1 for
- * one scope of one `readback` target. Reads that target's deployment
- * attribution map and the scope's checkpoint (`usageCheckpoints`) up front,
- * then returns ports that resolve a resource → org/deployment, append
- * `requests` rows, and advance the scope's checkpoint — never another
- * scope's, so two sources of one target never skip each other's windows.
+ * Which deployment each `resourceRef` of `target` attributes its usage to,
+ * from every deployment row. Every release of an alias shares its one tenant,
+ * so a resource's usage is attributed to the live release when there is one.
+ * Built once per target per sweep and shared by all of its scopes.
  */
-export const usageRollbackPorts = async (
-    database: ControlPlaneDatabase,
-    read: (sinceMs: number) => Promise<UsageRow[]>,
-    options: { now: number; periodStart: number; scope: string; target: TargetId },
-): Promise<UsageRollbackPorts> => {
-    // Drained: this map attributes metered usage to a deployment, so a resource
-    // missing from it is usage that lands on nobody's bill.
-    const deploymentRows = await drainTable<AttributionRow>(database, "deployments");
+export const usageAttributionOf = (deploymentRows: ReadonlyArray<AttributionRow>, target: TargetId): ReadonlyMap<string, UsageAttribution> => {
     const byResource = new Map<string, UsageAttribution>();
-    const billable = isBilledTarget(options.target);
 
-    // Every release of an alias shares its one tenant, so the resource's usage is
-    // attributed to the live release when there is one.
     for (const row of deploymentRows) {
-        if (storedTarget(row.target) !== options.target) {
+        if (storedTarget(row.target) !== target) {
             continue;
         }
 
@@ -237,6 +226,25 @@ export const usageRollbackPorts = async (
             });
         }
     }
+
+    return byResource;
+};
+
+/**
+ * Build the {@link runUsageRollback} ports against the control-plane D1 for
+ * one scope of one `readback` target, over that target's attribution map
+ * ({@link usageAttributionOf}). Reads the scope's checkpoint
+ * (`usageCheckpoints`) up front, then returns ports that resolve a resource →
+ * org/deployment, append `requests` rows, and advance the scope's checkpoint —
+ * never another scope's, so two sources of one target never skip each other's
+ * windows.
+ */
+export const usageRollbackPorts = async (
+    database: ControlPlaneDatabase,
+    read: (sinceMs: number) => Promise<UsageRow[]>,
+    options: { attribution: ReadonlyMap<string, UsageAttribution>; now: number; periodStart: number; scope: string; target: TargetId },
+): Promise<UsageRollbackPorts> => {
+    const billable = isBilledTarget(options.target);
 
     return {
         ...(await checkpointPorts(database, options)),
@@ -257,6 +265,88 @@ export const usageRollbackPorts = async (
                 quantity,
             });
         },
-        resolveResource: (resourceRef) => byResource.get(resourceRef),
+        resolveResource: (resourceRef) => options.attribution.get(resourceRef),
     };
+};
+
+/**
+ * Scopes read at once. A `cloudflare-workers` scope is one connected account,
+ * so a fleet of accounts would otherwise fire every account's GraphQL read and
+ * its D1 writes in the same instant.
+ */
+export const USAGE_SCOPE_CONCURRENCY = 4;
+
+/** Run `task` over `items`, at most `limit` at a time. `task` handles its own failures. */
+const forEachLimited = async <T>(items: ReadonlyArray<T>, limit: number, task: (item: T) => Promise<void>): Promise<void> => {
+    const queue = [...items];
+
+    const worker = async (): Promise<void> => {
+        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+            // eslint-disable-next-line no-await-in-loop -- each worker runs its share one at a time; that is the cap
+            await task(item);
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+};
+
+/** A `metering: "readback"` fleet as the usage sweep reads it. */
+export interface ReadbackFleet {
+    id: TargetId;
+    usage?: UsageReadback;
+}
+
+/**
+ * Fold every readback fleet's request counts into `platformUsage`, every scope
+ * delta-read off its own checkpoint. The deployments table is drained ONCE per
+ * sweep and each target's attribution map built once from it, then shared by
+ * all of that target's scopes — not drained again per scope — and scopes run
+ * {@link USAGE_SCOPE_CONCURRENCY} at a time. A scope whose read throws keeps
+ * its checkpoint and is retried next hour, while the rest advance; it is
+ * reported through `onScopeFailed` (scope `*` when its scopes could not be listed).
+ */
+export const runReadbackUsageSweep = async (
+    database: ControlPlaneDatabase,
+    fleets: ReadonlyArray<ReadbackFleet>,
+    options: { now: number; onScopeFailed: (target: TargetId, scope: string, reason: unknown) => void; periodStart: number },
+): Promise<void> => {
+    const reading = fleets.flatMap(({ id, usage }) => (usage === undefined ? [] : [{ target: id, usage }]));
+
+    if (reading.length === 0) {
+        return;
+    }
+
+    // Drained: this map attributes metered usage to a deployment, so a resource
+    // missing from it is usage that lands on nobody's bill.
+    const deploymentRows = await drainTable<AttributionRow>(database, "deployments");
+    const perTarget = await Promise.all(
+        reading.map(async ({ target, usage }) => {
+            const attribution = usageAttributionOf(deploymentRows, target);
+            const scopes = await usage.scopes().catch((error: unknown) => {
+                options.onScopeFailed(target, "*", error);
+
+                return [];
+            });
+
+            return scopes.map((scope) => {
+                return { attribution, scope, target, usage };
+            });
+        }),
+    );
+
+    await forEachLimited(perTarget.flat(), USAGE_SCOPE_CONCURRENCY, async ({ attribution, scope, target, usage }) => {
+        try {
+            const ports = await usageRollbackPorts(database, async (sinceMs) => usage.read(scope, sinceMs), {
+                attribution,
+                now: options.now,
+                periodStart: options.periodStart,
+                scope,
+                target,
+            });
+
+            await runUsageRollback(ports);
+        } catch (error) {
+            options.onScopeFailed(target, scope, error);
+        }
+    });
 };
