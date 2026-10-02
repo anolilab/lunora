@@ -278,6 +278,7 @@ interface PlatformCapabilities {
     features: {
         agents?: Capability;
         ai?: Capability;
+        aiSearch?: Capability;
         analytics?: Capability;
         artifacts?: Capability;
         authJurisdictionMove?: Capability;

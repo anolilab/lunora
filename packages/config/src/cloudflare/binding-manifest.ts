@@ -55,7 +55,7 @@ interface BindingRequirement {
      * exports it before publishing.
      */
     className?: string;
-    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`). */
+    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`, `ai_search_namespace`), instance (`ai_search`). */
     resource?: string;
     /** Remote resource id, when the config declares one (`d1`, `kv`, `hyperdrive`, `vpc_service`, `vpc_network`). */
     resourceId?: string;
@@ -64,6 +64,8 @@ interface BindingRequirement {
     /** The kind of resource, keyed to the wrangler section it came from. */
     type:
         | "ai"
+        | "ai_search"
+        | "ai_search_namespace"
         | "analytics_engine"
         | "artifacts"
         | "assets"
@@ -146,6 +148,8 @@ const NON_BINDING_FIELDS = new Set([
  */
 interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };
+    ai_search?: ReadonlyArray<{ binding?: string; instance_name?: string }>;
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
@@ -190,6 +194,9 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     resourceKey?: ReadonlyArray<string> | string;
     type: BindingRequirement["type"];
 }> = [
+    // An `ai_search` instance must exist at deploy time; a namespace is created by wrangler if missing.
+    { bindingKey: "binding", field: "ai_search", resourceKey: "instance_name", type: "ai_search" },
+    { bindingKey: "binding", field: "ai_search_namespaces", resourceKey: "namespace", type: "ai_search_namespace" },
     { bindingKey: "binding", field: "analytics_engine_datasets", resourceKey: "dataset", type: "analytics_engine" },
     { bindingKey: "binding", field: "artifacts", resourceKey: "namespace", type: "artifacts" },
     // Keyed by `class_name`, not `name`: a wrangler `containers[]` entry has no

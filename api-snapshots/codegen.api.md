@@ -1730,6 +1730,37 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly appMethod: {
+            readonly configKey: "aiSearch";
+            readonly doc: "Override the AI Search namespace binding backing `ctx.aiSearch` (defaults to `env.AI_SEARCH`).";
+            readonly method: "aiSearch";
+        };
+        readonly contextProperty: "aiSearch";
+        readonly key: "aiSearch";
+        readonly moduleSpecifier: "@lunora/bindings/ai-search";
+        readonly requiredPackage: "@lunora/bindings";
+        readonly serverCtxField: "\n    /** Cloudflare AI Search namespace (`ai_search_namespaces`): `.get(name)` an instance, then `search` / `chatCompletions`. Billed, non-deterministic network I/O — available only in actions. */\n    readonly aiSearch: import(\"@lunora/bindings/ai-search\").AiSearch;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly envName: "AI_SEARCH";
+            };
+            readonly clientType: "AiSearch";
+            readonly missingMessage: "ctx.aiSearch: no AI Search binding found. Add an \\`ai_search_namespaces\\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \\`defineApp().aiSearch((env) => …)\\` at yours.";
+            readonly stubMethods: readonly [
+                "chatCompletions",
+                "create",
+                "delete",
+                "get",
+                "list",
+                "search"
+            ];
+            readonly syncStubMethods: readonly [
+                "get"
+            ];
+        };
+        readonly tier: "action";
+    },
+    {
+        readonly appMethod: {
             readonly configKey: "analytics";
             readonly doc: "Override the Analytics Engine dataset backing `ctx.analytics` (defaults to `env.ANALYTICS`).";
             readonly method: "analytics";

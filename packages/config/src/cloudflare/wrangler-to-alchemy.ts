@@ -189,6 +189,8 @@ const collectVariables = (config: WranglerConfigShape, bindings: string[]): void
  */
 const UNSUPPORTED_FIELDS = [
     "ai",
+    "ai_search",
+    "ai_search_namespaces",
     "analytics_engine_datasets",
     "assets",
     "browser",

@@ -150,6 +150,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
         },
+        aiSearch: {
+            level: "unsupported",
+            note: "No AI Search-equivalent binding implemented, so codegen omits `ctx.aiSearch`. A REST-backed emulation (account id + API token over fetch) was considered and not built: the REST and binding APIs differ, and nobody on this target has asked for it",
+        },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
         containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },

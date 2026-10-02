@@ -85,8 +85,13 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 //   @lunora/bindings/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
 //   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/pipelines)
 //   ctx.artifacts               → artifacts                 → hint (the namespace's jurisdiction is fixed at creation, so never auto-written)
+//   ctx.aiSearch                → ai_search_namespaces      → self-describing (namespace "default" always exists; wrangler creates a missing one)
 const CAPABILITY_SOURCES = {
     usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
+    // Like `usesPipelines` / `usesR2sql` below: `@lunora/bindings/ai-search` is types
+    // only and codegen wires the raw `ai_search_namespaces` binding onto
+    // ActionCtx, so the signal is the `ctx.aiSearch` read, never an import.
+    usesAiSearch: { contextProperty: "aiSearch", source: "@lunora/bindings/ai-search" },
     usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/bindings\/analytics["']/, source: "@lunora/bindings/analytics" },
     // Artifacts is codegen-wired onto ActionCtx like Pipelines, so an app usually
     // only reads `ctx.artifacts`. A value import of `@lunora/bindings/artifacts`
@@ -234,6 +239,8 @@ interface InferredBindings {
     signals: string[];
     /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
+    /** `ctx.aiSearch` is used → self-describing `ai_search_namespaces` binding (`AI_SEARCH` on namespace `default`; auto-writeable). */
+    usesAiSearch: boolean;
     /** `@lunora/bindings/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
 
@@ -602,6 +609,10 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         [capabilities.usesImages, "images (@lunora/bindings/images imported) — self-describing { binding: IMAGES }"],
         [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/bindings/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
         [capabilities.usesWorkerLoader, "worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }"],
+        [
+            capabilities.usesAiSearch,
+            'ai_search_namespaces (ctx.aiSearch used) — self-describing { binding: AI_SEARCH, namespace: "default" }; remote-only, so `lunora dev` reaches the deployed AI Search service',
+        ],
         // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
         // as hints — never an auto-write — exactly like R2's user-defined bucket name.
