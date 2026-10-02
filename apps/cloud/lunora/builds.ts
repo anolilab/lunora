@@ -28,17 +28,25 @@ interface BuildRow {
     bundleHash?: string;
     commitSha: string;
     createdAt: number;
+    deploymentId?: string;
     fromFork?: boolean;
     organizationId: Id<"organizations">;
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
     pullRequest?: number;
+    reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
     skipReason?: string;
     status: BuildStatus;
     trigger?: BuildTrigger;
 }
+
+/**
+ * Deployment states in which a release is serving or about to: a push of its
+ * commit again (a redelivered webhook, say) has nothing left to do.
+ */
+const SERVING_STATUSES: ReadonlySet<string> = new Set(["building", "live", "provisioning", "queued", "verifying"]);
 
 interface ProjectRow {
     _id: Id<"projects">;
@@ -72,11 +80,19 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * arbitrary project. Reached via the HMAC-verified webhook edge route; the
  * only spoofable input is build volume, which the per-IP limiter caps.
  * Dedup: an existing successful build for (project, commitSha, rootDirectory,
- * trigger) is returned as-is (`reused: true`) instead of queuing a rebuild. The
- * trigger is part of the key because it decides the release: a pull request's
- * preview build must not swallow the production release of the same commit
- * once it is merged fast-forward. Fork-ness is part of it for the same reason:
- * a fork's build is never released, so it must not stand in for a release.
+ * trigger) whose release still serves — or a fork's, which never releases — is
+ * returned as-is (`reused: true`) instead of queuing anything. The trigger is
+ * part of the key because it decides the release: a pull request's preview
+ * build must not swallow the production release of the same commit once it is
+ * merged fast-forward. Fork-ness is part of it for the same reason: a fork's
+ * build is never released, so it must not stand in for a release.
+ *
+ * A build of the same key whose release no longer serves (superseded by a
+ * later push, failed, or torn down) does NOT swallow the push: pushing that
+ * commit again means "deploy this". The new build names the old one
+ * (`reusesBuildId`) and re-releases its stored release without rebuilding; the
+ * runner rebuilds instead when that release was pruned with the rollback window,
+ * and a build that never recorded a deployment is rebuilt outright.
  *
  * Path filter: a push whose changed files match none of the project's watch
  * paths is recorded as a `skipped` build carrying the reason, so the Builds tab
@@ -120,16 +136,22 @@ export const recordPush = internalMutation
 
             const { rootDirectory, watchPaths } = project;
             const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-            const successful = existingPage.find(
-                (build) =>
-                    build.status === "successful" &&
-                    build.bundleHash &&
-                    build.rootDirectory === rootDirectory &&
-                    build.trigger === trigger &&
-                    (build.fromFork === true) === (fromFork === true),
-            );
+            // Newest first: once a commit was re-released, its newest build names the newest deployment.
+            const successful = existingPage
+                .toSorted((a, b) => b.createdAt - a.createdAt)
+                .find(
+                    (build) =>
+                        build.status === "successful" &&
+                        build.bundleHash &&
+                        build.rootDirectory === rootDirectory &&
+                        build.trigger === trigger &&
+                        (build.fromFork === true) === (fromFork === true),
+                );
 
-            if (successful) {
+            const previous =
+                successful?.deploymentId == null ? null : ((await context.db.get(successful.deploymentId as Id<"deployments">)) as null | { status: string });
+
+            if (successful && (successful.fromFork === true || (previous !== null && SERVING_STATUSES.has(previous.status)))) {
                 return { buildId: successful._id, reused: true };
             }
 
@@ -147,6 +169,8 @@ export const recordPush = internalMutation
                 organizationId: project.organizationId,
                 projectId: project._id, // secret-scanner:allow -- domain field name
                 ...(pullRequest === undefined ? {} : { pullRequest }),
+                // Only a build that recorded a deployment has a stored release to re-release.
+                ...(previous === null || successful === undefined ? {} : { reusesBuildId: successful._id }),
                 ...(rootDirectory === undefined ? {} : { rootDirectory }),
                 trigger,
                 updatedAt: now,
@@ -392,6 +416,48 @@ export const releaseTarget = internalQuery
             projectSlug: project.slug,
             ...(build.pullRequest === undefined ? {} : { pullRequest: build.pullRequest }),
             ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
+        };
+    });
+
+/** The stored release a build re-releases: the earlier build's deployment, its bundle hash and its crons. */
+export interface ReusableRelease {
+    bundleHash: string;
+    cronSpecs?: string[];
+    deploymentId: string;
+}
+
+/**
+ * What a build that re-releases an earlier one (`reusesBuildId`, set by
+ * {@link recordPush}) re-releases: that build's deployment — whose payload the
+ * runner reads from `RELEASES` — its bundle hash, and the crons the deployment
+ * ran with. `null` for a build that reuses nothing, or whose earlier build is
+ * gone or not this project's; the runner then builds from source. SYSTEM only.
+ */
+export const reusableRelease = internalQuery
+    .input({ buildId: v.id("builds") })
+    .query(async ({ ctx: context, args: { buildId } }): Promise<null | ReusableRelease> => {
+        const build = (await context.db.get(buildId)) as BuildRow | null;
+
+        if (build?.reusesBuildId == null) {
+            return null;
+        }
+
+        const earlier = (await context.db.get(build.reusesBuildId)) as BuildRow | null;
+
+        if (earlier?.projectId !== build.projectId || earlier.deploymentId == null || earlier.bundleHash == null) {
+            return null;
+        }
+
+        const deployment = (await context.db.get(earlier.deploymentId as Id<"deployments">)) as null | { cronSpecs?: null | string[]; projectId: string };
+
+        if (deployment?.projectId !== build.projectId) {
+            return null;
+        }
+
+        return {
+            bundleHash: earlier.bundleHash,
+            ...(deployment.cronSpecs == null ? {} : { cronSpecs: deployment.cronSpecs }),
+            deploymentId: earlier.deploymentId,
         };
     });
 

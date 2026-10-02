@@ -488,9 +488,15 @@ GitHub webhook only parses PR events into preview _intents_.
 > pushed. Known limits: the release payload rides one NDJSON line and is
 > parsed in the Worker, so a release near the 100 MiB cap will exceed Worker
 > memory exactly as a `POST /v1/deploy` of that size would; a build plus its
-> release must finish inside the 30-minute lease; and a reused build (same
-> commit, root directory and trigger) does not re-release, because its bundle
-> was never stored.
+> release must finish inside the 30-minute lease.
+>
+> - A push of a commit already built (same commit, root directory and
+>   trigger) whose release no longer serves (superseded, failed or torn
+>   down) re-releases: the new build names the earlier one
+>   (`builds.reusesBuildId`) and the runner releases that build's stored
+>   release (`releases/<deploymentId>.json`) without rebuilding; once the
+>   release was pruned with the rollback window, it builds from source. A
+>   build whose release still serves is reused as is (`feat/cloud-followups`).
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 

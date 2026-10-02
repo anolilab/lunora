@@ -127,6 +127,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:recordPush": lunora_builds_4.recordPush as unknown as RegisteredLunoraFunction,
     "builds:releaseTarget": lunora_builds_4.releaseTarget as unknown as RegisteredLunoraFunction,
     "builds:reportTarget": lunora_builds_4.reportTarget as unknown as RegisteredLunoraFunction,
+    "builds:reusableRelease": lunora_builds_4.reusableRelease as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_5.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_5.register as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:connect": lunora_cloudflare_accounts_6.connect as unknown as RegisteredLunoraFunction,
@@ -407,6 +408,12 @@ if (typeof source["buildId"] !== "string") return DEFER;
 return { "buildId": source["buildId"] };
 });
 installCompiledValidatorMap(lunora_builds_4.reportTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["buildId"] !== "string") return DEFER;
+return { "buildId": source["buildId"] };
+});
+installCompiledValidatorMap(lunora_builds_4.reusableRelease.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["buildId"] !== "string") return DEFER;
@@ -943,11 +950,12 @@ export interface Caller {
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
         recordPush: (args: { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
+        reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -1214,6 +1222,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         recordPush: (args) => callRegistered(context, "builds:recordPush", args),
         releaseTarget: (args) => callRegistered(context, "builds:releaseTarget", args),
         reportTarget: (args) => callRegistered(context, "builds:reportTarget", args),
+        reusableRelease: (args) => callRegistered(context, "builds:reusableRelease", args),
     },
     cells: {
         list: (args) => callRegistered(context, "cells:list", args),

@@ -194,6 +194,11 @@ export const deployTables = {
         projectId: v.id("projects"),
         // The pull request number, for `pull_request` builds.
         pullRequest: v.optional(v.number()),
+        // An earlier successful build of the same commit, root directory and
+        // trigger whose release is no longer serving: this build re-releases
+        // that build's stored release (`releases/<deploymentId>.json`) instead
+        // of rebuilding, or rebuilds once the release was pruned.
+        reusesBuildId: v.optional(v.id("builds")),
         // The project's rootDirectory when the push was recorded, so a settings
         // change mid-queue cannot build a commit from a directory it was not
         // pushed for, and dedup never reuses a bundle built from another root.

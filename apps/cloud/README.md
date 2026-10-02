@@ -610,7 +610,12 @@ A connected repository deploys without the CLI. The flow, end to end:
 1. **Webhook.** `POST /v1/github/webhook` (HMAC-verified) records a `builds` row
    through `builds.recordPush`: a push to the default branch with
    `trigger: "push"`, a pull-request upsert with `trigger: "pull_request"`. A
-   successful build of the same commit, root directory and trigger is reused.
+   successful build of the same commit, root directory and trigger is reused
+   while its release still serves; when it no longer does (a later push
+   superseded it, it failed or it was torn down), the push queues a build that
+   re-releases that build's stored release (`reusesBuildId`) — no rebuild —
+   or, once the stored release was pruned with the rollback window, builds it
+   again from source.
 2. **Drain.** Every minute the Worker's own `scheduled()` calls
    `POST /v1/builds/dispatch` in-process (admin-token gated), which claims up to
    five builds under a lease and hands each to its own `BuildRunnerDO`

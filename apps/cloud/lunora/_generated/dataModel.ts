@@ -200,6 +200,7 @@ export interface Doc_builds {
     processingStartedAt?: number;
     projectId: Id<"projects">;
     pullRequest?: number;
+    reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
@@ -1030,6 +1031,7 @@ export interface Insert_builds {
     processingStartedAt?: number;
     projectId: Id<"projects">;
     pullRequest?: number;
+    reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";

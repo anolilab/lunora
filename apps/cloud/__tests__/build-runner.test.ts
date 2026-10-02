@@ -4,6 +4,7 @@ import type { BuildStageResult } from "../src/builds/control-plane";
 import { runBuildStage } from "../src/builds/control-plane";
 import { BuildRunnerDO } from "../src/builds/runner-do";
 import type { BuildJob, BuildStage } from "../src/builds/runner-job";
+import type { DeployHandlerDeps } from "../src/deploy/release-core";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 
 /**
@@ -131,6 +132,36 @@ describe(runBuildStage, () => {
 
         await expect(runBuildStage(input, job, "interrupted")).resolves.toStrictEqual({ next: null });
         expect(mutations.at(-1)).toMatchObject({ buildId: "bld_1", error: expect.stringContaining("cut off mid-run") as string, runnerId: "edge-1" });
+    });
+
+    it("re-releases a commit already built from its deployment's stored release, keeping it for the release half", async () => {
+        const { input, mutations } = wiring();
+        const objects = new Map<string, string>();
+        const bucket = {
+            delete: (key: string) => {
+                objects.delete(key);
+
+                return Promise.resolve();
+            },
+            get: (key: string) => {
+                const value = objects.get(key);
+
+                return Promise.resolve(value === undefined ? null : { text: () => Promise.resolve(value) });
+            },
+            put: (key: string, value: string) => Promise.resolve(objects.set(key, value)),
+        };
+        const stored = { bundle: "QUJD", manifest: { bindings: [] } };
+        const deploy = { releases: { get: (id: string) => Promise.resolve(id === "dep_old" ? stored : null) } } as unknown as DeployHandlerDeps;
+        const context = { ...input.context, runQuery: <R>() => Promise.resolve({ bundleHash: "h1", cronSpecs: ["0 0 * * *"], deploymentId: "dep_old" } as R) };
+
+        await expect(runBuildStage({ context, deploy, environment: { RELEASES: bucket } }, job, "build")).resolves.toStrictEqual({ next: "release" });
+        expect(JSON.parse(objects.get("build-executions/bld_1.json") ?? "null")).toStrictEqual({
+            bundle: "QUJD",
+            bundleHash: "h1",
+            cronSpecs: ["0 0 * * *"],
+            manifest: { bindings: [] },
+        });
+        expect(mutations.map((args) => args["line"])).toContain("abc is already built: re-releasing deployment dep_old's stored release");
     });
 
     it("fails a release whose execution was not kept", async () => {

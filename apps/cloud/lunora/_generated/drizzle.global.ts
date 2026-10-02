@@ -206,6 +206,7 @@ export const builds = sqliteTable("builds", {
     processingStartedAt: real("processingStartedAt"),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     pullRequest: real("pullRequest"),
+    reusesBuildId: text("reusesBuildId").references((): AnySQLiteColumn => builds._id),
     rootDirectory: text("rootDirectory"),
     skipReason: text("skipReason"),
     status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
