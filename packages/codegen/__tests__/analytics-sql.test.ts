@@ -63,7 +63,8 @@ describe("analytics-sql fixture", () => {
         expect(shard).toContain(
             "const analyticsSqlBinding = config.analyticsSql?.(env) ?? (env as Record<string, unknown>).ANALYTICS_SQL;\n                const analyticsSql: AnalyticsSql = analyticsSqlBinding ? createAnalyticsSql({ binding: analyticsSqlBinding as AnalyticsSqlBindingLike }) : analyticsSqlStub;",
         );
-        expect(shard).toContain("Add an \\`analytics\\` binding");
+        // A plain string in the row, rendered through JSON.stringify: no stray escaped backticks.
+        expect(shard).toContain('Add an `analytics` binding ({ binding: \\"ANALYTICS_SQL\\" }');
         // The stub points at the token transport for a worker with no binding.
         expect(shard).toContain("createAnalyticsSqlRest({ accountId, apiToken })");
         expect(shard).toContain("const analyticsSqlStub: AnalyticsSql = {");

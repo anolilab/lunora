@@ -126,7 +126,7 @@ const storageStub = {
 
 const analyticsSqlStub: AnalyticsSql = {
     query: async () => {
-        throw new Error("ctx.analyticsSql: no Analytics SQL binding found. Add an \`analytics\` binding ({ binding: \"ANALYTICS_SQL\" }, wrangler >= 4.145.0) to wrangler.jsonc, or point ctx.analyticsSql at a token transport with defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId, apiToken })).");
+        throw new Error("ctx.analyticsSql: no Analytics SQL binding found. Add an `analytics` binding ({ binding: \"ANALYTICS_SQL\" }, wrangler >= 4.145.0) to wrangler.jsonc, or point ctx.analyticsSql at a token transport with defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId, apiToken })).");
     },
 };
 
