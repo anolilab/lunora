@@ -17,7 +17,7 @@
  *   is reachable from outside. `./session-client` is their typed caller.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
-import type { CloudMessage, HostdJob } from "@lunora/hostd/protocol";
+import type { CloudMessage, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
 import { encodeMessage, HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
@@ -26,6 +26,7 @@ import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame } from "./session";
 import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf } from "./session-store";
+import { recordBoxReport } from "./usage";
 
 /** The env slice the session reads. A `type` so the control plane's env types stay assignable to it. */
 export type BoxSessionEnvironment = {
@@ -71,6 +72,9 @@ const MAX_JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const BOX_ID_PATTERN = /^[\w-]{1,128}$/u;
 
 const NONCE_PATTERN = /^[\w-]{22,128}$/u;
+
+/** A `report` window must start on a whole minute (README §5.1). */
+const REPORT_ALIGNMENT_MS = 60_000;
 
 /** Close code for every refusal: 1008, policy violation. */
 const POLICY_VIOLATION = 1008;
@@ -119,6 +123,9 @@ const refuseSocket = (socket: SessionSocket, code: string, message: string): voi
 
 export class BoxSessionDO {
     private readonly jobs = new JobRegistry();
+
+    /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. */
+    private reports: Promise<unknown> = Promise.resolve();
 
     private readonly state: SessionState;
 
@@ -343,7 +350,7 @@ export class BoxSessionDO {
                 break;
             }
             case "report": {
-                // Usage reports are recorded by the usage path (G15); until then they are validated and dropped.
+                await this.recordReport(database, attachment.boxId, effect.message, now);
                 break;
             }
             case "result": {
@@ -421,6 +428,25 @@ export class BoxSessionDO {
         finish().catch(() => undefined);
 
         return new Response(readable, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
+    }
+
+    /**
+     * Record a `report` (plan 458 G15). Only minute-aligned windows are taken: a
+     * box reports once a minute, and the alignment is what bounds how many
+     * distinct windows — and so how many rows — even a hostile box can produce.
+     */
+    private async recordReport(database: ControlPlaneStore, boxId: string, report: ReportMessage, now: number): Promise<void> {
+        if (report.windowStart % REPORT_ALIGNMENT_MS !== 0) {
+            return;
+        }
+
+        this.reports = this.reports.then(async () => {
+            const box = await loadBox(database, boxId);
+
+            return box === null || box.status === "revoked" ? undefined : recordBoxReport(database, box, report, now);
+        });
+
+        await this.reports.catch(() => undefined);
     }
 
     /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */

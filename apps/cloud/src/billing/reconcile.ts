@@ -10,6 +10,7 @@ import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
 import type { PeriodUsage } from "./spend";
+import { isBillableUsage } from "./usage";
 
 interface OrgRow {
     _id: string;
@@ -19,6 +20,7 @@ interface OrgRow {
 }
 
 interface UsageRow {
+    boxId?: null | string;
     kind: string;
     organizationId: string;
     periodStart: number;
@@ -68,7 +70,8 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
     // the bucket that no rate ever converts into credits. The *cap* prices the
     // whole bill (`src/billing/spend.ts`) — that asymmetry is deliberate.
     for (const row of usageRows) {
-        if (row.kind !== "requests" && row.kind !== "cpuMs") {
+        // Box-reported counts are never billed (plan 458 D12).
+        if ((row.kind !== "requests" && row.kind !== "cpuMs") || !isBillableUsage(row)) {
             continue;
         }
 

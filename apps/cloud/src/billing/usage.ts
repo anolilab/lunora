@@ -51,6 +51,15 @@ export const aggregateUsage = (events: ReadonlyArray<UsageEvent>, periodStart: n
     return totals;
 };
 
+/**
+ * Whether a `platformUsage` row counts toward what an organization is billed —
+ * its spend cap, its overage debit and its invoice summary. A row a customer
+ * box reported (`boxId` set) never does (plan 458 D12): the customer has root
+ * on the box, so its counts are display only. NULL off a `.global()` row and
+ * `undefined` both mean "not a box row".
+ */
+export const isBillableUsage = (row: { boxId?: null | string }): boolean => row.boxId == null;
+
 /** Drop the zero meters — the sparse form the cost model and breakdown take. */
 export const toPeriodUsage = (totals: UsageTotals): PeriodUsage => {
     const usage: PeriodUsage = {};

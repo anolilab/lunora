@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { PeriodUsage, UsageMeter } from "../src/billing/spend";
 import { estimatedSpendMinor, evaluateSpendCap, isUsageMeter } from "../src/billing/spend";
 import type { UsageTotals } from "../src/billing/usage";
-import { aggregateUsage } from "../src/billing/usage";
+import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
@@ -139,6 +139,8 @@ export const ingest = mutation
 
 interface PlatformUsageRow {
     _id: Id<"platformUsage">;
+    /** Set on box-reported rows — display only, never billed (plan 458 D12). */
+    boxId?: Id<"boxes"> | null;
     createdAt: number;
     kind: UsageMeter;
     organizationId: Id<"organizations">;
@@ -190,7 +192,9 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
     const groups = new Map<string, PlatformUsageRow[]>();
 
     for (const row of closed) {
-        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}`;
+        // Box rows compact among themselves, per box: folding one into a billable
+        // row would bill it, and folding it away would lose what the studio shows.
+        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}|${row.boxId ?? ""}`;
         const group = groups.get(groupKey) ?? [];
 
         group.push(row);
@@ -233,7 +237,11 @@ export const summary = query
         // `rollup`, and one page stops at 1000 rows — a busy org would under-report.
         const rows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { organizationId, periodStart } }));
 
-        return aggregateUsage(rows, periodStart);
+        // What the org is billed on: box-reported counts are display only (plan 458 D12).
+        return aggregateUsage(
+            rows.filter((row) => isBillableUsage(row)),
+            periodStart,
+        );
     });
 
 /**
@@ -262,7 +270,8 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     // skipped rather than throwing: the sweep that protects the platform from a
     // runaway bill must never be the thing that crashes.
     for (const row of usageRows) {
-        if (!isUsageMeter(row.kind)) {
+        // Box-reported counts never move the spend cap (plan 458 D12).
+        if (!isUsageMeter(row.kind) || !isBillableUsage(row)) {
             continue;
         }
 
@@ -366,22 +375,35 @@ export const series = query
         const { page } = await context.db.platformUsage.findMany({ where: { organizationId, periodStart } });
         const dayMs = 24 * 60 * 60 * 1000;
         const buckets = new Map<number, PeriodUsage>();
+        // Requests a customer box reported: plotted, never priced (plan 458 D12).
+        const boxRequests = new Map<number, number>();
 
-        for (const row of page) {
+        for (const row of page as PlatformUsageRow[]) {
             if (!isUsageMeter(row.kind)) {
                 continue;
             }
 
             const day = Math.floor(row.createdAt / dayMs) * dayMs;
-            const bucket = buckets.get(day) ?? {};
 
-            bucket[row.kind] = (bucket[row.kind] ?? 0) + row.quantity;
-            buckets.set(day, bucket);
+            if (isBillableUsage(row)) {
+                const bucket = buckets.get(day) ?? {};
+
+                bucket[row.kind] = (bucket[row.kind] ?? 0) + row.quantity;
+                buckets.set(day, bucket);
+            } else if (row.kind === "requests") {
+                boxRequests.set(day, (boxRequests.get(day) ?? 0) + row.quantity);
+                buckets.set(day, buckets.get(day) ?? {});
+            }
         }
 
         return [...buckets.entries()]
             .map(([day, bucket]) => {
-                return { costMinor: estimatedSpendMinor(bucket), cpuMs: bucket.cpuMs ?? 0, day, requests: bucket.requests ?? 0 };
+                return {
+                    costMinor: estimatedSpendMinor(bucket),
+                    cpuMs: bucket.cpuMs ?? 0,
+                    day,
+                    requests: (bucket.requests ?? 0) + (boxRequests.get(day) ?? 0),
+                };
             })
             .toSorted((a, b) => a.day - b.day);
     });

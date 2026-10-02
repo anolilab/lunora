@@ -187,7 +187,11 @@ MUST NOT carry `error`; `ok: false` MUST carry `error: {code, message}`. `url`
 `perAlias` holds ≤ 500 entries with unique aliases, each
 `{alias, requests, errors, p50Ms?}`: integer counts with `errors ≤ requests`,
 and `p50Ms` a finite number ≥ 0. Shown in the studio only; never billing
-evidence (D12).
+evidence (D12). A box reports once a minute: Lunora Cloud records a window
+only when `windowStart` is a whole minute (a multiple of 60 000), spans at most
+an hour, is at most a day old and ends no more than five minutes ahead of its
+clock, and it records each `windowStart` of a box once — resending a window
+(after a reconnect, say) is safe and never double-counts.
 
 **`pong`** — `{type}`.
 

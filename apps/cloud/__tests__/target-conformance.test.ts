@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
 import { boxSession } from "../src/boxes/session-client";
+import { recordBoxReport } from "../src/boxes/usage";
 import { boxUsageIn, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
 import type { ProvisionJob } from "../src/targets/cloudflare-wfp/box-contract";
 import { createCloudflareWfpDriver } from "../src/targets/cloudflare-wfp/driver";
@@ -86,12 +87,21 @@ describeTargetConformance("cloudflare-wfp", () => {
  * real `BoxSessionDO` through the session client, the session sends them down
  * an authenticated socket, and a fake `lunora-hostd` on the far end runs them
  * against its fleets and answers. What the box runs is what it reports.
- * Usage is read back from box-reported `platformUsage` rows, as production does.
+ * Usage is recorded by the real box-report write path and read back from the
+ * `platformUsage` rows it writes, as production does.
  */
 describeTargetConformance("celld-vps", () => {
     const box = { id: "box_1", slug: "bslug000001" };
     const fleets = new Map<string, string>();
-    const store = memoryStore({ deployments: [], domains: [], platformUsage: [], projects: [] });
+    // The project behind alias `app`, placed on the box, with a live deployment its reports attribute to.
+    const store = memoryStore({
+        aliasOwnership: [{ _id: "own_app", alias: "app", projectId: "proj_app" }],
+        deployments: [{ _id: "dep_app", alias: "app", projectId: "proj_app", status: "live" }],
+        domains: [],
+        platformUsage: [],
+        projects: [{ _id: "proj_app", boxId: "box_1", organizationId: "org_1" }],
+    });
+    const reported: Promise<unknown>[] = [];
     const state = fakeState();
     const session = new TestBoxSession(state, store, { LUNORA_BOX_DOMAIN: "boxes.test" });
     const connected = (async () => {
@@ -133,20 +143,23 @@ describeTargetConformance("celld-vps", () => {
             boxForSlug: (slug) => Promise.resolve(slug === box.slug ? { ...box, revoked: false } : null),
             controlPlaneOrigin: "https://cloud.test",
             session: () => connectedSession,
-            usage: boxUsageIn(store),
+            usage: async (sinceMs) => {
+                await Promise.all(reported);
+
+                return boxUsageIn(store)(sinceMs);
+            },
         }),
         running: () => [...fleets.keys()],
         serve: (resourceRef, requests, atMs) => {
-            // A box report, as the usage path records it: one row per alias and window.
-            store.tables["deployments"]?.push({ _id: `dep_${resourceRef}_${String(atMs)}`, alias: resourceRef, scriptName: resourceRef });
-            store.tables["platformUsage"]?.push({
-                _id: `use_${String(atMs)}`,
-                boxId: box.id,
-                deploymentId: `dep_${resourceRef}_${String(atMs)}`,
-                kind: "requests",
-                quantity: requests,
-                windowStart: atMs,
-            });
+            // A box's report, through the real write path, received the moment its window closed.
+            reported.push(
+                recordBoxReport(
+                    store,
+                    { _id: box.id, organizationId: "org_1" },
+                    { perAlias: [{ alias: resourceRef, errors: 0, requests }], type: "report", windowEnd: atMs, windowStart: atMs },
+                    atMs,
+                ),
+            );
         },
     };
 });
