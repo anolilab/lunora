@@ -8,7 +8,8 @@
  * `GET /v1/boxes/releases/:id` and `GET /v1/hostd/releases/:id/manifest` are
  * box-signed and verified as the control plane does (timestamp window,
  * single-use nonce, signature). `/s3/{bucket}` is a minimal S3
- * (ListObjectsV2 + DeleteObjects) for a destroy's `deleteData`.
+ * (ListObjectsV2 + DeleteObjects) for a destroy's `deleteData`. `POST
+ * /v1/logs` keeps the OTLP log exports the box forwards.
  */
 import { createPublicKey, verify } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -20,9 +21,17 @@ import { WebSocketServer } from "ws";
 
 import { decodeBoxMessage, encodeMessage } from "../../../src/wire/codec";
 import { challengeSigningPayload, HOSTD_REQUEST_HEADERS, requestSigningPayload } from "../../../src/wire/signing";
-import type { BoxMessage, CloudMessage, HelloMessage, HostdJob, ResultMessage, RouteEntry } from "../../../src/wire/types";
+import type { BoxMessage, CloudMessage, ConfigMessage, HelloMessage, HostdJob, ResultMessage, RouteEntry } from "../../../src/wire/types";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+type OtlpAttribute = { key: string; value: { stringValue: string } };
+
+/** One resource of an OTLP/JSON logs export, as far as the box fills it. */
+interface OtlpResourceLogs {
+    resource: { attributes: OtlpAttribute[] };
+    scopeLogs: { logRecords: { attributes: OtlpAttribute[]; body: { stringValue: string }; severityText: string }[] }[];
+}
 
 interface JobOutcome {
     progress: string[];
@@ -94,6 +103,12 @@ class FakeControlPlane {
     public readonly objects = new Map<string, Set<string>>();
 
     public routes: RouteEntry[] = [];
+
+    /** The `config` sent after every `auth`; set with `pushConfig`. */
+    public config: ConfigMessage | undefined;
+
+    /** Every OTLP logs export the box posted to `/v1/logs`: its `Authorization` header and parsed body. */
+    public readonly logExports: { authorization: string | undefined; body: { resourceLogs: OtlpResourceLogs[] } }[] = [];
 
     /** How many sockets authenticated. */
     public authentications = 0;
@@ -194,6 +209,34 @@ class FakeControlPlane {
         this.socket?.send(encodeMessage(message));
     }
 
+    /** Send a `config`, now and after every later `auth`. */
+    public pushConfig(config: Omit<ConfigMessage, "type">): void {
+        this.config = { ...config, type: "config" };
+        this.send(this.config);
+    }
+
+    /** Every log record the box has forwarded so far, with its resource's `service.name`. */
+    public get forwardedLogs(): { attributes: Record<string, string>; body: string; service: string; severity: string }[] {
+        const forwarded: { attributes: Record<string, string>; body: string; service: string; severity: string }[] = [];
+
+        for (const { body } of this.logExports) {
+            for (const resource of body.resourceLogs) {
+                const service = resource.resource.attributes.find((entry) => entry.key === "service.name")?.value.stringValue ?? "";
+
+                for (const record of resource.scopeLogs.flatMap((scope) => scope.logRecords)) {
+                    forwarded.push({
+                        attributes: Object.fromEntries(record.attributes.map((entry) => [entry.key, entry.value.stringValue])),
+                        body: record.body.stringValue,
+                        service,
+                        severity: record.severityText,
+                    });
+                }
+            }
+        }
+
+        return forwarded;
+    }
+
     /** Push a routing table. */
     public pushRoutes(table: RouteEntry[]): void {
         this.routes = table;
@@ -286,6 +329,10 @@ class FakeControlPlane {
                 this.socket = ws;
                 this.authentications += 1;
                 ws.send(encodeMessage({ table: this.routes, type: "routes" }));
+
+                if (this.config !== undefined) {
+                    ws.send(encodeMessage(this.config));
+                }
 
                 for (const resolve of this.readyWaiters.splice(0)) {
                     resolve();
@@ -396,6 +443,15 @@ class FakeControlPlane {
             const stored = release === null ? this.manifests.get(manifest?.[1] ?? "") : this.releases.get(release[1] ?? "");
 
             return stored === undefined ? { body: JSON.stringify({ error: "not found" }), status: 404 } : { body: stored, status: 200 };
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/logs") {
+            this.logExports.push({
+                authorization: request.headers.authorization,
+                body: JSON.parse(await readBody(request)) as { resourceLogs: OtlpResourceLogs[] },
+            });
+
+            return { body: JSON.stringify({ partialSuccess: {} }), status: 200 };
         }
 
         if (url.pathname.startsWith("/s3/")) {

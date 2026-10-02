@@ -85,7 +85,16 @@ interface CloudErrorMessage extends ProtocolErrorDetail {
 ### `CloudMessage` (type)
 
 ```ts
-type CloudMessage = ChallengeMessage | CloudErrorMessage | JobMessage | PingMessage | RoutesMessage;
+type CloudMessage = ChallengeMessage | CloudErrorMessage | ConfigMessage | JobMessage | PingMessage | RoutesMessage;
+```
+
+### `ConfigMessage` (interface)
+
+```ts
+interface ConfigMessage {
+    telemetry?: TelemetryConfig;
+    type: "config";
+}
 ```
 
 ### `DecodeError` (interface)
@@ -184,6 +193,7 @@ const HOSTD_PROTOCOL_LIMITS: {
     readonly maxLineBytes: 8192;
     readonly maxReportAliases: 500;
     readonly maxRoutes: 2000;
+    readonly maxTokenLength: 512;
     readonly maxUrlLength: 2048;
 };
 ```
@@ -369,6 +379,15 @@ interface RoutesMessage {
 }
 ```
 
+### `TelemetryConfig` (interface)
+
+```ts
+interface TelemetryConfig {
+    endpoint: string;
+    token: string;
+}
+```
+
 ### `UpgradeJob` (interface)
 
 ```ts
@@ -502,6 +521,10 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
+### `ConfigMessage` (interface)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
 ### `DecodeError` (interface)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
@@ -619,6 +642,10 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
 ### `RoutesMessage` (interface)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `TelemetryConfig` (interface)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 

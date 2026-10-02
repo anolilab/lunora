@@ -22,6 +22,7 @@ export type {
     ChallengeMessage,
     CloudErrorMessage,
     CloudMessage,
+    ConfigMessage,
     DecodeError,
     DecodeErrorCode,
     DecodeResult,
@@ -44,6 +45,7 @@ export type {
     ResultMessage,
     RouteEntry,
     RoutesMessage,
+    TelemetryConfig,
     UpgradeJob,
 } from "./wire/types";
 export { isAlias, isErrorCode, isHostname, isNonce, isProtocolId, isSignature, isVersion } from "./wire/validate";

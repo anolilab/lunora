@@ -19,6 +19,7 @@ import type { Isolation, IsolationSystem } from "./isolation";
 import { helloIsolation, setUpIsolation } from "./isolation";
 import { JobRunner } from "./jobs";
 import type { Logger } from "./log";
+import { forwardingLogger, LogForwarder } from "./log-forwarder";
 import LogTailer from "./log-tailer";
 import type { SpawnFunction } from "./process";
 import { installedVersions } from "./release-install";
@@ -49,6 +50,8 @@ interface DaemonOptions {
     fetch?: typeof fetch;
     /** What the isolation self-check reads and runs: the real system unless a test injects its own. */
     isolation?: IsolationSystem;
+    /** How often forwarded logs are posted; injected for tests. */
+    logFlushMs?: number;
     logger: Logger;
     /** Report tick, injected for tests. */
     reportTickMs?: number;
@@ -66,6 +69,9 @@ class Daemon {
 
     public readonly supervisor: Supervisor;
 
+    /** hostd's, celld's and Caddy's own log lines, on their way to the control plane (W6). */
+    public readonly logs: LogForwarder;
+
     private isolation: Isolation | undefined;
 
     private routes: RouteEntry[] = [];
@@ -80,6 +86,9 @@ class Daemon {
 
     private readonly options: DaemonOptions;
 
+    /** The log every part of the daemon writes to: the local one, its warnings and errors forwarded. */
+    private readonly logger: Logger;
+
     private readonly reports = new ReportAggregator();
 
     private readonly reportQueue = new ReportQueue();
@@ -87,11 +96,32 @@ class Daemon {
     public constructor(options: DaemonOptions) {
         this.options = options;
         this.state = loadState(options.config.dataDir);
+        this.logs = new LogForwarder({
+            boxSlug: options.config.hostname.split(".")[0] ?? options.config.hostname,
+            controlPlane: options.config.controlPlane,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+            logger: options.logger,
+            secrets: () => {
+                try {
+                    return Object.values(this.credentials());
+                } catch {
+                    return [];
+                }
+            },
+        });
+        this.logger = forwardingLogger(options.logger, this.logs);
 
         this.supervisor = new Supervisor({
             config: options.config,
             credentials: () => this.credentials(),
-            logger: options.logger,
+            logger: this.logger,
+            onStderr: (child, line) => {
+                if (child.kind === "celld") {
+                    this.logs.pushCelld(child.alias, line);
+                } else {
+                    this.logs.pushCaddy(line);
+                }
+            },
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
         });
@@ -99,7 +129,7 @@ class Daemon {
             caddy: options.config.caddy,
             dataDir: options.config.dataDir,
             hostname: options.config.hostname,
-            logger: options.logger,
+            logger: this.logger,
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         });
     }
@@ -114,7 +144,8 @@ class Daemon {
      * @returns the process exit code
      */
     public async run(): Promise<number> {
-        const { config, logger } = this.options;
+        const { config } = this.options;
+        const { logger } = this;
 
         if (process.getuid?.() === 0 && !config.allowRoot) {
             throw new ConfigError("lunora-hostd refuses to run as root: run it as its own user (the systemd unit does), or set allowRoot in the config");
@@ -189,6 +220,9 @@ class Daemon {
             hello: () => this.hello(),
             identity,
             logger,
+            onConfig: (message) => {
+                this.logs.configure(message.telemetry);
+            },
             onJob: (message) => {
                 runner.submit(message);
             },
@@ -204,6 +238,7 @@ class Daemon {
         });
         this.session = session;
         this.startReports(session);
+        this.logs.start(this.options.logFlushMs);
 
         const end = await session.run();
 
@@ -247,7 +282,8 @@ class Daemon {
 
     /** Write Caddy's boot config, start it when installed, and serve the `ask` endpoint. */
     private async startEdge(): Promise<void> {
-        const { config, logger } = this.options;
+        const { config } = this.options;
+        const { logger } = this;
 
         this.caddy.writeBootConfig(this.routes, this.ports());
 
@@ -303,7 +339,7 @@ class Daemon {
             }
 
             if (!routed.has(alias) && record.state !== "stopped") {
-                this.options.logger.info(`stopping fleet ${alias}: the control plane no longer routes it`);
+                this.logger.info(`stopping fleet ${alias}: the control plane no longer routes it`);
                 // eslint-disable-next-line no-await-in-loop -- one fleet at a time
                 await this.supervisor.stopFleet(alias);
                 this.state.fleets[alias] = { ...record, state: "stopped", updatedAt: Date.now() };
@@ -346,6 +382,7 @@ class Daemon {
         await this.supervisor.shutdown();
         await this.caddy.close();
         this.isolation?.stop();
+        await this.logs.stop();
     }
 }
 

@@ -9,7 +9,7 @@
  * record directory and the Node binary baked in rather than reading them from
  * the environment or `PATH`.
  */
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** One recorded run of a fake binary. */
@@ -63,6 +63,9 @@ const server = createServer((request, response) => {
     response.writeHead(200).end("fleet " + argv[argv.indexOf("--bucket") + 1] + " host " + request.headers["x-forwarded-host"]);
 });
 server.listen(Number(port), host);
+// What celld's RUST_LOG=error,celld=warn lets through, on stderr; and app output on stdout.
+console.error("2026-10-03T00:00:00Z  WARN celld::node: fake node listening on " + listen);
+console.log("app console output");
 process.on("SIGTERM", () => {
     draining = true;
     if (existsSync(join(record, "ignore-sigterm"))) {
@@ -149,8 +152,16 @@ const caddyInvocations = (recordDirectory: string): Invocation[] => readJsonLine
 const caddyLoads = (recordDirectory: string): Record<string, unknown>[] => readJsonLines<Record<string, unknown>>(join(recordDirectory, "caddy-loads.jsonl"));
 
 /** Make the fake binaries misbehave: `fail-deploy`, `ignore-sigterm`, `reject-load`. */
-const setFakeFlag = (recordDirectory: string, flag: "fail-deploy" | "ignore-sigterm" | "reject-load"): void => {
+type FakeFlag = "fail-deploy" | "ignore-sigterm" | "reject-load";
+
+/** Set a flag the fake binaries read. */
+const setFakeFlag = (recordDirectory: string, flag: FakeFlag): void => {
     writeFileSync(join(recordDirectory, flag), "");
+};
+
+/** Clear a flag {@link setFakeFlag} set. */
+const clearFakeFlag = (recordDirectory: string, flag: FakeFlag): void => {
+    rmSync(join(recordDirectory, flag), { force: true });
 };
 
 /** Every file directly in `directory`, for assertions. */
@@ -163,4 +174,4 @@ const listFiles = (directory: string): string[] => {
 };
 
 export type { Invocation };
-export { caddyInvocations, caddyLoads, celldInvocations, listFiles, setFakeFlag, writeFakeBinaries };
+export { caddyInvocations, caddyLoads, celldInvocations, clearFakeFlag, listFiles, setFakeFlag, writeFakeBinaries };

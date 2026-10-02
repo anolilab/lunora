@@ -14,7 +14,7 @@ import { loadState } from "../../src/daemon/state";
 import type { DeployJob } from "../../src/wire/types";
 import type { TestBox } from "./helpers/box";
 import { createTestBox, unisolatedSystem } from "./helpers/box";
-import { caddyInvocations, caddyLoads, celldInvocations, setFakeFlag } from "./helpers/fake-binaries";
+import { caddyInvocations, caddyLoads, celldInvocations, clearFakeFlag, setFakeFlag } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
 
 const storedRelease = (): string =>
@@ -60,7 +60,7 @@ describe("the daemon", () => {
         await plane.listen();
         box = await createTestBox(plane);
         plane.releases.set("dep_1", storedRelease());
-        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger, reportTickMs: 100 });
+        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logFlushMs: 50, logger: silentLogger, reportTickMs: 100 });
         running = daemon.run();
         await plane.authenticated();
     });
@@ -241,6 +241,36 @@ describe("the daemon", () => {
 
         expect(result.error?.code).toBe("CELLD_FAILED");
         expect(result.error?.message).toMatch(/bucket refused the upload/u);
+    });
+
+    it("forwards its own warnings and its fleets' stderr as OTLP logs, once the control plane names an endpoint", async () => {
+        expect.assertions(5);
+
+        const token = "production:org_1|box-log-ingest-key";
+
+        plane.pushConfig({ telemetry: { endpoint: plane.origin, token } });
+        setFakeFlag(box.records, "fail-deploy");
+        await plane.dispatch(deployJob(plane));
+        clearFakeFlag(box.records, "fail-deploy");
+        await plane.dispatch(deployJob(plane));
+
+        await expect
+            .poll(() => plane.forwardedLogs.map((record) => record.body), { timeout: 5000 })
+            .toStrictEqual(
+                expect.arrayContaining([expect.stringMatching(/^job job_1: CELLD_FAILED: /u), expect.stringMatching(/WARN celld::node: fake node listening/u)]),
+            );
+
+        const forwarded = plane.forwardedLogs;
+
+        expect(plane.logExports.every((post) => post.authorization === `Bearer ${token}`)).toBe(true);
+        expect(forwarded.find((record) => record.body.includes("fake node listening"))).toMatchObject({
+            attributes: { alias: "my-app", box: plane.hostname.split(".")[0], source: "celld" },
+            service: "my-app",
+            severity: "WARN",
+        });
+        // A fleet's stdout (its app's own output) and hostd's info lines stay on the box.
+        expect(forwarded.filter((record) => record.body === "app console output" || record.severity === "INFO")).toStrictEqual([]);
+        expect(JSON.stringify(plane.logExports)).not.toContain("test-secret");
     });
 
     it("refuses a release with a binding celld cannot run", async () => {

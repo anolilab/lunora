@@ -191,6 +191,24 @@ export interface RoutesMessage {
     type: "routes";
 }
 
+/** Where a box forwards its own logs: an OTLP/HTTP base URL and the organization's ingest key. */
+export interface TelemetryConfig {
+    /** OTLP base URL; the box posts JSON log records to `{endpoint}/v1/logs`. */
+    endpoint: string;
+    /** The organization's ingest key, sent as `Authorization: Bearer {token}`. Kept in memory only, never logged. */
+    token: string;
+}
+
+/**
+ * The box's runtime configuration from the control plane, sent after `auth`
+ * and again on every change. Each `config` replaces the previous one.
+ */
+export interface ConfigMessage {
+    /** Forward the box's own logs (hostd, celld, Caddy) as OTLP logs. Absent: forward nothing. */
+    telemetry?: TelemetryConfig;
+    type: "config";
+}
+
 /** Keep-alive. The box answers with {@link PongMessage}. */
 export interface PingMessage {
     type: "ping";
@@ -202,7 +220,7 @@ export interface CloudErrorMessage extends ProtocolErrorDetail {
 }
 
 /** Every frame the control plane may send. */
-export type CloudMessage = ChallengeMessage | CloudErrorMessage | JobMessage | PingMessage | RoutesMessage;
+export type CloudMessage = ChallengeMessage | CloudErrorMessage | ConfigMessage | JobMessage | PingMessage | RoutesMessage;
 
 /** Every frame of the protocol, in either direction. */
 export type HostdMessage = BoxMessage | CloudMessage;

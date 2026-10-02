@@ -8,9 +8,9 @@ needs no inbound port for the control plane.
 **Status:** the wire protocol, the signed release pipeline, the daemon (plan
 458 W4, with the on-box halves of W5 and W6), `install.sh`, the systemd unit and
 side-by-side upgrades (W7), and fleet isolation (W8) exist, with the
-`test:hostd` lane over all of it. Not yet: a committed release key (so nothing
-can be released or installed yet, see [below](#setting-up-the-release-key-maintainers)),
-and forwarding hostd's own logs as OTLP (W6).
+`test:hostd` lane over all of it, and forwarding hostd's own logs as OTLP (W6).
+Not yet: a committed release key (so nothing can be released or installed yet,
+see [below](#setting-up-the-release-key-maintainers)).
 
 ## Install
 
@@ -210,6 +210,40 @@ a budget; shutdown drains the fleets before Caddy. The control plane is the
 source of truth: a fleet it stops routing is stopped (its data stays), and
 `hello` reports the fleets on every connect. `destroy` with `deleteData`
 deletes exactly the `fleets/<alias>/` prefix.
+
+**Its own logs** go to the journal (stderr), and — once the control plane's
+`config` frame names an OTLP endpoint and the organization's ingest key
+(protocol §5.2) — to Lunora Cloud as OTLP logs (`POST {endpoint}/v1/logs`,
+`src/daemon/log-forwarder.ts`): hostd's warnings and errors, each celld node's
+stderr (`RUST_LOG=error,celld=warn`; a fleet's stdout, its app's own output,
+stays on the box) and Caddy's warnings and errors, tagged `box:<slug>`,
+`source` and, for a fleet, `alias:<alias>` (its `service.name` is the alias,
+`lunora-hostd` otherwise). At most 1 000 records wait — before the first
+`config`, or while the endpoint is unreachable (retried with backoff from 5 s
+to 5 min) — and the oldest go first, counted in a record of their own. The
+ingest key lives in memory only; every record is redacted before it leaves
+(the ingest key, the bucket credentials, and anything shaped like a bearer
+token, an `AWS_*=` assignment, an enrolment token or a private key), and the
+key is never sent to a plain-`http:` endpoint from a box enrolled with an
+`https:` control plane.
+
+**What the `apps/cloud` branch must send** (cross-branch; this branch does not
+touch `apps/cloud`): right after `auth` — after the `routes` push — and again
+whenever the value changes, `BoxSessionDO` sends
+
+```json
+{ "type": "config", "telemetry": { "endpoint": "<LUNORA_OTLP_ENDPOINT>", "token": "<the box's organization's ingest key>" } }
+```
+
+with the same endpoint a tenant gets as `LUNORA_OTLP_ENDPOINT`, and the token
+`resolveTelemetryConfig` (`src/telemetry/ingest-key.ts`) resolves for the box's
+organization — an `ingest`-capability key, which `POST /v1/logs` accepts and
+which cannot deploy. An organization without an ingest key yet gets one minted
+the same way (`recordIngestKey`); a cell without telemetry configured sends
+`{"type":"config"}`, and the box forwards nothing. `/v1/logs` files records by
+`service.name`: a fleet's lines arrive under its alias, hostd's and Caddy's
+under `lunora-hostd`, each with `box`, `source` and (for a fleet) `alias`
+attributes for the studio's Logs panel to filter on.
 
 hostd refuses to run as root unless the config sets `allowRoot`; it runs as its
 own user (`lunora-hostd`) under [`install/lunora-hostd.service`](./install/lunora-hostd.service).

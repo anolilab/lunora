@@ -69,6 +69,8 @@ interface SupervisorOptions {
     /** Injected for tests. */
     fetch?: typeof fetch;
     logger: Logger;
+    /** Each line a child prints on stderr: a fleet's node (with its alias) or Caddy. */
+    onStderr?: (child: { alias: string; kind: "celld" } | { kind: "caddy" }, line: string) => void;
     spawn?: SpawnFunction;
     timers?: Timers;
 }
@@ -169,6 +171,11 @@ class Supervisor {
             ...launchIdentity(fleet),
             logger,
             name: `celld ${launch.alias}`,
+            onLine: (line, stream) => {
+                if (stream === "stderr") {
+                    this.options.onStderr?.({ alias: launch.alias, kind: "celld" }, line);
+                }
+            },
             ...(cgroups === undefined
                 ? {}
                 : {
@@ -277,6 +284,11 @@ class Supervisor {
             ...launchIdentity(this.isolation.caddy),
             logger: this.options.logger,
             name: "caddy",
+            onLine: (line, stream) => {
+                if (stream === "stderr") {
+                    this.options.onStderr?.({ kind: "caddy" }, line);
+                }
+            },
             ...(this.options.spawn === undefined ? {} : { spawn: this.options.spawn }),
             ...(this.options.timers === undefined ? {} : { timers: this.options.timers }),
         });
