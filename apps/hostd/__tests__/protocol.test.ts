@@ -35,7 +35,7 @@ interface Fixtures {
     signing: {
         challenge: { boxId: string; nonce: string; payload: string };
         request: { boxId: string; method: string; nonce: string; path: string; payload: string; timestamp: number };
-        "request-without-timestamp": { boxId: string; method: string; nonce: string; path: string; payload: string };
+        "request-with-query": { boxId: string; method: string; nonce: string; path: string; payload: string; timestamp: number };
     };
 }
 
@@ -423,10 +423,10 @@ describe("signing payloads", () => {
 
     it("builds the golden request payloads", () => {
         const { payload, ...input } = fixtures.signing.request;
-        const { payload: payloadWithoutTimestamp, ...inputWithoutTimestamp } = fixtures.signing["request-without-timestamp"];
+        const { payload: payloadWithQuery, ...inputWithQuery } = fixtures.signing["request-with-query"];
 
         expect(text(requestSigningPayload(input))).toBe(payload);
-        expect(text(requestSigningPayload(inputWithoutTimestamp))).toBe(payloadWithoutTimestamp);
+        expect(text(requestSigningPayload(inputWithQuery))).toBe(payloadWithQuery);
     });
 
     it("is deterministic", () => {
@@ -436,7 +436,7 @@ describe("signing payloads", () => {
 
     it("separates the two domains", () => {
         const challenge = text(challengeSigningPayload(NONCE, BOX_ID));
-        const request = text(requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/" }));
+        const request = text(requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/", timestamp: 1 }));
 
         expect(challenge.startsWith(`${HOSTD_AUTH_DOMAIN}:`)).toBe(true);
         expect(request.startsWith(`${HOSTD_REQUEST_DOMAIN}\n`)).toBe(true);
@@ -454,7 +454,6 @@ describe("signing payloads", () => {
             { ...base, nonce: `${NONCE}A` },
             { ...base, path: "/v1/boxes/releases/dep_2" },
             { ...base, timestamp: 2 },
-            { ...base, timestamp: undefined },
         ].map((input) => text(requestSigningPayload(input)));
 
         expect(new Set(payloads).size).toBe(payloads.length);
@@ -466,11 +465,17 @@ describe("signing payloads", () => {
         expect(() => challengeSigningPayload(NONCE, "box:1")).toThrow(TypeError);
         expect(() => challengeSigningPayload("short", BOX_ID)).toThrow(TypeError);
         expect(() => challengeSigningPayload(`${NONCE}:x`, BOX_ID)).toThrow(TypeError);
-        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "get", nonce: NONCE, path: "/" })).toThrow(TypeError);
-        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/a\nb" })).toThrow(TypeError);
-        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "relative" })).toThrow(TypeError);
-        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/a#frag" })).toThrow(TypeError);
+        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "get", nonce: NONCE, path: "/", timestamp: 1 })).toThrow(TypeError);
+        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/a\nb", timestamp: 1 })).toThrow(TypeError);
+        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "relative", timestamp: 1 })).toThrow(TypeError);
+        expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/a#frag", timestamp: 1 })).toThrow(TypeError);
         expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/", timestamp: -1 })).toThrow(TypeError);
         expect(() => requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/", timestamp: 1.5 })).toThrow(TypeError);
+    });
+
+    it("refuses a request without a timestamp", () => {
+        expect(() =>
+            requestSigningPayload({ boxId: BOX_ID, method: "GET", nonce: NONCE, path: "/" } as unknown as Parameters<typeof requestSigningPayload>[0]),
+        ).toThrow(TypeError);
     });
 });

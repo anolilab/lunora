@@ -201,13 +201,13 @@ export const namespaceOver = (session: BoxSessionDO): BoxSessionNamespace => {
 /** Signed-request headers for `method path` from `boxId`, as `hostd` sends them (README §6.2). */
 export const signedHeaders = async (
     key: BoxKey,
-    input: { boxId: string; method: string; nonce: string; path: string; timestamp?: number },
+    input: { boxId: string; method: string; nonce: string; path: string; timestamp: number },
 ): Promise<Record<string, string>> => {
     return {
         "x-lunora-box-id": input.boxId,
         "x-lunora-box-nonce": input.nonce,
         "x-lunora-box-signature": await key.sign(requestSigningPayload(input)),
-        ...(input.timestamp === undefined ? {} : { "x-lunora-box-timestamp": String(input.timestamp) }),
+        "x-lunora-box-timestamp": String(input.timestamp),
     };
 };
 

@@ -317,7 +317,7 @@ interface RequestSigningInput {
     method: string;
     nonce: string;
     path: string;
-    timestamp?: number;
+    timestamp: number;
 }
 ```
 

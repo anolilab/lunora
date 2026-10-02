@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ownsDeployment } from "../lunora/boxes";
 import { randomBase64Url } from "../src/boxes/encoding";
 import type { SigningBox } from "../src/boxes/signed-request";
-import { TIMESTAMP_WINDOW_MS, UNTIMED_NONCE_TTL_MS, verifyBoxRequest } from "../src/boxes/signed-request";
+import { TIMESTAMP_WINDOW_MS, verifyBoxRequest } from "../src/boxes/signed-request";
 import { createReleaseStore } from "../src/deploy/release-store";
 import { isRoutePattern, matchRoutePath } from "../src/deploy/route-path";
 import { createDeployRouter } from "../src/deploy/router";
@@ -19,10 +19,15 @@ const NOW = 1_700_000_000_000;
 const PATH = "/v1/boxes/releases/dep_1";
 const BUNDLE = btoa("export default {}");
 
-const signedRequest = async (key: BoxKey, overrides: { boxId?: string; nonce?: string; path?: string; timestamp?: null | number } = {}): Promise<Request> => {
+const signedRequest = async (key: BoxKey, overrides: { boxId?: string; nonce?: string; path?: string; timestamp?: number } = {}): Promise<Request> => {
     const nonce = overrides.nonce ?? randomBase64Url();
-    const timestamp = overrides.timestamp === null ? undefined : (overrides.timestamp ?? NOW);
-    const headers = await signedHeaders(key, { boxId: overrides.boxId ?? "box_1", method: "GET", nonce, path: overrides.path ?? PATH, timestamp });
+    const headers = await signedHeaders(key, {
+        boxId: overrides.boxId ?? "box_1",
+        method: "GET",
+        nonce,
+        path: overrides.path ?? PATH,
+        timestamp: overrides.timestamp ?? NOW,
+    });
 
     return new Request(`https://cloud.test${PATH}`, { headers });
 };
@@ -73,12 +78,26 @@ describe("box-signed requests", () => {
         expect(ledger.claims.get(`box_1:${"n".repeat(22)}`)).toBe(NOW + TIMESTAMP_WINDOW_MS);
     });
 
-    it("accepts a request without a timestamp — a skewed clock must not lock a box out — and remembers its nonce a day", async () => {
+    it("refuses a request without a timestamp, even one validly signed — nothing would ever expire it", async () => {
+        const key = await boxKey();
+        const { ledger, ports } = portsFor(key);
+        const nonce = "u".repeat(22);
+        // The untimed payload the protocol used to allow: an empty timestamp line.
+        const untimed = new TextEncoder().encode(["lunora-hostd-request:v1", "GET", PATH, "box_1", "", nonce].join("\n"));
+        const request = new Request(`https://cloud.test${PATH}`, {
+            headers: { "x-lunora-box-id": "box_1", "x-lunora-box-nonce": nonce, "x-lunora-box-signature": await key.sign(untimed) },
+        });
+
+        await expect(verifyBoxRequest(request, ports)).resolves.toBeNull();
+        expect(ledger.claims.size).toBe(0);
+    });
+
+    it("refuses a request from a day ago, whatever happened to its nonce", async () => {
         const key = await boxKey();
         const { ledger, ports } = portsFor(key);
 
-        await expect(verifyBoxRequest(await signedRequest(key, { nonce: "u".repeat(22), timestamp: null }), ports)).resolves.not.toBeNull();
-        expect(ledger.claims.get(`box_1:${"u".repeat(22)}`)).toBe(NOW + UNTIMED_NONCE_TTL_MS);
+        await expect(verifyBoxRequest(await signedRequest(key, { timestamp: NOW - 24 * 60 * 60 * 1000 }), ports)).resolves.toBeNull();
+        expect(ledger.claims.size).toBe(0);
     });
 
     it("refuses a replayed nonce", async () => {

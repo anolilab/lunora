@@ -989,12 +989,13 @@
             "nonce": "c2VydmVyLW5vbmNlLTEyOC1iaXRz",
             "payload": "lunora-hostd-request:v1\nGET\n/v1/boxes/releases/dep_123\nbox_01J9ZK3Q\n1790000000000\nc2VydmVyLW5vbmNlLTEyOC1iaXRz"
         },
-        "request-without-timestamp": {
+        "request-with-query": {
             "method": "GET",
             "path": "/v1/boxes/releases/dep_123?attempt=2",
             "boxId": "box_01J9ZK3Q",
+            "timestamp": 1790000060000,
             "nonce": "c2VydmVyLW5vbmNlLTEyOC1iaXRz",
-            "payload": "lunora-hostd-request:v1\nGET\n/v1/boxes/releases/dep_123?attempt=2\nbox_01J9ZK3Q\n\nc2VydmVyLW5vbmNlLTEyOC1iaXRz"
+            "payload": "lunora-hostd-request:v1\nGET\n/v1/boxes/releases/dep_123?attempt=2\nbox_01J9ZK3Q\n1790000060000\nc2VydmVyLW5vbmNlLTEyOC1iaXRz"
         }
     }
 }

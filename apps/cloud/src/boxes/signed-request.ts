@@ -6,13 +6,12 @@
  * The box sends four headers ({@link HOSTD_REQUEST_HEADERS}); the server
  * rebuilds the signed payload from the request IT received (method, path and
  * query), so a signature cannot be moved to another path. Replay protection is
- * the box-chosen single-use nonce, remembered in the box's own session object:
- *
- * - with a timestamp, the request must be within {@link TIMESTAMP_WINDOW_MS} of
- *   the control plane's clock, and its nonce is remembered until the window
- *   closes — after that the timestamp alone refuses it;
- * - without one (README: a skewed clock must not lock a box out), the nonce is
- *   remembered for {@link UNTIMED_NONCE_TTL_MS}.
+ * the timestamp and the box-chosen single-use nonce together: the request must
+ * carry a timestamp within {@link TIMESTAMP_WINDOW_MS} of the control plane's
+ * clock, and its nonce is remembered (in the box's own session object) until
+ * that window closes — after which the timestamp alone refuses it. A request
+ * without a timestamp is refused: nothing would ever expire its signature, and
+ * a nonce is only remembered for so long.
  *
  * Every refusal answers the same 401, so a caller learns nothing about which
  * box ids exist or which check failed.
@@ -23,9 +22,6 @@ import { verifyBoxSignature } from "./encoding";
 
 /** How far a signed request's timestamp may sit from the control plane's clock. */
 export const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
-
-/** How long the nonce of a request without a timestamp is remembered. */
-export const UNTIMED_NONCE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const BOX_ID_PATTERN = /^[\w-]{1,128}$/u;
 
@@ -54,8 +50,8 @@ export interface VerifiedBoxRequest {
 }
 
 /**
- * Verify a box-signed request, or answer why not (`null`). Checks the shape,
- * the timestamp window, the box (known, not revoked), the signature, and only
+ * Verify a box-signed request, or answer why not (`null`). Checks the shape
+ * (a timestamp included), the timestamp window, the box (known, not revoked), the signature, and only
  * then claims the nonce — so a forged request cannot burn a real one.
  */
 export const verifyBoxRequest = async (request: Request, ports: SignedRequestPorts): Promise<null | VerifiedBoxRequest> => {
@@ -64,13 +60,13 @@ export const verifyBoxRequest = async (request: Request, ports: SignedRequestPor
     const signature = request.headers.get(HOSTD_REQUEST_HEADERS.signature) ?? "";
     const stamp = request.headers.get(HOSTD_REQUEST_HEADERS.timestamp);
 
-    if (!BOX_ID_PATTERN.test(boxId) || !NONCE_PATTERN.test(nonce) || (stamp !== null && !TIMESTAMP_PATTERN.test(stamp))) {
+    if (!BOX_ID_PATTERN.test(boxId) || !NONCE_PATTERN.test(nonce) || stamp === null || !TIMESTAMP_PATTERN.test(stamp)) {
         return null;
     }
 
-    const timestamp = stamp === null ? undefined : Number(stamp);
+    const timestamp = Number(stamp);
 
-    if (timestamp !== undefined && Math.abs(ports.now - timestamp) > TIMESTAMP_WINDOW_MS) {
+    if (Math.abs(ports.now - timestamp) > TIMESTAMP_WINDOW_MS) {
         return null;
     }
 
@@ -83,7 +79,7 @@ export const verifyBoxRequest = async (request: Request, ports: SignedRequestPor
             method: request.method,
             nonce,
             path: `${url.pathname}${url.search}`,
-            ...(timestamp === undefined ? {} : { timestamp }),
+            timestamp,
         });
     } catch {
         return null;
@@ -95,7 +91,5 @@ export const verifyBoxRequest = async (request: Request, ports: SignedRequestPor
         return null;
     }
 
-    const expiresAt = timestamp === undefined ? ports.now + UNTIMED_NONCE_TTL_MS : timestamp + TIMESTAMP_WINDOW_MS;
-
-    return (await ports.claimNonce(boxId, nonce, expiresAt)) ? { boxId, organizationId: box.organizationId } : null;
+    return (await ports.claimNonce(boxId, nonce, timestamp + TIMESTAMP_WINDOW_MS)) ? { boxId, organizationId: box.organizationId } : null;
 };

@@ -275,22 +275,28 @@ lunora-hostd-request:v1
 | `method`    | upper-case HTTP method, e.g. `GET`                                                                    |
 | `path`      | origin-form request target: `/`, then printable ASCII without spaces or `#` (query included), ≤ 2 048 |
 | `boxId`     | id                                                                                                    |
-| `timestamp` | epoch ms in decimal, or the empty string when not sent                                                |
+| `timestamp` | epoch ms in decimal; required                                                                         |
 | `nonce`     | 22–128 base64url characters, chosen by the box, unique per request                                    |
 
 The fields travel in headers:
 
-| Header                   | Value                               |
-| ------------------------ | ----------------------------------- |
-| `x-lunora-box-id`        | `boxId`                             |
-| `x-lunora-box-nonce`     | `nonce`                             |
-| `x-lunora-box-timestamp` | `timestamp` (omitted when not sent) |
-| `x-lunora-box-signature` | the signature                       |
+| Header                   | Value         |
+| ------------------------ | ------------- |
+| `x-lunora-box-id`        | `boxId`       |
+| `x-lunora-box-nonce`     | `nonce`       |
+| `x-lunora-box-timestamp` | `timestamp`   |
+| `x-lunora-box-signature` | the signature |
 
 The server rebuilds the payload from the request it received and verifies the
-signature against the box's enrolled public key. It MUST refuse a nonce it has
-already accepted for that box within its replay window; when a timestamp is
-present it MAY use it to bound that window.
+signature against the box's enrolled public key. It MUST refuse a request
+without a timestamp, one whose timestamp is more than five minutes from its own
+clock, and a nonce it has already accepted for that box within that window.
+
+Unlike the challenge (§6.1), a signed request is not bound to a live session,
+so the timestamp is mandatory: without it a captured request stays valid for
+as long as the box's key does, and the nonce alone protects it only while the
+server still remembers it. A box keeps its clock synchronised (NTP); a box
+whose clock is more than five minutes off cannot fetch releases until it is.
 
 ## 7. Conformance
 

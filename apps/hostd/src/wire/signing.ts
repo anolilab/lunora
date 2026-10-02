@@ -95,8 +95,13 @@ interface RequestSigningInput {
     nonce: string;
     /** Origin-form request target: path plus query, no fragment, e.g. `/v1/boxes/releases/dep_123`. */
     path: string;
-    /** Unix epoch milliseconds. Optional: it bounds the server's replay window, but a skewed clock must not lock a box out. */
-    timestamp?: number;
+
+    /**
+     * Unix epoch milliseconds. Required: a signed request outlives any session,
+     * so the server refuses one more than five minutes from its clock — that,
+     * not the nonce alone, is what keeps a captured request from being replayed.
+     */
+    timestamp: number;
 }
 
 /**
@@ -108,7 +113,7 @@ interface RequestSigningInput {
  * {method}
  * {path}
  * {boxId}
- * {timestamp in decimal, or the empty string}
+ * {timestamp in decimal}
  * {nonce}
  * ```
  *
@@ -125,15 +130,13 @@ const requestSigningPayload = (input: RequestSigningInput): Uint8Array => {
         throw new TypeError("path must be an origin-form request target: '/' then printable ASCII, no '#', at most 2048 characters");
     }
 
-    if (input.timestamp !== undefined && (!Number.isSafeInteger(input.timestamp) || input.timestamp < 0)) {
+    if (!Number.isSafeInteger(input.timestamp) || input.timestamp < 0) {
         throw new TypeError("timestamp must be a non-negative integer of Unix epoch milliseconds");
     }
 
     const boxId = check(() => readBoxId(input.boxId, "boxId"));
     const nonce = check(() => readNonce(input.nonce, "nonce"));
-    const timestamp = input.timestamp === undefined ? "" : String(input.timestamp);
-
-    return utf8.encode([HOSTD_REQUEST_DOMAIN, input.method, input.path, boxId, timestamp, nonce].join("\n"));
+    return utf8.encode([HOSTD_REQUEST_DOMAIN, input.method, input.path, boxId, String(input.timestamp), nonce].join("\n"));
 };
 
 export type { RequestSigningInput };
