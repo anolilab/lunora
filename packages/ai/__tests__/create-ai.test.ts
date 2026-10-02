@@ -419,7 +419,7 @@ describe("createAi", () => {
         });
 
         it("maps HTTP failures onto LunoraError codes", async () => {
-            expect.assertions(3);
+            expect.assertions(6);
 
             const codeFor = async (status: number): Promise<string | undefined> => {
                 const error: unknown = await createAi({ binding: searchBinding(new Response("nope", { status })) })
@@ -430,16 +430,34 @@ describe("createAi", () => {
             };
 
             await expect(codeFor(400)).resolves.toBe("BAD_REQUEST");
+            await expect(codeFor(401)).resolves.toBe("UNAUTHORIZED");
+            await expect(codeFor(403)).resolves.toBe("FORBIDDEN");
+            await expect(codeFor(404)).resolves.toBe("NOT_FOUND");
             await expect(codeFor(429)).resolves.toBe("RATE_LIMITED");
             await expect(codeFor(502)).resolves.toBe("SERVICE_UNAVAILABLE");
         });
 
-        it("refuses a body without an items array", async () => {
+        it("caps the upstream error body it puts in the message", async () => {
             expect.assertions(1);
 
-            await expect(createAi({ binding: searchBinding(Response.json({ result: searchBody })) }).websearch("lunora")).rejects.toThrow(
-                /without an `items` array/,
-            );
+            const error: unknown = await createAi({ binding: searchBinding(new Response("x".repeat(5000), { status: 502 })) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect((error as Error).message.length).toBeLessThan(400);
+        });
+
+        it.each([
+            ["a body without an items array", () => Response.json({ result: searchBody })],
+            ["a body that is not JSON", () => new Response("<html>oops</html>")],
+        ])("refuses %s as INTERNAL", async (_label, response) => {
+            expect.assertions(1);
+
+            const error: unknown = await createAi({ binding: searchBinding(response()) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error) && error.code === "INTERNAL").toBe(true);
         });
 
         it("throws a directed error without a binding, or with one that predates websearch()", async () => {

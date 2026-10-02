@@ -76,14 +76,23 @@ const isCapacityExceeded = (error: unknown): boolean =>
 /** The AI Gateway every Cloudflare account has, which `workers-ai-provider` also falls back to for catalog slugs. */
 const DEFAULT_GATEWAY_ID = "default";
 
-/** 4xx is the caller's request (bad query, unknown provider, gateway missing); 429 and 5xx are retryable. */
-const websearchErrorCode = (status: number): "BAD_REQUEST" | "RATE_LIMITED" | "SERVICE_UNAVAILABLE" => {
-    if (status === 429) {
-        return "RATE_LIMITED";
-    }
+/**
+ * 401 / 403 / 404 are the deployment's configuration (credentials, gateway),
+ * so they keep their own codes and reach the developer; any other 4xx is the
+ * request itself. 429 and 5xx are retryable.
+ */
+const WEBSEARCH_STATUS_CODES: ReadonlyMap<number, "FORBIDDEN" | "NOT_FOUND" | "RATE_LIMITED" | "UNAUTHORIZED"> = new Map([
+    [401, "UNAUTHORIZED"],
+    [403, "FORBIDDEN"],
+    [404, "NOT_FOUND"],
+    [429, "RATE_LIMITED"],
+]);
 
-    return status >= 400 && status < 500 ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE";
-};
+const websearchErrorCode = (status: number): string =>
+    WEBSEARCH_STATUS_CODES.get(status) ?? (status >= 400 && status < 500 ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE");
+
+/** Upstream error bodies can be whole HTML pages; a `LunoraError` message reaches the client unredacted. */
+const WEBSEARCH_DETAIL_MAX_LENGTH = 300;
 
 /** A proxy host a bearer token may reach over plain HTTP: this machine only. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
@@ -360,16 +369,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         // requires by id. The gateway inference already routes through is the
         // natural default, then the account's `default` gateway — the same one an
         // unconfigured catalog slug lands on.
-        const response = await binding.websearch({
-            ...(searchOptions?.byokAlias === undefined ? {} : { byokAlias: searchOptions.byokAlias }),
-            gatewayId: searchOptions?.gatewayId ?? resolvedGateway?.id ?? DEFAULT_GATEWAY_ID,
-            ...(searchOptions?.limit === undefined ? {} : { limit: searchOptions.limit }),
-            ...(searchOptions?.provider === undefined ? {} : { provider: searchOptions.provider }),
-            query,
-        });
+        const { gatewayId, ...request } = searchOptions ?? {};
+        const response = await binding.websearch({ ...request, gatewayId: gatewayId ?? resolvedGateway?.id ?? DEFAULT_GATEWAY_ID, query });
 
         if (!response.ok) {
-            const detail = await response.text().catch(() => "");
+            const text = await response.text().catch(() => "");
+            const detail = text.slice(0, WEBSEARCH_DETAIL_MAX_LENGTH);
 
             throw new LunoraError(
                 websearchErrorCode(response.status),
@@ -377,12 +382,12 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             );
         }
 
-        const body = (await response.json()) as Partial<AiWebSearchResult> | null;
+        const body = (await response.json().catch(() => undefined)) as Partial<AiWebSearchResult> | null | undefined;
 
         // Fail loudly on a shape change during the beta rather than hand the
         // caller a result whose `items` is not there.
         if (!Array.isArray(body?.items)) {
-            throw new LunoraError("INTERNAL", "@lunora/ai: web search returned a body without an `items` array");
+            throw new LunoraError("INTERNAL", "@lunora/ai: web search returned a body that is not JSON with an `items` array");
         }
 
         return body as AiWebSearchResult;
