@@ -59,8 +59,8 @@
  * `getMetadata`/`head`.
  *
  * `list` rules therefore DO govern something: they scope `_storage` enumeration
- * through `ctx.db.system`. They still govern nothing at the `ctx.storage` layer,
- * which exposes no `list` (and the wrapper drops any).
+ * through `ctx.db.system`. They still govern nothing at the `ctx.storage` layer:
+ * the action-only `ctx.storage.list` is dropped by the wrapper, not gated.
  */
 import { LunoraError } from "@lunora/errors";
 
@@ -238,7 +238,8 @@ const resolveSignedUrlOperation = (args: ReadonlyArray<unknown>): StorageOperati
  * must allow. This is the *only* surface the wrapper re-exposes; every other
  * method on the backing object (`upload`, `createMultipartUpload`,
  * `resumeMultipartUpload`, `getPresignedUrl`, `list`) is dropped so it can't
- * bypass enforcement. `list` has no entry because `ctx.storage` exposes none.
+ * bypass enforcement. `list` has no entry: a guarded procedure enumerates through
+ * the filtered `ctx.db.system.query("_storage")` instead.
  *
  * `getSignedUrl` is gated by a per-call resolver (not a static op) because a
  * `{ method: "PUT" }` mints a write capability — see {@link resolveSignedUrlOperation}.

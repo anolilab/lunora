@@ -4694,6 +4694,9 @@ importers:
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
+      '@lunora/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@opentelemetry/api':
         specifier: catalog:otel
         version: 1.9.1

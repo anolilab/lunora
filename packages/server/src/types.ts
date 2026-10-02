@@ -2033,9 +2033,119 @@ interface MutationStorage<Buckets extends string = string> extends ReadOnlyStora
     deleteAfterCommit: (key: string) => void;
 }
 
+/**
+ * The body shapes `store` / `upload` accept — what R2's `put` stores bytes from.
+ * Mirrors `@lunora/storage`'s `Storage.upload` parameter.
+ */
+type StorageUploadBody = ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string;
+
+/**
+ * Options for `store` / `upload` — a structural mirror of `@lunora/storage`'s
+ * `UploadOptions`, so the `maxSize` / `allowedContentTypes` guards are reachable
+ * from `ctx.storage` without a type dependency on the storage package.
+ */
+interface StorageUploadOptions {
+    /** Content-type allowlist; the supplied `contentType` must match. */
+    allowedContentTypes?: ReadonlyArray<string>;
+    contentType?: string;
+    customMetadata?: Record<string, string>;
+
+    /**
+     * Maximum body size in bytes. A `ReadableStream` is buffered under the cap,
+     * so on the stream path `maxSize` is itself capped at 16 MiB — above that use
+     * {@link Storage.createMultipartUpload}.
+     */
+    maxSize?: number;
+    /** SHA-256 of the body (hex or a 32-byte buffer); R2 records and verifies it. */
+    sha256?: ArrayBuffer | string;
+}
+
+/** What `store` / `upload` resolve to: the stored key plus its etag (unquoted and quoted). */
+interface StorageUploadResult {
+    etag: string;
+    httpEtag: string;
+    key: string;
+}
+
+/** One uploaded multipart part — returned by `uploadPart`, required by `complete`. Mirrors R2's `R2UploadedPart`. */
+interface StorageUploadedPart {
+    etag: string;
+    partNumber: number;
+}
+
+/**
+ * An in-progress R2 multipart upload, as {@link Storage.createMultipartUpload} /
+ * {@link Storage.resumeMultipartUpload} return it. A structural mirror of
+ * `@lunora/platform`'s `R2MultipartUploadLike` (R2's `R2MultipartUpload`).
+ *
+ * Every part except the last must be the same size, and at least 5 MiB. The
+ * object does not guarantee the upload still exists — a parallel `complete` /
+ * `abort` invalidates it — so handle errors on each call.
+ */
+interface StorageMultipartUpload {
+    /** Abort the upload, discarding every uploaded part. */
+    abort: () => Promise<void>;
+    /** Finish the upload from the collected parts; resolves to the stored object's metadata. */
+    complete: (uploadedParts: StorageUploadedPart[]) => Promise<StorageObjectHead>;
+    /** The object key being assembled. */
+    readonly key: string;
+    /** The R2 upload id — persist it to resume the upload in a later request. */
+    readonly uploadId: string;
+    /** Upload one part (1-indexed); returns the `{ partNumber, etag }` to pass to `complete`. */
+    uploadPart: (partNumber: number, value: StorageUploadBody) => Promise<StorageUploadedPart>;
+}
+
+/** Options for {@link Storage.list}. Mirrors `@lunora/storage`'s `ListOptions`. */
+interface StorageListOptions {
+    /** The `cursor` of the previous page. */
+    cursor?: string;
+    /** R2 list delimiter — keys sharing a segment roll up into `delimitedPrefixes`. */
+    delimiter?: string;
+    /** Page-size ceiling: defaults to 100, capped at 1000. A positive integer; anything else throws. */
+    limit?: number;
+}
+
+/** One page of {@link Storage.list}. */
+interface StorageListResult {
+    /** Pass back as `options.cursor` for the next page, while `truncated` is `true`. */
+    cursor?: string;
+    /** The rolled-up "folders" when `options.delimiter` is set — these are NOT in `objects`. */
+    delimitedPrefixes?: string[];
+    /** The objects on this page, body-free and JSON-serializable. */
+    objects: StorageObjectHead[];
+    /** `true` while more pages remain. Paginate on this, never on `objects.length`. */
+    truncated?: boolean;
+}
+
+/**
+ * `ctx.storage` inside an **action**: the full `@lunora/storage` `Storage`
+ * surface, plus `bucket(name)`.
+ *
+ * Declared structurally rather than imported — `@lunora/server` takes no
+ * runtime or published-type dependency on `@lunora/storage` — so it tracks that
+ * surface by hand. A type test (`__tests__/storage-surface.test-d.ts`) fails
+ * `tsc` when `@lunora/storage`'s `Storage` grows a member this interface does
+ * not declare, or when a signature drifts so the runtime object no longer
+ * satisfies it.
+ *
+ * The privileged members (`upload`, `createMultipartUpload`,
+ * `resumeMultipartUpload`, `getPresignedUrl`, `list`) are action-only, and are
+ * NOT re-exposed under a procedure guarded by `storageRules(...)`: that
+ * middleware rebuilds `ctx.storage` as an allowlist of the rule-gated methods, so
+ * nothing writes or enumerates past the rules.
+ */
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
     /** Select a named bucket; the returned accessor exposes the full read/write surface. */
     bucket: (name: Buckets) => Storage<Buckets>;
+
+    /**
+     * Begin a native R2 **multipart upload** — for objects above `store()`'s
+     * 16 MiB stream cap, streamed through the Worker without buffering. Upload
+     * the parts (each at least 5 MiB and uniform in size, except the last), then
+     * `complete` with the returned parts, or `abort`. Persist `uploadId` to
+     * continue in a later request via {@link Storage.resumeMultipartUpload}.
+     */
+    createMultipartUpload: (key: string, options?: { contentType?: string; customMetadata?: Record<string, string> }) => Promise<StorageMultipartUpload>;
 
     delete: (key: string) => Promise<void>;
 
@@ -2054,29 +2164,38 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
      * Requires `s3` credentials on the `.storage({ s3 })` declaration; without
      * them the call throws. That is the trade-off: no Worker in the path also
      * means no rule enforcement in the path.
-     *
-     * Declared structurally rather than imported — `@lunora/server` does not
-     * depend on `@lunora/storage`, and this file mirrors that surface the same
-     * way `head` and `download` do.
      */
     getPresignedUrl: (key: string, options?: { expiresInSeconds?: number; method?: "GET" | "PUT" }) => Promise<string>;
 
     /**
-     * Upload `body` to `key` from the server, returning the stored object's key
-     * and etag. Mirrors Convex's `storage.store`. Accepts the same guard fields
-     * as `@lunora/storage`'s `UploadOptions` so `maxSize` /
-     * `allowedContentTypes` enforcement isn't lost behind the Convex-style alias.
+     * List objects under `prefix` — e.g. to sweep abandoned staging uploads. With
+     * `options.delimiter` set, keys sharing a segment roll up into
+     * `delimitedPrefixes` and are NOT in `objects`, so an empty `objects` is not
+     * an empty directory. A page may hold fewer objects than `options.limit`:
+     * paginate on `truncated` / `cursor`.
+     *
+     * Not gated by storage access rules (and dropped under `storageRules(...)`);
+     * a rule-scoped enumeration goes through `ctx.db.system.query("_storage")`.
      */
-    store: (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        options?: {
-            allowedContentTypes?: ReadonlyArray<string>;
-            contentType?: string;
-            customMetadata?: Record<string, string>;
-            maxSize?: number;
-        },
-    ) => Promise<{ etag: string; key: string }>;
+    list: (prefix?: string, options?: StorageListOptions) => Promise<StorageListResult>;
+
+    /**
+     * Resume an in-progress multipart upload by its `uploadId` (e.g. across
+     * requests). Synchronous: R2 does not validate the id, so a stale one
+     * surfaces as an error on the first `uploadPart` / `complete`.
+     */
+    resumeMultipartUpload: (key: string, uploadId: string) => StorageMultipartUpload;
+
+    /**
+     * Upload `body` to `key` from the server, returning the stored object's key
+     * and etag. Mirrors Convex's `storage.store`; the same function as
+     * {@link Storage.upload}, so the `maxSize` / `allowedContentTypes` guards
+     * apply through the alias.
+     */
+    store: (key: string, body: StorageUploadBody, options?: StorageUploadOptions) => Promise<StorageUploadResult>;
+
+    /** Upload `body` to `key` — {@link Storage.store} under `@lunora/storage`'s own name. */
+    upload: (key: string, body: StorageUploadBody, options?: StorageUploadOptions) => Promise<StorageUploadResult>;
 }
 
 interface VectorMatch {
@@ -2869,10 +2988,17 @@ export type {
     SpanLink,
     SpanOptions,
     Storage,
+    StorageListOptions,
+    StorageListResult,
     StorageMetadata,
+    StorageMultipartUpload,
     StorageObjectBody,
     StorageObjectHead,
     StorageRange,
+    StorageUploadBody,
+    StorageUploadedPart,
+    StorageUploadOptions,
+    StorageUploadResult,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,

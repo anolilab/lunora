@@ -48,15 +48,13 @@ export default defineApp<Env>()
 
 </Callout>
 
-`ctx.storage` is a narrower projection of the API below: `query` and `mutation`
-handlers are typed with a read-only surface (`download`, `head`, `getMetadata`,
-`getSignedUrl`, `getUrl`; a mutation also gets `deleteAfterCommit`), and only
-`action` handlers are typed with the full read/write surface (`store`, `delete`,
-`generateUploadUrl`, `getPresignedUrl`). Multipart (`createMultipartUpload` /
-`resumeMultipartUpload`), `upload`, and `list` are on **no** `ctx.storage`
-surface — call them on a `createStorage` instance (below). `download(key)`
-resolves to the R2 object (its metadata plus a `body` stream), not to a bare
-`ReadableStream`.
+`ctx.storage` is typed by context: `query` and `mutation` handlers get a
+read-only surface (`download`, `head`, `getMetadata`, `getSignedUrl`, `getUrl`;
+a mutation also gets `deleteAfterCommit`), and `action` handlers get the whole
+API below plus `bucket(name)` — `store` / `upload`, `delete`,
+`generateUploadUrl`, `getPresignedUrl`, multipart (`createMultipartUpload` /
+`resumeMultipartUpload`) and `list`. `download(key)` resolves to the R2 object
+(its metadata plus a `body` stream), not to a bare `ReadableStream`.
 
 <Callout>
     **The read-only / action-only split is a type-level one.** The object behind `ctx.storage` is the same in every context, so a `mutation` that casts past its
@@ -257,7 +255,9 @@ when the app's `.storage()` declaration does not carry `s3`.
 
 For very large objects use R2's native multipart upload: `createMultipartUpload`
 returns a handle whose `uploadPart` / `complete` / `abort` you drive yourself.
-Persist `uploadId` to resume across requests with `resumeMultipartUpload`.
+Persist `uploadId` to resume across requests with `resumeMultipartUpload`. Both
+are on `ctx.storage` inside an action, as is `list` — the way to sweep abandoned
+staging objects.
 
 ```ts
 const multipart = await storage.createMultipartUpload("videos/clip.mp4", { contentType: "video/mp4" });

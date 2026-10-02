@@ -23,8 +23,9 @@ import type { Permission, Role } from "../rls/types";
  *
  * `list` governs `ctx.db.system.query("_storage")` — the object enumeration
  * reachable from a handler — plus the file browser / admin path. It governs
- * nothing on `ctx.storage`, which exposes no `list` (and `storageRules` drops
- * any). Note the enumeration is additionally narrowed by the bucket's `read`
+ * nothing on `ctx.storage`: the action-only `ctx.storage.list` is not a gated
+ * method, so `storageRules` drops it rather than enforcing it. Note the
+ * enumeration is additionally narrowed by the bucket's `read`
  * rules, so a `read` prefix rule scopes what a handler can enumerate even with
  * no `list` rule declared.
  */
