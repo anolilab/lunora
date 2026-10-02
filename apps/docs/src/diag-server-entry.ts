@@ -3,10 +3,16 @@
 const instanceId = Math.random().toString(36).slice(2, 10);
 const evalAt = performance.now();
 let count = 0;
+const caught: string[] = [];
 
 for (const event of ["unhandledRejection", "uncaughtException"] as const) {
     process.on(event, (error: unknown) => {
         console.error(`[diag] ${event} on instance ${instanceId}:`, error);
+        caught.push(
+            `${event}#${count}: ${String((error as Error)?.stack ?? error)
+                .replaceAll(/\s+/g, " ")
+                .slice(0, 700)}`,
+        );
     });
 }
 
@@ -47,6 +53,8 @@ export default {
         headers.set("x-diag-eval-at-ms", String(Math.round(evalAt)));
         headers.set("x-diag-process-uptime-s", process.uptime().toFixed(2));
         headers.set("x-diag-runtime", runtimeInfo);
+        headers.set("x-diag-caught-count", String(caught.length));
+        caught.slice(-2).forEach((entry, index) => headers.set(`x-diag-caught-${index}`, encodeURIComponent(entry)));
         headers.set("x-diag-pending", process.getActiveResourcesInfo().join(","));
 
         return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
