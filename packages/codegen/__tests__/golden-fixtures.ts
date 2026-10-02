@@ -79,6 +79,12 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * (`app.ts`, `server.ts`, `shard.ts`): an app that reads it, so the ActionCtx-only
  * wiring and the `.artifacts()` builder method are pinned byte-for-byte.
  *
+ * `ai-search` is a one-action app reading `ctx.aiSearch` (plan 459). It is
+ * compiled like `delta-sync`, which is the point: `ctx.aiSearch` is the raw
+ * binding cast to a types-only `@lunora/bindings` subpath's `AiSearch`, with an
+ * annotated (never cast) throwing stub, and only a compiled tree proves both
+ * type-check for a consumer.
+ *
  * Shared by `capture-expected.ts` (which writes the goldens) and the tests that
  * assert them, so a new fixture is registered once. The optional third element
  * limits a fixture to those golden files.
@@ -89,6 +95,7 @@ const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<str
     ["hyperdrive-shape", "lunora/_generated"],
     ["sdk-surface", "expected/_generated", ["openrpc.json"]],
     ["artifacts", "expected/_generated", ["app.ts", "server.ts", "shard.ts"]],
+    ["ai-search", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */

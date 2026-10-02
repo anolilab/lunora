@@ -29,7 +29,7 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `analytics`, `artifacts`, `browser`, `commitOrderedTables`,
+ * `agents`, `ai`, `aiSearch`, `analytics`, `artifacts`, `browser`, `commitOrderedTables`,
  * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
@@ -147,6 +147,19 @@ export interface PlatformCapabilities {
          * `ctx.trace` / `ctx.metrics`, which need no key.
          */
         ai?: Capability;
+
+        /**
+         * Cloudflare AI Search (formerly AutoRAG) — `ctx.aiSearch`, the raw
+         * `ai_search_namespaces` binding passed through as-is, on ActionCtx only.
+         *
+         * Its own key rather than a facet of `ai` or `vectorStore`: it is a
+         * managed retrieval service (chunking, embedding, the hybrid index and
+         * reranking all live on the instance), not inference and not a vector
+         * index a host could stand in for. No Lunora host contract carries it —
+         * a second host would have to supply an `AiSearchNamespace` look-alike.
+         * Gate-bearing through `CAPABILITY_TO_FEATURE`.
+         */
+        aiSearch?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
         /** Git-backed versioned repos via an Artifacts binding (`ctx.artifacts`). */

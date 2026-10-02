@@ -3004,6 +3004,15 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
         });
 
+        it("accepts well-formed AI Search bindings and rejects ones missing their namespace or instance", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog", remote: true }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH" }] })).errors.join(" ")).toContain('non-empty "instance_name"');
+        });
+
         it("requires exactly one of tunnel_id / network_id on a vpc_networks entry", () => {
             expect.assertions(4);
 

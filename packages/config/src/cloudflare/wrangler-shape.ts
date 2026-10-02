@@ -67,6 +67,9 @@ interface ExportEntry {
 
 interface WranglerShape {
     ai?: { binding?: string };
+    // Self-describing: { binding, namespace } — the `default` namespace exists on every account
+    // and wrangler creates a missing one on deploy, so there is nothing to mint (see reconcileSelfDescribingArray).
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileSelfDescribingArray).
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     // Hint-only: the namespace's jurisdiction is fixed at creation — warned, never written.

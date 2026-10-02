@@ -16,6 +16,7 @@ let workdir: string;
 const ALL_OFF: FeatureUsage = {
     access: false,
     ai: false,
+    aiSearch: false,
     analytics: false,
     artifacts: false,
     browser: false,
