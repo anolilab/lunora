@@ -2661,8 +2661,18 @@ export const schema = defineSchema({
             expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
         });
 
-        it("rejects custom instance types that violate the memory/vcpu and disk/memory ratios", () => {
-            expect.assertions(4);
+        it("rejects custom instance types below 1 vCPU or under 3 GiB memory per vCPU, and allows 20 GB disk at any memory", () => {
+            expect.assertions(6);
+
+            const belowMinVcpu = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 0.5 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(belowMinVcpu.errors.join(" ")).toContain("needs ≥ 1 vCPU (got 0.5)");
 
             const tooLittleMemory = validateWranglerConfig(
                 baseConfig({
@@ -2674,15 +2684,31 @@ export const schema = defineSchema({
 
             expect(tooLittleMemory.errors.join(" ")).toContain("≥ 3 GiB");
 
-            const tooMuchDisk = validateWranglerConfig(
+            // 20 GB disk with only 3 GiB memory — the old 2-GB-per-GiB ratio would have capped this at 6 GB.
+            const maxDiskSmallMemory = validateWranglerConfig(
                 baseConfig({
                     containers: [
-                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 },
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./x/Dockerfile",
+                            instance_type: { disk_mb: 20_000, memory_mib: 3072, vcpu: 1 },
+                            max_instances: 1,
+                        },
                     ],
                 }),
             );
 
-            expect(tooMuchDisk.errors.join(" ")).toContain("≤ 2 GB disk");
+            expect(maxDiskSmallMemory.errors).toEqual([]);
+
+            const tooMuchDisk = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_001, memory_mib: 4096 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(tooMuchDisk.errors.join(" ")).toContain("disk_mb must be a positive number ≤ 20000");
 
             const valid = validateWranglerConfig(
                 baseConfig({
