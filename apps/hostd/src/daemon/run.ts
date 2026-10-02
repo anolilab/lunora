@@ -87,11 +87,9 @@ class Daemon {
         this.options = options;
         this.state = loadState(options.config.dataDir);
 
-        const credentials = (): Readonly<Record<string, string>> => loadBucketCredentials(options.config.credentialsFile);
-
         this.supervisor = new Supervisor({
             config: options.config,
-            credentials,
+            credentials: () => this.credentials(),
             logger: options.logger,
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
@@ -122,7 +120,6 @@ class Daemon {
         }
 
         const identity = loadIdentity(config.keyFile);
-        const credentials = (): Readonly<Record<string, string>> => loadBucketCredentials(config.credentialsFile);
         const signedFetch = createSignedFetch({
             boxId: config.boxId,
             controlPlane: config.controlPlane,
@@ -144,7 +141,7 @@ class Daemon {
                 applyEdge: async () => this.applyEdge(),
                 caddy: this.caddy,
                 config,
-                credentials,
+                credentials: () => this.credentials(),
                 dropRoutes: (alias) => {
                     this.routes = this.routes.filter((route) => route.alias !== alias);
                 },
@@ -332,6 +329,11 @@ class Daemon {
             this.reportQueue.push(this.reports.close(now));
             this.reportQueue.drain((report) => session.send(report), now);
         }, this.options.reportTickMs ?? REPORT_TICK_MS);
+    }
+
+    /** The bucket credentials, read from their file at each use so a rotated file takes effect on the next spawn. */
+    private credentials(): Readonly<Record<string, string>> {
+        return loadBucketCredentials(this.options.config.credentialsFile);
     }
 
     private async shutdown(): Promise<void> {

@@ -263,6 +263,11 @@ const diagnose = async (context: JobContext, progress: Progress): Promise<void> 
 /** The alias a job locks, `*` for one that needs the whole box, `undefined` for one that needs nothing. */
 const lockOf = (job: HostdJob): string | undefined => {
     switch (job.kind) {
+        case "deploy":
+        case "destroy":
+        case "reload": {
+            return job.alias;
+        }
         case "diagnose": {
             return undefined;
         }
@@ -270,7 +275,10 @@ const lockOf = (job: HostdJob): string | undefined => {
             return "*";
         }
         default: {
-            return job.alias;
+            // Exhaustive: a new job kind fails to compile here; were one to slip through, it runs alone.
+            const unhandled: never = job;
+
+            return unhandled;
         }
     }
 };
@@ -409,8 +417,15 @@ class JobRunner {
                     await reload(this.context, job, progress);
                     break;
                 }
-                default: {
+                case "upgrade": {
                     await this.context.upgrade(job, progress);
+                    break;
+                }
+                default: {
+                    // Exhaustive: a new job kind fails to compile here until it is handled.
+                    const unhandled: never = job;
+
+                    throw new JobError("JOB_FAILED", `this box does not run ${(unhandled as HostdJob).kind} jobs`);
                 }
             }
 

@@ -12,6 +12,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
+import { isRecord, optional } from "../values";
 import { isProtocolId } from "../wire/validate";
 
 /** Where the configuration lives unless `--config` or `LUNORA_HOSTD_CONFIG` says otherwise. */
@@ -111,8 +112,6 @@ const permissionsOf = (mode: number): number => mode % 0o1000;
 /** Whether a file with `mode` grants its group or others anything (any of the low six permission bits). */
 const isOpenToOthers = (mode: number): boolean => permissionsOf(mode) % 0o100 !== 0;
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 const readField = <T>(record: Record<string, unknown>, key: string, check: (value: unknown) => value is T, what: string, path: string): T => {
     const value = record[key];
 
@@ -158,8 +157,6 @@ const isOrigin = (value: unknown): value is string => {
 };
 
 const isOptionalString = (value: unknown): value is string | undefined => value === undefined || isString(value);
-
-const optional = <T>(key: string, value: T | undefined): Record<string, T> => (value === undefined ? {} : { [key]: value });
 
 /** `record[key]` checked, or `fallback` when it is absent. */
 const readOr = <T>(record: Record<string, unknown>, key: string, fallback: T, check: (value: unknown) => value is T, what: string, path: string): T =>

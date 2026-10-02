@@ -41,6 +41,7 @@ import { createGunzip } from "node:zlib";
 
 import type { HostdReleaseArtifact, HostdReleasePlatform, TrustedReleaseKey } from "../release";
 import { verifyReleaseManifest } from "../release";
+import { releaseArtifactFor } from "../release-manifest";
 import { verifyArtifact } from "../release-verify";
 import HOSTD_VERSION from "../version";
 import type { UpgradeJob } from "../wire/types";
@@ -281,7 +282,7 @@ const runUpgrade = async (job: UpgradeJob, options: UpgradeOptions, progress: (l
     );
 
     const artifactOf = (component: "caddy" | "celld" | "hostd"): HostdReleaseArtifact => {
-        const found = manifest[component].artifacts.find((artifact) => artifact.platform === platform);
+        const found = releaseArtifactFor(manifest, component, platform);
 
         if (found === undefined) {
             throw new JobError("UPGRADE_REFUSED", `release ${manifest.releaseId} ships no ${component} for ${platform}`);

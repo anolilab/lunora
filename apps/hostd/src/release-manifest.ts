@@ -118,6 +118,16 @@ const URL_CHARACTERS_PATTERN = /^[\u0021\u0023-\u005B\u005D-\u007E]+$/u;
 
 const PLATFORMS: ReadonlySet<string> = new Set<string>(HOSTD_RELEASE_PLATFORMS);
 
+/** Whether `value` names a release platform. */
+const isReleasePlatform = (value: string): value is HostdReleasePlatform => PLATFORMS.has(value);
+
+/** The `component` artifact a manifest pins for `platform`, or `undefined` when it ships none. */
+const releaseArtifactFor = (
+    manifest: HostdReleaseManifest,
+    component: "caddy" | "celld" | "hostd",
+    platform: HostdReleasePlatform,
+): HostdReleaseArtifact | undefined => manifest[component].artifacts.find((artifact) => artifact.platform === platform);
+
 const readHttpsUrl = (value: unknown, path: string): string => {
     const text = readString(value, path);
 
@@ -388,6 +398,8 @@ export {
     HOSTD_RELEASE_PLATFORMS,
     HOSTD_RELEASE_SCHEMA,
     HOSTD_RELEASE_SIGNING_DOMAIN,
+    isReleasePlatform,
+    releaseArtifactFor,
     releaseSigningPayload,
     validateReleaseEnvelope,
     validateReleaseManifest,

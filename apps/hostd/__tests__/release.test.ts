@@ -15,6 +15,7 @@ import {
     validateReleaseManifest,
     verifyReleaseManifest,
 } from "../src/release";
+import { isReleasePlatform, releaseArtifactFor } from "../src/release-manifest";
 import { releaseKeyId, signReleaseManifest, verifyArtifact } from "../src/release-verify";
 
 const SHA_A = "a".repeat(64);
@@ -108,6 +109,18 @@ describe(validateReleaseManifest, () => {
 
     it.each([null, [], "manifest", 1])("rejects %j without throwing", (value) => {
         expect(validateReleaseManifest(value).ok).toBe(false);
+    });
+});
+
+describe(releaseArtifactFor, () => {
+    it("finds a component's artifact for one platform, and nothing for a platform it does not ship", () => {
+        expect.assertions(3);
+
+        const manifest = makeManifest();
+
+        expect(releaseArtifactFor(manifest, "hostd", "linux-arm64")).toStrictEqual(artifact("linux-arm64", "hostd", SHA_B));
+        expect(releaseArtifactFor({ ...manifest, celld: { ...manifest.celld, artifacts: [] } }, "celld", "linux-x64")).toBeUndefined();
+        expect(["linux-x64", "linux-arm64", "darwin-arm64", ""].map((platform) => isReleasePlatform(platform))).toStrictEqual([true, true, false, false]);
     });
 });
 

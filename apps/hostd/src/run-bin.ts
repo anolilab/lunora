@@ -7,9 +7,11 @@ import { createLogger } from "./daemon/log";
 import type { DaemonOptions } from "./daemon/run";
 import { Daemon, statusText } from "./daemon/run";
 import { currentPlatform } from "./daemon/upgrade";
-import type { HostdReleasePlatform, TrustedReleaseKey } from "./release";
+import type { TrustedReleaseKey } from "./release";
 import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "./release";
+import { isReleasePlatform, releaseArtifactFor } from "./release-manifest";
 import { verifyArtifact } from "./release-verify";
+import { optional } from "./values";
 import HOSTD_VERSION from "./version";
 
 /** Where the binary writes; injected so tests need no real process streams. */
@@ -92,11 +94,6 @@ const VERIFY_OPTIONS = {
     platform: { type: "string" },
 } as const;
 
-const PLATFORMS: ReadonlySet<string> = new Set<HostdReleasePlatform>(["linux-arm64", "linux-x64"]);
-
-const optional = <K extends string>(key: K, value: string | undefined): Partial<Record<K, string>> =>
-    (value === undefined ? {} : { [key]: value }) as Partial<Record<K, string>>;
-
 const runEnrol = async (args: ReadonlyArray<string>, output: BinOutput, dependencies: BinDependencies): Promise<number> => {
     const environment = dependencies.environment ?? process.env;
     const { values } = parseArgs({ args: [...args], options: ENROL_OPTIONS, strict: true });
@@ -159,7 +156,7 @@ const runVerifyRelease = async (args: ReadonlyArray<string>, output: BinOutput, 
     const [manifestPath] = positionals;
     const platform = values.platform ?? currentPlatform();
 
-    if (manifestPath === undefined || positionals.length !== 1 || platform === undefined || !PLATFORMS.has(platform)) {
+    if (manifestPath === undefined || positionals.length !== 1 || platform === undefined || !isReleasePlatform(platform)) {
         output.stderr("lunora-hostd verify-release needs one manifest file, on linux-x64 or linux-arm64 (or --platform)\n");
 
         return 1;
@@ -187,7 +184,7 @@ const runVerifyRelease = async (args: ReadonlyArray<string>, output: BinOutput, 
 
     for (const component of ["hostd", "celld", "caddy"] as const) {
         const file = values[component];
-        const artifact = manifest[component].artifacts.find((entry) => entry.platform === platform);
+        const artifact = releaseArtifactFor(manifest, component, platform);
 
         if (file === undefined) {
             continue;
