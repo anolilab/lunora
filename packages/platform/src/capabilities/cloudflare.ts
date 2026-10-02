@@ -121,6 +121,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "@cloudflare/sandbox (Sandbox SDK 1.0): Files, DirectoryBackup and S3Mount drive the sandbox-shim helper in the image through the native ctx.container.exec(), and the backup and mount gateways are WorkerEntrypoints the container reaches through interceptOutboundHttp. The image must ship /usr/local/bin/sandbox-shim, copied from Cloudflare's shim-only cloudflare/sandbox image",
         },
         analytics: { level: "native", note: "Analytics Engine" },
+        analyticsSql: {
+            level: "native",
+            note: "Analytics SQL binding (wrangler `analytics` key, wrangler >= 4.145.0): read-only SQL over the account's Analytics SQL API — Analytics Engine datasets as `events.analyticsEngine.<dataset>`, plus Cloudflare's own `events.` / `states.` / `logs.` datasets — with the account derived from the Worker. ActionCtx only. One statement and one dataset per query, a lower `timestamp` bound required. Remote-only even in dev: there is no local simulator, and miniflare proxies the binding to the service. Without the binding, `createAnalyticsSqlRest` runs the same dialect over the REST endpoint with an API token",
+        },
         artifacts: {
             level: "native",
             note: "Cloudflare Artifacts binding (open beta, Workers Paid): repo create/import/fork/list/delete, repo-scoped Git tokens, and reads of commits, trees, blobs and files. It has no write method; writes are a `git push` from a Git client with a minted token. No local simulator, so `lunora dev` reaches the remote service. Namespace jurisdiction is `eu` or `us`, fixed when the namespace is created; a `fedramp` schema using it is a codegen error",
