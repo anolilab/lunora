@@ -162,7 +162,12 @@ const stage = async (
     }
 
     if (artifact.compression === "gzip") {
-        await pipeline(createReadStream(downloaded), createGunzip(), createWriteStream(target, { mode: 0o600 }));
+        try {
+            await pipeline(createReadStream(downloaded), createGunzip(), createWriteStream(target, { mode: 0o600 }));
+        } catch (error) {
+            throw new JobError("ARTIFACT_INVALID", `${component}: the manifest says gzip, but it does not decompress: ${(error as Error).message}`);
+        }
+
         rmSync(downloaded, { force: true });
     } else {
         renameSync(downloaded, target);
