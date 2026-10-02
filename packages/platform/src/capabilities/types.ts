@@ -29,7 +29,7 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
+ * `agents`, `ai`, `analytics`, `artifacts`, `browser`, `commitOrderedTables`,
  * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
@@ -149,6 +149,8 @@ export interface PlatformCapabilities {
         ai?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
+        /** Git-backed versioned repos via an Artifacts binding (`ctx.artifacts`). */
+        artifacts?: Capability;
 
         /**
          * Copying DO-backed auth from its un-pinned object into the

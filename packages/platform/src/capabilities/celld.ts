@@ -44,6 +44,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
+        artifacts: { level: "unsupported", note: "Artifacts is not a celld binding type" },
         authJurisdictionMove: {
             level: "unsupported",
             note: "celld implements no jurisdictions — a fleet has only the machines you run, and `newUniqueId({ jurisdiction })` / `namespace.jurisdiction()` throw — so there is no jurisdiction-pinned auth object to copy into, and a schema that pins auth with `.jurisdiction(…)` fails closed",

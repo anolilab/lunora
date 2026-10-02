@@ -117,6 +117,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "@cloudflare/sandbox (Sandbox SDK 1.0): Files, DirectoryBackup and S3Mount drive the sandbox-shim helper in the image through the native ctx.container.exec(), and the backup and mount gateways are WorkerEntrypoints the container reaches through interceptOutboundHttp. The image must ship /usr/local/bin/sandbox-shim, copied from Cloudflare's shim-only cloudflare/sandbox image",
         },
         analytics: { level: "native", note: "Analytics Engine" },
+        artifacts: {
+            level: "native",
+            note: "Cloudflare Artifacts binding (open beta, Workers Paid): repo create/import/fork/list/delete, repo-scoped Git tokens, and reads of commits, trees, blobs and files. It has no write method; writes are a `git push` from a Git client with a minted token. No local simulator, so `lunora dev` reaches the remote service. Namespace jurisdiction is `eu` or `us`, fixed when the namespace is created; a `fedramp` schema using it is a codegen error",
+        },
         edgeRequestMetadata: {
             level: "native",
             note: 'request.cf — the edge stamps placement (colo, country) and, where an mTLS-enabled hostname is configured, the verified client certificate under tlsClientAuth. Unforgeable because it is not a header: trustInboundTraceContext: "mtls" and the OTLP placement resource detector both read it directly',
