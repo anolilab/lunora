@@ -120,21 +120,107 @@ describe(runBuild, () => {
         expect(terminal).toStrictEqual(["fail:tarball 404"]);
     });
 
-    it("hands a completed build to the release port and reports the deployment", async () => {
-        const { logs, ports } = portsWith({ release: () => Promise.resolve({ deploymentId: "dep_9" }) });
+    it("hands the build to the release port, then completes it linked to the deployment", async () => {
+        const order: string[] = [];
+        const { logs, ports } = portsWith({
+            complete: (_id, bundleHash, deploymentId) => {
+                order.push(`complete:${bundleHash}:${deploymentId ?? "-"}`);
+
+                return Promise.resolve();
+            },
+            release: async (_build, execution) => {
+                order.push(`release:${execution.bundleHash}`);
+
+                return { deploymentId: "dep_9", kind: "production", url: "https://app.lunora.app" };
+            },
+        });
         const outcome = await runBuild(build, ports);
 
         expect(outcome).toStrictEqual({ bundleHash: "hash-1", deploymentId: "dep_9", status: "successful" });
+        // Released while the lease is still held — completing drops it, and the
+        // release's lines are written under it.
+        expect(order).toStrictEqual(["release:hash-1", "complete:hash-1:dep_9"]);
         expect(logs).toContain("info:released as deployment dep_9");
     });
 
-    it("keeps the build successful when the release fails — the artifact stays reusable", async () => {
-        const { logs, ports, terminal } = portsWith({ release: () => Promise.reject(new Error("health check failed")) });
+    it("reports a production release as production, linking its URL", async () => {
+        const statuses: string[] = [];
+        const { ports } = portsWith({
+            release: () => Promise.resolve({ deploymentId: "dep_9", kind: "production", url: "https://app.lunora.app" }),
+            reportStatus: (_build, state, description, targetUrl) => {
+                statuses.push(`${state}:${description}:${targetUrl ?? "-"}`);
+
+                return Promise.resolve();
+            },
+        });
+
+        await runBuild(build, ports);
+
+        expect(statuses.at(-1)).toBe("success:Deployed to production on Lunora Cloud.:https://app.lunora.app");
+    });
+
+    it("keeps the build successful when the release throws — the artifact stays reusable", async () => {
+        const statuses: string[] = [];
+        const { logs, ports, terminal } = portsWith({
+            release: () => Promise.reject(new Error("health check failed")),
+            reportStatus: (_build, state, description) => {
+                statuses.push(`${state}:${description}`);
+
+                return Promise.resolve();
+            },
+        });
         const outcome = await runBuild(build, ports);
 
         expect(outcome).toStrictEqual({ bundleHash: "hash-1", status: "successful" });
         expect(terminal).toStrictEqual(["complete:hash-1"]);
         expect(logs).toContain("error:release failed: health check failed");
+        // The commit must not read green: nothing was deployed.
+        expect(statuses.at(-1)).toBe("failure:Build succeeded but the release failed: health check failed");
+    });
+
+    it("keeps the build successful, linked, when its deployment was recorded but failed", async () => {
+        const statuses: string[] = [];
+        const linked: (string | undefined)[] = [];
+        const { logs, ports } = portsWith({
+            complete: (_id, _hash, deploymentId) => {
+                linked.push(deploymentId);
+
+                return Promise.resolve();
+            },
+            release: () => Promise.resolve({ deploymentId: "dep_9", error: "health check failed", kind: "preview", url: "https://x.lunora.app" }),
+            reportStatus: (_build, state, description, targetUrl) => {
+                statuses.push(`${state}:${description}:${targetUrl ?? "-"}`);
+
+                return Promise.resolve();
+            },
+        });
+        const outcome = await runBuild(build, ports);
+
+        expect(outcome).toStrictEqual({ bundleHash: "hash-1", deploymentId: "dep_9", status: "successful" });
+        expect(linked).toStrictEqual(["dep_9"]);
+        expect(logs).toContain("error:release failed: deployment dep_9 ended failed: health check failed");
+        expect(statuses.at(-1)).toBe("failure:Build succeeded but the release failed: health check failed:https://x.lunora.app");
+    });
+
+    it("writes the release line before completing, so the lease still covers it", async () => {
+        const order: string[] = [];
+        const { ports } = portsWith({
+            appendLog: (_id, _level, line) => {
+                order.push(`log:${line}`);
+
+                return Promise.resolve();
+            },
+            complete: () => {
+                order.push("complete");
+
+                return Promise.resolve();
+            },
+            release: () => Promise.resolve({ deploymentId: "dep_9", kind: "preview" }),
+        });
+
+        await runBuild(build, ports);
+
+        expect(order.indexOf("log:released as deployment dep_9")).toBeLessThan(order.indexOf("complete"));
     });
 
     it("fails the build when execution throws", async () => {

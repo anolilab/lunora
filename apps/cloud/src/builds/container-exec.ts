@@ -12,18 +12,47 @@ import { LunoraError } from "@lunora/server";
 import readNdjson from "../lib/read-ndjson";
 import type { BuildExecution } from "./runner";
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The terminal release line, as an execution.
+ *
+ * Only the shape is checked here — `manifest` an object, `cronSpecs` strings.
+ * Everything inside them is validated by the deploy path, exactly as it
+ * validates a `POST /v1/deploy` body, so a box that ran tenant code cannot
+ * reach the provisioner with anything a CLI upload could not.
+ *
+ * A line with no `manifest` is still a build: it is what a build box that
+ * predates release payloads sends, and its build should stay green. It just
+ * cannot be released, which the release says.
+ */
+const toExecution = (payload: Record<string, unknown> & { bundle: string; bundleHash: string }): BuildExecution => {
+    const { assets, cronSpecs, manifest, scriptName } = payload;
+    const crons = Array.isArray(cronSpecs) ? cronSpecs.filter((cron): cron is string => typeof cron === "string") : [];
+
+    return {
+        ...(assets === undefined ? {} : { assets }),
+        bundle: payload.bundle,
+        bundleHash: payload.bundleHash,
+        ...(crons.length > 0 ? { cronSpecs: crons } : {}),
+        ...(isRecord(manifest) ? { manifest } : {}),
+        ...(typeof scriptName === "string" && scriptName !== "" ? { scriptName } : {}),
+    };
+};
+
 /**
  * One line of the build box's NDJSON.
  *
- * `error` and `bundle` are terminal; `line` is progress. Split out from the
- * reader below so the stream plumbing and the protocol stay separately
- * readable — together they were one function nobody would want to change.
+ * `error` and the release (`bundle` + `bundleHash` + the rest) are terminal;
+ * `line` is progress. Split out from the reader below so the stream plumbing
+ * and the protocol stay separately readable — together they were one function
+ * nobody would want to change.
  */
 const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<void>): Promise<BuildExecution | undefined> => {
-    let payload: { bundle?: string; bundleHash?: string; error?: string; line?: string };
+    let payload: unknown;
 
     try {
-        payload = JSON.parse(line) as typeof payload;
+        payload = JSON.parse(line);
     } catch {
         // A malformed line is the container's problem, not the build's.
         // Surfacing it as a log line beats failing a build that may yet
@@ -33,16 +62,20 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
         return undefined;
     }
 
-    if (typeof payload.error === "string") {
-        throw new LunoraError("INTERNAL", payload.error);
+    if (!isRecord(payload)) {
+        return undefined;
     }
 
-    if (typeof payload.bundle === "string" && typeof payload.bundleHash === "string") {
-        return { bundle: payload.bundle, bundleHash: payload.bundleHash };
+    if (typeof payload["error"] === "string") {
+        throw new LunoraError("INTERNAL", payload["error"]);
     }
 
-    if (typeof payload.line === "string") {
-        await onLine(payload.line);
+    if (typeof payload["bundle"] === "string" && typeof payload["bundleHash"] === "string") {
+        return toExecution({ ...payload, bundle: payload["bundle"], bundleHash: payload["bundleHash"] });
+    }
+
+    if (typeof payload["line"] === "string") {
+        await onLine(payload["line"]);
     }
 
     return undefined;
@@ -52,8 +85,9 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
  * Drive one build through the build box and read its NDJSON back.
  *
  * The container answers `200` as soon as it starts, then writes one JSON object
- * per line: `{"line"}` while the build runs, and a final `{"bundle","bundleHash"}`
- * or `{"error"}`. Streaming rather than a buffered reply is what puts a build's
+ * per line: `{"line"}` while the build runs, and a final release
+ * (`{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?}`) or
+ * `{"error"}`. Streaming rather than a buffered reply is what puts a build's
  * output in `buildLogs` while it is still running — the live tail the Studio's
  * Builds tab is built around — and it sidesteps the exec contract's 1MB
  * response cap, which a real build log passes easily.

@@ -26,7 +26,7 @@ export interface ApiTypes {
         subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
     builds: {
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped" }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
     cells: {
@@ -141,7 +141,7 @@ export interface ApiTypes {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
     };
     tenant_backups: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number; trigger: "manual" | "pre-restore" | "scheduled" }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: unknown }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -178,10 +178,10 @@ export interface InternalApiTypes {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;
         claimNext: FunctionReference<"mutation", { runnerId: string }, null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; }>;
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
-        dispatch: FunctionReference<"action", {}, { ran: number; }>;
         expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
-        recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        releaseTarget: FunctionReference<"query", { buildId: Id<"builds"> }, null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: FunctionReference<"query", { buildId: Id<"builds"> }, { commitSha: string; installationId: number; repository: string; } | null>;
     };
     cells: {
@@ -190,6 +190,8 @@ export interface InternalApiTypes {
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
         recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
+        recordReleaseKey: FunctionReference<"mutation", { buildId: Id<"builds">; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; type: "production" | "preview" }, Id<"deployKeys">>;
+        removeReleaseKey: FunctionReference<"mutation", { buildId: Id<"builds">; id: Id<"deployKeys"> }, void>;
     };
     deployments: {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;

@@ -89,6 +89,57 @@ describe(executeInContainer, () => {
         expect(onLine).toHaveBeenCalledWith(expect.stringContaining("not JSON"));
     });
 
+    it("returns the whole release the box reports — manifest, assets, crons and the script name", async () => {
+        expect.assertions(1);
+
+        const release = {
+            assets: { files: [{ content: "aGk=", path: "/index.html" }] },
+            bundle: "YmFzZTY0",
+            bundleHash: "abc123",
+            cronSpecs: ["0 0 * * *"],
+            manifest: { bindings: [{ binding: "DB", type: "d1" }], compatibilityDate: "2026-01-01" },
+            scriptName: "app",
+        };
+
+        await expect(
+            executeInContainer(streaming([`${JSON.stringify(release)}\n`]), SOURCE, undefined, vi.fn().mockResolvedValue(undefined)),
+        ).resolves.toStrictEqual(release);
+    });
+
+    it("drops release fields of the wrong shape rather than passing them on", async () => {
+        expect.assertions(1);
+
+        const line = JSON.stringify({
+            bundle: "YmFzZTY0",
+            bundleHash: "abc123",
+            cronSpecs: ["0 0 * * *", 7],
+            manifest: ["not", "an", "object"],
+            scriptName: "",
+        });
+
+        // The deploy path validates the contents; this only refuses to forward a
+        // manifest that is not an object or a cron that is not a string.
+        await expect(executeInContainer(streaming([`${line}\n`]), SOURCE, undefined, vi.fn().mockResolvedValue(undefined))).resolves.toStrictEqual({
+            bundle: "YmFzZTY0",
+            bundleHash: "abc123",
+            cronSpecs: ["0 0 * * *"],
+        });
+    });
+
+    it("still reads a bundle-only line from a box that predates release payloads", async () => {
+        expect.assertions(1);
+
+        // The build stays green; the release path is what refuses it, for want of a manifest.
+        const execution = await executeInContainer(
+            streaming(['{"bundle":"YmFzZTY0","bundleHash":"abc123"}\n']),
+            SOURCE,
+            undefined,
+            vi.fn().mockResolvedValue(undefined),
+        );
+
+        expect(execution).toStrictEqual({ bundle: "YmFzZTY0", bundleHash: "abc123" });
+    });
+
     it("throws when the box refuses the request outright", async () => {
         expect.assertions(1);
 

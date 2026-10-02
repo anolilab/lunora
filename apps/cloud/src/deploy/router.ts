@@ -11,6 +11,7 @@ import { currentAuth } from "../auth";
 import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from "../backup/tenant-routes";
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
+import { dispatchBuilds } from "../builds/control-plane";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { createGitHubApp } from "../github/app";
 import type { BuildRecordResult } from "../github/webhook";
@@ -26,7 +27,7 @@ import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken, sealAdminToken } from "./admin-token";
-import type { DeployBackend, DeployTarget } from "./handler";
+import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import type { DeployKind, ReleaseDeps } from "./release";
 import { rollbackRelease } from "./release";
@@ -36,7 +37,13 @@ import { assertRoutesClassified } from "./route-registry";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { dispatchNamespaceOf, jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
-import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
+import {
+    handleCellRegisterRoute,
+    handlePreviewAuthRoute,
+    handleTenantCustomDomainRoute,
+    handleTenantPlanRoute,
+    requireAdminToken,
+} from "./routes/tenant-admin";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -130,6 +137,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
                 repository: intent.repository,
+                trigger: "pull_request",
             }),
         // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
         onPush: (intent) =>
@@ -139,6 +147,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
                 commitSha: intent.commitSha,
                 installationId: intent.installationId,
                 repository: intent.repository,
+                trigger: "push",
             }),
         resolveProject: (repository) => context.runMutation<null | ProjectResolution>(internal.projects.byGithubRepo, { repository }),
         secret: environment.GITHUB_WEBHOOK_SECRET,
@@ -890,12 +899,17 @@ export const createDeployRouter = (): HttpRouterLike => {
         };
     };
 
-    const handleDeployRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const context = requireContext(environment);
+    /**
+     * Everything the deploy core needs, wired to this request's control-plane
+     * context — the ONE wiring both callers share: `POST /v1/deploy`, and a git
+     * build's release (`POST /v1/builds/dispatch`). `undefined` without the
+     * `RELEASES` bucket, for the reason {@link releaseDeps} gives.
+     */
+    const deployDeps = (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv): DeployHandlerDeps | undefined => {
         const release = releaseDeps(context, environment);
 
         if (!release) {
-            return jsonError(500, "the RELEASES bucket is not configured; a deploy without a stored release could never be rolled back");
+            return undefined;
         }
 
         const cell = environment.LUNORA_CELL ?? "default";
@@ -951,7 +965,42 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
         };
 
-        return handleDeployRequest(request, { ...release, analytics, backend, healthCheck });
+        return { ...release, analytics, backend, healthCheck };
+    };
+
+    const handleDeployRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+        const deps = deployDeps(requireContext(environment), environment);
+
+        if (!deps) {
+            return jsonError(500, "the RELEASES bucket is not configured; a deploy without a stored release could never be rolled back");
+        }
+
+        return handleDeployRequest(request, deps);
+    };
+
+    /**
+     * `POST /v1/builds/dispatch` — claim and run queued git builds, releasing
+     * each successful one through the deploy core (GAPS.md A3).
+     *
+     * A route, and not a Lunora cron action, because a release needs this
+     * Worker's bindings — the `RELEASES` bucket, the provision box, the master
+     * key — and an action's `ctx` carries only declared vars. The Worker's own
+     * `scheduled()` calls it once a minute, in-process (`drainBuildQueue` in
+     * `src/server.ts`), which is what hands it the request-scoped Lunora context
+     * every other route here runs on. Admin-token gated like every other
+     * platform-internal route.
+     */
+    const handleBuildDispatchRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+        const unauthorized = requireAdminToken(request, environment);
+
+        if (unauthorized) {
+            return unauthorized;
+        }
+
+        const context = requireContext(environment);
+        const result = await dispatchBuilds({ context, deploy: deployDeps(context, environment), environment });
+
+        return Response.json(result);
     };
 
     /**
@@ -1047,6 +1096,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
+        // The build queue's drain, called in-process by the Worker's own `scheduled()`.
+        { handler: handleBuildDispatchRoute, method: "POST", path: "/v1/builds/dispatch", spec: { auth: "adminToken" } },
     ];
 
     // The MCP surface (GAPS.md Ring-3 #8): opted-in tool routes are exposed to

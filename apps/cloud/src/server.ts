@@ -636,6 +636,43 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
 ];
 
+/**
+ * Where the Worker reaches its own build-queue drain. The host is never
+ * resolved — the request is handed to the Worker in-process — so it only has to
+ * be a valid URL.
+ */
+const BUILD_DISPATCH_URL = "https://control-plane.internal/v1/builds/dispatch";
+
+/**
+ * Drain the git build queue: claim, build and release (GAPS.md A3), through
+ * `POST /v1/builds/dispatch`.
+ *
+ * In-process, through the Worker's own `fetch`, because that is where a handler
+ * gets the request-scoped Lunora context it runs the builds' mutations on — and
+ * a `scheduled()` invocation has no request. It used to be a Lunora cron action,
+ * which has the context but not the Worker's bindings, and a release needs those.
+ *
+ * Handed to `waitUntil` rather than awaited: a build runs for minutes, and the
+ * tenant cron fan-out below must not wait behind it. No-ops without the admin
+ * token the route is gated on.
+ */
+const drainBuildQueue = async (env: Env, context: ExecutionContextLike, target: ReturnType<typeof createWorker>): Promise<void> => {
+    if (!env.LUNORA_ADMIN_TOKEN) {
+        return;
+    }
+
+    const response = await target.fetch(
+        new Request(BUILD_DISPATCH_URL, { headers: { authorization: `Bearer ${env.LUNORA_ADMIN_TOKEN}` }, method: "POST" }),
+        env,
+        context,
+    );
+
+    if (!response.ok) {
+        // eslint-disable-next-line no-console -- the drain's only record; a failing one would otherwise be invisible
+        console.error("[builds] build dispatch failed", response.status, await response.text().catch(() => ""));
+    }
+};
+
 /** Tick one tenant's cron over the dispatcher, gated by its admin token. */
 const dispatchCronTick = async (
     dispatcher: NonNullable<Env["DISPATCHER"]>,
@@ -828,6 +865,19 @@ export default {
             if (result.status === "rejected") {
                 // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
                 console.error("[sweep] scheduled sweep failed", result.reason);
+            }
+        }
+
+        if (controller.cron === EVERY_MINUTE) {
+            const drained = drainBuildQueue(env, context, worker).catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- see drainBuildQueue
+                console.error("[builds] build dispatch failed", error);
+            });
+
+            if (context.waitUntil) {
+                context.waitUntil(drained);
+            } else {
+                await drained;
             }
         }
 

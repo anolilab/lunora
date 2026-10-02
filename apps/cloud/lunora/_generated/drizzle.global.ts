@@ -246,6 +246,7 @@ export const builds = sqliteTable("builds", {
     rootDirectory: text("rootDirectory"),
     skipReason: text("skipReason"),
     status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
+    trigger: text("trigger", { mode: "json" }).$type<"push" | "pull_request">(),
     updatedAt: real("updatedAt").notNull(),
     buildingAt: real("buildingAt"),
     successfulAt: real("successfulAt"),

@@ -1,21 +1,15 @@
 import { LunoraError } from "@lunora/server";
 
-import { executeInContainer } from "../src/builds/container-exec";
-import { runBuildDispatch } from "../src/builds/dispatch";
 import type { PushChanges } from "../src/builds/paths";
 import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
-import type { BuildRunnerPorts } from "../src/builds/runner";
+import type { BuildReleaseTarget } from "../src/builds/release";
 import { isUnconfiguredInfrastructure } from "../src/builds/runner";
-import { createGitHubApp } from "../src/github/app";
 import type { Id } from "./_generated/dataModel.js";
-import { internalAction, internalMutation, internalQuery, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
-
-/** The runner ports speak plain strings; the mutations want the branded id. */
-type BuildId = Id<"builds">;
 
 /**
  * Server-side builds (GAPS.md A3/A4). A verified GitHub push records a build
@@ -41,13 +35,19 @@ interface BuildRow {
     rootDirectory?: string;
     skipReason?: string;
     status: BuildStatus;
+    trigger?: BuildTrigger;
 }
 
 interface ProjectRow {
     _id: Id<"projects">;
+    activeScriptName?: string;
     githubRepo?: string;
     organizationId: Id<"organizations">;
+    slug: string;
 }
+
+/** What recorded a build: a default-branch push (production) or a pull request (preview). */
+type BuildTrigger = "pull_request" | "push";
 
 /**
  * The push's changed files as the webhook parsed them. `files` is deliberately
@@ -69,8 +69,11 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * the project from the repository name itself — callers cannot aim it at an
  * arbitrary project. Reached via the HMAC-verified webhook edge route; the
  * only spoofable input is build volume, which the per-IP limiter caps.
- * Dedup: an existing successful build for (project, commitSha, rootDirectory)
- * is returned as-is (`reused: true`) instead of queuing a rebuild.
+ * Dedup: an existing successful build for (project, commitSha, rootDirectory,
+ * trigger) is returned as-is (`reused: true`) instead of queuing a rebuild. The
+ * trigger is part of the key because it decides the release: a pull request's
+ * preview build must not swallow the production release of the same commit
+ * once it is merged fast-forward.
  *
  * Path filter: a push whose changed files match none of the project's watch
  * paths is recorded as a `skipped` build carrying the reason, so the Builds tab
@@ -85,8 +88,9 @@ export const recordPush = internalMutation
         commitSha: boundedString(LIMITS.id),
         installationId: v.number(),
         repository: boundedString(LIMITS.token),
+        trigger: v.union(v.literal("push"), v.literal("pull_request")),
     })
-    .mutation(async ({ ctx: context, args: { branch, changes, commitSha, installationId, repository } }): Promise<RecordPushResult> => {
+    .mutation(async ({ ctx: context, args: { branch, changes, commitSha, installationId, repository, trigger } }): Promise<RecordPushResult> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = page[0];
 
@@ -106,7 +110,9 @@ export const recordPush = internalMutation
 
         const { rootDirectory, watchPaths } = project;
         const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-        const successful = existingPage.find((build) => build.status === "successful" && build.bundleHash && build.rootDirectory === rootDirectory);
+        const successful = existingPage.find(
+            (build) => build.status === "successful" && build.bundleHash && build.rootDirectory === rootDirectory && build.trigger === trigger,
+        );
 
         if (successful) {
             return { buildId: successful._id, reused: true };
@@ -125,6 +131,7 @@ export const recordPush = internalMutation
             organizationId: project.organizationId,
             projectId: project._id, // secret-scanner:allow -- domain field name
             ...(rootDirectory === undefined ? {} : { rootDirectory }),
+            trigger,
             updatedAt: now,
         };
 
@@ -335,6 +342,39 @@ export const reportTarget = internalQuery
         return { commitSha: build.commitSha, installationId: installation.installationId, repository: project.githubRepo };
     });
 
+/**
+ * What releasing a build needs beyond its claim: the project it belongs to, the
+ * alias that project already deploys to, and what recorded the build — which is
+ * what decides production versus preview (`src/builds/release.ts`).
+ *
+ * Read from the rows, never from the caller: the release is aimed by the build
+ * the webhook recorded, not by anything the build box reported. SYSTEM only.
+ */
+export const releaseTarget = internalQuery
+    .input({ buildId: v.id("builds") })
+    .query(async ({ ctx: context, args: { buildId } }): Promise<BuildReleaseTarget | null> => {
+        const build = (await context.db.get(buildId)) as BuildRow | null;
+
+        if (!build) {
+            return null;
+        }
+
+        const project = (await context.db.get(build.projectId)) as null | ProjectRow;
+
+        if (project?.organizationId !== build.organizationId) {
+            return null;
+        }
+
+        return {
+            ...(project.activeScriptName === undefined ? {} : { activeScriptName: project.activeScriptName }),
+            branch: build.branch,
+            organizationId: build.organizationId,
+            projectId: build.projectId, // secret-scanner:allow -- domain field name
+            projectSlug: project.slug,
+            ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
+        };
+    });
+
 /** A project's builds, newest first (members). */
 export const listByProject = query
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
@@ -403,109 +443,4 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
     }
 
     return { expired: stale.length };
-});
-
-/**
- * The build source/execute seam, resolved from configuration.
- *
- * `execute` runs in a container now (`containers/build/`) and needs no
- * credential. `fetchSource` still does: a GitHub App id + private key, distinct
- * from the `GITHUB_CLIENT_ID`/`SECRET` OAuth pair used for social sign-in.
- * Without them this throws with the reason, which `runBuild` turns into a
- * logged, FAILED build.
- *
- * That failure is the point. Before the dispatcher was wired, a pushed build sat
- * `pending` with nobody to claim it and was failed 24 hours later by the expiry
- * cron, with no explanation anywhere. Failing in the first minute, with the cause
- * written to `buildLogs`, is strictly better than silence.
- */
-const unconfigured = (what: string) => (): never => {
-    throw new LunoraError(
-        "INTERNAL",
-        `build ${what} is not configured: the control plane has no GitHub App credentials (app id + private key) to mint an installation token. Builds cannot run until it is provisioned.`,
-    );
-};
-
-/**
- * Claim and run queued builds — the loop that was missing.
- *
- * `builds.recordPush` enqueues, `claimNext` leases and `runBuild` drives a build
- * through fetch → execute → complete/fail, but nothing called the loop that joins
- * them, so `claimNext` had no caller in the entire codebase. This is that caller,
- * invoked once a minute by the cron in `lunora/crons.ts`.
- *
- * `runnerId` identifies this lease holder. It is derived from `ctx.now` rather
- * than randomly so a handler re-run under OCC retry reuses the same id instead of
- * orphaning the lease it just took.
- */
-export const dispatch = internalAction.action(async ({ ctx: context }): Promise<{ ran: number }> => {
-    const runnerId = `cron-${String(context.now)}`;
-
-    // Absent App credentials this is `null` and the runner skips reporting — the
-    // same 🌐 gate the source fetch sits behind, since it is the same credential.
-    const environment = (context.env ?? {}) as { GITHUB_APP_ID?: string; GITHUB_APP_PRIVATE_KEY?: string };
-    const app = createGitHubApp({ appId: environment.GITHUB_APP_ID, fetch: context.fetch, privateKeyPem: environment.GITHUB_APP_PRIVATE_KEY });
-
-    const runnerPorts: BuildRunnerPorts = {
-        appendLog: async (buildId, level, line) => {
-            await context.runMutation(appendLog, { buildId: buildId as BuildId, level, line, runnerId });
-        },
-        complete: async (buildId, bundleHash) => {
-            await context.runMutation(complete, { buildId: buildId as BuildId, bundleHash, runnerId });
-        },
-        // `.any()` — a build is stateless, so any instance will do, and `.any()`
-        // is the handle that retries THROUGH a cold start (a 503 "no instance"
-        // while Cloudflare provisions) while letting a genuine 5xx from a
-        // running box pass straight through. Retrying a real build failure
-        // would just pay for the same install twice.
-        execute: async (source, rootDirectory, onLine) => await executeInContainer(context.containers.buildBox.any(), source, rootDirectory, onLine),
-        fail: async (buildId, error) => {
-            await context.runMutation(fail, { buildId: buildId as BuildId, error, runnerId });
-        },
-        fetchSource:
-            app === null
-                ? unconfigured("source fetch")
-                : async (build) => {
-                      // Same row the status reporter reads: the installation to
-                      // authenticate as, the repository, and the commit.
-                      const target = await context.runQuery(reportTarget, { buildId: build.buildId as BuildId });
-
-                      if (!target) {
-                          throw new LunoraError(
-                              "INTERNAL",
-                              "this build has no GitHub source to fetch: the project has no `githubRepo`, or the organization has no claimed App installation",
-                          );
-                      }
-
-                      return await app.downloadTarball(target);
-                  },
-        ...(app === null
-            ? {}
-            : {
-                  reportStatus: async (build, state, description, targetUrl) => {
-                      const target = await context.runQuery(reportTarget, { buildId: build.buildId as BuildId });
-
-                      if (!target) {
-                          return;
-                      }
-
-                      await app.postCommitStatus({
-                          description,
-                          installationId: target.installationId,
-                          repository: target.repository,
-                          sha: target.commitSha,
-                          state,
-                          ...(targetUrl === undefined ? {} : { targetUrl }),
-                      });
-                  },
-              }),
-    };
-
-    const { outcomes } = await runBuildDispatch({
-        claimNext: async (id) => await context.runMutation(claimNext, { runnerId: id }),
-        runnerId,
-        runnerPorts,
-    });
-
-    return { ran: outcomes.length };
 });

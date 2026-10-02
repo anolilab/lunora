@@ -241,3 +241,68 @@ describe("pOST /v1/cells", () => {
         expect(runMutation).toHaveBeenCalledTimes(1);
     });
 });
+
+/** POST to the build-queue drain the Worker's `scheduled()` calls in-process. */
+const dispatchPost = (token?: string): Request =>
+    new Request("https://control-plane.internal/v1/builds/dispatch", {
+        headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+        method: "POST",
+    });
+
+describe("pOST /v1/builds/dispatch", () => {
+    const env = (ctx: unknown): Record<string, unknown> => {
+        return { __lunoraCtx: ctx, LUNORA_ADMIN_TOKEN: "admin-secret" };
+    };
+
+    it("401s anyone but the Worker itself (the platform admin token)", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>();
+
+        const noToken = await router.fetch(dispatchPost(), env(makeCtx({ runMutation })));
+        const wrongToken = await router.fetch(dispatchPost("nope"), env(makeCtx({ runMutation })));
+
+        expect(noToken.status).toBe(401);
+        expect(wrongToken.status).toBe(401);
+        // Nothing was claimed: a tenant cannot drive the build queue.
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+
+    it("drains an empty queue", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue(null);
+        const response = await router.fetch(dispatchPost("admin-secret"), env(makeCtx({ runMutation })));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ ran: 0 });
+    });
+
+    it("fails a claimed build with the reason when the platform has no GitHub App", async () => {
+        const router = createDeployRouter();
+        const calls: { args: Record<string, unknown> | undefined }[] = [];
+        let handedOut = false;
+        const runMutation = vi.fn<ActionPort>((_reference, args) => {
+            calls.push({ args });
+
+            // `claimNext` is the one call carrying only the runner id: hand out
+            // one build, then report an empty queue.
+            const isClaim = args !== undefined && Object.keys(args).length === 1 && "runnerId" in args;
+
+            if (isClaim && !handedOut) {
+                handedOut = true;
+
+                return Promise.resolve({ buildId: "bld_1", commitSha: "abc", projectId: "prj_1" });
+            }
+
+            return Promise.resolve(null);
+        });
+
+        const response = await router.fetch(dispatchPost("admin-secret"), env(makeCtx({ runMutation, runQuery: vi.fn<ActionPort>().mockResolvedValue(null) })));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ ran: 1 });
+
+        const failed = calls.find((call) => typeof call.args?.["error"] === "string");
+
+        expect(failed?.args?.["error"]).toMatch(/source fetch is not configured: the control plane has no GitHub App credentials/u);
+    });
+});

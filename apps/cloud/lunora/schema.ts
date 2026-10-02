@@ -482,6 +482,11 @@ export default defineSchema({
         // Why a push was not built — set only on `skipped` rows (path filter).
         skipReason: v.optional(v.string()),
         status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed"), v.literal("skipped")),
+        // What recorded the build, which decides how it releases: a push to the
+        // default branch goes to production, a pull request to a preview. Absent
+        // on rows recorded before releases existed — those release as previews,
+        // the kind that can never move a project's stable URL.
+        trigger: v.optional(v.union(v.literal("push"), v.literal("pull_request"))),
         updatedAt: v.number(),
         // Phase timestamps (A2 pattern).
         buildingAt: v.optional(v.number()),

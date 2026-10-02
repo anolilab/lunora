@@ -226,6 +226,7 @@ export interface Doc_builds {
     rootDirectory?: string;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
+    trigger?: "push" | "pull_request";
     updatedAt: number;
     buildingAt?: number;
     successfulAt?: number;
@@ -942,6 +943,7 @@ export interface Insert_builds {
     rootDirectory?: string;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
+    trigger?: "push" | "pull_request";
     updatedAt: number;
     buildingAt?: number;
     successfulAt?: number;

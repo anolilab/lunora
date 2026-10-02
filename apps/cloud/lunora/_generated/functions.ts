@@ -105,12 +105,12 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:appendLog": lunora_builds_3.appendLog as unknown as RegisteredLunoraFunction,
     "builds:claimNext": lunora_builds_3.claimNext as unknown as RegisteredLunoraFunction,
     "builds:complete": lunora_builds_3.complete as unknown as RegisteredLunoraFunction,
-    "builds:dispatch": lunora_builds_3.dispatch as unknown as RegisteredLunoraFunction,
     "builds:expireStale": lunora_builds_3.expireStale as unknown as RegisteredLunoraFunction,
     "builds:fail": lunora_builds_3.fail as unknown as RegisteredLunoraFunction,
     "builds:listByProject": lunora_builds_3.listByProject as unknown as RegisteredLunoraFunction,
     "builds:logs": lunora_builds_3.logs as unknown as RegisteredLunoraFunction,
     "builds:recordPush": lunora_builds_3.recordPush as unknown as RegisteredLunoraFunction,
+    "builds:releaseTarget": lunora_builds_3.releaseTarget as unknown as RegisteredLunoraFunction,
     "builds:reportTarget": lunora_builds_3.reportTarget as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_4.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_4.register as unknown as RegisteredLunoraFunction,
@@ -127,6 +127,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deploy_keys:issue": lunora_deploy_keys_7.issue as unknown as RegisteredLunoraFunction,
     "deploy_keys:list": lunora_deploy_keys_7.list as unknown as RegisteredLunoraFunction,
     "deploy_keys:recordIngestKey": lunora_deploy_keys_7.recordIngestKey as unknown as RegisteredLunoraFunction,
+    "deploy_keys:recordReleaseKey": lunora_deploy_keys_7.recordReleaseKey as unknown as RegisteredLunoraFunction,
+    "deploy_keys:removeReleaseKey": lunora_deploy_keys_7.removeReleaseKey as unknown as RegisteredLunoraFunction,
     "deploy_keys:revoke": lunora_deploy_keys_7.revoke as unknown as RegisteredLunoraFunction,
     "deploy_keys:roll": lunora_deploy_keys_7.roll as unknown as RegisteredLunoraFunction,
     "deploy_keys:verify": lunora_deploy_keys_7.verify as unknown as RegisteredLunoraFunction,
@@ -329,6 +331,12 @@ if (typeof source["buildId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "afterCreatedAt": __val1 } : {}), "buildId": source["buildId"], "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_builds_3.releaseTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["buildId"] !== "string") return DEFER;
+return { "buildId": source["buildId"] };
+});
 installCompiledValidatorMap(lunora_builds_3.reportTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -393,6 +401,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_7.removeReleaseKey.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["buildId"] !== "string") return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+return { "buildId": source["buildId"], "id": source["id"] };
 });
 installCompiledValidatorMap(lunora_deploy_keys_7.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -838,12 +853,12 @@ export interface Caller {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
         claimNext: (args: { runnerId: string }) => Promise<null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; }>;
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
-        dispatch: (args?: {}) => Promise<{ ran: number; }>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; rootDirectory?: string; skipReason?: string; status: "building" | "failed" | "pending" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown }) => Promise<null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        recordPush: (args: { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; installationId: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
     };
     cells: {
@@ -868,6 +883,8 @@ export interface Caller {
         issue: (args: { capability?: "deploy" | "ingest"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
         recordIngestKey: (args: { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
+        recordReleaseKey: (args: { buildId: Id<"builds">; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; type: "production" | "preview" }) => Promise<Id<"deployKeys">>;
+        removeReleaseKey: (args: { buildId: Id<"builds">; id: Id<"deployKeys"> }) => Promise<void>;
         revoke: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<void>;
         roll: (args: { id: Id<"deployKeys">; organizationId: Id<"organizations"> }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
         verify: (args: { key: unknown }) => Promise<{ deployKeyId: Id<"deployKeys">; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "dev" | "preview" | "production"; } | null>;
@@ -986,7 +1003,7 @@ export interface Caller {
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; scriptName: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; scriptName: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; organizationId: Id<"organizations">; restoreConflicts?: number; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number; trigger: "manual" | "pre-restore" | "scheduled" }[]>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1076,12 +1093,12 @@ export const createCaller = (context: CallerCtx): Caller => ({
         appendLog: (args) => callRegistered(context, "builds:appendLog", args),
         claimNext: (args) => callRegistered(context, "builds:claimNext", args),
         complete: (args) => callRegistered(context, "builds:complete", args),
-        dispatch: (args) => callRegistered(context, "builds:dispatch", args),
         expireStale: (args) => callRegistered(context, "builds:expireStale", args),
         fail: (args) => callRegistered(context, "builds:fail", args),
         listByProject: (args) => callRegistered(context, "builds:listByProject", args),
         logs: (args) => callRegistered(context, "builds:logs", args),
         recordPush: (args) => callRegistered(context, "builds:recordPush", args),
+        releaseTarget: (args) => callRegistered(context, "builds:releaseTarget", args),
         reportTarget: (args) => callRegistered(context, "builds:reportTarget", args),
     },
     cells: {
@@ -1106,6 +1123,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         issue: (args) => callRegistered(context, "deploy_keys:issue", args),
         list: (args) => callRegistered(context, "deploy_keys:list", args),
         recordIngestKey: (args) => callRegistered(context, "deploy_keys:recordIngestKey", args),
+        recordReleaseKey: (args) => callRegistered(context, "deploy_keys:recordReleaseKey", args),
+        removeReleaseKey: (args) => callRegistered(context, "deploy_keys:removeReleaseKey", args),
         revoke: (args) => callRegistered(context, "deploy_keys:revoke", args),
         roll: (args) => callRegistered(context, "deploy_keys:roll", args),
         verify: (args) => callRegistered(context, "deploy_keys:verify", args),

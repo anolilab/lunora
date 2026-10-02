@@ -28,7 +28,7 @@ const world = (projectRow: Row, builds: Row[] = []): Record<string, Row[]> => {
     };
 };
 
-const push = { branch: "main", commitSha: "abc123", installationId: 42, repository: "acme/mono" };
+const push = { branch: "main", commitSha: "abc123", installationId: 42, repository: "acme/mono", trigger: "push" as const };
 
 describe("builds.recordPush path filter", () => {
     it("records a skipped build with the reason when no watched path changed", async () => {
@@ -83,10 +83,38 @@ describe("builds.recordPush path filter", () => {
     });
 
     it("reuses a bundle built from the same root directory", async () => {
-        const previous = { _id: "bld_old", bundleHash: "h", commitSha: "abc123", projectId: "prj_1", rootDirectory: "apps/web", status: "successful" };
+        const previous = {
+            _id: "bld_old",
+            bundleHash: "h",
+            commitSha: "abc123",
+            projectId: "prj_1",
+            rootDirectory: "apps/web",
+            status: "successful",
+            trigger: "push",
+        };
         const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web" }), [previous]));
 
         await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({ buildId: "bld_old", reused: true });
+    });
+
+    it("records what triggered the build — it decides production versus preview", async () => {
+        const { ctx, ops } = makeCtx(world(project()));
+
+        await recordPush.handler(ctx, { ...push, branch: "feat/x", changes: { unknown: "forced push" }, trigger: "pull_request" });
+
+        expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { branch: "feat/x", trigger: "pull_request" } });
+    });
+
+    it("does not let a pull request's preview build stand in for the production push of the same commit", async () => {
+        // A fast-forward merge pushes the PR head's own SHA to the default branch.
+        // Reusing the preview build there would mean the merge never released.
+        const previous = { _id: "bld_pr", bundleHash: "h", commitSha: "abc123", projectId: "prj_1", status: "successful", trigger: "pull_request" };
+        const { ctx } = makeCtx(world(project(), [previous]));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
+            buildId: "builds_new",
+            reused: false,
+        });
     });
 });
 

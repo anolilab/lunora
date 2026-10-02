@@ -354,3 +354,65 @@ export const recordIngestKey = internalMutation
 
         return encryptedSecret;
     });
+
+/** The name a release key carries, so the org's key list says what it is while it exists. */
+const releaseKeyName = (buildId: string): string => `Git build release (${buildId})`;
+
+/**
+ * Record a deploy key minted for ONE git-build release (`src/builds/release.ts`).
+ *
+ * A pushed build is released through the same deploy core as `POST /v1/deploy`,
+ * and every step of that core authorizes by deploy key — so the release gets a
+ * key of its own rather than a second, key-less path through each of them.
+ *
+ * The scope comes from the BUILD row, never the caller: the key is bound to the
+ * build's own organization and project, so it can deploy nothing else. `type` is
+ * the release's kind and acts as its ceiling, exactly as for a user's key. The
+ * token is minted at the edge and only its hash arrives, like every key here;
+ * {@link removeReleaseKey} deletes it when the release ends.
+ *
+ * SYSTEM only — the build dispatcher is its one caller.
+ */
+export const recordReleaseKey = internalMutation
+    .input({
+        buildId: v.id("builds"),
+        hashedKey: boundedString(LIMITS.name),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        type: v.union(v.literal("production"), v.literal("preview")),
+    })
+    .mutation(async ({ ctx: context, args: { buildId, hashedKey, organizationId, projectId, type } }): Promise<Id<"deployKeys">> => {
+        const build = (await context.db.get(buildId)) as null | { organizationId: Id<"organizations">; projectId: Id<"projects"> };
+
+        // The edge formats the key with the org and project it encodes, so they
+        // arrive as arguments — and are refused unless they are the build's own.
+        if (build?.organizationId !== organizationId || build.projectId !== projectId) {
+            throw new LunoraError("FORBIDDEN", "a release key must be scoped to its build's own project");
+        }
+
+        return context.db.insert("deployKeys", {
+            createdAt: context.now,
+            hashedKey,
+            name: releaseKeyName(buildId),
+            organizationId,
+            projectId, // secret-scanner:allow -- domain field name
+            type,
+        });
+    });
+
+/**
+ * Delete a release key once its release has ended. Only ever a key
+ * {@link recordReleaseKey} minted for this same build — a user's key is never
+ * reachable from here. SYSTEM only.
+ */
+export const removeReleaseKey = internalMutation
+    .input({ buildId: v.id("builds"), id: v.id("deployKeys") })
+    .mutation(async ({ ctx: context, args: { buildId, id } }): Promise<void> => {
+        const row = (await context.db.get(id)) as null | { name: string };
+
+        if (row?.name !== releaseKeyName(buildId)) {
+            throw new LunoraError("NOT_FOUND", "no release key for this build");
+        }
+
+        await context.db.delete(id);
+    });

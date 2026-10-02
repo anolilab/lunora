@@ -15,17 +15,47 @@ export interface ClaimedBuild {
     rootDirectory?: string;
 }
 
+/**
+ * What a build produced: everything the deploy path needs to release it, as the
+ * project's own `lunora cloud deploy --out` described it in the build box.
+ *
+ * `manifest`, `assets` and `cronSpecs` are wire data from a box that ran tenant
+ * code, so they stay `unknown`-ish here; the deploy path validates them exactly
+ * as it validates a `POST /v1/deploy` body.
+ */
 export interface BuildExecution {
-    /** Base64-encoded worker bundle, ready for `POST /v1/deploy`. */
+    /** The static files behind the manifest's `assets` binding, when there is one. */
+    assets?: unknown;
+    /** Base64-encoded worker bundle. */
     bundle: string;
     bundleHash: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`). */
+    cronSpecs?: string[];
+
+    /**
+     * The Worker's binding manifest. Absent only from a build box that predates
+     * release payloads, whose builds cannot be released — the release refuses
+     * rather than deploying a Worker with none of its bindings.
+     */
+    manifest?: Record<string, unknown>;
+    /** The wrangler `name`, a hint for a project's first production alias. */
+    scriptName?: string;
+}
+
+/** What the release port reports: the deployment it recorded, and how it ended. */
+export interface BuildRelease {
+    deploymentId: string;
+    /** Set when the deployment was recorded but did not go live. */
+    error?: string;
+    kind: "preview" | "production";
+    url?: string;
 }
 
 export interface BuildRunnerPorts {
     /** Stream one output line into `buildLogs` (lease-checked upstream). */
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
-    /** Mark the build successful with its bundle hash. */
-    complete: (buildId: string, bundleHash: string) => Promise<void>;
+    /** Mark the build successful with its bundle hash, linking the deployment it fed when there is one. */
+    complete: (buildId: string, bundleHash: string, deploymentId?: string) => Promise<void>;
     /** Run the build over the fetched source in `rootDirectory`, streaming output via `onLine`. 🌐 in production. */
     execute: (source: ArrayBuffer, rootDirectory: string | undefined, onLine: (line: string) => Promise<void>) => Promise<BuildExecution>;
     /** Mark the build failed. */
@@ -34,12 +64,14 @@ export interface BuildRunnerPorts {
     fetchSource: (build: ClaimedBuild) => Promise<ArrayBuffer>;
 
     /**
-     * Build → deploy handoff (GAPS.md ring-2): feed the built bundle into the
-     * release path (`POST /v1/deploy` with the project's deploy key — the
-     * health-checked release path takes it from there). A release failure
-     * fails the *deploy*, never the completed build. Omit for build-only runs.
+     * Build → deploy handoff (GAPS.md A3): feed the build into the same release
+     * core `POST /v1/deploy` runs (`src/builds/release.ts`). Runs while the build
+     * still holds its lease, so the release's progress lands in `buildLogs`. A
+     * release failure fails the *deploy*, never the completed build — it either
+     * throws (nothing was recorded) or answers with `error` (a deployment was
+     * recorded and failed). Omit for build-only runs.
      */
-    release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<{ deploymentId: string; url?: string }>;
+    release?: (build: ClaimedBuild, execution: BuildExecution) => Promise<BuildRelease>;
 
     /**
      * Report the build's state back to the commit that triggered it (GAPS.md A4)
@@ -54,7 +86,7 @@ export interface BuildRunnerPorts {
 }
 
 /**
- * The marker `builds.dispatch`'s `unconfigured()` ports put in their message.
+ * The marker the build dispatcher's `unconfigured()` ports (`control-plane.ts`) put in their message.
  *
  * Shared rather than duplicated as a string literal, because two places have to
  * agree on it and a typo in either silently restores the noise below.
@@ -101,6 +133,15 @@ const report = async (
     }
 };
 
+/**
+ * The BUILD succeeded, but nothing was deployed — so the commit must not read
+ * green. Reporting the build's own outcome here would tell the pusher their
+ * change is live when it is not, which is the one wrong answer available.
+ */
+const reportReleaseFailure = async (ports: BuildRunnerPorts, build: ClaimedBuild, message: string, targetUrl?: string): Promise<void> => {
+    await report(ports, build, "failure", `Build succeeded but the release failed: ${message}`, targetUrl);
+};
+
 export type BuildOutcome = { bundleHash: string; deploymentId?: string; status: "successful" } | { error: string; status: "failed" };
 
 /** Drive one claimed build through fetch → execute → complete/fail. Never throws. */
@@ -116,38 +157,58 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
 
         const result = await ports.execute(source, build.rootDirectory, (line) => ports.appendLog(build.buildId, "info", line));
 
-        await ports.complete(build.buildId, result.bundleHash);
+        if (!ports.release) {
+            await ports.complete(build.buildId, result.bundleHash);
+            await report(ports, build, "success", "Built on Lunora Cloud.");
 
-        // The build is done regardless of what happens next; a failed release
-        // is reported in the logs but keeps the artifact reusable (dedup).
-        if (ports.release) {
-            try {
-                const { deploymentId, url } = await ports.release(build, result);
-
-                await ports.appendLog(build.buildId, "info", `released as deployment ${deploymentId}`);
-                // The preview URL is the whole point of reporting back: a green check
-                // that does not link anywhere still leaves the pusher opening the
-                // dashboard to find out where their change went.
-                await report(ports, build, "success", "Deployed to a preview on Lunora Cloud.", url);
-
-                return { bundleHash: result.bundleHash, deploymentId, status: "successful" };
-            } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-
-                await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
-                // The BUILD succeeded and its artifact stays reusable, but nothing
-                // was deployed — so the commit must not read green. Reporting the
-                // build's own outcome here would tell the pusher their change is
-                // live when it is not, which is the one wrong answer available.
-                await report(ports, build, "failure", `Build succeeded but the release failed: ${message}`);
-
-                return { bundleHash: result.bundleHash, status: "successful" };
-            }
+            return { bundleHash: result.bundleHash, status: "successful" };
         }
 
-        await report(ports, build, "success", "Built on Lunora Cloud.");
+        // Released BEFORE `complete`: completing drops the lease, and the release's
+        // progress lines are written under it. The build is done regardless of what
+        // happens next — a failed release is reported, never turned into a failed
+        // build, and the artifact stays reusable (dedup).
+        let released: BuildRelease;
 
-        return { bundleHash: result.bundleHash, status: "successful" };
+        try {
+            released = await ports.release(build, result);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
+            await ports.complete(build.buildId, result.bundleHash);
+            await reportReleaseFailure(ports, build, message);
+
+            return { bundleHash: result.bundleHash, status: "successful" };
+        }
+
+        // Logged before `complete`, like every line: completing releases the lease
+        // that `appendLog` checks.
+        await (
+            released.error === undefined
+                ? ports.appendLog(build.buildId, "info", `released as deployment ${released.deploymentId}`)
+                : ports.appendLog(build.buildId, "error", `release failed: deployment ${released.deploymentId} ended failed: ${released.error}`)
+        ).catch(() => {});
+        await ports.complete(build.buildId, result.bundleHash, released.deploymentId);
+
+        if (released.error !== undefined) {
+            await reportReleaseFailure(ports, build, released.error, released.url);
+
+            return { bundleHash: result.bundleHash, deploymentId: released.deploymentId, status: "successful" };
+        }
+
+        // The URL is the whole point of reporting back: a green check that does
+        // not link anywhere still leaves the pusher opening the dashboard to find
+        // out where their change went.
+        await report(
+            ports,
+            build,
+            "success",
+            released.kind === "production" ? "Deployed to production on Lunora Cloud." : "Deployed to a preview on Lunora Cloud.",
+            released.url,
+        );
+
+        return { bundleHash: result.bundleHash, deploymentId: released.deploymentId, status: "successful" };
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
