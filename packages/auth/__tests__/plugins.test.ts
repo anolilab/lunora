@@ -26,6 +26,7 @@ const EXPECTED_EXPORTS = [
     "captcha",
     "cimd",
     "createAccessControl",
+    "createInsufficientScopeError",
     "createMcpProtectedRequestHandler",
     "customSession",
     "deviceAuthorization",

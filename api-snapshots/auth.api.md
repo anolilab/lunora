@@ -633,6 +633,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<null | {
         email?: string;
@@ -648,6 +649,7 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
+    discoveryPaths?: ReadonlyArray<string>;
     internalSecret: string | undefined;
     jurisdiction?: AuthJurisdiction;
     namespace: AuthNamespaceLike | undefined;
@@ -915,6 +917,12 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authDiscoveryPaths` (const)
+
+```ts
+const authDiscoveryPaths: (options: LunoraAuthOptions) => ReadonlyArray<string>;
+```
+
 ### `authDoColumnAdditions` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -1030,6 +1038,12 @@ const ensureMigrated: (auth: LunoraAuth | {
 
 ```ts
 const eventForPath: (path: string) => AuthAuditEvent | undefined;
+```
+
+### `handleAuthDiscoveryRequest` (const)
+
+```ts
+const handleAuthDiscoveryRequest: (auth: LunoraAuth, request: Request) => Promise<Response | undefined>;
 ```
 
 ### `handleAuthRequest` (const)
@@ -1376,6 +1390,10 @@ Re-exported from `@better-auth/cimd` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
+### `createInsufficientScopeError` (function)
+
+Re-exported from `@better-auth/core` — signature tracked at its source.
+
 ### `createMcpProtectedRequestHandler` (const)
 
 Re-exported from `@better-auth/mcp` — signature tracked at its source.
@@ -1420,7 +1438,9 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ### `mcp` (const)
 
-Re-exported from `@better-auth/mcp` — signature tracked at its source.
+```ts
+const mcp: (options: McpOptions) => ReturnType<typeof mcp$1>;
+```
 
 ### `mcpDiscoveryPaths` (const)
 

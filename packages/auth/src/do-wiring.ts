@@ -15,6 +15,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
+import { isDiscoveryRequest } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
 import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
@@ -37,6 +38,14 @@ export type AuthJurisdiction = "eu" | "fedramp" | "us";
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
+    /**
+     * The OAuth discovery paths the object serves outside `/api/auth` —
+     * `authDiscoveryPaths(options)` over the same auth options the object builds.
+     * Derived in the worker so a probe of any other path never costs a round-trip
+     * to the object. Empty or absent: nothing is forwarded.
+     */
+    discoveryPaths?: ReadonlyArray<string>;
+
     /**
      * Shared secret presented on the object's internal session route. `undefined`
      * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
@@ -86,6 +95,13 @@ export interface DoAuthWiring {
     authHandler: (request: Request) => Promise<Response | undefined>;
 
     /**
+     * Forwards a `GET`/`HEAD` for one of {@link DoAuthWiringOptions.discoveryPaths}
+     * to the object; `undefined` for anything else, and for the object's 404. The
+     * worker calls it only after the app's own routes missed.
+     */
+    discoveryHandler: (request: Request) => Promise<Response | undefined>;
+
+    /**
      * Copy the auth tables from the un-pinned object into the pinned one, and later
      * purge the un-pinned copy. Present only when a `jurisdiction` is set. Backs the
      * worker's `copyAuthToJurisdiction` and `purgeUnpinnedAuth` admin ops.
@@ -118,6 +134,7 @@ export interface DoAuthWiring {
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
     const { internalSecret, jurisdiction, objectName = "auth" } = options;
+    const discoveryPaths: ReadonlySet<string> = new Set(options.discoveryPaths);
     const unpinned = options.namespace;
     let { namespace } = options;
 
@@ -219,6 +236,15 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             }
 
             return stub()?.fetch(request);
+        },
+        discoveryHandler: async (request) => {
+            if (!isDiscoveryRequest(request, discoveryPaths)) {
+                return undefined;
+            }
+
+            const response = await stub()?.fetch(request);
+
+            return response?.status === 404 ? undefined : response;
         },
         resolveIdentity: async (request) => {
             // Fail closed on a missing secret. The object would refuse the call anyway;

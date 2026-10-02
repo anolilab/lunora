@@ -36,6 +36,7 @@ import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
+import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
@@ -470,8 +471,9 @@ class LunoraAuthDO {
     }
 
     /**
-     * Serve an auth request. Routes under `/api/auth` go to better-auth; the internal
-     * session route is handled here; anything else is a 404.
+     * Serve an auth request. Routes under `/api/auth` go to better-auth, and so do
+     * the OAuth discovery documents its options configure (`./discovery`); the
+     * internal session route is handled here; anything else is a 404.
      *
      * The base path is not configurable. The worker half only ever forwards
      * `/api/auth/*` (`createDoAuthWiring`, which codegen calls with no base path),
@@ -493,7 +495,7 @@ class LunoraAuthDO {
         }
 
         const auth = this.#ensureReady();
-        const response = await handleAuthRequest(auth, request);
+        const response = (await handleAuthRequest(auth, request)) ?? (await handleAuthDiscoveryRequest(auth, request));
 
         return response ?? Response.json({ error: "not an auth route" }, { status: 404 });
     }

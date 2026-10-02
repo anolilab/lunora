@@ -1,17 +1,21 @@
 /**
- * Lunora's wrapper over better-auth's `requireMcpAuth`, plus the discovery paths
- * an MCP route has to forward to the auth handler.
+ * Lunora's wrappers over better-auth's `mcp` and `requireMcpAuth`, plus the
+ * discovery paths an MCP route needs served.
  *
- * better-auth makes `resource` optional and falls back to the auth `baseURL`
- * (`…/api/auth`). No token `mcp({ resource })` issues carries that audience, so
- * the default refuses every request with a 401 — and its challenge points
- * clients at a protected-resource document nobody serves. Here `resource` is
- * required, and checked before any request is served.
+ * better-auth makes `requireMcpAuth`'s `resource` optional and falls back to the
+ * auth `baseURL` (`…/api/auth`). No token `mcp({ resource })` issues carries that
+ * audience, so the default refuses every request with a 401 — and its challenge
+ * points clients at a protected-resource document nobody serves. Here `resource`
+ * is required, and checked before any request is served.
+ *
+ * `mcp` is better-auth's, unchanged, except that it records its `resource` on the
+ * plugin object, so the worker can derive the protected-resource path to serve
+ * (see `./discovery`).
  */
-import type { RequireMcpAuthOptions } from "@better-auth/mcp";
-import { requireMcpAuth as betterAuthRequireMcpAuth } from "@better-auth/mcp";
-import { LunoraError } from "@lunora/errors";
+import type { McpOptions, RequireMcpAuthOptions } from "@better-auth/mcp";
+import { mcp as betterAuthMcp, requireMcpAuth as betterAuthRequireMcpAuth } from "@better-auth/mcp";
 
+import { authorizationServerPath, MCP_RESOURCE_KEY, parseMcpResource, protectedResourcePath } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH } from "./handler";
 
 /** better-auth's `requireMcpAuth` options, with `resource` required. */
@@ -29,22 +33,20 @@ type McpAuthInstance = Parameters<typeof betterAuthRequireMcpAuth>[0];
 /** The protected handler: receives the request and the verified token claims. */
 type McpProtectedHandler = Parameters<typeof betterAuthRequireMcpAuth>[1];
 
-const TRAILING_SLASH = /\/$/u;
+/**
+ * The MCP authorization server: better-auth's `oauthProvider` configured for MCP,
+ * serving the RFC 9728 protected-resource metadata for `resource`. Lunora's
+ * worker serves that document and the authorization-server metadata outside the
+ * auth base path on its own; that needs this `mcp`, not `@better-auth/mcp`'s.
+ */
+const mcp = (options: McpOptions): ReturnType<typeof betterAuthMcp> => {
+    const plugin = betterAuthMcp(options);
 
-/** Parse `resource` as an absolute URL, or fail closed. */
-const parseResource = (resource: unknown): URL => {
-    if (typeof resource === "string" && resource !== "") {
-        try {
-            return new URL(resource);
-        } catch {
-            // Fall through to the error below.
-        }
-    }
+    // Non-enumerable: better-auth spreads and inspects plugin objects, and the mark
+    // is for `./discovery` alone.
+    Object.defineProperty(plugin, MCP_RESOURCE_KEY, { value: options.resource });
 
-    throw new LunoraError(
-        "AUTH_MCP_RESOURCE_INVALID",
-        `requireMcpAuth needs \`resource\` set to the absolute URL passed to mcp({ resource }), got ${JSON.stringify(resource)}. Without it no issued token's audience matches and every request is refused.`,
-    );
+    return plugin;
 };
 
 /**
@@ -58,7 +60,7 @@ const requireMcpAuth = (
     handler: McpProtectedHandler,
     options: LunoraRequireMcpAuthOptions,
 ): ((request: Request) => Promise<Response>) => {
-    parseResource(options.resource);
+    parseMcpResource(options.resource);
 
     return betterAuthRequireMcpAuth(auth, handler, options);
 };
@@ -67,19 +69,18 @@ const requireMcpAuth = (
  * The two `.well-known` paths an MCP client fetches before it authorizes:
  * the RFC 9728 protected-resource metadata for `resource` (where the 401
  * challenge points), then the RFC 8414 authorization-server metadata for the
- * issuer. better-auth serves both, but outside the auth base path, so route
- * exactly these to `auth.handler`.
+ * issuer.
  *
- * Pass `authBasePath` when `createAuth` was given a `basePath` other than
- * `/api/auth`.
+ * The Lunora worker already serves both for an `.auth()` declaration with
+ * `mcp()`; this is for routing them yourself, e.g. in front of a hand-built
+ * worker. Pass `authBasePath` when `createAuth` was given a `basePath` other
+ * than `/api/auth`.
  * @throws LunoraError when `resource` is not an absolute URL.
  */
-const mcpDiscoveryPaths = (resource: string, authBasePath: string = DEFAULT_AUTH_BASE_PATH): ReadonlyArray<string> => {
-    const resourcePath = parseResource(resource).pathname.replace(TRAILING_SLASH, "");
-    const issuerPath = authBasePath.replace(TRAILING_SLASH, "");
-
-    return [`/.well-known/oauth-protected-resource${resourcePath}`, `/.well-known/oauth-authorization-server${issuerPath}`];
-};
+const mcpDiscoveryPaths = (resource: string, authBasePath: string = DEFAULT_AUTH_BASE_PATH): ReadonlyArray<string> => [
+    protectedResourcePath(resource),
+    authorizationServerPath(authBasePath),
+];
 
 export type { LunoraRequireMcpAuthOptions };
-export { mcpDiscoveryPaths, requireMcpAuth };
+export { mcp, mcpDiscoveryPaths, requireMcpAuth };
