@@ -52,6 +52,22 @@ describe("discover/sandbox", () => {
         });
     });
 
+    it("treats containerFsTool as a container tool — it needs the dispatcher and ctx.containers", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { containerFsTool, defineAgent } from "@lunora/agent/sandbox";
+            export const coder = defineAgent({ model: "m", tools: { files: containerFsTool("sandbox") } });
+        `);
+
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: true,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
+    });
+
     it("detects sandbox tools re-exported from the @lunora/agent main entry (the documented import)", () => {
         expect.assertions(1);
 

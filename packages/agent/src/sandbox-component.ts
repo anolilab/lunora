@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import { initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -39,6 +39,24 @@ interface SandboxContainerHandle {
      */
     exec: (command: string, options?: { args?: ReadonlyArray<string>; timeoutMs?: number }) => Promise<{ code: number; stderr: string; stdout: string }>;
     fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string; signal?: AbortSignal }) => Promise<Response>;
+
+    /**
+     * `handle.files` on a `defineContainer({ sandbox: true })` container — the
+     * container's own disk, through `@cloudflare/sandbox`'s `Files`. Present on
+     * every named-instance handle; a container without `sandbox: true` answers
+     * each call with a directed error.
+     */
+    files?: SandboxContainerFiles;
+}
+
+/** Structural view of `handle.files` — what `containerFsTool` uses of it. */
+interface SandboxContainerFiles {
+    mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
+    readDirectory: (path: string) => Promise<ReadonlyArray<{ name: string; type: string }>>;
+    readFile: (path: string) => Promise<Response>;
+    remove: (path: string, options?: { force?: boolean }) => Promise<void>;
+    stat: (path: string) => Promise<{ size: bigint | number; type: string }>;
+    writeFile: (path: string, content: string) => Promise<void>;
 }
 
 /** Structural view of a `ctx.containers.<name>` accessor. */
@@ -111,9 +129,9 @@ interface SandboxInvokeArgs {
     /** fs: content for a `write`. */
     content?: string;
     fullPage?: boolean;
-    /** container: the author-pinned instance name (the agent's thread). */
+    /** container / containerFs: the author-pinned instance name (the agent's thread). */
     instance?: string;
-    kind: "browser" | "container" | "fs";
+    kind: "browser" | "container" | "containerFs" | "fs";
     method?: string;
     name?: string;
     op: string;
@@ -208,19 +226,27 @@ const runContainerFetch = async (handle: SandboxContainerHandle, request: Sandbo
     }
 };
 
-const runContainerOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<string> => {
-    // Refused rather than defaulted. `idFromName("")` is a perfectly valid
-    // address, so an absent `instance` would silently route EVERY thread to one
-    // shared container — the defect this replaced, in a shape nothing notices.
-    // `BAD_REQUEST` so the failure is deterministic and lands as a tool result
-    // instead of burning the durable step's retry budget on a call that cannot
-    // succeed. The tool always sends one; this covers a dispatch that did not.
+/**
+ * The thread's own container instance — the author-pinned `instance`, never
+ * `any()` (see `SandboxContainerAccessor.get`).
+ *
+ * Refused rather than defaulted. `idFromName("")` is a perfectly valid
+ * address, so an absent `instance` would silently route EVERY thread to one
+ * shared container — the defect this replaced, in a shape nothing notices.
+ * `BAD_REQUEST` so the failure is deterministic and lands as a tool result
+ * instead of burning the durable step's retry budget on a call that cannot
+ * succeed. The tools always send one; this covers a dispatch that did not.
+ */
+const threadInstance = (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): SandboxContainerHandle => {
     if (request.instance === undefined || request.instance.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/agent: sandbox container op arrived with no `instance` — the tool pins the thread's own container");
     }
 
-    // The author-pinned instance, never `any()` — see `SandboxContainerAccessor.get`.
-    const handle = accessor.get(request.instance);
+    return accessor.get(request.instance);
+};
+
+const runContainerOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<string> => {
+    const handle = threadInstance(accessor, request);
 
     if (request.op === "exec") {
         // `ctx.containers.<name>.exec` owns the wire contract now (a typed POST
@@ -476,6 +502,81 @@ const runFsOp = async (bucket: R2BucketLike, root: string, request: SandboxInvok
     }
 };
 
+/** The parent directory of an absolute container path (`/a/b` → `/a`, `/a` → `/`). */
+const parentDirectory = (path: string): string => path.slice(0, path.lastIndexOf("/")) || "/";
+
+/**
+ * Run one file op on the thread's container disk (`containerFsTool`). Paths are
+ * scoped under `root` exactly as {@link runFsOp} scopes keys, then made
+ * absolute. Same ops and the same byte cap as the R2-backed `fsTool`; a `write`
+ * creates missing parents, and `rm` of a missing file succeeds, so a retried
+ * step converges instead of failing.
+ */
+const runContainerFsOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<unknown> => {
+    const { files } = threadInstance(accessor, request);
+
+    if (files === undefined) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: containerFsTool needs ctx.containers.<name>.get(id).files — update @lunora/container");
+    }
+
+    const path = `/${resolveFsKey(request.root ?? "/", request.path ?? "")}`;
+
+    switch (request.op) {
+        case "ls": {
+            const entries = await files.readDirectory(path);
+
+            return { entries: entries.map((entry) => (entry.type === "directory" ? `${entry.name}/` : entry.name)) };
+        }
+        case "read": {
+            // Reject an oversized file BEFORE pulling it into memory/context.
+            const { size } = await files.stat(path);
+
+            if (Number(size) > MAX_FS_BYTES) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/agent: fs read: "${request.path ?? ""}" is ${String(size)} bytes (max ${String(MAX_FS_BYTES)})`);
+            }
+
+            const response = await files.readFile(path);
+            const body = await readCapped(response.body, MAX_FS_BYTES);
+
+            return body.text;
+        }
+        case "rm": {
+            await files.remove(path, { force: true });
+
+            return { path: request.path ?? "", removed: true };
+        }
+        case "stat": {
+            try {
+                const { size, type } = await files.stat(path);
+
+                return { exists: true, size: Number(size), type };
+            } catch (error: unknown) {
+                if (isLunoraError(error) && error.code === "NOT_FOUND") {
+                    return { exists: false };
+                }
+
+                throw error;
+            }
+        }
+        case "write": {
+            const content = request.content ?? "";
+            const bytes = fsEncoder.encode(content).length;
+
+            if (bytes > MAX_FS_BYTES) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/agent: fs write: ${String(bytes)} bytes exceeds the max (${String(MAX_FS_BYTES)})`);
+            }
+
+            await files.mkdir(parentDirectory(path), { recursive: true });
+            await files.writeFile(path, content);
+
+            return { bytes, path: request.path ?? "", wrote: true };
+        }
+        default: {
+            throw new LunoraError("INTERNAL", `@lunora/agent: sandbox fs op "${request.op}" is not supported`);
+        }
+    }
+};
+
 /**
  * Build the sandbox runtime component: the single internal action the
  * batteries-included `browserTool`/`containerTool` dispatch to. Codegen
@@ -495,7 +596,7 @@ const sandboxComponent = (): SandboxComponent => {
             content: v.optional(v.string()),
             fullPage: v.optional(v.boolean()),
             instance: v.optional(v.string()),
-            kind: v.union(v.literal("browser"), v.literal("container"), v.literal("fs")),
+            kind: v.union(v.literal("browser"), v.literal("container"), v.literal("containerFs"), v.literal("fs")),
             method: v.optional(v.string()),
             name: v.optional(v.string()),
             op: v.string(),
@@ -537,11 +638,11 @@ const sandboxComponent = (): SandboxComponent => {
                 );
             }
 
-            return runContainerOp(accessor, request);
+            return request.kind === "containerFs" ? runContainerFsOp(accessor, request) : runContainerOp(accessor, request);
         });
 
     return { invoke };
 };
 
 export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxInvokeArgs, SandboxRegisteredFunction };
-export { resolveFsKey, runFsOp, sandboxComponent };
+export { resolveFsKey, runContainerFsOp, runFsOp, sandboxComponent };
