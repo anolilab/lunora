@@ -451,3 +451,10 @@ instant may still see the old size.
 
 Remaining for a remote (`wrangler versions upload` preview) run: backups,
 mounts, and a WebSocket upgrade through `port(n).fetch`.
+
+Remote attempt (2026-10-02): blocked. The account has no Cloudflare Containers
+access, which requires the Workers Paid plan (`wrangler containers list`:
+"Unauthorized: You do not have access to Cloudflare Containers"). The
+throwaway Worker and R2 bucket created for the attempt were deleted. Backups,
+mounts and the preview WebSocket upgrade remain unverified until an account
+with Containers can run the harness.
