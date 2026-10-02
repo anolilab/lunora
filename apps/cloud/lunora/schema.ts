@@ -222,6 +222,9 @@ export default defineSchema({
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
+        // A box's projects: its routing table and every usage report it sends
+        // read them, so neither may scan the whole table.
+        .index("by_box", ["boxId"])
         .index("by_github_repo", ["githubRepo"])
         // Per-org slug uniqueness, enforced by the composite unique index.
         .index("by_org_slug", ["organizationId", "slug"], { unique: true }),

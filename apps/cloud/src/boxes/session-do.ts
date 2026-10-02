@@ -29,7 +29,7 @@ import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame } from "./session";
 import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf } from "./session-store";
-import { recordBoxReport } from "./usage";
+import { MAX_REPORT_AGE_MS, recordBoxReport } from "./usage";
 
 /** The env slice the session reads. A `type` so the control plane's env types stay assignable to it. */
 export type BoxSessionEnvironment = {
@@ -81,6 +81,20 @@ const NONCE_PATTERN = /^[\w-]{22,128}$/u;
 /** A `report` window must start on a whole minute (README §5.1). */
 const REPORT_ALIGNMENT_MS = 60_000;
 
+/**
+ * Reports one socket may send per minute. A box reports once a minute; the
+ * headroom is for its backlog after a reconnect (a day of windows drains in
+ * under half an hour), and the cap is what bounds the control-plane reads a
+ * hostile box can cause.
+ */
+export const MAX_REPORTS_PER_MINUTE = 60;
+
+/** Reports queued behind the one being recorded. Beyond it a report is dropped and logged, never chained. */
+export const MAX_PENDING_REPORTS = 8;
+
+/** Storage prefix of the report windows this box's session has processed. */
+const REPORT_PREFIX = "report:";
+
 /** Close code for every refusal: 1008, policy violation. */
 const POLICY_VIOLATION = 1008;
 
@@ -129,8 +143,18 @@ const refuseSocket = (socket: SessionSocket, code: string, message: string): voi
 export class BoxSessionDO {
     private readonly jobs = new JobRegistry();
 
-    /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. */
-    private reports: Promise<unknown> = Promise.resolve();
+    /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. Never rejects. */
+    private reports: Promise<void> = Promise.resolve();
+
+    /** Reports chained on {@link reports} and not yet recorded. */
+    private pendingReports = 0;
+
+    /**
+     * Each socket's report count in the current minute. In memory rather than in
+     * the attachment: a frame's attachment is read before an `await` and written
+     * after it, so a counter there is lost to any two frames that interleave.
+     */
+    private readonly reportBudgets = new WeakMap<SessionSocket, { count: number; minute: number }>();
 
     private readonly state: SessionState;
 
@@ -260,6 +284,7 @@ export class BoxSessionDO {
         }
 
         await this.sweepNonces(now);
+        await this.sweepReportWindows(now);
 
         if (this.readySockets().length === 0 && boxId !== undefined && database !== undefined) {
             this.jobs.failAll("BOX_OFFLINE", "the box's session ended");
@@ -358,7 +383,7 @@ export class BoxSessionDO {
                 break;
             }
             case "report": {
-                await this.recordReport(database, attachment.boxId, effect.message, now);
+                await this.recordReport(socket, database, attachment.boxId, effect.message, now);
                 break;
             }
             case "result": {
@@ -478,19 +503,77 @@ export class BoxSessionDO {
      * Record a `report` (plan 458 G15). Only minute-aligned windows are taken: a
      * box reports once a minute, and the alignment is what bounds how many
      * distinct windows — and so how many rows — even a hostile box can produce.
+     *
+     * Each window is processed once per box, whether or not it wrote a row: the
+     * window is remembered in this object's storage, so replaying a report that
+     * named nothing countable costs a storage read, not a D1 query. A socket
+     * may send {@link MAX_REPORTS_PER_MINUTE}, and at most
+     * {@link MAX_PENDING_REPORTS} wait their turn; the rest are dropped and logged.
      */
-    private async recordReport(database: ControlPlaneStore, boxId: string, report: ReportMessage, now: number): Promise<void> {
+    private async recordReport(socket: SessionSocket, database: ControlPlaneStore, boxId: string, report: ReportMessage, now: number): Promise<void> {
         if (report.windowStart % REPORT_ALIGNMENT_MS !== 0) {
             return;
         }
 
-        this.reports = this.reports.then(async () => {
+        const minute = Math.floor(now / REPORT_ALIGNMENT_MS);
+        const budget = this.reportBudgets.get(socket);
+        const used = budget?.minute === minute ? budget.count : 0;
+
+        if (used >= MAX_REPORTS_PER_MINUTE || this.pendingReports >= MAX_PENDING_REPORTS) {
+            // eslint-disable-next-line no-console -- a dropped report is only visible here, in Workers Logs
+            console.warn(
+                `[box ${boxId}] report for window ${String(report.windowStart)} dropped: ${used >= MAX_REPORTS_PER_MINUTE ? "over the per-minute cap" : "too many reports pending"}`,
+            );
+
+            return;
+        }
+
+        this.reportBudgets.set(socket, { count: used + 1, minute });
+        this.pendingReports += 1;
+
+        const key = `${REPORT_PREFIX}${String(report.windowStart)}`;
+        const record = async (): Promise<void> => {
+            if ((await this.state.storage.get<number>(key)) !== undefined) {
+                return;
+            }
+
             const box = await loadBox(database, boxId);
 
-            return box === null || box.status === "revoked" ? undefined : recordBoxReport(database, box, report, now);
-        });
+            if (box === null || box.status === "revoked") {
+                return;
+            }
 
-        await this.reports.catch(() => undefined);
+            const outcome = await recordBoxReport(database, box, report, now);
+
+            // An out-of-range window cost nothing and is not remembered; anything
+            // else — rows written, nothing countable, already in D1 — is done.
+            if (!("dropped" in outcome && outcome.dropped === "out-of-range")) {
+                await this.state.storage.put(key, report.windowStart);
+            }
+        };
+
+        // Chained on a promise that never rejects, so one failed report cannot
+        // wedge every report after it.
+        this.reports = this.reports
+            .then(record)
+            .catch(() => undefined)
+            .finally(() => {
+                this.pendingReports -= 1;
+            });
+
+        await this.reports;
+    }
+
+    /** Forget processed report windows too old to be recorded anyway, a bounded batch at a time. */
+    private async sweepReportWindows(now: number): Promise<void> {
+        const windows = await this.state.storage.list<number>({ limit: 256, prefix: REPORT_PREFIX });
+
+        for (const [key, windowStart] of windows) {
+            if (windowStart < now - MAX_REPORT_AGE_MS) {
+                // eslint-disable-next-line no-await-in-loop -- bounded batch; storage deletes are local
+                await this.state.storage.delete(key);
+            }
+        }
     }
 
     /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */

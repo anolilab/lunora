@@ -637,7 +637,7 @@ export interface IndexNamesByTable {
     cells: "by_name";
     organizations: "by_slug";
     members: "by_user" | "by_org_user";
-    projects: "by_org_slug" | "by_github_repo";
+    projects: "by_org_slug" | "by_github_repo" | "by_box";
     deployments: "by_status" | "by_script" | "by_project" | "by_org_created" | "by_kind";
     aliasOwnership: "by_project" | "by_alias";
     boxes: "by_slug" | "by_org";

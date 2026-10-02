@@ -70,6 +70,7 @@ export const projects = sqliteTable("projects", {
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
     by_github_repo: index("by_github_repo").on(t.githubRepo),
+    by_box: index("by_box").on(t.boxId),
 }));
 
 export const deployments = sqliteTable("deployments", {

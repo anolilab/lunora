@@ -1,13 +1,64 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { rollup, summary } from "../lunora/usage";
 import { buildOverageReconcileData } from "../src/billing/reconcile";
 import { isBillableUsage } from "../src/billing/usage";
+import { MAX_PENDING_REPORTS, MAX_REPORTS_PER_MINUTE } from "../src/boxes/session-do";
 import { MAX_REPORT_AGE_MS, periodStartOf, recordBoxReport } from "../src/boxes/usage";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import { boxKey, boxRow, fakeState, handshake, TestBoxSession } from "./support/box-session-fakes";
+import type { MemoryStore } from "./support/memory-store";
 import { memoryStore } from "./support/memory-store";
+
+/**
+ * `inner` behind a meter: counts every read, can hold reads until released,
+ * and can fail the next `get`.
+ */
+const metered = (inner: MemoryStore) => {
+    let reads = 0;
+    let failures = 0;
+    let gate: Promise<void> = Promise.resolve();
+    const store: MemoryStore = {
+        ...inner,
+        findMany: async (...arguments_) => {
+            reads += 1;
+            await gate;
+
+            return inner.findMany(...arguments_);
+        },
+        get: async (...arguments_) => {
+            reads += 1;
+            await gate;
+
+            if (failures > 0) {
+                failures -= 1;
+
+                throw new Error("D1 hiccup");
+            }
+
+            return inner.get(...arguments_);
+        },
+    };
+
+    return {
+        failNextGet: () => {
+            failures += 1;
+        },
+        /** Hold every read until the returned release is called. */
+        hold: (): (() => void) => {
+            let release: () => void = () => undefined;
+
+            gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            return release;
+        },
+        reads: () => reads,
+        store,
+    };
+};
 
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 9, 2, 12, 0, 0);
@@ -102,6 +153,19 @@ describe("recording a box's usage report", () => {
         expect(store.tables["platformUsage"]).toStrictEqual([]);
     });
 
+    it("reads the box's own aliases once, however many junk aliases a report names", async () => {
+        const { reads, store } = metered(seeded());
+        const junk = Array.from({ length: 499 }, (_, index) => {
+            return { alias: `junk-${String(index)}`, requests: 1 };
+        });
+
+        await expect(recordBoxReport(store, BOX, report(NOW - MINUTE, [...junk, { alias: "web", requests: 5 }]), NOW)).resolves.toStrictEqual({
+            recorded: 1,
+        });
+        // The duplicate check, the box's projects, and that one project's live deployments.
+        expect(reads()).toBe(3);
+    });
+
     it("counts nothing for an alias whose project is in another organization", async () => {
         const store = seeded();
 
@@ -133,6 +197,103 @@ describe("reports over the box's session", () => {
 
         expect(store.tables["platformUsage"]?.map((row) => [row["windowStart"], row["quantity"]])).toStrictEqual([[windowStart, 4]]);
         expect(socket.closedWith).toBeUndefined();
+    });
+});
+
+describe("report cost over the box's session", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const connected = async () => {
+        const key = await boxKey();
+        const meter = metered(seeded());
+
+        meter.store.tables["boxes"] = [boxRow(key)];
+        meter.store.tables["domains"] = [];
+
+        const state = fakeState();
+        const session = new TestBoxSession(state, meter.store);
+        const socket = await handshake(session, state, key, "box_1");
+
+        return { ...meter, session, socket, state };
+    };
+
+    const aligned = (): number => Math.floor(Date.now() / MINUTE) * MINUTE;
+    const junkFrame = (windowStart: number) => JSON.stringify(report(windowStart, [{ alias: "junk", requests: 1 }]));
+    const processed = (state: ReturnType<typeof fakeState>): string[] => [...state.values.keys()].filter((key) => key.startsWith("report:"));
+
+    it("processes a window once even when it recorded nothing, so a replay costs no D1 read", async () => {
+        const { reads, session, socket, store } = await connected();
+        const windowStart = aligned() - MINUTE;
+        const before = reads();
+
+        await session.webSocketMessage(socket, junkFrame(windowStart));
+
+        const afterFirst = reads();
+
+        expect(afterFirst).toBeGreaterThan(before);
+
+        await session.webSocketMessage(socket, junkFrame(windowStart));
+        await session.webSocketMessage(socket, junkFrame(windowStart));
+
+        expect(reads()).toBe(afterFirst);
+        expect(store.tables["platformUsage"]).toStrictEqual([]);
+    });
+
+    it("caps the reports one socket may send in a minute, and logs what it drops", async () => {
+        const warn = vi.spyOn(globalThis.console, "warn").mockImplementation(() => undefined);
+        const { session, socket, state } = await connected();
+        const base = aligned();
+
+        // Pin the clock inside one minute: every report below lands in the same budget.
+        vi.spyOn(Date, "now").mockReturnValue(base + 1000);
+
+        for (let index = 1; index <= MAX_REPORTS_PER_MINUTE + 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- frames arrive in order
+            await session.webSocketMessage(socket, junkFrame(base - index * MINUTE));
+        }
+
+        expect(processed(state)).toHaveLength(MAX_REPORTS_PER_MINUTE);
+        expect(warn).toHaveBeenCalledTimes(5);
+        expect(socket.closedWith).toBeUndefined();
+    });
+
+    it("drops reports beyond the pending bound instead of chaining them", async () => {
+        const warn = vi.spyOn(globalThis.console, "warn").mockImplementation(() => undefined);
+        const { hold, session, socket, state } = await connected();
+        const release = hold();
+        const base = aligned();
+        const sent = Array.from({ length: MAX_PENDING_REPORTS + 3 }, (_, index) => session.webSocketMessage(socket, junkFrame(base - (index + 1) * MINUTE)));
+
+        release();
+        await Promise.all(sent);
+
+        expect(processed(state)).toHaveLength(MAX_PENDING_REPORTS);
+        expect(warn).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps recording after one report fails", async () => {
+        const { failNextGet, session, socket, state } = await connected();
+        const base = aligned();
+
+        failNextGet();
+        await session.webSocketMessage(socket, junkFrame(base - MINUTE));
+        await session.webSocketMessage(socket, junkFrame(base - 2 * MINUTE));
+
+        expect(processed(state)).toStrictEqual([`report:${String(base - 2 * MINUTE)}`]);
+    });
+
+    it("forgets processed windows once they are too old to be recorded anyway", async () => {
+        const { session, state } = await connected();
+        const now = Date.now();
+
+        state.values.set("report:1", 1);
+        state.values.set(`report:${String(now - MINUTE)}`, now - MINUTE);
+
+        await session.alarm();
+
+        expect(processed(state)).toStrictEqual([`report:${String(now - MINUTE)}`]);
     });
 });
 

@@ -12,6 +12,10 @@
  * THIS box, in its organization, are counted; a window too long, too old or in
  * the future is dropped; and a window already recorded for this box is never
  * counted twice — a replayed report, or one resent after a reconnect, is a no-op.
+ * What a report costs is bounded by the box's own projects: their aliases are
+ * read once, and every other alias in it is dropped without a read. The session
+ * (`session-do.ts`) also remembers each window it processed, rows or not, and
+ * caps how many reports a socket may send.
  */
 import type { ReportMessage } from "@lunora/hostd/protocol";
 
@@ -36,27 +40,28 @@ export const periodStartOf = (at: number): number => {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
 };
 
-interface ProjectRow {
-    _id: string;
-    boxId?: null | string;
-    organizationId: string;
-}
+/**
+ * The live deployment of every alias this box may report on: the aliases of
+ * the projects placed on `box`, in its organization. Read once per report, so
+ * the cost of a report is bounded by the box's own projects — never by how
+ * many aliases the box chose to name in it.
+ */
+const liveAliasesOn = async (database: ControlPlaneStore, box: { _id: string; organizationId: string }): Promise<Map<string, string>> => {
+    const { page: projects } = await database.findMany("projects", { where: { boxId: box._id, organizationId: box.organizationId } });
+    const live = new Map<string, string>();
 
-/** The live deployment `alias` serves from, when the alias's project is placed on `box`. */
-const liveDeploymentOn = async (database: ControlPlaneStore, box: { _id: string; organizationId: string }, alias: string): Promise<null | string> => {
-    const { page: owners } = await database.findMany("aliasOwnership", { where: { alias } });
-    const owner = owners[0] as undefined | { projectId: string };
-    const project = owner ? ((await database.get(owner.projectId, "projects")) as null | ProjectRow) : null;
+    for (const project of projects as { _id: string }[]) {
+        // eslint-disable-next-line no-await-in-loop -- one read per project placed on this box; an org's handful
+        const { page } = await database.findMany("deployments", { where: { projectId: project._id, status: "live" } }); // secret-scanner:allow -- domain field name
 
-    if (project?.boxId !== box._id || project.organizationId !== box.organizationId) {
-        return null;
+        for (const deployment of page as { _id: string; alias?: null | string }[]) {
+            if (deployment.alias != null && !live.has(deployment.alias)) {
+                live.set(deployment.alias, deployment._id);
+            }
+        }
     }
 
-    const { _id: projectId } = project;
-    const { page } = await database.findMany("deployments", { where: { alias, projectId, status: "live" } });
-    const deployment = page[0] as undefined | { _id: string };
-
-    return deployment?._id ?? null;
+    return live;
 };
 
 /** Record one `report` from `box`. Never throws on box input. */
@@ -78,21 +83,25 @@ export const recordBoxReport = async (
         return { dropped: "duplicate" };
     }
 
+    const counted = report.perAlias.filter((entry) => entry.requests > 0);
+
+    if (counted.length === 0) {
+        return { recorded: 0 };
+    }
+
+    // Everything else the box named — another org's alias, a junk one — is
+    // dropped here, in memory, for no read at all.
+    const live = await liveAliasesOn(database, box);
     let recorded = 0;
 
-    for (const entry of report.perAlias) {
-        if (entry.requests <= 0) {
+    for (const entry of counted) {
+        const deploymentId = live.get(entry.alias);
+
+        if (deploymentId === undefined) {
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- a box serves one org's handful of aliases
-        const deploymentId = await liveDeploymentOn(database, box, entry.alias);
-
-        if (deploymentId === null) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- see above
+        // eslint-disable-next-line no-await-in-loop -- one insert per alias the box actually serves
         await database.insert("platformUsage", {
             boxId: box._id,
             createdAt: now,
