@@ -37,6 +37,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
 import assertRequiredPackages from "./assert-required-packages";
+import type { CapabilityKey } from "./capabilities";
 import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
 import { discoverContainers } from "./discover/containers";
@@ -129,6 +130,8 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  */
 interface DeclarationSurface {
     agents: ReadonlyArray<AgentIR>;
+    /** {@link DeclarationSurface.featureUsage} as the capability set every emitter takes — derived once, here. */
+    capabilities: ReadonlySet<CapabilityKey>;
     containers: ReadonlyArray<ContainerIR>;
     /** Cron jobs discovered from `cronJobs()` registrations — read by the platform gate here, emitted downstream. */
     crons: ReadonlyArray<CronJobIR>;
@@ -316,6 +319,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         workflowSchedules: workflows.some((workflow) => workflow.schedules !== undefined),
     });
     const featureUsage = platformGate.usage;
+    const capabilities = usedCapabilities(featureUsage);
     // The gate's `vectorStore` verdict, named once for both consumers below.
     // `undefined` means the app never declared a vector index, which must not
     // withhold anything; only an explicit `false` is a rejection.
@@ -351,6 +355,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
 
     return {
         agents,
+        capabilities,
         containers,
         crons,
         dataModelContent: emitDataModel(schema),
@@ -371,7 +376,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         queues,
         serverContent: emitServer({
             agents,
-            capabilities: usedCapabilities(featureUsage),
+            capabilities,
             containers,
             env,
             // The gate's verdict, not the raw declaration: a `.vectorize()` column

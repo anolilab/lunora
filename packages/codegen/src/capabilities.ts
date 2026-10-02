@@ -27,15 +27,10 @@
  * fields in each ctx interface, and of the ShardDO's imports / config fields /
  * stubs / ctx builds. Reordering rows changes generated output.
  *
- * Still **out of scope** (emitted bespoke, gated on a DECLARATION rather than on
- * usage, so they are not keyed by this table's usage set): `ctx.flags`
- * (`lunora/flags.ts`, umbrella-aware specifier), `ctx.notify`/`ctx.push`
- * (`lunora/notify.ts`), `ctx.env` (`lunora/env.ts`), `ctx.vectors` (schema
- * indexes + the platform gate), and the per-declaration emitters for
- * `containers` / `workflows` / `queues` / `services` / `agents`. `ctx.ai`'s type
- * field and the `payments` / `x402` rails also stay bespoke (each imports its own
- * named type / builds a lazily-metered facade), but are still keyed off this
- * table's usage set.
+ * Out of scope: surfaces gated on a DECLARATION rather than on usage (`ctx.flags`,
+ * `ctx.notify`/`ctx.push`, `ctx.env`, `ctx.vectors` and the per-declaration
+ * `containers`/`workflows`/`queues`/`services`/`agents` emitters), and `ctx.payments`
+ * (see its row).
  */
 
 /** Determinism tier a capability's `ctx.*` field rides. `"every"` = query+mutation+action; `"action"` = ActionCtx only (external, non-deterministic I/O). */
@@ -83,7 +78,7 @@ interface ShardBindingFacet {
     binding?: ShardEnvBinding;
     /** The exported client type the ctx local and the stub are typed as, imported type-only from the row's `moduleSpecifier`. */
     clientType: string;
-    /** The text inside the stub's `throw new Error("…")` — name the wrangler key and the `createShardDO()` override. Emitted verbatim inside a double-quoted string. */
+    /** The plain-text message of the stub's `throw new Error(…)` — name the wrangler key and the `createShardDO()` override. Rendered with `JSON.stringify`, so write it unescaped. */
     missingMessage: string;
     /** Every method of `clientType`, in emit order. Async (`async () => { throw }`) unless listed in `syncStubMethods`. */
     stubMethods: ReadonlyArray<string>;
@@ -154,8 +149,8 @@ type CapabilityDescriptor = (
  * The canonical capability list. **Order is load-bearing** — every consumer
  * emits in row order (see the module doc). The `appMethod` rows reproduce the
  * original `LONG_TAIL` builder sequence (ai, aiSearch, analytics, artifacts, browser, hyperdrive,
- * images, kv, payment, x402, r2sql, vectors), and the same order places the
- * `ctx.*` fields and the ShardDO wiring.
+ * images, kv, payment, x402, r2sql — `.vectors()` follows them, emitted off the
+ * declaration), and the same order places the `ctx.*` fields and the ShardDO wiring.
  */
 const CAPABILITY_ROWS = [
     // The `accessContext()` middleware imports the `/context` subpath, NOT the
@@ -175,15 +170,16 @@ const CAPABILITY_ROWS = [
         tier: "every",
     },
     // `ctx.ai` — Workers AI. ActionCtx ONLY: inference is external,
-    // non-deterministic I/O. Its type field (a named `LunoraAi` import plus the
-    // `env.AI` binding field) and its `createAi` build (gateway metadata +
-    // telemetry) are bespoke.
+    // non-deterministic I/O. Its `createAi` build (gateway metadata + telemetry)
+    // is bespoke; `emit/server.ts` also types the conventional `env.AI` binding
+    // off this row's usage.
     {
         appMethod: { configKey: "ai", doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).", method: "ai" },
         contextProperty: "ai",
         key: "ai",
         moduleSpecifier: "@lunora/ai",
         requiredPackage: "@lunora/ai",
+        serverCtxField: `\n    readonly ai: import("@lunora/ai").LunoraAi;`,
         shardBinding: "bespoke",
         tier: "action",
     },
@@ -209,7 +205,7 @@ const CAPABILITY_ROWS = [
             binding: { envName: "AI_SEARCH" },
             clientType: "AiSearch",
             missingMessage:
-                "ctx.aiSearch: no AI Search binding found. Add an \\`ai_search_namespaces\\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \\`defineApp().aiSearch((env) => …)\\` at yours.",
+                "ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.",
             stubMethods: ["chatCompletions", "create", "delete", "get", "list", "search"],
             syncStubMethods: ["get"],
         },
@@ -233,7 +229,7 @@ const CAPABILITY_ROWS = [
             binding: { bindingType: "AnalyticsEngineDatasetLike", envName: "ANALYTICS", factory: { name: "createAnalytics" } },
             clientType: "AnalyticsClient",
             missingMessage:
-                "ctx.analytics: no Analytics Engine binding found. Add an \\`analytics_engine_datasets\\` binding (env.ANALYTICS) to wrangler.jsonc, or pass \\`analytics\\` to createShardDO().",
+                "ctx.analytics: no Analytics Engine binding found. Add an `analytics_engine_datasets` binding (env.ANALYTICS) to wrangler.jsonc, or pass `analytics` to createShardDO().",
             stubMethods: ["track", "writeDataPoint"],
             syncStubMethods: ["track", "writeDataPoint"],
         },
@@ -259,7 +255,7 @@ const CAPABILITY_ROWS = [
             binding: { bindingType: "ArtifactsBindingLike", envName: "ARTIFACTS", factory: { name: "createArtifacts", option: "binding" } },
             clientType: "ArtifactsClient",
             missingMessage:
-                'ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\"ARTIFACTS\\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).',
+                'ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: "ARTIFACTS", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).',
             stubMethods: ["authenticatedRemote", "create", "delete", "import", "info", "list", "withRepo"],
             syncStubMethods: ["authenticatedRemote"],
         },
@@ -284,7 +280,7 @@ const CAPABILITY_ROWS = [
         shardBinding: {
             clientType: "Browser",
             missingMessage:
-                "ctx.browser: provide a \\`browser\\` config thunk, e.g. \\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\` with \\`import { launch } from '@cloudflare/playwright'\\`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.",
+                "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.",
             stubMethods: ["cancelCrawl", "connect", "content", "crawl", "crawlResult", "launch", "pdf", "quickAction", "scrape", "screenshot", "sessions"],
         },
         tier: "action",
@@ -316,7 +312,7 @@ const CAPABILITY_ROWS = [
         shardBinding: {
             clientType: "SqlClient",
             missingMessage:
-                "ctx.sql: provide a \\`sql\\` config thunk that builds a SqlClient from your driver, e.g. \\`sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))\\`.",
+                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.",
             stubMethods: ["query"],
         },
         tier: "action",
@@ -333,8 +329,7 @@ const CAPABILITY_ROWS = [
         shardBinding: {
             binding: { bindingType: "ImagesBindingLike", envName: "IMAGES", factory: { name: "createImages", option: "binding" } },
             clientType: "Images",
-            missingMessage:
-                "ctx.images: no Images binding found. Add an \\`images\\` binding (env.IMAGES) to wrangler.jsonc, or pass \\`images\\` to createShardDO().",
+            missingMessage: "ctx.images: no Images binding found. Add an `images` binding (env.IMAGES) to wrangler.jsonc, or pass `images` to createShardDO().",
             stubMethods: ["info", "transform"],
         },
         tier: "action",
@@ -357,7 +352,7 @@ const CAPABILITY_ROWS = [
                 unvouchableReads: ["get", "getRaw", "getWithMetadata", "list"],
             },
             clientType: "Kv",
-            missingMessage: "ctx.kv: no KV binding found. Add a \\`kv_namespaces\\` binding (env.KV) to wrangler.jsonc, or pass \\`kv\\` to createShardDO().",
+            missingMessage: "ctx.kv: no KV binding found. Add a `kv_namespaces` binding (env.KV) to wrangler.jsonc, or pass `kv` to createShardDO().",
             stubMethods: ["delete", "get", "getRaw", "getWithMetadata", "list", "put"],
         },
         tier: "every",
@@ -374,8 +369,10 @@ const CAPABILITY_ROWS = [
     // fields are hand-wired in `emit/` off the `lunora/notify.ts` signal, so no
     // ctx facets here — declaring them would emit the fields twice.
     { contextProperty: "notify", key: "notify", moduleSpecifier: "@lunora/notify" },
-    // `ctx.payments` — its field and lazily-built facade are bespoke (`emit/`
-    // hand-wires them off this row's usage flag), so no ctx facets.
+    // `ctx.payments` — deliberately NOT a ctx-facet row: its facade's store rides
+    // the request's `ctx.db`, so its build must run AFTER `db` is constructed,
+    // which no `shardBinding` slot does (every one is built before the ctx
+    // literal). `emit/` hand-wires its field and build off this row's usage.
     {
         appMethod: { configKey: "payment", doc: "Wire the payment options backing `ctx.payments`.", method: "payment" },
         contextProperty: "payments",
@@ -384,9 +381,8 @@ const CAPABILITY_ROWS = [
         requiredPackage: "@lunora/payment",
     },
     // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
-    // settles real USDC over the network per request. Like `payments`, its ctx
-    // field is bespoke (a lazily-built, per-run-metered rail), so no ctx facets —
-    // `emit/` hand-wires it.
+    // settles real USDC over the network per request. Its ShardDO build is bespoke
+    // (a lazily-built rail reading its wallet key through `ctx.secrets`).
     {
         appMethod: {
             configKey: "x402",
@@ -397,6 +393,9 @@ const CAPABILITY_ROWS = [
         key: "x402",
         moduleSpecifier: "@lunora/x402/pay",
         requiredPackage: "@lunora/x402",
+        serverCtxField: `\n    readonly x402: import("@lunora/x402/pay").X402Pay;`,
+        shardBinding: "bespoke",
+        tier: "action",
     },
     // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
     // (write-only fire-and-forget, but external I/O — kept off query/mutation).
@@ -413,7 +412,7 @@ const CAPABILITY_ROWS = [
             binding: { bindingType: "PipelineBindingLike", envName: "PIPELINES", factory: { name: "createPipelines", option: "binding" } },
             clientType: "PipelineClient",
             missingMessage:
-                "ctx.pipelines: no Pipelines binding found. Add a \\`pipelines\\` binding (env.PIPELINES) to wrangler.jsonc, or pass \\`pipelines\\` to createShardDO().",
+                "ctx.pipelines: no Pipelines binding found. Add a `pipelines` binding (env.PIPELINES) to wrangler.jsonc, or pass `pipelines` to createShardDO().",
             stubMethods: ["send"],
         },
         tier: "action",
@@ -439,8 +438,10 @@ const CAPABILITY_ROWS = [
     },
     { contextProperty: "scheduler", key: "scheduler", moduleSpecifier: "@lunora/scheduler" },
     { contextProperty: "storage", key: "storage", moduleSpecifier: "@lunora/storage" },
+    // `ctx.vectors` is declaration-gated (schema indexes + the platform gate), so
+    // its `.vectors()` builder method is emitted off `hasVectors` in `emit-app.ts`,
+    // not from this row; the row is the usage probe only.
     {
-        appMethod: { configKey: "vectors", doc: "Wire the Vectorize index map backing `ctx.vectors`.", method: "vectors" },
         contextProperty: "vectors",
         key: "vectors",
         moduleSpecifier: "@lunora/bindings/vectors",
@@ -493,11 +494,22 @@ const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: A
 );
 
 /**
+ * The usage-probe facets of every row, read-only — the view a consumer outside
+ * codegen keys its own capability detection off (`@lunora/config`'s binding
+ * inference), so the two cannot disagree on which import or `ctx.<property>`
+ * read marks a capability used.
+ */
+const CAPABILITY_PROBES: ReadonlyArray<{ readonly contextProperty: string | undefined; readonly key: CapabilityKey; readonly moduleSpecifier: string }> =
+    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => {
+        return { contextProperty, key, moduleSpecifier };
+    });
+
+/**
  * The capabilities a usage record marks as used, as the set the emitters take
  * (`emitServer` / `emitShard` / `emitApp`'s `capabilities` option).
  */
 const usedCapabilities = (usage: Readonly<Record<CapabilityKey, boolean>>): ReadonlySet<CapabilityKey> =>
     new Set(CAPABILITIES.filter((capability) => usage[capability.key]).map((capability) => capability.key));
 
-export { APP_METHOD_CAPABILITIES, CAPABILITIES, usedCapabilities };
+export { APP_METHOD_CAPABILITIES, CAPABILITIES, CAPABILITY_PROBES, usedCapabilities };
 export type { AppMethodFacet, AppMethodKey, BespokeShardKey, CapabilityDescriptor, CapabilityKey, CapabilityTier, ShardBindingFacet, ShardEnvBinding };

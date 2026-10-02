@@ -983,7 +983,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
             expect(result.generated.shard).toContain("ctx.ai = ai;");
-            expect(result.generated.server).toContain("readonly ai: LunoraAi;");
+            expect(result.generated.server).toContain('readonly ai: import("@lunora/ai").LunoraAi;');
         });
 
         it("does not wire @lunora/payment for a project that doesn't use it", () => {
@@ -2133,7 +2133,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
             expect(result.generated.app).toContain('public x402(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["x402"]>>): this');
             // …the typed rail rides the ActionCtx…
-            expect(result.generated.server).toContain("readonly x402: X402Pay;");
+            expect(result.generated.server).toContain('readonly x402: import("@lunora/x402/pay").X402Pay;');
             // …and the value is attached only inside the action-only `if (isAction)` block.
             expect(result.generated.shard).toContain("ctx.x402 = x402;");
         });
@@ -4594,8 +4594,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withX402 = emitServer({ capabilities: new Set(["x402"]) });
 
-            expect(withX402).toContain('import type { X402Pay } from "@lunora/x402/pay";');
-            expect(withX402).toContain("readonly x402: X402Pay;");
+            // Typed inline and on ActionCtx ONLY — the field appears exactly once.
+            expect(withX402.split('readonly x402: import("@lunora/x402/pay").X402Pay;')).toHaveLength(2);
+            expect(withX402).not.toContain("import type { X402Pay }");
 
             const withoutX402 = emitServer({});
 
@@ -4608,8 +4609,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withAi = emitServer({ capabilities: new Set(["ai"]) });
 
-            expect(withAi).toContain('import type { LunoraAi } from "@lunora/ai";');
-            expect(withAi).toContain("readonly ai: LunoraAi;");
+            // Typed inline and on ActionCtx ONLY — the field appears exactly once.
+            expect(withAi.split('readonly ai: import("@lunora/ai").LunoraAi;')).toHaveLength(2);
+            expect(withAi).not.toContain("import type { LunoraAi }");
 
             const withoutAi = emitServer({});
 
