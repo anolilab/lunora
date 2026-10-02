@@ -1,3 +1,16 @@
+## @lunora/codegen [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.247...@lunora/codegen@1.0.0-alpha.248) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.180
+* **@lunora/agent:** upgraded to 1.0.0-alpha.162
+* **@lunora/server:** upgraded to 1.0.0-alpha.169
+
 ## @lunora/codegen [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.246...@lunora/codegen@1.0.0-alpha.247) (2026-10-02)
 
 ### Features
