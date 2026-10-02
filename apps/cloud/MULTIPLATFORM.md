@@ -671,7 +671,7 @@ celld reaches 1.0.
 
 Stated so they don't creep back in:
 
-- **We are not building a general-purpose PaaS.** No Docker images of user
+- **We are not building a general-purpose PaaS.** No container images of user
   apps, no OpenResty, no SSH executors, no workloads that are not Lunora apps.
   Lunora Cloud deploys **Lunora apps**. Gaps 9, 12 in §2 are permanent
   rejections, not backlog. _Narrowed 2026-10-02 (§7.9):_ the original bullet
