@@ -626,6 +626,10 @@ interface ProjectConfigLiterals {
         unreadable?: boolean;
     };
     remote?: boolean;
+    services?: {
+        declared?: Record<string, ServiceLiteral>;
+        unreadable?: boolean;
+    };
     target?: string;
     unreadable?: boolean;
 }
@@ -897,6 +901,30 @@ interface SdkTarget {
     renderModels?: (document: OpenRpcDocument) => Record<string, string>;
     requires: ReadonlyArray<string>;
     vendor: ReadonlyArray<SdkVendorEntry>;
+}
+```
+
+### `ServiceBindingIR` (interface)
+
+```ts
+interface ServiceBindingIR {
+    binding: string;
+    entrypoint?: string;
+    envWorkers: Readonly<Record<string, string>>;
+    main: string;
+    name: string;
+    publicScopes: ReadonlyArray<string>;
+    worker: string;
+    wranglerPath: string;
+}
+```
+
+### `ServiceLiteral` (interface)
+
+```ts
+interface ServiceLiteral {
+    dir: string;
+    entrypoint?: string;
 }
 ```
 
@@ -1346,13 +1374,13 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, generatedDirectory, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1497,6 +1525,15 @@ const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
 const readProjectTarget: (projectRoot: string) => string | undefined;
 ```
 
+### `readServiceBindings` (const)
+
+```ts
+const readServiceBindings: (projectRoot: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
 ### `redact` (const)
 
 ```ts
@@ -1513,6 +1550,12 @@ const refreshCodegenProject: (project: Project, lunoraDirectory: string) => void
 
 ```ts
 const resolveCodegenTarget: (projectRoot: string, explicit?: string) => string;
+```
+
+### `resolveServiceBindings` (const)
+
+```ts
+const resolveServiceBindings: (projectRoot: string) => ServiceBindingIR[];
 ```
 
 ### `runCodegen` (const)
@@ -1945,6 +1988,7 @@ interface EmitServerOptions {
     agents?: ReadonlyArray<AgentIR>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;
+    generatedDirectory?: string;
     hasAccessFacade?: boolean;
     hasAi?: boolean;
     hasAnalytics?: boolean;
@@ -1962,6 +2006,7 @@ interface EmitServerOptions {
     identity?: IdentityIR;
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
+    services?: ReadonlyArray<ServiceBindingIR>;
     storageRuleBuckets?: ReadonlyArray<string>;
     topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
@@ -2002,6 +2047,7 @@ interface EmitShardOptions {
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
     schemaSnapshot?: SchemaSnapshot;
+    services?: ReadonlyArray<ServiceBindingIR>;
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;

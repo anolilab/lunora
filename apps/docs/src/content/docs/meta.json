@@ -28,6 +28,7 @@
         "concepts/middleware",
         "concepts/components",
         "concepts/modules",
+        "concepts/services",
         "concepts/scheduling",
         "concepts/notifications",
         "concepts/error-handling",

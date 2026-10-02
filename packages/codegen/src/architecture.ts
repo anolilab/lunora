@@ -20,6 +20,7 @@ import type {
     QueryReadIR,
     QueueIR,
     SchemaIR,
+    ServiceBindingIR,
     TableWriteIR,
     TopicIR,
     WorkflowCallIR,
@@ -45,6 +46,8 @@ interface ArchitectureInput extends CallSites {
     modules: ReadonlyArray<ModuleIR>;
     queues: ReadonlyArray<QueueIR>;
     schema: SchemaIR;
+    /** Sibling Workers bound as services (plan 457); drawn as `service` nodes. */
+    services: ReadonlyArray<ServiceBindingIR>;
     topics: ReadonlyArray<TopicIR>;
     workflows: ReadonlyArray<WorkflowIR>;
 }
@@ -65,7 +68,13 @@ type PendingEdge = EdgeTarget & {
 };
 
 /** The node-id prefix a call-site edge's `target` names. */
-const CALL_TARGET_KIND: Readonly<Record<CallEdgeIR["kind"], string>> = { call: "function", enqueue: "queue", publish: "topic", schedule: "function" };
+const CALL_TARGET_KIND: Readonly<Record<CallEdgeIR["kind"], string>> = {
+    call: "function",
+    enqueue: "queue",
+    invoke: "service",
+    publish: "topic",
+    schedule: "function",
+};
 
 /** The module paths call sites inside `lunora/queues.ts` / `lunora/workflows.ts` handlers carry. */
 const QUEUES_MODULE = QUEUES_FILENAME.replace(/\.ts$/u, "");
@@ -189,6 +198,15 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
 
     for (const cron of input.crons) {
         add({ detail: cron.cron, id: `cron:${cron.name}`, kind: "cron", name: cron.name });
+    }
+
+    for (const service of input.services) {
+        add({
+            detail: service.entrypoint === undefined ? "fetch" : `rpc · ${service.entrypoint}`,
+            id: `service:${service.name}`,
+            kind: "service",
+            name: service.worker,
+        });
     }
 
     return { nodes, sites };

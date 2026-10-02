@@ -1838,3 +1838,4 @@ provisioning and per-service deploy were considered and left out.
 | ---- | ----------------------------------------------------------------------------------------- | ----------- |
 | 455  | [Pub/Sub topics: one publish, N durable subscriptions](455-queue-topics-fanout.md)        | IN PROGRESS |
 | 456  | [Modules: catalog, call graph, architecture diagram](456-modules-catalog-architecture.md) | IN PROGRESS |
+| 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)            | IN PROGRESS |

@@ -22,6 +22,8 @@
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
+import type { ServiceBindingIR } from "@lunora/codegen";
+import { readServiceBindings } from "@lunora/codegen";
 import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
 import type { AgentIR } from "./agent-info";
@@ -194,6 +196,13 @@ interface InferredBindings {
     needsD1: boolean;
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
     queues: InferredQueue[];
+
+    /**
+     * Sibling Workers declared in `lunora.config` `services` → reconciled into
+     * `services[]` (plan 457). `undefined` when the declaration is unreadable, so
+     * reconcile leaves every entry alone rather than removing the owned ones.
+     */
+    services: ServiceBindingIR[] | undefined;
     /** Human-readable provenance for each inferred binding / hint, for logging. */
     signals: string[];
     /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
@@ -613,6 +622,17 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         );
     }
 
+    // Codegen throws, naming the entry, on a declaration it cannot wire; that
+    // error surfaces there, so inference only reconciles what resolves.
+    const resolved = readServiceBindings(options.projectRoot);
+    const services = resolved.error === undefined ? resolved.services : undefined;
+
+    if (resolved.error !== undefined) {
+        signals.push(`hint: lunora.config \`services\` not reconciled — ${resolved.error}`);
+    }
+
+    signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
+
     return {
         agents,
         containers,
@@ -620,6 +640,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         flagshipBinding,
         needsD1,
         queues,
+        services,
         signals,
         usesFlags: flags !== undefined,
         usesWorkerLoader: capabilities.usesWorkerLoader,

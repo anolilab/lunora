@@ -1,3 +1,20 @@
+## @lunora/studio [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.246...@lunora/studio@1.0.0-alpha.247) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.177
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.89
+* **@lunora/client:** upgraded to 1.0.0-alpha.167
+* **@lunora/react:** upgraded to 1.0.0-alpha.174
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.169
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/studio [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.245...@lunora/studio@1.0.0-alpha.246) (2026-10-01)
 
 ### Features

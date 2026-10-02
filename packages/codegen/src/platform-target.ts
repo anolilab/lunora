@@ -275,6 +275,8 @@ interface PlatformSignals {
     relationGraph?: boolean;
     /** A `ctx.secrets` read. */
     secrets?: boolean;
+    /** A `lunora.config.*` `services` declaration (service bindings to sibling Workers). */
+    services?: boolean;
     /** A `defineTopic` declaration. */
     topics?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
@@ -300,6 +302,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "queues",
     "relationGraph",
     "secrets",
+    "services",
     "topics",
     "vectorStore",
     "workerLoaders",
@@ -320,6 +323,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
+    services: "service bindings to sibling Workers (`lunora.config` `services`)",
     topics: "pub/sub topics (`defineTopic` / `defineSubscription`)",
     vectorStore: "vector indexes (`.vectorize()`)",
     workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",

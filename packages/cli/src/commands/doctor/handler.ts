@@ -15,6 +15,7 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import type { DoctorOptions } from "./index";
+import checkServices from "./service-checks";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
 type FindingLevel = "fail" | "info" | "pass" | "warn";
@@ -45,6 +46,7 @@ const DOCTOR_CODES = [
     "r2-lifecycle-unset",
     "scheduler-origin-missing",
     "schema-unreadable",
+    "service-workers-dev",
     "stale-lunora-json",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
@@ -727,6 +729,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkVectorMetadataIndexes(cwd, findings);
     checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
+    checkServices(cwd, findings);
 
     const inferred = await inferBindings(cwd, findings);
 

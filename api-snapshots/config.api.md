@@ -177,6 +177,35 @@ const CODEGEN_ENV = "LUNORA_CODEGEN";
 const COMPOSED_WORKER_ENTRY = "src/worker.ts";
 ```
 
+### `CelldDevSession` (interface)
+
+```ts
+interface CelldDevSession {
+    exited: Promise<number>;
+    stop: () => Promise<void>;
+}
+```
+
+### `CelldDevSessionOptions` (interface)
+
+```ts
+interface CelldDevSessionOptions {
+    log: (line: string, origin: CelldLineOrigin) => void;
+    port: number;
+    projectRoot: string;
+    spawn?: DevProcessSpawner;
+}
+```
+
+### `CelldLineOrigin` (interface)
+
+```ts
+interface CelldLineOrigin {
+    stream: "stderr" | "stdout";
+    tag: string;
+}
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -364,6 +393,42 @@ interface DestructivePolicyEdit {
 
 ```ts
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
+```
+
+### `DevProcess` (interface)
+
+```ts
+interface DevProcess {
+    crashed: Promise<number>;
+    stop: () => Promise<void>;
+}
+```
+
+### `DevProcessOptions` (interface)
+
+```ts
+interface DevProcessOptions {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd: string;
+    label: string;
+    notFound: string;
+    onLine: (line: string, stream: "stderr" | "stdout") => void;
+    port: number;
+    readyTimeoutMs: number;
+    shell?: boolean;
+    signal?: AbortSignal;
+    spawn?: DevProcessSpawner;
+}
+```
+
+### `DevProcessSpawner` (type)
+
+```ts
+type DevProcessSpawner = (command: string, args: ReadonlyArray<string>, options: {
+    cwd: string;
+    shell: boolean;
+}) => ChildProcess;
 ```
 
 ### `DevRequest` (interface)
@@ -622,6 +687,7 @@ interface InferredBindings {
     flagshipBinding?: string;
     needsD1: boolean;
     queues: InferredQueue[];
+    services: ServiceBindingIR[] | undefined;
     signals: string[];
     usesAi: boolean;
     usesAnalytics: boolean;
@@ -1065,6 +1131,12 @@ interface WireRlsEdit {
 ### `WorkflowIR` (interface)
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
+
+### `acceptsConnection` (const)
+
+```ts
+const acceptsConnection: (port: number) => Promise<boolean>;
+```
 
 ### `addArgsFor` (const)
 
@@ -1587,6 +1659,18 @@ const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit, serverModule: string) => Sc
 const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[];
 ```
 
+### `startCelldDevSession` (const)
+
+```ts
+const startCelldDevSession: (options: CelldDevSessionOptions) => Promise<CelldDevSession>;
+```
+
+### `startDevProcess` (const)
+
+```ts
+const startDevProcess: (options: DevProcessOptions) => Promise<DevProcess>;
+```
+
 ### `streamContainerLogs` (const)
 
 ```ts
@@ -1879,6 +1963,11 @@ interface ReadWranglerResult<T> {
 interface ReconcileBindingsResult {
     added: string[];
     changed: boolean;
+    devConfig?: {
+        added: string[];
+        path: string;
+        updated: string[];
+    };
     exportGaps: ExportGap[];
     reason?: string;
     updated: string[];

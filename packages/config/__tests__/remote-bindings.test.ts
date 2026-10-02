@@ -225,6 +225,23 @@ describe("materializeRemoteWranglerConfig", () => {
         expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(FULL_WRANGLER);
     });
 
+    it("keeps a Lunora-owned service binding local and remotes a hand-written one", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{ "services": [{ "binding": "SERVICE_PARSER", "service": "parser" }, { "binding": "LEGACY", "service": "legacy" }] }`,
+            "utf8",
+        );
+        writeFileSync(join(root, "package.json"), `{ "lunora": { "services": { "services": ["SERVICE_PARSER"] } } }`, "utf8");
+
+        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+
+        generated = result.configPath;
+
+        expect(result.remoteBindings.map((binding) => binding.binding)).toStrictEqual(["LEGACY"]);
+    });
+
     it("writes the temp config as a SIBLING of wrangler.jsonc (not an OS temp dir)", () => {
         // Regression: wrangler resolves a config's relative `main`/`assets` paths
         // against the CONFIG FILE's own directory. A temp config in `/tmp` would

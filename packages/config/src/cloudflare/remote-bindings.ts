@@ -30,6 +30,8 @@ import { rmSync, writeFileSync } from "node:fs";
 
 import { applyModify } from "../jsonc-edit";
 import join from "../path";
+import { readManifest } from "./lunora-manifest";
+import { ownedServiceBindings } from "./reconcile-services";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /**
@@ -286,7 +288,10 @@ const materializeRemoteWranglerConfig = (options: MaterializeOptions): Materiali
         return { cleanup: noopCleanup, enabled: true, reason: `failed to parse ${wranglerPath} as JSONC`, remoteBindings: [] };
     }
 
-    const plans = planRemoteBindings(parsed);
+    // A Lunora-owned service binding (plan 457) runs locally beside the app in
+    // the same dev session, so remoting it would call the deployed Worker instead.
+    const localServices = ownedServiceBindings(readManifest(options.projectRoot));
+    const plans = planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding));
 
     if (plans.length === 0) {
         return { cleanup: noopCleanup, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };

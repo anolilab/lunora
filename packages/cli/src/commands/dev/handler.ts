@@ -42,11 +42,11 @@ import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import { codegenRequested, detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
-import { resolveTargetFlavor } from "./own-dev-server";
+import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
 import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
-import type { DevCommandOptions, DevCommandPlan } from "./types";
+import type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
@@ -376,6 +376,28 @@ const startBanner = (plan: DevCommandPlan): string =>
     plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : `starting ${plan.wrangler.tag} dev + studio`;
 
 /**
+ * The worker the plan runs — a celld dev session, else the planned dev server
+ * process — or `undefined`, logged, when it cannot start.
+ */
+const startPlannedWorker = async (
+    plan: DevCommandPlan,
+    options: DevCommandOptions,
+    spawn: WorkerSpawner,
+    cwd: string,
+    logger: Logger,
+): Promise<WorkerProcess | undefined> => {
+    try {
+        return plan.celldSession === true
+            ? await startCelldWorker({ logger, port: plan.workerPort, projectRoot: cwd, start: options.startCelldSession })
+            : spawn(plan.wrangler, logger);
+    } catch (error: unknown) {
+        logger.error(`could not start the worker: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
@@ -579,7 +601,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
-        const worker = spawn(plan.wrangler, logger);
+        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger);
+
+        if (worker === undefined) {
+            return { code: EXIT_CODE.FAILURE, plan };
+        }
         // The Lunora realtime sidecar (`wrangler dev`, owns ShardDO) for the
         // framework-worker flavor — `undefined` for every single-process flavor.
         const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);

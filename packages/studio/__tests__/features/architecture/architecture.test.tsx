@@ -129,8 +129,9 @@ describe("architecturePanel", () => {
 
 describe("linkFor", () => {
     it("opens a table's rows and every other kind's listing tab", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
+        expect(linkFor({ id: "service:parser", kind: "service", name: "neore-parser" })).toStrictEqual({ to: "/functions" });
         expect(linkFor({ id: "table:messages", kind: "table", name: "messages" })).toStrictEqual({ search: { table: "messages" }, to: "/data" });
         expect(linkFor({ id: "function:chat_posts:post", kind: "function", name: "chat_posts.post" })).toStrictEqual({ to: "/functions" });
         expect(linkFor({ id: "topic:posted", kind: "topic", name: "posted" })).toStrictEqual({ to: "/queues" });

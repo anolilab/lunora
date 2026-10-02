@@ -1,0 +1,39 @@
+{
+    "name": "@lunora-example/services",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "node node_modules/lunorash/dist/bin.mjs deploy",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
+    },
+    "dependencies": {
+        "@lunora/vite": "workspace:*",
+        "lunorash": "workspace:*"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "lunora": {
+        "services": {
+            "services": [
+                "SERVICE_GATEWAY",
+                "SERVICE_PARSER"
+            ]
+        }
+    }
+}

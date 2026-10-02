@@ -1,0 +1,150 @@
+---
+title: Services
+description: Call sibling Cloudflare Workers from actions over typed service bindings, run them in one dev session, and deploy them before the app.
+related:
+    - to: /docs/concepts/modules
+      note: "the `invoke` edge in the Architecture view"
+    - to: /docs/concepts/actions
+      note: "where `ctx.services` is available"
+---
+
+A **service** is a separate Cloudflare Worker that your Lunora app calls: a
+document parser, an LLM gateway, a headless-browser renderer. It keeps its own
+folder, its own `wrangler.jsonc` and its own dependencies. Lunora binds it to the
+app with a [service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/),
+so a call runs on the same thread, has no public URL, and costs no extra request.
+
+Services are for work that should not live in the app Worker: a heavy
+dependency, a different CPU limit or placement, a team that ships on its own
+schedule. Don't use them to split the Lunora app itself. Functions that share
+tables belong in one Worker, where they keep transactions and live queries; use
+[modules](/docs/concepts/modules) to organise those.
+
+## Declare a service
+
+List each service in `lunora.config.ts`, keyed by the name you call it by:
+
+```ts
+// lunora.config.ts
+export default {
+    services: {
+        // A fetch service: any Worker with a `fetch` handler (Hono, itty, …)
+        documentParser: { dir: "services/document-parser" },
+        // An RPC service: `entrypoint` names its exported WorkerEntrypoint class
+        llmGateway: { dir: "services/llm-gateway", entrypoint: "Gateway" },
+    },
+};
+```
+
+- `dir` is the service's folder. Its `wrangler.jsonc` supplies the Worker
+  `name` and `main`, so there is one source of truth for both.
+- `entrypoint` (optional) makes it an RPC service, typed from that class.
+  Codegen imports the service's entry module for those types, so the service's
+  sources join the app's type check: a type error there fails the app's.
+- Write the map inline with string literals: codegen reads it without running
+  the file.
+
+A Worker in your repo that the app does not call does not need declaring.
+
+## Call it from an action
+
+Each declared service is a typed `ctx.services.<key>` on **actions**:
+
+```ts
+// lunora/documents.ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const summarise = action.input({ url: v.string() }).action(async ({ ctx, args }) => {
+    // Fetch service: `fetch` is bound to the binding, so any fetch-based client works with it
+    const response = await ctx.services.documentParser.fetch("https://parser/parse", {
+        body: JSON.stringify({ url: args.url }),
+        method: "POST",
+    });
+    const { text } = (await response.json()) as { text: string };
+
+    // RPC service: methods and return types come from the `Gateway` class
+    return ctx.services.llmGateway.complete(`Summarise: ${text}`);
+});
+        const { text } = (await response.json()) as { text: string };
+
+        // RPC service: methods and return types come from the `Gateway` class
+        return ctx.services.llmGateway.complete(`Summarise: ${text}`);
+    },
+});
+```
+
+An existing generated client keeps working: pass `fetch: ctx.services.documentParser.fetch`
+where it took a base URL. The hostname does not route anywhere: the binding
+delivers the request to the service as given.
+
+Queries and mutations have no `ctx.services`. A call to another Worker cannot be
+replayed with a query or rolled back with a mutation. From a mutation, schedule
+an action or send a queue message. From an HTTP action, call an action with
+`ctx.runAction`.
+
+## What Lunora wires
+
+| Step                | What happens                                                                                                                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wrangler.jsonc`    | A `services[]` entry per service (`SERVICE_<KEY>` → the Worker name, plus `entrypoint`), top level and in each `env.<name>` block (with the service's env Worker name, by default `<name>-<env>`). |
+| `lunora dev`        | The services run in the same `wrangler dev` session (one `--config` each), so bindings resolve locally.                                                                                            |
+| `vite dev`          | Each service is an `auxiliaryWorkers` entry of `@cloudflare/vite-plugin`.                                                                                                                          |
+| `lunora deploy`     | Each service deploys first (`wrangler deploy --config <dir>/wrangler.jsonc`, with `--env` and `--dry-run` passed through), then the app. `--skip-services` deploys only the app.                   |
+| `lunora doctor`     | `service-workers-dev` warns about a service still public on `workers.dev` with no route.                                                                                                           |
+| Studio Architecture | Each service is a node; every `ctx.services.<key>.…()` call is an `invoke` edge.                                                                                                                   |
+
+Services run only in dev sessions: `vite build` does not build them, since
+`lunora deploy` deploys each one from its own folder. The SvelteKit / Nuxt dev
+flavor gets them too: reconcile writes the bindings into `wrangler.dev.jsonc`,
+and the `wrangler dev` sidecar runs each service beside the app.
+
+Lunora records the `services[]` entries it wrote in `package.json`
+(`lunora.services`), so it updates and removes only its own. An entry you wrote
+yourself is never touched, even one using a declared binding name; Lunora warns
+and leaves it.
+
+## Make the service private
+
+A service binding is the only way into a service that has no public URL. Set
+this in the service's `wrangler.jsonc`:
+
+```jsonc
+{
+    "name": "document-parser",
+    "main": "src/index.ts",
+    "workers_dev": false,
+}
+```
+
+You can then delete the internal auth (HMAC signing secrets) and the `*_URL`
+variables the app used to reach it. A service that must also be public, such as a
+gateway with its own route, keeps that route and its own auth for it. The binding
+is the internal path only.
+
+## Platforms
+
+| Target       | Support                                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflare` | Native.                                                                                                                                                                                                                                                                                                                                                 |
+| `celld`      | Native (verified on v0.6.0). celld resolves a binding from the service's deployment, so `lunora deploy` deploys each service into the fleet first, and every dev server — `lunora dev`, `vite dev` and Rsbuild — boots each service once into the local state before the app. On every one of them a service edit re-registers it and restarts the app. |
+| `node`       | Unsupported: there is no sibling Worker to bind. Codegen omits `ctx.services`.                                                                                                                                                                                                                                                                          |
+
+## Migrating from URLs and HMAC
+
+A project that calls its Workers over HTTPS with signed requests (for example
+a backend plus `services/*` deployed with Alchemy) moves over in four steps:
+
+1. Declare the services the backend calls in `lunora.config.ts`. Leave out any
+   it does not call.
+2. In each service's `wrangler.jsonc`, set `"workers_dev": false`, unless it
+   also has a public route, and remove the HMAC middleware from its internal
+   path.
+3. In the backend, construct each client with `fetch: ctx.services.<key>.fetch`
+   instead of a base URL plus a signing interceptor.
+4. Delete the signing secrets, the `*_URL` variables, and any per-service dev
+   ports or boot-order notes: `lunora dev` now starts every Worker in one
+   session.
+
+If you deploy with Alchemy, keep `alchemy.run.ts` and bind the services there
+(`bindings: { SERVICE_DOCUMENT_PARSER: documentParser }`) under the same binding
+names Lunora writes. Don't use `lunora deploy` as well.
