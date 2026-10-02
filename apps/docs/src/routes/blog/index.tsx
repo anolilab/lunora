@@ -1,14 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 
 import { createSeoHead, SITE_URL } from "@/lib/seo";
 import BlogOverview from "@/pages/blog/overview";
 
-const listPosts = createServerFn({ method: "GET" }).handler(async () => {
-    const { listBlogPosts } = await import("@/lib/blog-source");
+const listPosts = createServerFn({ method: "GET" })
+    .middleware([staticFunctionMiddleware])
+    .handler(async () => {
+        const { listBlogPosts } = await import("@/lib/blog-source");
 
-    return listBlogPosts();
-});
+        return listBlogPosts();
+    });
 
 const RouteComponent = () => <BlogOverview posts={Route.useLoaderData()} />;
 
