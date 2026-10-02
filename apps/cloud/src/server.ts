@@ -16,6 +16,7 @@ import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
 import { currentAuth, ensureAuth } from "./auth";
+import { controlPlaneExport } from "./backup/control-plane-export";
 import type { BackupBucket } from "./backup/sweep";
 import { runBackupSweep } from "./backup/sweep";
 import { runTenantBackupSweep } from "./backup/tenant-sweep";
@@ -25,7 +26,6 @@ import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
-import { createHttpCloudflareApi } from "./cloudflare/api";
 import { resolveAdminToken } from "./deploy/admin-token";
 import type { ReleaseBucket } from "./deploy/release-store";
 import { createReleaseStore } from "./deploy/release-store";
@@ -571,18 +571,17 @@ const sweepAlertDrain = async (env: Env): Promise<void> => {
  * rather than an error, so a cell without backups configured still ticks.
  */
 const sweepBackup = async (env: Env): Promise<void> => {
-    if (!env.BACKUPS || !env.CONTROL_PLANE_DATABASE_ID || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+    const startExport = controlPlaneExport(env);
+
+    if (!env.BACKUPS || !startExport) {
         return;
     }
-
-    const api = createHttpCloudflareApi({ accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN });
-    const databaseId = env.CONTROL_PLANE_DATABASE_ID;
 
     await runBackupSweep({
         bucket: env.BACKUPS,
         cell: env.LUNORA_CELL ?? "default",
         now: Date.now(),
-        startExport: () => api.exportD1Database(databaseId),
+        startExport,
     });
 };
 

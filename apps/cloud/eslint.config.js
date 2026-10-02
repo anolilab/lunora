@@ -144,6 +144,10 @@ export default createConfig(
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "off",
             "vitest/prefer-expect-assertions": "off",
+            // The target-driver conformance suite registers its `describe` blocks
+            // from a shared function (`__tests__/support/target-conformance.ts`),
+            // one call per driver — test registration, not setup.
+            "vitest/require-hook": ["warn", { allowedFunctionCalls: ["describeTargetConformance"] }],
         },
     },
     // Cirrus function modules (cirrus/*.ts) and the worker entry export *named*
@@ -255,6 +259,53 @@ export default createConfig(
             "react-perf/jsx-no-new-object-as-prop": "off",
             "sonarjs/void-use": "off",
             "unicorn/filename-case": "off",
+        },
+    },
+    // The deploy-target boundary (MULTIPLATFORM.md Phase 1). The control plane
+    // reaches a tenant only through a `TargetDriver` resolved by
+    // `src/targets/registry.ts`, so the Cloudflare-specific code — the
+    // `cloudflare-wfp` driver (provision-box client, dispatch namespace,
+    // Analytics Engine, hostname grammar) and the REST port in `src/cloudflare/` —
+    // is imported only by the places listed in the next block. A new import from
+    // anywhere else is a Cloudflare assumption leaking back into code every
+    // target shares. `@typescript-eslint/no-restricted-imports` rather than the
+    // core rule so the base config's `no-restricted-imports` paths stay intact.
+    {
+        files: ["lunora/**/*.{ts,tsx}", "src/**/*.{ts,tsx}"],
+        rules: {
+            "@typescript-eslint/no-restricted-imports": [
+                "error",
+                {
+                    patterns: [
+                        {
+                            group: ["**/targets/cloudflare-wfp", "**/targets/cloudflare-wfp/**", "./cloudflare-wfp/**"],
+                            message: "Reach a tenant through its TargetDriver (src/targets/registry.ts), not the cloudflare-wfp driver's internals.",
+                        },
+                        {
+                            group: ["**/cloudflare/*"],
+                            message: "The Cloudflare REST port is the cloudflare-wfp driver's (or the control plane's own host's) — go through a TargetDriver.",
+                        },
+                    ],
+                },
+            ],
+        },
+    },
+    {
+        files: [
+            // The registry is where drivers are built; each driver owns its own directory.
+            "src/targets/registry.ts",
+            "src/targets/cloudflare-wfp/**/*.ts",
+            // The data plane: separate Workers deployed beside the control plane,
+            // Cloudflare-only by construction (dispatcher.wrangler.jsonc, tail.wrangler.jsonc).
+            "src/dispatcher/**/*.ts",
+            "src/tail/**/*.ts",
+            // The control plane's own HOST, not a deploy target: its D1 export, and the
+            // cost overview of an organization's own Cloudflare account.
+            "src/backup/control-plane-export.ts",
+            "lunora/cloudflare-billing.ts",
+        ],
+        rules: {
+            "@typescript-eslint/no-restricted-imports": "off",
         },
     },
     // JSDoc-in-comment false positives: indented prose/list blocks inside doc comments.
