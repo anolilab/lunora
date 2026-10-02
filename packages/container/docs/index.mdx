@@ -879,6 +879,83 @@ ENTRYPOINT ["node", "server.mjs"]
 Disk is **ephemeral**: every (re)start gives a fresh filesystem. For
 persistence, write to [`@lunora/storage`](/docs/packages/storage) (R2).
 
+## Pushing to a Cloudflare Artifacts repo
+
+A container's disk is ephemeral. When what it produces is a tree of files you
+want history and diffs for (an agent's workspace, a generated site, a build
+output), push it to a [Cloudflare Artifacts](/docs/packages/bindings#artifacts--lunorabindingsartifacts)
+repo. The Artifacts binding can't write files, so the push comes from `git` inside
+the container, authenticated with a short-lived token the action mints:
+
+```ts
+import { action } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+// Single-quoted: `exec` runs the command unshelled, so `sh -c` expands the
+// variables inside the container, and the secret never appears in this source.
+const CLONE = 'git clone --branch "$BRANCH" "$ARTIFACTS_GIT_REMOTE" /work && git -C /work remote set-url origin "$PLAIN_REMOTE"';
+const PUSH =
+    'git -C /work add -A && git -C /work -c user.name=lunora -c user.email=bot@example.com commit -m "$MESSAGE" && git -C /work push "$ARTIFACTS_GIT_REMOTE" "HEAD:$BRANCH"';
+
+export const buildAndPush = action.input({ repo: v.string(), sessionId: v.string() }).action(async ({ ctx, args }) => {
+    const { defaultBranch, remote } = await ctx.artifacts.info(args.repo);
+    // Write scope, and no longer-lived than the session needs.
+    const token = await ctx.artifacts.withRepo(args.repo, (repo) => repo.createToken("write", 900));
+    const env = {
+        ARTIFACTS_GIT_REMOTE: ctx.artifacts.authenticatedRemote(remote, token.plaintext),
+        BRANCH: defaultBranch,
+        MESSAGE: `build ${args.sessionId}`,
+        PLAIN_REMOTE: remote,
+    };
+    const box = ctx.containers.workspace.get(args.sessionId);
+
+    try {
+        const clone = await box.exec("sh", { args: ["-c", CLONE], env, timeoutMs: 120_000 });
+
+        if (clone.code !== 0) {
+            throw new Error(`clone failed (exit ${String(clone.code)})`);
+        }
+
+        await box.exec("pnpm", { args: ["run", "build"], cwd: "/work", timeoutMs: 300_000 });
+
+        const push = await box.exec("sh", { args: ["-c", PUSH], env, timeoutMs: 120_000 });
+
+        return { pushed: push.code === 0 };
+    } finally {
+        // Revoke by id when the session ends, whatever happened.
+        await ctx.artifacts.withRepo(args.repo, (repo) => repo.revokeToken(token.id));
+    }
+});
+```
+
+After the push, `ctx.artifacts.withRepo(repo, (r) => r.readFile({ ref: defaultBranch, path }))`
+reads the pushed files back from any action, with no container running.
+
+A few rules keep the token contained:
+
+- **Pass the remote through `env`, never through `args` or a log line.** The
+  clone resets `origin` to the plain remote, so the token isn't left in
+  `/work/.git/config`. `git` still holds the URL in its own process arguments
+  while it runs. If code you don't trust shares the container, use a token that
+  expires sooner.
+- **Never echo the remote.** Don't print `$ARTIFACTS_GIT_REMOTE`, don't return it
+  from the action, and don't leave `set -x` on in a script that uses it.
+- **The image needs `git`.** `node:22-slim` doesn't include it, so add
+  `RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates`
+  to the Dockerfile.
+
+This is a different trust model from saving files to R2 with
+[`@lunora/storage`](/docs/packages/storage), where the Worker holds the
+credentials and the container never sees them. Here a repo-scoped write
+credential lives inside the container for the length of the session. Choose
+Artifacts when you want Git history, diffs and forks of the output, or want
+other Git clients to clone it. Choose R2 when you want an opaque snapshot
+restored as is.
+
+For repos too large to clone on every start, mount them with
+[ArtifactFS](https://developers.cloudflare.com/artifacts/guides/artifact-fs/)
+inside the image. That is an image-level choice Lunora doesn't wrap.
+
 ## Local development
 
 `lunora dev` (and `vite dev`) build and run containers locally through the

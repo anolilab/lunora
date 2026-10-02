@@ -1,6 +1,6 @@
 ---
 title: "@lunora/bindings"
-description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — with per-binding subpaths and tree-shaking.
+description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts — with per-binding subpaths and tree-shaking.
 ---
 
 `@lunora/bindings` bundles the thin, zero-dependency Cloudflare binding helpers into a single install, exposed as **per-binding subpaths**. Each is a typed `ctx.*` facade over its Cloudflare binding; codegen wires the matching context helper when a `lunora/` source imports the subpath (or reads the `ctx.*` property).
@@ -17,6 +17,7 @@ pnpm add @lunora/bindings
 | `@lunora/bindings/pipelines` | `ctx.pipelines` | Pipelines (R2-backed)   | Action only               |
 | `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize               | Query / Mutation / Action |
 | `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL (Apache Iceberg) | Action only               |
+| `@lunora/bindings/artifacts` | `ctx.artifacts` | Artifacts (Git repos)   | Action only               |
 
 `sideEffects: false` subpath exports keep tree-shaking per-binding: an app that imports only `@lunora/bindings/kv` bundles nothing from the other helpers. Heavier add-ons with framework/driver peer deps (`@lunora/browser`, `@lunora/hyperdrive`, `@lunora/ai`, `@lunora/payment`) stay separate installs.
 
@@ -147,3 +148,113 @@ export const topEvents = action.action(async ({ ctx }) =>
 ```
 
 Tag descending order with `desc(...)` (or `asc(...)`); a bare string column sorts ascending. Aggregates go in the `select` list as raw SQL expressions.
+
+## Artifacts — `@lunora/bindings/artifacts`
+
+[Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) is a versioned file system that speaks Git: a namespace holds repos, and `ctx.artifacts` reaches them through an `artifacts` binding. It is in open beta and needs Workers Paid. Every call is a billed, remote operation, so `ctx.artifacts` is **action-only**. Add the binding (`env.ARTIFACTS`):
+
+```jsonc
+{ "artifacts": [{ "binding": "ARTIFACTS", "namespace": "default" }] }
+```
+
+```ts
+import { action } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+export const readme = action.input({ repo: v.string() }).action(async ({ ctx, args }) => {
+    // withRepo opens the repo handle and disposes of it when the callback settles,
+    // even when it throws, so a handle never outlives the request.
+    const file = await ctx.artifacts.withRepo(args.repo, (repo) => repo.readFile({ ref: "main", path: "README.md" }));
+
+    return file === null ? null : await file.text();
+});
+```
+
+The client wraps the binding without hiding it:
+
+- **Namespace operations**: `create`, `import` (from an external HTTPS Git remote), `list`, `delete`, and `info(name)`.
+- **Repo operations**, inside `withRepo(name, (repo) => …)`: `info`, `createToken(scope, ttlSeconds)`, `listTokens`, `revokeToken`, `fork`, `log`, `readCommit`, `readTree`, `readBlob`, and `readFile`. `readFile` and `readBlob` return the binding's `Blob` as is, without buffering it.
+- **Errors** come back as `LunoraError`: `NOT_FOUND` → `NOT_FOUND`; `ALREADY_EXISTS` and the `*_IN_PROGRESS` codes → `CONFLICT`; `INVALID_*` → `BAD_REQUEST`; `REMOTE_AUTH_REQUIRED` → `FORBIDDEN`; everything else → `INTERNAL`. The binding's own `code` and `numericCode` are kept in `error.data`. Its message is not copied into ours, so nothing the service echoes back ends up on the wire.
+
+### Writing is a `git push`
+
+The binding has **no write method**. You can't put a file into a repo from a Worker. A Git client pushes it, using a repo-scoped token:
+
+```ts
+export const pushAccess = action.input({ repo: v.string() }).action(async ({ ctx, args }) => {
+    const { remote } = await ctx.artifacts.info(args.repo);
+    const token = await ctx.artifacts.withRepo(args.repo, (repo) => repo.createToken("write", 900));
+
+    // https://x:<secret>@host/… — the `?expires=` suffix is stripped. This URL is a secret:
+    // hand it to the Git client through an environment variable, never a log line.
+    return { remote: ctx.artifacts.authenticatedRemote(remote, token.plaintext), tokenId: token.id };
+});
+```
+
+The Git client can be a container (see [`@lunora/container`'s Artifacts recipe](/docs/packages/container#pushing-to-a-cloudflare-artifacts-repo)), a CI runner, or a developer's machine. Keep write tokens short-lived and `revokeToken(token.id)` when the session that needed one ends.
+
+### Namespaces and jurisdiction
+
+A namespace's jurisdiction (`eu` or `us`) is set when the namespace is **created** and can't change afterwards. The first `create()` against a namespace that does not exist creates it **unrestricted**. If your schema declares `.jurisdiction("eu")` or `.jurisdiction("us")`, create the namespace first over the REST API with that jurisdiction (wrangler has no `namespaces create`):
+
+```bash
+curl --request POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/artifacts/namespaces" \
+  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{ "namespace": "my-eu-namespace", "jurisdiction": "eu" }'
+```
+
+`lunora dev` prints this as a hint when it sees `ctx.artifacts` and no `artifacts` binding, and it never writes the binding for you. A `.jurisdiction("fedramp")` schema that uses `ctx.artifacts` fails codegen, because Artifacts has no FedRAMP namespace.
+
+### Events
+
+Artifacts publishes repo events through [Queues event subscriptions](https://developers.cloudflare.com/artifacts/guides/event-subscriptions/). Consume them with an ordinary `defineQueue` and type the messages as `ArtifactsEvent`, narrowing on `type`:
+
+```ts
+// lunora/queues.ts
+import type { ArtifactsEvent } from "@lunora/bindings/artifacts";
+import { defineQueue } from "@lunora/queue";
+
+import { api } from "./_generated/api";
+
+export const repoEvents = defineQueue<ArtifactsEvent>({
+    handler: async (_ctx, batch) => {
+        for (const message of batch.messages) {
+            const event = message.body;
+
+            if (event.type === "cf.artifacts.repo.pushed") {
+                await message.run(api.review.start, { repo: event.source.repoName, sha: event.payload.after });
+            }
+
+            message.ack();
+        }
+    },
+});
+```
+
+Then subscribe the queue. Account-level lifecycle events (`created`, `deleted`, `forked`, `imported`) come from the `artifacts` source:
+
+```bash
+npx wrangler queues subscription create repo-events --source artifacts --events repo.created,repo.deleted,repo.forked,repo.imported
+```
+
+Repo-level activity (`pushed`, `cloned`, `fetched`, `token.created`, `token.revoked`) comes from the `artifacts.repo` source, which is scoped to one namespace and repo. `wrangler queues subscription create` has no flags for that scope yet, so create those subscriptions in the dashboard (**Queues** → your queue → **Subscriptions**). Lunora doesn't provision subscriptions. Token events carry the token id, never the plaintext.
+
+### Development and testing
+
+There is no local simulator: miniflare only proxies the binding to the remote service, so `lunora dev` needs an authenticated wrangler, and every call reaches your account. In unit tests, use the in-memory fake from `@lunora/testing`:
+
+```ts
+import { createArtifacts } from "@lunora/bindings/artifacts";
+import { createArtifactsFake } from "@lunora/testing";
+
+const fake = createArtifactsFake({ namespace: "default" });
+const artifacts = createArtifacts({ binding: fake.binding });
+
+await artifacts.create("docs");
+fake.putFile("docs", { ref: "main", path: "README.md", content: "# hello" }); // stands in for a push
+```
+
+`fake.handles` counts opened and disposed repo handles, and `fake.failNext(code)` injects a binding error.
+
+Artifacts is Cloudflare-only: `target: "node"` and `celld` rate it `unsupported`, so codegen omits `ctx.artifacts` there and reports `platform_unsupported_feature`. Pushing to an Artifacts repo from Workers Builds is not wired into `lunora deploy`: a push-to-deploy build would skip codegen, migrations and the schema-drift gate.
