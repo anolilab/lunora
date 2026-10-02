@@ -1839,3 +1839,15 @@ provisioning and per-service deploy were considered and left out.
 | 455  | [Pub/Sub topics: one publish, N durable subscriptions](455-queue-topics-fanout.md)        | IN PROGRESS |
 | 456  | [Modules: catalog, call graph, architecture diagram](456-modules-catalog-architecture.md) | IN PROGRESS |
 | 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)            | IN PROGRESS |
+
+## Cloudflare changelog, 2026-10-01 / 02 (baseline `f79680910`, 2026-10-02)
+
+Shipped directly, without a plan: the `compatibility_date` 2026-10-01 default (Durable Object
+pending-I/O keep-alive) and its validator warning, `ctx.ai.websearch` + `webSearchTool` (Web Search
+API), and jurisdiction-aware KV / R2 checks for `.jurisdiction()` schemas (KV jurisdictions GA).
+
+| Plan | Title                                                                                 | Status |
+| ---- | ------------------------------------------------------------------------------------- | ------ |
+| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | TODO   |
+| 460  | [Cloudflare Artifacts: an action-only `ctx.artifacts`](460-cloudflare-artifacts.md)   | TODO   |
+| 461  | [MCP OAuth: close the MCP 2026-07-28 authorization gaps](461-mcp-oauth-2026-07-28.md) | TODO   |
