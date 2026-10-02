@@ -932,6 +932,57 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         });
     });
 
+    it("infers artifacts from a ctx.artifacts read as a hint, never naming a jurisdiction for an unpinned schema", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+        write("lunora/repos.ts", `export const handler = (ctx) => ctx.artifacts.list();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBeUndefined();
+        expect(result.signals.some((signal) => signal.startsWith('hint: ctx.artifacts is used; add an "artifacts" binding'))).toBe(true);
+    });
+
+    it("tells a jurisdiction-pinned app to create the Artifacts namespace in that jurisdiction first", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("eu");\n'));
+        write(
+            "lunora/repos.ts",
+            `import type { ArtifactsClient } from "@lunora/bindings/artifacts";\nimport { createArtifacts } from "@lunora/bindings/artifacts";\nexport const make = (env) => createArtifacts({ binding: env.ARTIFACTS });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+        const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBe("eu");
+        expect(hint).toContain('"jurisdiction": "eu"');
+    });
+
+    it("does not infer artifacts from a type-only import of its event payload", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("fedramp");\n'));
+        write(
+            "lunora/consumer.ts",
+            `import type { ArtifactsEvent } from "@lunora/bindings/artifacts";\nexport const isPush = (event: ArtifactsEvent) => event.type === "cf.artifacts.repo.pushed";`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(false);
+        expect(result.signals.some((signal) => signal.includes("ctx.artifacts"))).toBe(false);
+    });
+
     it("does not flip pipelines for an analytics-only project (no ctx.pipelines read)", async () => {
         expect.assertions(2);
 

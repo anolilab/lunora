@@ -29,6 +29,7 @@ import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
+import artifactsBindingHint from "./artifacts-hint";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { discoverFlagsInfo } from "./flags-info";
@@ -37,6 +38,7 @@ import { extractImportSpecifierList, SANDBOX_TOOLS, sandboxToolImports, TYPE_ONL
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
+import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
 import type { DurableObjectClass, DurableObjectSpec } from "./worker-entry";
 import {
@@ -82,9 +84,15 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 //   @lunora/bindings/images     → images                    → self-describing (binding name only)
 //   @lunora/bindings/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
 //   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/pipelines)
+//   ctx.artifacts               → artifacts                 → hint (the namespace's jurisdiction is fixed at creation, so never auto-written)
 const CAPABILITY_SOURCES = {
     usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
     usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/bindings\/analytics["']/, source: "@lunora/bindings/analytics" },
+    // Artifacts is codegen-wired onto ActionCtx like Pipelines, so an app usually
+    // only reads `ctx.artifacts`. A value import of `@lunora/bindings/artifacts`
+    // (a hand-built `createArtifacts`) flips it too; a type-only one (`ArtifactsEvent`
+    // typing a queue consumer) compiles away and does not — matching codegen.
+    usesArtifacts: { contextProperty: "artifacts", source: "@lunora/bindings/artifacts" },
     usesAuth: { pattern: /\bfrom\s+["']@lunora\/auth["']/, source: "@lunora/auth" },
     usesBrowser: { pattern: /\bfrom\s+["']@lunora\/browser["']/, source: "@lunora/browser" },
     usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
@@ -204,6 +212,13 @@ interface InferredBindings {
      * un-mintable `app_id`, so it is reconciled as a hint, not auto-written.
      */
     flagshipBinding?: string;
+
+    /**
+     * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
+     * hints whose resource takes its residency at creation (Artifacts), so the
+     * hint can name the jurisdiction to create it in.
+     */
+    jurisdiction?: SchemaInfo["jurisdiction"];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
@@ -221,6 +236,14 @@ interface InferredBindings {
     usesAi: boolean;
     /** `@lunora/bindings/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
+
+    /**
+     * `ctx.artifacts` is read or `@lunora/bindings/artifacts` value-imported.
+     * Hint-only: the first repo `create()` against a missing namespace creates it
+     * UNRESTRICTED, and a namespace's jurisdiction can never change after that,
+     * so Lunora never writes the binding for you.
+     */
+    usesArtifacts: boolean;
     /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
     /** `@lunora/browser` is imported → self-describing `browser` binding (auto-writeable). */
@@ -459,14 +482,25 @@ interface InferOptions {
     schemaDir?: string;
 }
 
+/** The schema facts binding inference reads. */
+interface SchemaFacts {
+    /** The schema's `.jurisdiction("…")`, for the creation-time hints. */
+    jurisdiction: SchemaInfo["jurisdiction"];
+    /** A `.global()` table needs the `DB` D1 binding. */
+    needsD1: boolean;
+}
+
 /**
- * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
- * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
- * validator read the exact same fact. A missing or unparseable schema yields
- * `false` — codegen surfaces the actionable error elsewhere.
+ * The schema-derived signals. Delegates to the shared `discoverSchemaInfo` so
+ * inference and the wrangler validator read the exact same facts. A missing or
+ * unparseable schema yields no D1 need and no jurisdiction — codegen surfaces the
+ * actionable error elsewhere.
  */
-const schemaNeedsD1 = (projectRoot: string, schemaDirectory: string): boolean =>
-    discoverSchemaInfo(projectRoot, schemaDirectory).info?.hasD1GlobalTable ?? false;
+const schemaFacts = (projectRoot: string, schemaDirectory: string): SchemaFacts => {
+    const { info } = discoverSchemaInfo(projectRoot, schemaDirectory);
+
+    return { jurisdiction: info?.jurisdiction, needsD1: info?.hasD1GlobalTable ?? false };
+};
 
 /** Union the capabilities imported across every scanned source file. */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>): Capabilities => {
@@ -548,9 +582,10 @@ const describeDeclaredExports = (
 
 /**
  * Provenance lines implied by capability imports. Each entry is a predicate on
- * the scanned capabilities plus the signal it contributes when true.
+ * the scanned capabilities plus the signal it contributes when true; `schema`
+ * supplies the facts a hint needs to name where to create a resource.
  */
-const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>): string[] => {
+const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>, schema: SchemaFacts): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
         [capabilities.usesAi, "AI (@lunora/ai imported or env.AI used)"],
         [
@@ -582,6 +617,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
             capabilities.usesPipelines,
             "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned",
         ],
+        [capabilities.usesArtifacts, `hint: ${artifactsBindingHint(schema.jurisdiction)}`],
         [
             capabilities.usesX402Charge,
             "hint: @lunora/x402/charge is imported; set the recipient wallet address as a [vars] entry (the var name is yours to choose) and pass it to the charge config — the x402 facilitator settles USDC to that address",
@@ -598,7 +634,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
 /** Build the human-readable provenance list. */
 const describeSignals = (
     durableObjects: DurableObjectSpec[],
-    needsD1: boolean,
+    schema: SchemaFacts,
     capabilities: Capabilities,
     containers: ReadonlyArray<InferredContainer> = [],
     workflows: ReadonlyArray<InferredWorkflow> = [],
@@ -607,11 +643,11 @@ const describeSignals = (
     const exported = new Set(durableObjects.map((object) => object.className));
     const signals = durableObjects.map((object) => `${object.binding}/${object.className} (exported by worker entry)`);
 
-    if (needsD1) {
+    if (schema.needsD1) {
         signals.push("DB (.global() table declared)");
     }
 
-    signals.push(...describeDeclaredExports(containers, workflows, agents), ...describeCapabilitySignals(capabilities, exported));
+    signals.push(...describeDeclaredExports(containers, workflows, agents), ...describeCapabilitySignals(capabilities, exported, schema));
 
     return signals;
 };
@@ -666,7 +702,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         durableObjects = entry.path === undefined ? [] : detectExportedDurableObjects(entry.path);
     }
 
-    const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
+    const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory);
+    const schema: SchemaFacts = { ...discoveredSchema, needsD1: capabilities.needsD1 || discoveredSchema.needsD1 };
     const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
@@ -690,7 +727,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         capabilityFlags[flag] = capabilities[flag];
     }
 
-    const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows, agents);
+    const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     if (flagshipBinding !== undefined) {
         signals.push(
@@ -714,7 +751,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         containers,
         durableObjects,
         flagshipBinding,
-        needsD1,
+        ...(schema.jurisdiction === undefined ? {} : { jurisdiction: schema.jurisdiction }),
+        needsD1: schema.needsD1,
         queues,
         services,
         signals,

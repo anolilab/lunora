@@ -279,6 +279,7 @@ interface PlatformCapabilities {
         agents?: Capability;
         ai?: Capability;
         analytics?: Capability;
+        artifacts?: Capability;
         authJurisdictionMove?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;

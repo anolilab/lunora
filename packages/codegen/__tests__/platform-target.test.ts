@@ -16,6 +16,7 @@ const ALL_OFF: FeatureUsage = {
     access: false,
     ai: false,
     analytics: false,
+    artifacts: false,
     browser: false,
     container: false,
     flags: false,

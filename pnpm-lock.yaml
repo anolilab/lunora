@@ -5102,6 +5102,9 @@ importers:
       '@lunora/agent':
         specifier: workspace:*
         version: link:../agent
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../bindings
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors

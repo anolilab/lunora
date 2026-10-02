@@ -1856,8 +1856,8 @@ Shipped directly, without a plan: the `compatibility_date` 2026-10-01 default (D
 pending-I/O keep-alive) and its validator warning, `ctx.ai.websearch` + `webSearchTool` (Web Search
 API), and jurisdiction-aware KV / R2 checks for `.jurisdiction()` schemas (KV jurisdictions GA).
 
-| Plan | Title                                                                                 | Status |
-| ---- | ------------------------------------------------------------------------------------- | ------ |
-| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | TODO   |
-| 460  | [Cloudflare Artifacts: an action-only `ctx.artifacts`](460-cloudflare-artifacts.md)   | TODO   |
-| 461  | [MCP OAuth: close the MCP 2026-07-28 authorization gaps](461-mcp-oauth-2026-07-28.md) | TODO   |
+| Plan | Title                                                                                 | Status                                                                                                       |
+| ---- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | TODO                                                                                                         |
+| 460  | [Cloudflare Artifacts: an action-only `ctx.artifacts`](460-cloudflare-artifacts.md)   | IN PROGRESS (A, B, C shipped; D blocked: namespace GET schema undocumented; live probes need a paid account) |
+| 461  | [MCP OAuth: close the MCP 2026-07-28 authorization gaps](461-mcp-oauth-2026-07-28.md) | TODO                                                                                                         |
