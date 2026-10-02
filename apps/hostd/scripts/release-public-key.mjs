@@ -1,7 +1,7 @@
 /**
- * Prints the entry to commit to `src/trusted-release-keys.ts` for a release
- * signing key (plan 458 W7). Reads the PRIVATE key only to derive its public
- * half; nothing is written. Generate the key with
+ * Prints the entries to commit to `src/trusted-release-keys.ts` and
+ * `install/install.sh` for a release signing key (plan 458 W7). Reads the
+ * PRIVATE key only to derive its public half; nothing is written. Generate the key with
  * `openssl genpkey -algorithm ed25519 -out hostd-release.pem`, then run
  * `node scripts/release-public-key.mjs hostd-release.pem`. Needs the built
  * `dist/` (`pnpm run build` in this package).
@@ -26,4 +26,19 @@ if (privateKey.asymmetricKeyType !== "ed25519") {
 const publicPem = createPublicKey(privateKey).export({ format: "pem", type: "spki" }).toString().trim();
 const keyId = releaseKeyId(privateKey);
 
-process.stdout.write(`key id: ${keyId}\n\nAdd to HOSTD_TRUSTED_RELEASE_KEYS in src/trusted-release-keys.ts:\n\n    "${keyId}": \`${publicPem}\`,\n`);
+process.stdout.write(
+    [
+        `key id: ${keyId}`,
+        "",
+        "Add to HOSTD_TRUSTED_RELEASE_KEYS in src/trusted-release-keys.ts:",
+        "",
+        `    "${keyId}": \`${publicPem}\`,`,
+        "",
+        "and the same key to trusted_key() in install/install.sh (a test keeps the two equal):",
+        "",
+        `        ${keyId})`,
+        String.raw`            printf '%s\n' '${publicPem}'`,
+        "            ;;",
+        "",
+    ].join("\n"),
+);

@@ -5,7 +5,7 @@
 # pinned source (no upstream Caddy release ships that module), signs a release
 # manifest over those binaries and the pinned celld release, attests provenance,
 # and publishes all of it as the GitHub Release `hostd-v<version>` (plan 458 W7,
-# §9 Q2).
+# §9 Q2), with `install.sh` and the systemd unit it installs.
 #
 # How a box trusts a release: `manifest.json` is an Ed25519-signed envelope, and
 # the public key that verifies it is compiled into `hostd` and the control plane
@@ -324,6 +324,14 @@
                   "path": "apps/hostd/dist/sea"
                   "merge-multiple": true
 
+            # The installer and the unit it writes ship with the release they install.
+            # The manifest's schema has no place for them: install.sh is fetched over
+            # HTTPS from this release and pins the release keys itself, and the release
+            # notes carry both files' SHA-256 for anyone who wants to check by hand.
+            - "name": "Add the installer"
+              "run": |
+                  cp apps/hostd/install/install.sh apps/hostd/install/lunora-hostd.service apps/hostd/dist/sea/
+
             # Hashes the hostd and Caddy files in dist/sea, takes celld and the Caddy
             # version + modules from release-pins.json. Refuses while an input is
             # missing or a placeholder, and unless the signature verifies against a
@@ -357,6 +365,8 @@
                       apps/hostd/dist/sea/lunora-hostd-*
                       apps/hostd/dist/sea/caddy-*.gz
                       apps/hostd/dist/sea/manifest.json
+                      apps/hostd/dist/sea/install.sh
+                      apps/hostd/dist/sea/lunora-hostd.service
 
             # `gh release create --target` mints the tag on a dispatch run (on a tag
             # push it already exists), rather than `git tag && git push`: the shared
@@ -385,7 +395,30 @@
                       args+=(--prerelease)
                   fi
 
+                  notes="${RUNNER_TEMP}/release-notes.md"
+                  {
+                      echo "lunora-hostd ${VERSION}."
+                      echo
+                      echo "Install or upgrade a box (Debian or Ubuntu, amd64 or arm64, 2 GB of memory):"
+                      echo
+                      echo '```sh'
+                      echo "curl -fsSLO https://github.com/anolilab/lunora/releases/download/${TAG}/install.sh"
+                      echo "sha256sum install.sh  # $(sha256sum install.sh | cut -d ' ' -f 1)"
+                      echo 'sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<secret> \'
+                      echo "    bash install.sh --version ${VERSION} --control-plane <origin> --bucket <bucket> [--endpoint <url>]"
+                      echo '```'
+                      echo
+                      echo "SHA-256:"
+                      echo
+                      echo '```text'
+                      sha256sum install.sh lunora-hostd.service
+                      echo '```'
+                      echo
+                      echo "Verify \`manifest.json\` against the release keys pinned in apps/hostd/src/trusted-release-keys.ts (protocol/hostd/README.md §8); provenance: \`gh attestation verify <file> --repo anolilab/lunora\`."
+                  } > "${notes}"
+
                   gh release create "${TAG}" "${args[@]}" \
-                      --notes "lunora-hostd ${VERSION}. Verify \`manifest.json\` against the release keys pinned in apps/hostd/src/trusted-release-keys.ts (protocol/hostd/README.md §8); provenance: \`gh attestation verify <file> --repo anolilab/lunora\`." \
+                      --notes-file "${notes}" \
                       manifest.json lunora-hostd-linux-x64 lunora-hostd-linux-arm64 \
-                      caddy-linux-x64.gz caddy-linux-arm64.gz
+                      caddy-linux-x64.gz caddy-linux-arm64.gz \
+                      install.sh lunora-hostd.service
