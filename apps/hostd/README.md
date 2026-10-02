@@ -5,10 +5,75 @@ Cloud can run [celld](../../packages/platform-celld) fleets on it (plan 458). It
 dials out over a WebSocket to the box's Durable Object in Lunora Cloud; the box
 needs no inbound port for the control plane.
 
-**Status:** the wire protocol and the signed release pipeline exist.
-Enrolment, the session and the supervisor arrive with plan 458 W4; the
-`lunora-hostd` binary answers `--version` and `--help` and refuses everything
-else.
+**Status:** the wire protocol, the signed release pipeline and the daemon
+itself (plan 458 W4, with the on-box halves of W5 and W6) exist. Not yet:
+`install.sh` and the systemd unit (W7), uid separation and the network
+sandbox for fleets (W8), and forwarding hostd's own logs as OTLP (W6).
+
+## The daemon
+
+### Commands
+
+| Command                | What it does                                                                                                   |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `lunora-hostd enrol …` | Binds the machine to an organization with the one-time token the studio shows, and writes the configuration    |
+| `lunora-hostd run`     | The daemon, in the foreground (what systemd runs). Exit 0 on SIGTERM or after replacing itself, 2 when revoked |
+| `lunora-hostd status`  | The enrolment and the fleets, from the files on disk                                                           |
+
+`enrol` takes `--control-plane <origin>` (required until a production origin
+is published), `--bucket <name|s3://name>`, `--endpoint <url>` for an
+S3-compatible store, `--region`, `--ipv4` / `--ipv6` (detected when omitted),
+`--single-trust`, `--data-dir` and `--force` (enrol again, as a new box). It
+probes the bucket with `celld diagnose` before it spends the token. The token
+may come from `--token` or `LUNORA_HOSTD_ENROL_TOKEN`; the bucket credentials
+come only from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+`AWS_SESSION_TOKEN` in the environment. Neither is ever printed, and the
+credentials never leave the box. Every command takes `--config <path>`
+(default `/etc/lunora-hostd/config.json`, or `LUNORA_HOSTD_CONFIG`).
+
+### Files
+
+| Path                                      | Holds                                                                                   | Mode |
+| ----------------------------------------- | --------------------------------------------------------------------------------------- | ---- |
+| `/etc/lunora-hostd/config.json`           | control-plane origin, box id and hostname, bucket name/endpoint/region, ports, binaries | 0640 |
+| `/etc/lunora-hostd/box.key`               | the box's Ed25519 private key (PKCS#8 PEM)                                              | 0600 |
+| `/etc/lunora-hostd/bucket.env`            | the bucket credentials (`AWS_*`); refused when anyone but the owner can read it         | 0600 |
+| `/var/lib/lunora-hostd/state.json`        | each fleet's ports, state and last deployment                                           | 0600 |
+| `/var/lib/lunora-hostd/releases/<id>/`    | a downloaded release: `worker.js`, `assets/`, `wrangler.json` (holds the app's secrets) | 0600 |
+| `/var/lib/lunora-hostd/fleets/<alias>/`   | a celld node's working directory                                                        |      |
+| `/var/lib/lunora-hostd/caddy/`            | Caddy's config (`caddy.json`), certificates, and the JSON `access.log` hostd tails      |      |
+| `/var/lib/lunora-hostd/bin/{celld,caddy}` | the binaries hostd runs and an `upgrade` replaces (paths overridable in the config)     |      |
+
+### What runs, and how
+
+`lunora-hostd run` holds one WebSocket to the control plane and supervises
+every other process as its child:
+
+- **one celld node per deployment alias** (plan 458 D8): `celld --bucket
+s3://<bucket>/fleets/<alias> [--endpoint] [--region] --listen
+127.0.0.1:<port> --internal-listen 127.0.0.1:<port+1> --advertise
+127.0.0.1:<port+1> --trust-forwarded-headers`, with `CELLD_DURABILITY=bucket`
+  and `RUST_LOG=error,celld=warn` in an otherwise cleared environment. Both
+  listeners are loopback; ports come in pairs from `ports` (default
+  20000–20999). A `deploy` runs `celld deploy` on the release directory; a
+  running node adopts the new version at its next pointer poll, without a
+  restart;
+- **Caddy**, configured through its JSON admin API on loopback from the
+  `routes` the control plane pushes: each alias's hostnames proxy to its
+  node, readiness-gated on `/.well-known/celld/health`, compressed (never an
+  event stream), rate-limited per client, with on-demand TLS that hostd's own
+  loopback `ask` endpoint approves only for routed hostnames and the box's own.
+
+Children restart with a 1–30 s backoff; a stop is SIGTERM, then SIGKILL past
+a budget; shutdown drains the fleets before Caddy. The control plane is the
+source of truth: a fleet it stops routing is stopped (its data stays), and
+`hello` reports the fleets on every connect. `destroy` with `deleteData`
+deletes exactly the `fleets/<alias>/` prefix.
+
+hostd refuses to run as root unless the config sets `allowRoot`; it is meant
+to run as its own user (`lunora-hostd`), with `CAP_NET_BIND_SERVICE` handed to
+Caddy for ports 80/443. W8 will run the fleets as a separate `lunora-fleet`
+user (the supervisor already takes a uid/gid per child).
 
 ## Wire protocol
 

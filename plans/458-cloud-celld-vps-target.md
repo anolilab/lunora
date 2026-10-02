@@ -6,7 +6,9 @@
 `TargetDriver` extraction, G3–G10) landed 2026-10-02 on `work/cloud-vps-gaps`,
 and so did G2, the control-plane side of G11–G17, the `celld-vps` driver and the
 studio pages (G18)
-(§1.5). W4 (`hostd`'s daemon side) is not started. Decision recorded in
+(§1.5). W3's `celldConfigFromRelease` landed in `c302205ac` and W4 (`hostd`'s
+daemon, with the on-box halves of W5 and W6) in `763c5ca96`; `install.sh`,
+the `test:hostd` lane and W8 are still open. Decision recorded in
 [`apps/cloud/MULTIPLATFORM.md` §7.9](../apps/cloud/MULTIPLATFORM.md).
 **Rulings (2026-10-02):**
 
@@ -350,6 +352,25 @@ included). As built:
 - one fixture deployed by the existing `test:celld` lane (`celld deploy
 --dry-run`), so celld itself accepts the output.
 
+**Landed (2026-10-02, `c302205ac`):** `celldConfigFromRelease` in
+`@lunora/config/celld` (new subpath). As built:
+
+- the stored bundle is `main` with `no_bundle: true`, so the box needs no
+  esbuild (checked against celld v0.6.0);
+- `ACCEPTED_KEYS` and the migration refusal are reused by running the output
+  through `projectCelldConfig`; a key it would drop is an error, never shipped;
+- a release manifest carries no migration history, only each class's
+  `sqlite` flag, so every Durable Object class goes into one cumulative
+  `new_sqlite_classes` migration under one tag (celld v0.6.0 accepts a
+  growing class list under the same tag); a KV-backed class or a binding to
+  another Worker's class is refused;
+- resource names: `@lunora/config` cannot import `apps/cloud` (D17), so
+  `releaseResourceName` restates `tenantResourceName`'s `{alias}--{binding}`
+  rule, and `apps/cloud/__tests__/binding-support.test.ts` pins the two —
+  and the refused binding types against the `celld-vps` row — together;
+- the full golden fixture passes a real `celld deploy --dry-run` (run by hand
+  against v0.6.0; not yet wired into the `test:celld` lane).
+
 ### W4 — `hostd` core (L)
 
 Lives at `apps/hostd/` (D17), as a new workspace package with the standard
@@ -398,6 +419,39 @@ package shape. Housekeeping:
 - the conformance suite from W0 passing for `celld-vps` through a test harness
   that drives a real `hostd`.
 
+**Landed (2026-10-02, `763c5ca96`):** the daemon, `apps/hostd/src/daemon/`
+(`apps/hostd/README.md` "The daemon"). `enrol`, `run` and `status`; the
+session (hello / challenge / auth, strict decoding, jittered 1–60 s
+reconnect, `BOX_REVOKED` → exit 2, an outbound frame budget under the
+session's rate limit); box-signed fetches pinned to the enrolled origin; the
+five jobs; the supervisor; Caddy; reports; `state.json`. Tested in
+`apps/hostd/__tests__/daemon/` against an in-process fake control plane and
+fake celld/Caddy binaries, and smoke-run by hand against real celld v0.6.0,
+Caddy v2.11.6 (with `caddy-ratelimit`) and moto, from `dist/bin.mjs` and from
+the single executable: deploy, serving through Caddy (Durable Object, D1,
+assets, forwarded host), a `report`, `diagnose`, `destroy` with `deleteData`.
+That smoke found two bugs the fakes then learned to catch (Caddy's admin API
+refuses Node's `fetch` without its own `Origin`; an access log created after
+the daemon started was skipped). Decisions made while building:
+
+- **No production default** for `--control-plane`: none is published yet, so
+  `enrol` requires it (D16's default arrives with the production cell).
+- **`deploy` relies on celld's in-place adoption.** `celld deploy` writes the
+  version; a running node adopts it at its next pointer poll (≈15–45 s
+  observed), so the job's health wait proves the node serves, not that it
+  already serves the new version.
+- **`reload` restarts the node**: celld v0.6.0 has no reload operator route.
+- **Enrol checks the bucket** with `celld diagnose --json` before spending
+  the token (skippable with `--skip-bucket-check`).
+- **`deleteData`** lists and batch-deletes `fleets/<alias>/` over the S3 API
+  (aws4fetch, path-style), since celld has no delete; only `s3://` buckets.
+- **Root:** `run` refuses uid 0 unless the config sets `allowRoot`; the
+  supervisor takes a uid/gid per child for W8's `lunora-fleet`.
+
+Still open: the `test:hostd` lane and the conformance run through a real
+`hostd`, `install.sh` and the systemd unit (W7), hostd's own log forwarding
+(W6), and W8.
+
 ### W5 — Routing, DNS and TLS (M)
 
 - At enrolment, create `*.<boxSlug>.boxes.lunora.app` A/AAAA records via the
@@ -442,8 +496,21 @@ the boxes of organizations past the erasure cutoff, and runs right before the
 six-hourly code crons, so `purgeDeleted` erases boxes whose sessions and records
 are already gone; the hourly run is the backstop.
 
-Still open: the box zone and the token's Zone → DNS:Edit scope (🌐 ops), and
-everything on the box (Caddyfile generation, on-demand TLS) — that is W4.
+Still open: the box zone and the token's Zone → DNS:Edit scope (🌐 ops).
+
+**Landed (2026-10-02, on-box half, `763c5ca96`):** `apps/hostd/src/daemon/caddy.ts`
+generates Caddy's JSON config (not a Caddyfile) from the `routes` table and
+loads it over the loopback admin API only when it changed; a refused config
+keeps the previous one and shows in `diagnose`. Readiness-gated upstreams
+(active health checks plus `try_duration`), `zstd`/`gzip` for an explicit list
+of compressible types (an event stream is never compressed, `flush_interval:
+-1`), `read_header_timeout` against slowloris, a per-client `rate_limit` zone
+per alias, on-demand TLS whose `permission` endpoint is hostd's loopback `ask`
+(routed hostnames and the box's own only), a JSON access log. The generated
+config validates with `caddy validate` (v2.11.6) in both TLS modes and served
+an alias in the smoke run above over plain HTTP; HTTPS against Pebble (the W5
+gate) is not run yet. Not built: immutable cache headers for hashed asset
+paths (§6).
 
 ### W6 — Telemetry, usage and logs (M)
 
@@ -474,6 +541,13 @@ summary; the conformance leg records `celld-vps` usage through it. Billing
 enrolment, and `BOX_CREDITS_PER_MONTH` (500 credits) per box billed in a period
 through the prepaid-credits debit. Still open: `hostd`'s own log forwarding and
 the `test:hostd` panel gate (W4).
+
+**Landed (2026-10-02, on-box half, `763c5ca96`):** `apps/hostd/src/daemon/reports.ts`
+tails Caddy's JSON access log and sends one `report` per closed whole-minute
+window — requests, errors (status ≥ 500), median latency, at most 500
+aliases — queueing up to a day of windows while offline and draining five per
+ten seconds, well under `MAX_REPORTS_PER_MINUTE`. A real report reached the
+fake control plane in the smoke run. hostd's own log forwarding is still open.
 
 ### W7 — Install, upgrades and supply chain (M)
 
