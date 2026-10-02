@@ -1,10 +1,19 @@
 /**
- * Read-side client over the Analytics Engine **SQL API**.
- *
- * AE has no binding-side read path — data is queried out-of-band through
- * Cloudflare's REST SQL endpoint:
+ * Read-side client over the Workers Analytics Engine **SQL API** — the
+ * AE-specific REST endpoint and its ClickHouse-flavoured dialect
+ * (`FROM <dataset>`, `count()`, `_sample_interval`):
  * `POST https://api.cloudflare.com/client/v4/accounts/{accountId}/analytics_engine/sql`
  * — body: SQL text (plain text, not JSON); headers: `Authorization: Bearer <token>`.
+ *
+ * A Worker can now also read AE in-process through the **Analytics SQL binding**
+ * (wrangler `analytics` key, ≥ 4.145.0) — `ctx.analyticsSql` /
+ * `@lunora/bindings/analytics-sql`. That binding fronts Cloudflare's newer,
+ * account-wide Analytics SQL API, whose dialect differs
+ * (`FROM events.analyticsEngine."<dataset>"`, a lower `timestamp` bound required,
+ * `$1` / `$name` parameters), so a statement written for this client does not
+ * run there unchanged. Prefer the binding inside a Worker: it needs no token.
+ * This client remains for callers outside a Worker and for statements in the
+ * AE dialect.
  *
  * The token is an **account-scoped API token with Analytics Engine read** — a
  * secret*, never a binding and never auto-scaffolded with a real value. The

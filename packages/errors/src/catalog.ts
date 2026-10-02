@@ -226,6 +226,12 @@ export const ERROR_CATALOG = {
      * here is a fallback; each throw passes the actual upstream HTTP status.
      */
     ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
+    /*
+     * `ctx.analyticsSql` (`@lunora/bindings/analytics-sql`): a rejected Analytics
+     * SQL query from the binding or its REST transport. `data.retryable` says
+     * whether repeating it may succeed; the message carries a capped preview.
+     */
+    ANALYTICS_SQL_QUERY_ERROR: { status: 502, title: "Analytics SQL query error" },
     BROWSER_RUN_ERROR: { status: 502, title: "Browser Run API error" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
