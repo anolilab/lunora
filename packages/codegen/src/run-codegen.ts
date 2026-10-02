@@ -13,6 +13,7 @@ import { toAdvisorContext } from "./advisor";
 import { applyAdvisorFloor } from "./advisor-floor";
 import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
+import assertArtifactsJurisdiction from "./assert-artifacts-jurisdiction";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { usedCapabilities } from "./capabilities";
 import { buildDeclarationSurface } from "./declaration-surface";
@@ -659,6 +660,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // before would start it out empty, and nothing else about the upgrade
     // changes the schema, so this is the one place that can stop it.
     assertJurisdictionMoveAcknowledged(schema, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
+    // Artifacts namespaces exist only in `eu` / `us`, so a FedRAMP-pinned app has nowhere
+    // compliant to put its repos.
+    assertArtifactsJurisdiction(schema, featureUsage.artifacts);
 
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");

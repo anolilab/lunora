@@ -1762,6 +1762,43 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly appMethod: {
+            readonly configKey: "artifacts";
+            readonly doc: "Override the Artifacts binding backing `ctx.artifacts` (defaults to `env.ARTIFACTS`).";
+            readonly method: "artifacts";
+        };
+        readonly contextProperty: "artifacts";
+        readonly key: "artifacts";
+        readonly moduleSpecifier: "@lunora/bindings/artifacts";
+        readonly requiredPackage: "@lunora/bindings";
+        readonly serverCtxField: "\n    /** Cloudflare Artifacts repos (create/import/fork, Git tokens, read commits and files). Non-deterministic — available only in actions. Writes go through `git push` with a token, not this client. */\n    readonly artifacts: import(\"@lunora/bindings/artifacts\").ArtifactsClient;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "ArtifactsBindingLike";
+                readonly envName: "ARTIFACTS";
+                readonly factory: {
+                    readonly name: "createArtifacts";
+                    readonly option: "binding";
+                };
+            };
+            readonly clientType: "ArtifactsClient";
+            readonly missingMessage: "ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\\"ARTIFACTS\\\", namespace }) to wrangler.jsonc, or pass \\`artifacts\\` to createShardDO().";
+            readonly stubMethods: readonly [
+                "authenticatedRemote",
+                "create",
+                "delete",
+                "import",
+                "info",
+                "list",
+                "withRepo"
+            ];
+            readonly syncStubMethods: readonly [
+                "authenticatedRemote"
+            ];
+        };
+        readonly tier: "action";
+    },
+    {
+        readonly appMethod: {
             readonly configKey: "browser";
             readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
             readonly method: "browser";

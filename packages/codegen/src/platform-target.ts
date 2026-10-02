@@ -205,6 +205,7 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     access: null,
     ai: "ai",
     analytics: "analytics",
+    artifacts: "artifacts",
     browser: "browser",
     container: "containers",
     // eslint-disable-next-line unicorn/no-null -- see `access`
