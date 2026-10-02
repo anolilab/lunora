@@ -3,6 +3,8 @@ import { LunoraError } from "@lunora/server";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
+import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
+import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
@@ -102,9 +104,8 @@ const present = <T>(key: string, value: null | T | undefined): Record<string, T>
 /** The newest stable release's versions, which boxes are measured against; `null` before any release is stored. */
 const latestStableVersions = async (context: QueryContext): Promise<BoxVersions | null> => {
     const { page } = await context.db.hostdReleases.findMany({});
-    const stable = (page as { channel?: null | string; createdAt: number; versions: BoxVersions }[]).filter((row) => row.channel !== "canary");
 
-    return stable.toSorted((a, b) => b.createdAt - a.createdAt).at(0)?.versions ?? null;
+    return newestStableRelease(page as StoredReleaseSummary[])?.versions ?? null;
 };
 
 export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxView => {

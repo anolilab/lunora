@@ -26,6 +26,7 @@ import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
+import { runOutdatedBoxAlerts } from "./boxes/outdated";
 import { runBoxSweep } from "./boxes/reconcile";
 import { manifestUrlOf, resumeHostdRollouts, upgradeDispatch } from "./boxes/rollout";
 import { boxSession } from "./boxes/session-client";
@@ -661,6 +662,25 @@ const sweepHostdRollouts = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Raise the outdated-box alerts (plan 458 W7, `src/boxes/outdated.ts`): a box
+ * a week behind the newest stable `lunora-hostd` release's celld fires its org's
+ * `deploy` rules, once per box per release. The rows are delivered by the
+ * every-minute alert drain, as the release path's own alerts are.
+ */
+const sweepOutdatedBoxes = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const { fired } = await runOutdatedBoxAlerts(controlPlaneDatabase(env.DB as D1DatabaseLike), { now: Date.now() });
+
+    if (fired > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[boxes] outdated-box alerts fired", fired);
+    }
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -688,6 +708,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_HOUR, run: sweepBoxes },
     // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
     { cron: EVERY_HOUR, run: sweepHostdRollouts },
+    // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
+    { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —
