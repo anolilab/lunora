@@ -107,6 +107,88 @@ describe(createArtifactsFake, () => {
         await expect(artifacts.withRepo("docs-copy", async (repo) => repo.readFile({ path: "a.txt", ref: "main" }))).resolves.toBe(staged);
     });
 
+    it("forks blobs and trees, and copies other branches only without defaultBranchOnly", async () => {
+        expect.assertions(4);
+
+        const fake = createArtifactsFake();
+        const artifacts = createArtifacts({ binding: fake.binding });
+
+        await artifacts.create("docs");
+        fake.putFile("docs", { content: "x", path: "a.txt", ref: "feature" });
+        fake.putTree("docs", commit.treeHash, []);
+
+        const blob = fake.putBlob("docs", "c".repeat(40), "raw");
+
+        await artifacts.withRepo("docs", async (repo) => repo.fork("main-only"));
+        await artifacts.withRepo("docs", async (repo) => repo.fork("all-branches", { defaultBranchOnly: false }));
+
+        await artifacts.withRepo("main-only", async (repo) => {
+            await expect(repo.readFile({ path: "a.txt", ref: "feature" })).resolves.toBeNull();
+            await expect(repo.readBlob("c".repeat(40))).resolves.toBe(blob);
+            await expect(repo.readTree(commit.treeHash)).resolves.toStrictEqual([]);
+        });
+
+        await expect(artifacts.withRepo("all-branches", async (repo) => repo.readFile({ path: "a.txt", ref: "feature" }))).resolves.not.toBeNull();
+    });
+
+    it("starts log at a commit-id ref and yields [] for an unknown one", async () => {
+        expect.assertions(3);
+
+        const fake = createArtifactsFake();
+        const artifacts = createArtifacts({ binding: fake.binding });
+        const newer = { ...commit, hash: "d".repeat(40), parents: [commit.hash] };
+
+        await artifacts.create("docs");
+        fake.putCommit("docs", commit);
+        fake.putCommit("docs", newer);
+
+        await artifacts.withRepo("docs", async (repo) => {
+            await expect(repo.log({ ref: "main" })).resolves.toStrictEqual([newer, commit]);
+            await expect(repo.log({ ref: commit.hash })).resolves.toStrictEqual([commit]);
+            await expect(repo.log({ ref: "e".repeat(40) })).resolves.toStrictEqual([]);
+        });
+    });
+
+    it("pages list() by cursor and rejects a cursor it never handed out", async () => {
+        expect.assertions(3);
+
+        const fake = createArtifactsFake();
+        const artifacts = createArtifacts({ binding: fake.binding });
+
+        await artifacts.create("one");
+        await artifacts.create("two");
+
+        const first = await artifacts.list({ limit: 1 });
+
+        expect(first).toMatchObject({ cursor: "1", repos: [{ name: "one" }], total: 2 });
+        expect(first.repos[0]).not.toHaveProperty("remote");
+        await expect(artifacts.list({ cursor: "next-page" })).rejects.toMatchObject({ code: "BAD_REQUEST", data: { code: "INVALID_INPUT" } });
+    });
+
+    it("treats a handle as gone once its repo is deleted, and drops the repo's tokens", async () => {
+        expect.assertions(3);
+
+        const fake = createArtifactsFake();
+        const artifacts = createArtifacts({ binding: fake.binding });
+
+        await artifacts.create("docs");
+
+        await artifacts.withRepo("docs", async (repo) => {
+            const token = await repo.createToken("read", 600);
+
+            await artifacts.delete("docs");
+            await artifacts.create("docs");
+
+            // A stale handle must not read the same-named replacement.
+            await expect(repo.info()).rejects.toMatchObject({ code: "NOT_FOUND" });
+            await expect(repo.listTokens()).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+            const { tokens } = await artifacts.withRepo("docs", async (fresh) => fresh.listTokens());
+
+            expect(tokens.some((entry) => entry.id === token.id)).toBe(false);
+        });
+    });
+
     it("raises the binding's errors, which createArtifacts maps to LunoraError", async () => {
         expect.assertions(6);
 

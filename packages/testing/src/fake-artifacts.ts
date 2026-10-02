@@ -6,6 +6,10 @@
  * account passes this to `createArtifacts({ binding })` (or as the generated
  * `.artifacts()` override). Like the real binding it cannot write files: tests
  * stage content with the `put*` seeding helpers, standing in for a `git push`.
+ *
+ * History is one linear list of commits (`putCommit`), not a graph with
+ * branches: `log({ ref })` honours a commit id (history from that commit, `[]`
+ * when unknown) and reads the whole list for a branch or tag name.
  */
 /* eslint-disable unicorn/no-null -- the Artifacts binding's contract uses `null` (an unset description, a never-pushed repo, a missing object from the read methods); the fake has to return the same values */
 /* eslint-disable @typescript-eslint/require-await -- every binding method is an RPC that settles asynchronously and reports failure as a rejection; the in-memory bodies are synchronous, and `async` is what turns their throws into rejections */
@@ -37,6 +41,12 @@ const NUMERIC_CODES: Partial<Record<ArtifactsErrorCode, number>> = {
     REMOTE_AUTH_REQUIRED: 10_106,
     UPSTREAM_UNAVAILABLE: 10_401,
 };
+
+/** A full, lowercase SHA-1 object id — how `log()` tells a commit-id ref from a branch or tag name. */
+const COMMIT_ID_PATTERN = /^[\da-f]{40}$/;
+
+/** The fake's `list()` cursor: a decimal offset into the namespace. */
+const DECIMAL_CURSOR_PATTERN = /^\d+$/;
 
 /** The binding's public naming rule: a letter or digit, then letters, digits, `.`, `_` or `-`. */
 const REPO_NAME_PATTERN = /^[a-z\d][\w.-]*$/i;
@@ -190,12 +200,21 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
     const openHandle = (repo: FakeRepo): ArtifactsRepoLike => {
         handles.opened += 1;
 
+        /** Throw the queued failure, then `NOT_FOUND` once the repo was deleted (or replaced by a same-named one) — as the binding does for a stale handle. */
+        const checkLive = (): void => {
+            checkFailure();
+
+            if (repos.get(repo.info.name) !== repo) {
+                throw new FakeArtifactsError("NOT_FOUND", `repository "${repo.info.name}" does not exist`);
+            }
+        };
+
         return {
             [Symbol.dispose]: () => {
                 handles.disposed += 1;
             },
             createToken: async (scope = "write", ttl = DEFAULT_TOKEN_TTL_SECONDS) => {
-                checkFailure();
+                checkLive();
 
                 if (!Number.isInteger(ttl) || ttl < MIN_TOKEN_TTL_SECONDS || ttl > MAX_TOKEN_TTL_SECONDS) {
                     throw new FakeArtifactsError("INVALID_TTL", `ttl must be between ${String(MIN_TOKEN_TTL_SECONDS)} and ${String(MAX_TOKEN_TTL_SECONDS)}`);
@@ -204,7 +223,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 return mintToken(repo, scope, ttl);
             },
             fork: async (name, forkOptions) => {
-                checkFailure();
+                checkLive();
 
                 const created = addRepo(name, {
                     defaultBranch: repo.info.defaultBranch,
@@ -221,17 +240,27 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                     }
                 }
 
+                // Objects are content-addressed, so the fork shares every blob and tree; the
+                // one linear history is the default branch's, copied either way.
+                for (const [hash, blob] of repo.blobs) {
+                    forked.blobs.set(hash, blob);
+                }
+
+                for (const [hash, entries] of repo.trees) {
+                    forked.trees.set(hash, entries);
+                }
+
                 forked.commits.push(...repo.commits);
 
                 return created;
             },
             info: async () => {
-                checkFailure();
+                checkLive();
 
-                return { ...requireRepo(repo.info.name).info };
+                return { ...repo.info };
             },
             listTokens: async () => {
-                checkFailure();
+                checkLive();
 
                 const tokens = [...repo.tokens.values()].map((token) => {
                     return { ...token.info };
@@ -240,25 +269,35 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 return { tokens, total: tokens.length };
             },
             log: async (logOptions) => {
-                checkFailure();
+                checkLive();
 
                 const offset = logOptions?.offset ?? 0;
                 const limit = Math.min(logOptions?.limit ?? 50, 1000);
+                const ref = logOptions?.ref;
+                let start = 0;
 
-                return repo.commits.slice(offset, offset + limit);
+                if (ref !== undefined && COMMIT_ID_PATTERN.test(ref)) {
+                    start = repo.commits.findIndex((commit) => commit.hash === ref);
+
+                    if (start === -1) {
+                        return [];
+                    }
+                }
+
+                return repo.commits.slice(start + offset, start + offset + limit);
             },
             readBlob: async (hash) => {
-                checkFailure();
+                checkLive();
 
                 return repo.blobs.get(hash) ?? null;
             },
             readCommit: async (hash) => {
-                checkFailure();
+                checkLive();
 
                 return repo.commits.find((commit) => commit.hash === hash) ?? null;
             },
             readFile: async ({ path, ref }) => {
-                checkFailure();
+                checkLive();
 
                 if (ref === "" || path === "") {
                     throw new FakeArtifactsError("INVALID_INPUT", "ref and path must be non-empty");
@@ -267,12 +306,12 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 return repo.files.get(`${ref}:${path}`) ?? null;
             },
             readTree: async (hash) => {
-                checkFailure();
+                checkLive();
 
                 return repo.trees.get(hash) ?? null;
             },
             revokeToken: async (tokenOrId) => {
-                checkFailure();
+                checkLive();
 
                 if (tokenOrId === "") {
                     throw new FakeArtifactsError("INVALID_INPUT", "tokenOrId must be non-empty");
@@ -308,6 +347,9 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 throw new FakeArtifactsError("INVALID_REPO_NAME", `invalid repository name "${name}"`);
             }
 
+            // A repo's tokens go with it: none of them authenticates against a later same-named repo.
+            repos.get(name)?.tokens.clear();
+
             return repos.delete(name);
         },
         get: async (name) => {
@@ -327,15 +369,17 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
         list: async (listOptions) => {
             checkFailure();
 
-            const all = [...repos.values()].map(({ info }): Omit<ArtifactsRepoInfo, "remote"> => {
-                const listed: Partial<ArtifactsRepoInfo> = { ...info };
+            // `list()` omits the remote, as the binding does.
+            const all = [...repos.values()].map(({ info: { remote: _remote, ...listed } }): Omit<ArtifactsRepoInfo, "remote"> => listed);
+            const cursor = listOptions?.cursor ?? "0";
 
-                // `list()` omits the remote, as the binding does.
-                delete listed.remote;
+            // The fake's cursor is a decimal offset; anything else is a cursor it never handed out.
+            if (!DECIMAL_CURSOR_PATTERN.test(cursor)) {
+                throw new FakeArtifactsError("INVALID_INPUT", "invalid cursor");
+            }
 
-                return listed as Omit<ArtifactsRepoInfo, "remote">;
-            });
-            const start = listOptions?.cursor === undefined ? 0 : Number(listOptions.cursor);
+            const start = Number(cursor);
+
             const limit = listOptions?.limit ?? 50;
             const page = all.slice(start, start + limit);
             const next = start + limit;
