@@ -172,26 +172,39 @@ export const readme = action.input({ repo: v.string() }).action(async ({ ctx, ar
 
 The client wraps the binding without hiding it:
 
-- **Namespace operations**: `create`, `import` (from an external HTTPS Git remote), `list`, `delete`, and `info(name)`.
+- **Namespace operations**: `create`, `import` (from an external HTTPS Git remote), `list`, `delete`, and `info(name)`. Without a binding, every method of `ctx.artifacts` throws, `authenticatedRemote` included; import `authenticatedRemote` from `@lunora/bindings/artifacts` to build a remote URL where no binding is configured.
 - **Repo operations**, inside `withRepo(name, (repo) => …)`: `info`, `createToken(scope, ttlSeconds)`, `listTokens`, `revokeToken`, `fork`, `log`, `readCommit`, `readTree`, `readBlob`, and `readFile`. `readFile` and `readBlob` return the binding's `Blob` as is, without buffering it.
 - **Errors** come back as `LunoraError`: `NOT_FOUND` → `NOT_FOUND`; `ALREADY_EXISTS` and the `*_IN_PROGRESS` codes → `CONFLICT`; `INVALID_*` → `BAD_REQUEST`; `REMOTE_AUTH_REQUIRED` → `FORBIDDEN`; everything else → `INTERNAL`. The binding's own `code` and `numericCode` are kept in `error.data`. Its message is not copied into ours, so nothing the service echoes back ends up on the wire.
 
 ### Writing is a `git push`
 
-The binding has **no write method**. You can't put a file into a repo from a Worker. A Git client pushes it, using a repo-scoped token:
+The binding has **no write method**. You can't put a file into a repo from a Worker. A Git client pushes it, using a repo-scoped token. A write token is a push credential, so minting one is an authorization decision: check that the caller may write to the repo first, use the credential on the server, and never return it:
 
 ```ts
-export const pushAccess = action.input({ repo: v.string() }).action(async ({ ctx, args }) => {
+import { LunoraError } from "@lunora/errors";
+
+import { api } from "@/lunora/_generated/api";
+
+export const publish = action.input({ repo: v.string() }).action(async ({ ctx, args }) => {
+    // `api.repos.owner` is your own query mapping a repo to the user who may push to it.
+    const owner = await ctx.runQuery(api.repos.owner, { repo: args.repo });
+
+    if (owner === null || owner !== ctx.auth.userId) {
+        throw new LunoraError("FORBIDDEN", "you can't push to this repo");
+    }
+
     const { remote } = await ctx.artifacts.info(args.repo);
     const token = await ctx.artifacts.withRepo(args.repo, (repo) => repo.createToken("write", 900));
+    // https://x:<secret>@host/… — the `?expires=` suffix is stripped.
+    const pushRemote = ctx.artifacts.authenticatedRemote(remote, token.plaintext);
 
-    // https://x:<secret>@host/… — the `?expires=` suffix is stripped. This URL is a secret:
-    // hand it to the Git client through an environment variable, never a log line.
-    return { remote: ctx.artifacts.authenticatedRemote(remote, token.plaintext), tokenId: token.id };
+    // … hand `pushRemote` to the Git client through an environment variable (the container
+    // recipe below does exactly this), then revoke the token. Return at most its id.
+    return { tokenId: token.id };
 });
 ```
 
-The Git client can be a container (see [`@lunora/container`'s Artifacts recipe](/docs/packages/container#pushing-to-a-cloudflare-artifacts-repo)), a CI runner, or a developer's machine. Keep write tokens short-lived and `revokeToken(token.id)` when the session that needed one ends.
+The Git client can be a container (see [`@lunora/container`'s Artifacts recipe](/docs/packages/container#pushing-to-a-cloudflare-artifacts-repo)) or a CI runner the action starts. Don't send the authenticated remote, or `token.plaintext`, back to a browser: anyone holding it can push until it expires. Keep write tokens short-lived and `revokeToken(token.id)` when the session that needed one ends.
 
 ### Namespaces and jurisdiction
 
@@ -204,7 +217,7 @@ curl --request POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/a
   --data '{ "namespace": "my-eu-namespace", "jurisdiction": "eu" }'
 ```
 
-`lunora dev` prints this as a hint when it sees `ctx.artifacts` and no `artifacts` binding, and it never writes the binding for you. A `.jurisdiction("fedramp")` schema that uses `ctx.artifacts` fails codegen, because Artifacts has no FedRAMP namespace.
+`lunora dev` prints this as a hint when it sees `ctx.artifacts` and no `artifacts` binding named `ARTIFACTS` (the name `ctx.artifacts` reads unless `.artifacts()` on `defineApp` points it at another binding), and it never writes the binding for you. A `.jurisdiction("fedramp")` schema that uses `ctx.artifacts` fails codegen, because Artifacts has no FedRAMP namespace.
 
 ### Events
 
