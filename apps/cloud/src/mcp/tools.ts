@@ -19,6 +19,7 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", 
  * Paths that must NEVER be exposed as tools regardless of annotation — the
  * belt to the opt-in's suspenders. `/v1/secrets` writes tenant secrets,
  * `/v1/cloudflare-billing` writes a Cloudflare Billing-Read token,
+ * `/v1/cloudflare-accounts` writes a token that deploys into a customer's account,
  * `/v1/admin` proxies into a tenant, `/v1/eject` returns a tenant's ENTIRE data
  * snapshot in one response, `/v1/invitations/send` mints invite tokens,
  * `/v1/logs/tail` holds the tail secret, and `/v1/mcp` is the surface itself
@@ -32,6 +33,7 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", 
  */
 export const MCP_DENY_PATHS: ReadonlySet<string> = new Set([
     "/v1/admin",
+    "/v1/cloudflare-accounts",
     "/v1/cloudflare-billing",
     "/v1/eject",
     "/v1/invitations/send",

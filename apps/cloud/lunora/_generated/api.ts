@@ -40,6 +40,10 @@ export interface ApiTypes {
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
     };
+    cloudflare_accounts: {
+        disconnect: FunctionReference<"mutation", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, void>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; displayName?: string; createdAt: number; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
+    };
     cloudflare_billing: {
         disconnect: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { removed: boolean; }>;
         status: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cloudflareAccountId: null | string; connected: boolean; }>;
@@ -202,6 +206,9 @@ export interface InternalApiTypes {
     };
     cells: {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
+    };
+    cloudflare_accounts: {
+        connect: FunctionReference<"mutation", { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareAccounts">>;
     };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;

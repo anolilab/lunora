@@ -28,6 +28,7 @@ import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
@@ -793,6 +794,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxReleaseRoute, method: "GET", path: BOX_RELEASE_PATH, spec: { auth: "boxKey" } },
         // session — the revoke mutation asserts owner/admin of the box's org.
         { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
+        // session — a customer's own Cloudflare account (cloudflare-workers); the connect mutation asserts owner/admin.
+        { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
         // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator, fetched by boxes.
         { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
         { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },

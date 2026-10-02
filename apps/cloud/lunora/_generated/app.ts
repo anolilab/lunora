@@ -412,6 +412,7 @@ class AppBuilder<Env extends object> {
             ["boxes", { mode: { kind: "global" } }],
             ["boxEnrolments", { mode: { kind: "global" } }],
             ["hostdReleases", { mode: { kind: "global" } }],
+            ["cloudflareAccounts", { mode: { kind: "global" } }],
             ["metricPoints", { mode: { kind: "global" } }],
             ["tenantLogs", { mode: { kind: "global" } }],
             ["observations", { mode: { kind: "global" } }],

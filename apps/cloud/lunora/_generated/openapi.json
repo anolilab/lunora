@@ -1546,6 +1546,138 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#cloudflare_accounts:disconnect": {
+      "post": {
+        "description": "Invoke the `mutation` `cloudflare_accounts:disconnect` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_accounts:disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"cloudflareAccounts\">",
+                        "type": "string",
+                        "x-lunora-table": "cloudflareAccounts"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_accounts:disconnect",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: cloudflare_accounts:disconnect",
+        "tags": [
+          "cloudflare_accounts"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#cloudflare_accounts:list": {
+      "post": {
+        "description": "Invoke the `query` `cloudflare_accounts:list` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_accounts:list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_accounts:list",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: cloudflare_accounts:list",
+        "tags": [
+          "cloudflare_accounts"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#cloudflare_billing:disconnect": {
       "post": {
         "description": "Invoke the `mutation` `cloudflare_billing:disconnect` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -7906,6 +8038,10 @@
     {
       "description": "Operations declared in `lunora/cells`.",
       "name": "cells"
+    },
+    {
+      "description": "Operations declared in `lunora/cloudflare_accounts`.",
+      "name": "cloudflare_accounts"
     },
     {
       "description": "Operations declared in `lunora/cloudflare_billing`.",

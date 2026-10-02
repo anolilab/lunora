@@ -40,6 +40,10 @@ export const deployTables = {
         // not through the project: deleting a project removes the row that
         // would have named the box, while its fleet and data still run on it.
         boxId: v.optional(v.id("boxes")),
+        // The connected Cloudflare account a `cloudflare-workers` release was
+        // converged into, copied from the project like `boxId`: teardown and
+        // usage readback reach the account through it after the project is gone.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP
@@ -101,6 +105,8 @@ export const deployTables = {
         teardownAt: v.optional(v.number()),
     })
         .global()
+        // A connected account's deployments: disconnecting it reads them.
+        .index("by_cloudflare_account", ["cloudflareAccountId"])
         .index("by_kind", ["kind"])
         // Every read that scopes deployments to an ORG went unindexed: the Traffic
         // tab, the onboarding checklist and the org purge all filtered on

@@ -295,6 +295,14 @@ export default createConfig(
                             message: "Reach a tenant through its TargetDriver (src/targets/registry.ts), not the cloudflare-wfp driver's internals.",
                         },
                         {
+                            group: ["**/targets/cloudflare-workers", "**/targets/cloudflare-workers/**", "./cloudflare-workers/**"],
+                            message: "Reach a tenant through its TargetDriver (src/targets/registry.ts), not the cloudflare-workers driver's internals.",
+                        },
+                        {
+                            group: ["**/targets/provision-box", "**/targets/provision-box/**", "./provision-box/**"],
+                            message: "The provision box is the Cloudflare drivers' converge half — go through a TargetDriver.",
+                        },
+                        {
                             group: ["**/cloudflare/*"],
                             message: "The Cloudflare REST port is the cloudflare-wfp driver's (or the control plane's own host's) — go through a TargetDriver.",
                         },
@@ -308,6 +316,10 @@ export default createConfig(
             // The registry is where drivers are built; each driver owns its own directory.
             "src/targets/registry.ts",
             "src/targets/cloudflare-wfp/**/*.ts",
+            "src/targets/cloudflare-workers/**/*.ts",
+            "src/targets/provision-box/**/*.ts",
+            // Connecting a customer's own Cloudflare account checks the token against it first.
+            "src/deploy/routes/cloudflare-accounts.ts",
             // celld-vps box hostnames live in the platform's OWN zone (plan 458 G13): its
             // DNS records, written at enrolment and removed at revocation — no tenant account.
             "src/targets/celld-vps/dns.ts",

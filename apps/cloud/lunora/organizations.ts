@@ -267,6 +267,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "boxes",
         "buildLogs",
         "builds",
+        "cloudflareAccounts",
         "cloudflareBilling",
         "dashboards",
         "deployKeys",

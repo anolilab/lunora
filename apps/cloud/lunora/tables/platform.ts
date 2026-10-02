@@ -119,11 +119,17 @@ export const platformTables = {
         target: v.optional(deployTarget),
         // The customer box a `celld-vps` project deploys to (plan 458 G12).
         // Required when `target` is `celld-vps` and absent otherwise — enforced
-        // by `boxes.setProjectTarget`, the one writer of either column.
+        // by `projects.setTarget`, the one writer of the placement columns.
         boxId: v.optional(v.id("boxes")),
+        // The connected Cloudflare account a `cloudflare-workers` project deploys
+        // into. Required for that target and absent otherwise — enforced by
+        // `projects.setTarget`, the one writer of the placement columns.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
+        // A connected account's projects: disconnecting it reads them.
+        .index("by_cloudflare_account", ["cloudflareAccountId"])
         // A box's projects: its routing table and every usage report it sends
         // read them, so neither may scan the whole table.
         .index("by_box", ["boxId"])

@@ -66,11 +66,13 @@ export const projects = sqliteTable("projects", {
     slug: text("slug").notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">(),
     boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
     by_github_repo: index("by_github_repo").on(t.githubRepo),
     by_box: index("by_box").on(t.boxId),
+    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
 }));
 
 export const invitations = sqliteTable("invitations", {
@@ -122,6 +124,7 @@ export const deployments = sqliteTable("deployments", {
     adminTokenIv: text("adminTokenIv"),
     alias: text("alias"),
     boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
     bindings: text("bindings", { mode: "json" }).$type<Array<{ name: string; target?: string; type: string }>>(),
@@ -154,6 +157,7 @@ export const deployments = sqliteTable("deployments", {
     by_project: index("by_project").on(t.projectId),
     by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
+    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {
@@ -336,6 +340,27 @@ export const hostdReleases = sqliteTable("hostdReleases", {
     versions: text("versions", { mode: "json" }).$type<{ caddy: string; celld: string; hostd: string }>().notNull(),
 }, (t) => ({
     by_release: uniqueIndex("by_release").on(t.releaseId),
+}));
+
+export const cloudflareAccounts = sqliteTable("cloudflareAccounts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    accountId: text("accountId").notNull(),
+    displayName: text("displayName"),
+    ciphertext: text("ciphertext").notNull(),
+    createdAt: real("createdAt").notNull(),
+    createdBy: text("createdBy").notNull(),
+    iv: text("iv").notNull(),
+    label: text("label").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    permissions: text("permissions", { mode: "json" }).$type<Array<string>>().notNull(),
+    tokenExpiresAt: real("tokenExpiresAt"),
+    updatedAt: real("updatedAt").notNull(),
+    verifiedAt: real("verifiedAt").notNull(),
+    workersSubdomain: text("workersSubdomain").notNull(),
+}, (t) => ({
+    by_org_account: uniqueIndex("by_org_account").on(t.organizationId, t.accountId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const metricPoints = sqliteTable("metricPoints", {
