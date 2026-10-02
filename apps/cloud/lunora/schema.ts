@@ -97,6 +97,17 @@ const deploymentStatus = v.union(
 
 const deployKeyType = v.union(v.literal("production"), v.literal("dev"), v.literal("preview"));
 
+/**
+ * A customer box's lifecycle (plan 458 G12): `pending` from enrolment until its
+ * `hostd` first authenticates, then `online` / `offline` as its session comes
+ * and goes, and `revoked` for good — a revoked box never comes back; the machine
+ * enrols again as a new box (§3 rule 6).
+ */
+const boxStatus = v.union(v.literal("pending"), v.literal("online"), v.literal("offline"), v.literal("revoked"));
+
+/** The three binaries on a box, as its `hostd` reports them (`@lunora/hostd/protocol` `BoxVersions`). Displayed, never parsed. */
+const boxVersions = v.object({ caddy: v.string(), celld: v.string(), hostd: v.string() });
+
 export default defineSchema({
     cells: defineTable({
         // `cloudflare-wfp` encoding: the Cloudflare account this cell runs in.
@@ -204,6 +215,10 @@ export default defineSchema({
         // the project, never of a deploy request. Absent → `cloudflare-wfp`,
         // in the org's cell — which is what every project before targets did.
         target: v.optional(deployTarget),
+        // The customer box a `celld-vps` project deploys to (plan 458 G12).
+        // Required when `target` is `celld-vps` and absent otherwise — enforced
+        // by `boxes.setProjectTarget`, the one writer of either column.
+        boxId: v.optional(v.id("boxes")),
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
@@ -316,6 +331,61 @@ export default defineSchema({
         .global()
         .index("by_alias", ["alias"], { unique: true })
         .index("by_project", ["projectId"]),
+
+    // A machine a customer runs `lunora-hostd` on (plan 458 D13, G12): org-owned,
+    // never shared, and its `organizationId` never changes (§3 rule 6). The
+    // control plane holds the box's PUBLIC key and nothing else from it (§3 rule
+    // 5) — every session and every signed request is checked against it.
+    boxes: defineTable({
+        createdAt: v.number(),
+        // The `hostdReleases.releaseId` this box should run (plan 458 W7); an
+        // `upgrade` job moves it there. Absent → whatever it runs is fine.
+        desiredReleaseId: v.optional(v.string()),
+        // Why the box's DNS records could not be created (or removed), when they
+        // could not — surfaced on the row rather than failing the enrolment.
+        dnsError: v.optional(v.string()),
+        enrolledAt: v.optional(v.number()),
+        ipv4: v.optional(v.string()),
+        ipv6: v.optional(v.string()),
+        lastSeenAt: v.optional(v.number()),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        // The box's Ed25519 public key: the RAW 32 bytes, base64url without
+        // padding (43 characters) — the form WebCrypto imports as "raw".
+        publicKey: v.string(),
+        resources: v.optional(v.object({ diskFreeMb: v.number(), memMb: v.number() })),
+        revokedAt: v.optional(v.number()),
+        // `hostd enrol --single-trust`: the box skips the tenant isolation
+        // self-check (plan 458 W8). Recorded so the studio can say so.
+        singleTrust: v.boolean(),
+        // The box's DNS label (`<alias>.<slug>.<LUNORA_BOX_DOMAIN>`). Random,
+        // so a public hostname never leaks the name the customer chose.
+        slug: v.string(),
+        status: boxStatus,
+        versions: v.optional(boxVersions),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_slug", ["slug"], { unique: true }),
+
+    // One-time enrolment tokens (plan 458 D4): valid 15 minutes, single use,
+    // stored hashed. Consuming one binds a box's public key to the org.
+    boxEnrolments: defineTable({
+        // The box the token enrolled, once used — what lets a retried enrolment
+        // with the same key answer the same box instead of failing.
+        boxId: v.optional(v.id("boxes")),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        expiresAt: v.number(),
+        // SHA-256 of the token; the plaintext is shown once and never stored.
+        hashedToken: v.string(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        usedAt: v.optional(v.number()),
+    })
+        .global()
+        .index("by_hash", ["hashedToken"], { unique: true })
+        .index("by_org", ["organizationId"]),
 
     // Exact metric measurements (the precise tier behind the Metrics UI). Every
     // `ctx.metrics.*` data point OTLP-ingested via `/v1/metrics` lands here as one
@@ -644,15 +714,24 @@ export default defineSchema({
     // dimension in `usageMeter`, not just compute, so a storage- or
     // DO-duration-shaped runaway is visible to the spend cap.
     platformUsage: defineTable({
+        // Set on rows a customer box reported (plan 458 G15): request counts its
+        // `hostd` read off Caddy's access log. Displayed, NEVER billed (D12) —
+        // the customer has root on the box, so its counts are not billing
+        // evidence. `src/billing/usage.ts` `isBillableUsage` is the one test.
+        boxId: v.optional(v.id("boxes")),
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
         kind: usageMeter,
         organizationId: v.id("organizations"),
         periodStart: v.number(),
         quantity: v.number(),
+        // The report window a box row counts (epoch ms) — with `boxId`, the key
+        // that makes a replayed report a no-op instead of a double count.
+        windowStart: v.optional(v.number()),
     })
         .global()
-        .index("by_org", ["organizationId"]),
+        .index("by_org", ["organizationId"])
+        .index("by_box_window", ["boxId", "windowStart"]),
 
     // Grouped application errors — the Cloud Observability "Issues" view. The
     // telemetry ingest (`POST /v1/telemetry`) fingerprints each error event

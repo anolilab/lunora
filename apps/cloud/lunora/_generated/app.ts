@@ -399,6 +399,8 @@ class AppBuilder<Env extends object> {
             ["projects", { mode: { kind: "global" } }],
             ["deployments", { mode: { kind: "global" } }],
             ["aliasOwnership", { mode: { kind: "global" } }],
+            ["boxes", { mode: { kind: "global" } }],
+            ["boxEnrolments", { mode: { kind: "global" } }],
             ["metricPoints", { mode: { kind: "global" } }],
             ["deployKeys", { mode: { kind: "global" } }],
             ["overageDebits", { mode: { kind: "global" } }],

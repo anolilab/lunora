@@ -1,0 +1,428 @@
+import { LunoraError } from "@lunora/server";
+
+import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
+import { isBoxPublicKey } from "../src/boxes/encoding";
+import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
+import { sha256Hex } from "../src/deploy/keys";
+import type { Id } from "./_generated/dataModel.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { assertMember, assertRowInOrg } from "./authz";
+import { rateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
+
+/**
+ * Customer boxes (plan 458 G12): machines an organization runs `lunora-hostd`
+ * on, so its `celld-vps` projects deploy there.
+ *
+ * The lifecycle is: an owner mints a one-time enrolment token
+ * ({@link createEnrolment}); `hostd enrol` presents it with the box's freshly
+ * generated public key to `POST /v1/boxes/enrol`, which consumes it
+ * ({@link enrol}); the box then holds a WebSocket session with its
+ * `BoxSessionDO` (`src/boxes/session-do.ts`), which keeps `status`,
+ * `lastSeenAt`, `versions` and `resources` current. {@link revoke} ends it for
+ * good — the session closes and the box's DNS records go
+ * (`POST /v1/boxes/revoke`).
+ */
+
+/** The protocol's version-string format (`protocol/hostd/README.md` §4.1). */
+const VERSION_PATTERN = /^[\w.+~-]{1,64}$/u;
+
+type BoxStatus = "offline" | "online" | "pending" | "revoked";
+
+interface BoxVersions {
+    caddy: string;
+    celld: string;
+    hostd: string;
+}
+
+/** A `boxes` row as the store returns it. `.global()` rows answer SQL NULL for an unset column. */
+interface BoxRow {
+    _id: Id<"boxes">;
+    createdAt: number;
+    desiredReleaseId?: null | string;
+    dnsError?: null | string;
+    enrolledAt?: null | number;
+    ipv4?: null | string;
+    ipv6?: null | string;
+    lastSeenAt?: null | number;
+    name: string;
+    organizationId: Id<"organizations">;
+    publicKey: string;
+    resources?: null | { diskFreeMb: number; memMb: number };
+    revokedAt?: null | number;
+    singleTrust: boolean;
+    slug: string;
+    status: BoxStatus;
+    versions?: BoxVersions | null;
+}
+
+/** A box as the studio sees it. Explicitly projected, so a column added to the row later is not exposed by default. */
+export interface BoxView {
+    _id: Id<"boxes">;
+    createdAt: number;
+    desiredReleaseId?: string;
+    /** Why the box's DNS records could not be written, when they could not. */
+    dnsError?: string;
+    enrolledAt?: number;
+    ipv4?: string;
+    ipv6?: string;
+    lastSeenAt?: number;
+    name: string;
+    organizationId: Id<"organizations">;
+    /** The box's Ed25519 public key (raw, base64url) — public by definition, shown so an operator can match it to the box. */
+    publicKey: string;
+    resources?: { diskFreeMb: number; memMb: number };
+    revokedAt?: number;
+    singleTrust: boolean;
+    slug: string;
+    status: BoxStatus;
+    versions?: BoxVersions;
+}
+
+/** Copy the set fields of a row onto the view; NULL and undefined both mean unset. */
+const present = <T>(key: string, value: null | T | undefined): Record<string, T> => (value == null ? {} : { [key]: value });
+
+export const toBoxView = (row: BoxRow): BoxView => {
+    return {
+        _id: row._id,
+        createdAt: row.createdAt,
+        name: row.name,
+        organizationId: row.organizationId,
+        publicKey: row.publicKey,
+        singleTrust: row.singleTrust,
+        slug: row.slug,
+        status: row.status,
+        ...present("desiredReleaseId", row.desiredReleaseId),
+        ...present("dnsError", row.dnsError),
+        ...present("enrolledAt", row.enrolledAt),
+        ...present("ipv4", row.ipv4),
+        ...present("ipv6", row.ipv6),
+        ...present("lastSeenAt", row.lastSeenAt),
+        ...present("resources", row.resources),
+        ...present("revokedAt", row.revokedAt),
+        ...present("versions", row.versions),
+    };
+};
+
+/**
+ * Mint a one-time enrolment token for a new box (owner/admin). The plaintext
+ * token is returned ONCE, with the command that uses it; only its SHA-256 is
+ * stored, and it expires after 15 minutes (plan 458 D4).
+ */
+export const createEnrolment = mutation
+    .use(rateLimit("sensitive"))
+    .input({ name: boundedString(LIMITS.name), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<{ expiresAt: number; installCommand: string; token: string }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        if (name.trim() === "") {
+            throw new LunoraError("BAD_REQUEST", "a box needs a name");
+        }
+
+        const token = mintEnrolmentToken();
+        const expiresAt = context.now + ENROLMENT_TTL_MS;
+
+        await context.db.insert("boxEnrolments", {
+            createdAt: context.now,
+            createdBy: member.userId,
+            expiresAt,
+            hashedToken: await sha256Hex(token),
+            name: name.trim(),
+            organizationId,
+        });
+        await context.db.insert("auditLog", {
+            action: "box.enrolment.create",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId,
+            target: name.trim(),
+        });
+
+        return { expiresAt, installCommand: installCommandFor(token), token };
+    });
+
+/** An organization's boxes, revoked ones included (members). */
+export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<BoxView[]> => {
+    await assertMember(context, organizationId);
+
+    const { page } = await context.db.boxes.findMany({ where: { organizationId } });
+
+    return (page as BoxRow[]).map((row) => toBoxView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
+});
+
+/** One box of an organization (members). `null` for a box that is not this organization's. */
+export const get = query
+    .input({ id: v.id("boxes"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<BoxView | null> => {
+        await assertMember(context, organizationId);
+
+        const row = (await context.db.get(id)) as BoxRow | null;
+
+        return row?.organizationId === organizationId ? toBoxView(row) : null;
+    });
+
+/** Rename a box (owner/admin). The slug — its DNS label — never changes. */
+export const rename = mutation
+    .use(rateLimit("api"))
+    .input({ id: v.id("boxes"), name: boundedString(LIMITS.name), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, name, organizationId } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "box");
+
+        if (name.trim() === "") {
+            throw new LunoraError("BAD_REQUEST", "a box needs a name");
+        }
+
+        await context.db.patch(id, { name: name.trim() });
+        await context.db.insert("auditLog", { action: "box.rename", actorUserId: member.userId, createdAt: context.now, organizationId, target: name.trim() });
+    });
+
+/**
+ * Revoke a box for good (owner/admin). The row stays, `revoked`, so its
+ * history and audit trail survive; the machine enrols again as a new box.
+ *
+ * A mutation cannot reach the box's session or Cloudflare's DNS API, so the
+ * studio calls `POST /v1/boxes/revoke`, which runs this and then closes the
+ * session and removes the DNS records with what it returns. A box revoked
+ * through this mutation alone is still cut off: its session re-reads the row on
+ * every liveness tick and closes with `BOX_REVOKED`. Idempotent.
+ */
+export const revoke = mutation
+    .use(rateLimit("sensitive"))
+    .input({ id: v.id("boxes"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ ipv4?: string; ipv6?: string; slug: string }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, organizationId, "box");
+
+        const row = (await context.db.get(id)) as BoxRow;
+
+        if (row.status !== "revoked") {
+            await context.db.patch(id, { revokedAt: context.now, status: "revoked" });
+            await context.db.insert("auditLog", { action: "box.revoke", actorUserId: member.userId, createdAt: context.now, organizationId, target: row.slug });
+        }
+
+        return { slug: row.slug, ...present("ipv4", row.ipv4), ...present("ipv6", row.ipv6) };
+    });
+
+/**
+ * Point a project at a deploy target (owner/admin) — the one writer of
+ * `projects.target` and `projects.boxId`. A `celld-vps` project names a box of
+ * the same organization that is not revoked; any other target clears the box.
+ *
+ * Refused while the project still has a deployment the teardown sweep has not
+ * reclaimed: its tenant (and its data) lives on the CURRENT target, and the
+ * sweep would send that teardown — keyed by alias — to the new one.
+ */
+export const setProjectTarget = mutation
+    .use(rateLimit("sensitive"))
+    .input({
+        boxId: v.optional(v.id("boxes")),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        target: v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp")),
+    })
+    .mutation(async ({ ctx: context, args: { boxId, organizationId, projectId, target } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, projectId, organizationId, "project");
+
+        if (target === "celld-vps") {
+            if (boxId === undefined) {
+                throw new LunoraError("BAD_REQUEST", "a celld-vps project needs a box (boxId)");
+            }
+
+            const box = (await context.db.get(boxId)) as BoxRow | null;
+
+            if (box?.organizationId !== organizationId) {
+                throw new LunoraError("NOT_FOUND", "box not found in this organization");
+            }
+
+            if (box.status === "revoked") {
+                throw new LunoraError("CONFLICT", `box "${box.name}" is revoked; enrol the machine again and choose the new box`);
+            }
+        } else if (boxId !== undefined) {
+            throw new LunoraError("BAD_REQUEST", `a ${target} project has no box`);
+        }
+
+        const project = (await context.db.get(projectId)) as { boxId?: null | string; target?: null | string };
+        const currentTarget = project.target ?? "cloudflare-wfp";
+        const currentBox = project.boxId ?? undefined;
+
+        if (currentTarget === target && currentBox === boxId) {
+            return;
+        }
+
+        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId } });
+        const pending = (deployments as { status: string; teardownAt?: null | number }[]).filter((row) => row.status !== "destroyed" || row.teardownAt == null);
+
+        if (pending.length > 0) {
+            throw new LunoraError(
+                "CONFLICT",
+                `this project still has ${String(pending.length)} deployment(s) on ${currentTarget}; delete the project's deployments and wait for teardown before moving it`,
+            );
+        }
+
+        await context.db.patch(projectId, { boxId: boxId ?? null, target });
+        await context.db.insert("auditLog", {
+            action: "project.target.set",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId,
+            target: boxId === undefined ? target : `${target}:${boxId}`,
+        });
+    });
+
+/** Refuse an enrolment whose key, addresses or versions are malformed — before the token is touched. */
+const assertEnrolmentShape = (args: { ipv4?: string; ipv6?: string; publicKey: string; versions: BoxVersions }): void => {
+    if (!isBoxPublicKey(args.publicKey)) {
+        throw new LunoraError("BAD_REQUEST", "publicKey must be a raw Ed25519 public key, base64url without padding (43 characters)");
+    }
+
+    if (args.ipv4 !== undefined && !isPublicIpv4(args.ipv4)) {
+        throw new LunoraError("BAD_REQUEST", "ipv4 must be a public IPv4 address");
+    }
+
+    if (args.ipv6 !== undefined && !isPublicIpv6(args.ipv6)) {
+        throw new LunoraError("BAD_REQUEST", "ipv6 must be a global unicast IPv6 address");
+    }
+
+    if (args.ipv4 === undefined && args.ipv6 === undefined) {
+        throw new LunoraError("BAD_REQUEST", "a box must report a public IPv4 or IPv6 address — its hostnames point there");
+    }
+
+    if (![args.versions.caddy, args.versions.celld, args.versions.hostd].every((version) => VERSION_PATTERN.test(version))) {
+        throw new LunoraError("BAD_REQUEST", "versions must be 1-64 characters of [A-Za-z0-9_.+~-]");
+    }
+};
+
+/** What `POST /v1/boxes/enrol` answers a box. */
+export interface EnrolResult {
+    boxId: Id<"boxes">;
+    /** False when this was a retry of an enrolment that already created the box. */
+    created: boolean;
+    ipv4?: string;
+    ipv6?: string;
+    organizationId: Id<"organizations">;
+    slug: string;
+}
+
+/**
+ * Consume an enrolment token and create the box (SYSTEM — the token-gated
+ * `POST /v1/boxes/enrol` route, which hashes the token at the edge).
+ *
+ * Single use. A retry with the SAME public key after the token was consumed —
+ * `hostd` lost the first answer — returns the box it created; the same token
+ * with any other key is a replay and is refused. Expired and unknown tokens are
+ * refused alike, without saying which.
+ */
+export const enrol = internalMutation
+    .input({
+        hashedToken: boundedString(LIMITS.id),
+        ipv4: v.optional(boundedString(LIMITS.id)),
+        ipv6: v.optional(boundedString(LIMITS.id)),
+        publicKey: boundedString(LIMITS.id),
+        singleTrust: v.boolean(),
+        versions: v.object({ caddy: boundedString(LIMITS.id), celld: boundedString(LIMITS.id), hostd: boundedString(LIMITS.id) }),
+    })
+    .mutation(async ({ ctx: context, args }): Promise<EnrolResult> => {
+        assertEnrolmentShape(args);
+
+        const { page } = await context.db.boxEnrolments.findMany({ where: { hashedToken: args.hashedToken } });
+        const enrolment = page[0] as
+            | undefined
+            | {
+                  _id: Id<"boxEnrolments">;
+                  boxId?: Id<"boxes"> | null;
+                  expiresAt: number;
+                  name: string;
+                  organizationId: Id<"organizations">;
+                  usedAt?: null | number;
+              };
+
+        if (!enrolment) {
+            throw new LunoraError("FORBIDDEN", "invalid or expired enrolment token");
+        }
+
+        if (enrolment.usedAt != null) {
+            const existing = enrolment.boxId == null ? null : ((await context.db.get(enrolment.boxId)) as BoxRow | null);
+
+            if (existing?.publicKey === args.publicKey && existing.status !== "revoked") {
+                return {
+                    boxId: existing._id,
+                    created: false,
+                    organizationId: existing.organizationId,
+                    slug: existing.slug,
+                    ...present("ipv4", existing.ipv4),
+                    ...present("ipv6", existing.ipv6),
+                };
+            }
+
+            throw new LunoraError("FORBIDDEN", "this enrolment token was already used; mint a new one in the studio");
+        }
+
+        if (enrolment.expiresAt <= context.now) {
+            throw new LunoraError("FORBIDDEN", "invalid or expired enrolment token");
+        }
+
+        const slug = mintBoxSlug();
+        const boxId = await context.db.insert("boxes", {
+            createdAt: context.now,
+            enrolledAt: context.now,
+            ipv4: args.ipv4,
+            ipv6: args.ipv6,
+            name: enrolment.name,
+            organizationId: enrolment.organizationId,
+            publicKey: args.publicKey,
+            singleTrust: args.singleTrust,
+            slug,
+            status: "pending",
+            versions: args.versions,
+        });
+
+        await context.db.patch(enrolment._id, { boxId, usedAt: context.now });
+        await context.db.insert("auditLog", {
+            action: "box.enrol",
+            actorUserId: "system:box-enrol",
+            createdAt: context.now,
+            organizationId: enrolment.organizationId,
+            target: slug,
+        });
+
+        return {
+            boxId,
+            created: true,
+            organizationId: enrolment.organizationId,
+            slug,
+            ...present("ipv4", args.ipv4),
+            ...present("ipv6", args.ipv6),
+        };
+    });
+
+/**
+ * Record the outcome of writing (or removing) a box's DNS records (SYSTEM —
+ * the enrol and revoke routes). `null` clears a previous failure.
+ */
+export const recordDns = internalMutation
+    .input({ boxId: v.id("boxes"), dnsError: v.union(v.null(), boundedString(LIMITS.token)) })
+    .mutation(async ({ ctx: context, args: { boxId, dnsError } }): Promise<void> => {
+        await context.db.patch(boxId, { dnsError });
+    });
+
+/**
+ * A box's identity as a signed request is checked against it (SYSTEM — the
+ * box-signed routes). `null` for an unknown box.
+ */
+export const identity = internalQuery
+    .input({ boxId: v.id("boxes") })
+    .query(
+        async ({
+            ctx: context,
+            args: { boxId },
+        }): Promise<null | { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string }> => {
+            const row = (await context.db.get(boxId)) as BoxRow | null;
+
+            return row ? { organizationId: row.organizationId, publicKey: row.publicKey, revoked: row.status === "revoked", slug: row.slug } : null;
+        },
+    );

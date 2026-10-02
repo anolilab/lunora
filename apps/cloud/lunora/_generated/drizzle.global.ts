@@ -65,6 +65,7 @@ export const projects = sqliteTable("projects", {
     rootDirectory: text("rootDirectory"),
     slug: text("slug").notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">(),
+    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
@@ -122,6 +123,46 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
 }, (t) => ({
     by_project: index("by_project").on(t.projectId),
     by_alias: uniqueIndex("by_alias").on(t.alias),
+}));
+
+export const boxes = sqliteTable("boxes", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    desiredReleaseId: text("desiredReleaseId"),
+    dnsError: text("dnsError"),
+    enrolledAt: real("enrolledAt"),
+    ipv4: text("ipv4"),
+    ipv6: text("ipv6"),
+    lastSeenAt: real("lastSeenAt"),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    publicKey: text("publicKey").notNull(),
+    resources: text("resources", { mode: "json" }).$type<{ diskFreeMb: number; memMb: number }>(),
+    revokedAt: real("revokedAt"),
+    singleTrust: integer("singleTrust", { mode: "boolean" }).notNull(),
+    slug: text("slug").notNull(),
+    status: text("status", { mode: "json" }).$type<"pending" | "online" | "offline" | "revoked">().notNull(),
+    versions: text("versions", { mode: "json" }).$type<{ caddy: string; celld: string; hostd: string }>(),
+}, (t) => ({
+    by_slug: uniqueIndex("by_slug").on(t.slug),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const boxEnrolments = sqliteTable("boxEnrolments", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    createdAt: real("createdAt").notNull(),
+    createdBy: text("createdBy").notNull(),
+    expiresAt: real("expiresAt").notNull(),
+    hashedToken: text("hashedToken").notNull(),
+    name: text("name").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    usedAt: real("usedAt"),
+}, (t) => ({
+    by_org: index("by_org").on(t.organizationId),
+    by_hash: uniqueIndex("by_hash").on(t.hashedToken),
 }));
 
 export const metricPoints = sqliteTable("metricPoints", {
@@ -348,13 +389,16 @@ export const invitations = sqliteTable("invitations", {
 export const platformUsage = sqliteTable("platformUsage", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
     createdAt: real("createdAt").notNull(),
     deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
     kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     periodStart: real("periodStart").notNull(),
     quantity: real("quantity").notNull(),
+    windowStart: real("windowStart"),
 }, (t) => ({
+    by_box_window: index("by_box_window").on(t.boxId, t.windowStart),
     by_org: index("by_org").on(t.organizationId),
 }));
 

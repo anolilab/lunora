@@ -265,6 +265,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "alerts",
         "aliasOwnership",
         "auditLog",
+        "boxEnrolments",
+        "boxes",
         "buildLogs",
         "builds",
         "cloudflareBilling",
