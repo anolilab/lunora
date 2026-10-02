@@ -240,13 +240,36 @@ public key and nothing else (plan 458 §3).
 - **Releases.** Signed `lunora-hostd` releases are stored with
   `POST /v1/hostd/releases` (admin token; verified against the pinned release
   keys, so nothing is accepted until a real key replaces the placeholder) and
-  rolled out with `POST /v1/hostd/rollout` (canary, then batches, through
-  `src/fleet/upgrade.ts`); a box fetches the manifest from
-  `GET /v1/hostd/releases/:releaseId/manifest`. A box that is offline gets the
-  upgrade when it reconnects; one whose celld is not the newest stable
-  release's is flagged `outdated`.
-- **Revocation.** `POST /v1/boxes/revoke` (owner/admin session) marks the box
-  revoked, closes its session with `BOX_REVOKED` and removes its DNS records.
+  rolled out with `POST /v1/hostd/rollout`: it sets `boxes.desiredReleaseId`
+  (the durable intent), plans the online boxes (canary, then batches, through
+  `src/fleet/upgrade.ts`) and answers **202** with the batches; the run starts
+  on the request's `waitUntil`. That ends ~30 s after the response, so the
+  hourly rollout sweep re-plans every release a box still desires and carries
+  it the rest of the way — boxes already on it are skipped. A halted run
+  withdraws the intent from every box it did not upgrade; rolling out again is
+  a new `POST`. A box fetches the manifest from
+  `GET /v1/hostd/releases/:releaseId/manifest`; one that is offline gets the
+  upgrade when it reconnects. A box whose celld is not the newest stable
+  release's is flagged `outdated`, and after seven days the hourly
+  outdated-box sweep fires the org's `deploy` alert rules — once per box per
+  release.
+- **Revocation.** `POST /v1/boxes/revoke` (owner/admin session) is the only
+  way to revoke: it runs the internal `boxes.revoke`, closes the session with
+  `BOX_REVOKED` and removes the DNS records. A box whose row is gone (its
+  organization was purged) is cut off on its session's next liveness tick.
+- **Box sweep** (hourly, `src/boxes/reconcile.ts`). Lists every record under
+  `LUNORA_BOX_DOMAIN` (paginated, at most 50 pages) and deletes each box record
+  whose slug has no box that is not revoked — so a revoke whose DNS removal
+  failed, or an org purge, never leaves `*.<slug>` pointing at an address the
+  customer may release (a subdomain takeover under our zone) — and rewrites
+  missing or stale records of live boxes, recording failures in `dnsError`.
+  Only A/AAAA records at `<slug>` / `*.<slug>` with a minted slug are touched,
+  at most 200 writes a pass, and nothing is created from a truncated listing.
+  It also revokes and disconnects the boxes of organizations past the erasure
+  cutoff, and runs once more right before the six-hourly code crons, so
+  `organizations.purgeDeleted` erases boxes whose sessions and records are
+  already gone. Without `LUNORA_BOX_ZONE_ID` and a token it skips the zone with
+  a log line.
 
 | Route                                        | Auth             |
 | -------------------------------------------- | ---------------- |
@@ -267,6 +290,8 @@ cell: the origin boxes fetch releases and manifests from).
 The node suite drives the session with fakes; a `workerd` vitest project boots
 the real object over a real socket:
 `LUNORA_WORKERD_TESTS=1 pnpm exec vitest run --project workerd --no-coverage`.
+CI runs it in the `Workerd integration (apps/cloud)` leg of `test.yml`, whose
+drift guard covers `apps/*` as well as `packages/*`.
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 

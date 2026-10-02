@@ -133,13 +133,13 @@ for this plan.
 
 | #   | Gap                                                                                                                                                                                                                                           | Workstream                                                                     |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| G11 | No WebSocket endpoint and no custom Durable Object; `RouteAuth` has no box-key class (`route-registry.ts:20-32`)                                                                                                                              | W2 — ✅ `3eb6ce077`; workerd project `58ab2d184`                               |
+| G11 | No WebSocket endpoint and no custom Durable Object; `RouteAuth` has no box-key class (`route-registry.ts:20-32`)                                                                                                                              | W2 — ✅ `3eb6ce077`; workerd project `58ab2d184`, in CI `c5b7f6b6f`            |
 | G12 | No `boxes` / `boxEnrolments` tables, functions or `projects.boxId`                                                                                                                                                                            | W2 — ✅ `c656aeec1`                                                            |
-| G13 | `CloudflareApi` has no DNS-record methods, only `createCustomHostname` and `exportD1Database` (`src/cloudflare/api.ts:12-21`). The cell token also lacks Zone → DNS:Edit (PR #85's token scope list), and there is no `boxes.lunora.app` zone | W5 — ✅ code `722b198e1`; the zone itself and the token scope are 🌐 ops       |
+| G13 | `CloudflareApi` has no DNS-record methods, only `createCustomHostname` and `exportD1Database` (`src/cloudflare/api.ts:12-21`). The cell token also lacks Zone → DNS:Edit (PR #85's token scope list), and there is no `boxes.lunora.app` zone | W5 — ✅ code `722b198e1`, reconcile sweep `0bbcf4d65`; zone + token are 🌐 ops |
 | G14 | No box-signed release route (`GET /v1/boxes/releases/:deploymentId`)                                                                                                                                                                          | W4 — ✅ `b85e5c479`                                                            |
 | G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6 — ✅ `f87b67285` (the session writes the ledger directly, as the sweeps do) |
 | G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6 — ✅ `ed8b6b8ce`                                                            |
-| G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a, see W7); control-plane store + rollout `85c5f6c91`   |
+| G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a); store + rollout `85c5f6c91`, `653804c89`            |
 | G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9                                                                             |
 
 **Already target-neutral (no gap):**
@@ -299,8 +299,9 @@ decode; unknown fields and kinds are rejected.
 
 **Landed (2026-10-02, control plane, on `work/cloud-vps-gaps`):** G12
 `c656aeec1`, G11 `3eb6ce077`, the `celld-vps` driver `73a45c7cc`, and the
-`workerd` project `58ab2d184` (green locally; not in CI — the workerd job
-matrix covers `packages/*` only). As built:
+`workerd` project `58ab2d184`, run in CI since `c5b7f6b6f` (the workerd job
+matrix and its drift guard now list workspace directories, `apps/cloud`
+included). As built:
 
 - The handshake follows `protocol/hostd/README.md` §2 — `challenge` answers
   `hello`, not the upgrade — and the session writes `boxes` directly through the
@@ -308,7 +309,11 @@ matrix covers `packages/*` only). As built:
   internal mutations a Durable Object cannot call.
 - `RouteAuth` gained two classes: `boxKey` (connect, signed release and manifest
   fetches) and `enrolmentToken` (`POST /v1/boxes/enrol`). `POST /v1/boxes/revoke`
-  (session) closes the session and removes the DNS records.
+  (session) closes the session and removes the DNS records — and since
+  `0bbcf4d65` it is the only revoke path: `boxes.revoke` is internal, because a
+  revoke through the bare RPC mutation left the box's DNS records behind.
+- The liveness tick closes the session of a box whose row is gone (its
+  organization was purged), as it does a revoked one.
 - Not yet: the `__bench__` for 1,000 hibernated sockets (§8 perf watch).
 
 ### W3 — Per-target binding support and celld config from a manifest (S–M)
@@ -410,9 +415,23 @@ records for `*.<slug>` and `<slug>` written at enrolment and removed at
 revocation, idempotent, failures recorded on the box (`dnsError`); the `routes`
 table (live, provisioning and verifying aliases plus verified custom domains)
 pushed on connect, after every job and on domain verification; custom domains
-verify against `<slug>.<LUNORA_BOX_DOMAIN>`. Still open: the box zone and the
-token's Zone → DNS:Edit scope (🌐 ops), and everything on the box (Caddyfile
-generation, on-demand TLS) — that is W4.
+verify against `<slug>.<LUNORA_BOX_DOMAIN>`.
+
+**Landed (2026-10-02, box hardening, `0bbcf4d65`):** dangling box records are a
+subdomain takeover under our zone, so the hourly box sweep
+(`src/boxes/reconcile.ts`) reconciles the whole box sub-domain on the `boxes`
+table: it deletes every record whose slug has no box that is not revoked
+(revoked through any path, purged, or left by a failed removal), rewrites
+missing or stale records of live boxes and records the outcome in `dnsError`.
+It is bounded: only A/AAAA records at `<slug>` / `*.<slug>` with a minted slug
+are claimed, a pass writes at most 200 records, the listing stops at 50 pages
+and nothing is created from a truncated one. It also revokes and disconnects
+the boxes of organizations past the erasure cutoff, and runs right before the
+six-hourly code crons, so `purgeDeleted` erases boxes whose sessions and records
+are already gone; the hourly run is the backstop.
+
+Still open: the box zone and the token's Zone → DNS:Edit scope (🌐 ops), and
+everything on the box (Caddyfile generation, on-demand TLS) — that is W4.
 
 ### W6 — Telemetry, usage and logs (M)
 
@@ -508,7 +527,26 @@ sets `boxes.desiredReleaseId` and rolls the release out through
 `planFleetUpgrade` / `runFleetUpgrade` (their first production caller) as
 `upgrade` jobs to online boxes, while an offline box gets the job when it
 reconnects; `boxes.list`/`get` flag a box `outdated` when its celld is not the
-newest stable release's. Still open: the 7-day alert on an outdated box.
+newest stable release's.
+
+**Landed (2026-10-02, box hardening):**
+
+- `653804c89` — `POST /v1/hostd/rollout` no longer holds the request: it sets
+  the intent, plans, answers 202 with the batches and starts the run on
+  `waitUntil`. Because `waitUntil` ends ~30 s after the response, an hourly
+  sweep re-plans every release a box still desires and carries it on (the
+  planner skips boxes already on it); a halted run withdraws the intent from
+  every box it did not upgrade, so a release that failed its canary spreads
+  neither through the sweep nor through a reconnect.
+- `de63b8c31` — the 7-day outdated-box alert: an hourly sweep fires the org's
+  `deploy` alert rules (kind `box`, "Box outdated") for a box whose celld has
+  not been the newest stable release's for over seven days (counted from the
+  later of the release and the box's enrolment), once per box per release; the
+  alert drain delivers it. A dedicated alert target would need a label in the
+  studio's alert form (W9).
+
+Still open: `install.sh`, the `upgrade` job on the box, and a pinned release
+key (see above).
 
 ### W8 — Hardening on the box (M)
 
@@ -653,6 +691,11 @@ the interface in two directions:
   _Mitigate:_ nothing we bill depends on box reports (D12). Treat every message
   from a box as untrusted input: validate it, cap it, and rate-limit it per box
   in `BoxSessionDO`.
+- **Risk:** a box record left in the platform's zone after the box is gone
+  points our hostname at an address the customer may release — a subdomain
+  takeover. _Mitigate:_ one revoke path that removes the records, retirement of
+  a purged org's boxes before the purge, and the hourly box sweep that deletes
+  any record without a live box (W5 "box hardening").
 - **Risk:** the 1 MiB WebSocket message cap. _Mitigate:_ releases never travel
   over the socket (D6). Cap `report` and `progress` frames in the protocol.
 - **Risk:** celld is Deno's, and alpha. _Mitigate:_ `TargetDriver` keeps the
