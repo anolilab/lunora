@@ -31,6 +31,15 @@ interface AuthMessage {
 }
 ```
 
+### `BoxIsolation` (interface)
+
+```ts
+interface BoxIsolation {
+    problems?: string[];
+    status: IsolationStatus;
+}
+```
+
 ### `BoxMessage` (type)
 
 ```ts
@@ -169,6 +178,8 @@ const HOSTD_PROTOCOL_LIMITS: {
     readonly maxCrons: 64;
     readonly maxErrorMessageBytes: 8192;
     readonly maxFleets: 500;
+    readonly maxIsolationProblems: 8;
+    readonly maxIsolationProblemBytes: 512;
     readonly maxFrameBytes: 262144;
     readonly maxLineBytes: 8192;
     readonly maxReportAliases: 500;
@@ -206,6 +217,7 @@ const HOSTD_REQUEST_HEADERS: {
 interface HelloMessage {
     boxId: string;
     fleets: FleetSummary[];
+    isolation?: BoxIsolation;
     protocol: number;
     resources: BoxResources;
     type: "hello";
@@ -229,6 +241,12 @@ type HostdJob = DeployJob | DestroyJob | DiagnoseJob | ReloadJob | UpgradeJob;
 
 ```ts
 type HostdMessage = BoxMessage | CloudMessage;
+```
+
+### `IsolationStatus` (type)
+
+```ts
+type IsolationStatus = "enforced" | "refused" | "single-trust";
 ```
 
 ### `JobMessage` (interface)
@@ -455,6 +473,10 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
+### `BoxIsolation` (interface)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
 ### `BoxMessage` (type)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
@@ -544,6 +566,10 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
 ### `HostdMessage` (type)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `IsolationStatus` (type)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 

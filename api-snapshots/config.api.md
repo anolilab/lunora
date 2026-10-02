@@ -1730,6 +1730,91 @@ const writeDevVariablesFileAtomically: (path: string, content: string) => void;
 const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 ```
 
+## `@lunora/config/celld`
+
+### `CELLD_RELEASE_ASSETS_DIRECTORY` (const)
+
+```ts
+const CELLD_RELEASE_ASSETS_DIRECTORY = "assets";
+```
+
+### `CELLD_RELEASE_BINDING_TYPES` (const)
+
+```ts
+const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]>;
+```
+
+### `CELLD_RELEASE_MAIN` (const)
+
+```ts
+const CELLD_RELEASE_MAIN = "worker.js";
+```
+
+### `CelldReleaseAssetsConfig` (interface)
+
+```ts
+interface CelldReleaseAssetsConfig {
+    html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
+    not_found_handling?: "404-page" | "none" | "single-page-application";
+    run_worker_first?: boolean | ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseConfigError` (class)
+
+```ts
+class CelldReleaseConfigError extends Error {
+    readonly refused: ReadonlyArray<CelldReleaseRefusal>;
+    constructor(message: string, refused?: ReadonlyArray<CelldReleaseRefusal>);
+}
+```
+
+### `CelldReleaseManifest` (interface)
+
+```ts
+interface CelldReleaseManifest {
+    bindings: ReadonlyArray<BindingRequirement>;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseOptions` (interface)
+
+```ts
+interface CelldReleaseOptions {
+    alias: string;
+    assetsConfig?: CelldReleaseAssetsConfig;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+    crons: ReadonlyArray<string>;
+    hasAssets: boolean;
+    vars: Readonly<Record<string, string>>;
+}
+```
+
+### `CelldReleaseRefusal` (interface)
+
+```ts
+interface CelldReleaseRefusal {
+    binding: string;
+    reason: string;
+    type: BindingRequirement["type"];
+}
+```
+
+### `celldConfigFromRelease` (const)
+
+```ts
+const celldConfigFromRelease: (manifest: CelldReleaseManifest, options: CelldReleaseOptions) => Config;
+```
+
+### `releaseResourceName` (const)
+
+```ts
+const releaseResourceName: (alias: string, binding: string) => string;
+```
+
 ## `@lunora/config/cloudflare`
 
 ### `AlchemyTranslation` (interface)
@@ -2921,6 +3006,12 @@ interface BindingEntry {
     binding?: string;
     remote?: boolean;
 }
+```
+
+### `Config` (type)
+
+```ts
+type Config = Record<string, unknown>;
 ```
 
 ### `DockerLogStream` (interface)

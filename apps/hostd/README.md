@@ -5,10 +5,265 @@ Cloud can run [celld](../../packages/platform-celld) fleets on it (plan 458). It
 dials out over a WebSocket to the box's Durable Object in Lunora Cloud; the box
 needs no inbound port for the control plane.
 
-**Status:** the wire protocol and the signed release pipeline exist.
-Enrolment, the session and the supervisor arrive with plan 458 W4; the
-`lunora-hostd` binary answers `--version` and `--help` and refuses everything
-else.
+**Status:** the wire protocol, the signed release pipeline, the daemon (plan
+458 W4, with the on-box halves of W5 and W6), `install.sh`, the systemd unit and
+side-by-side upgrades (W7), and fleet isolation (W8) exist, with the
+`test:hostd` lane over all of it. Not yet: a committed release key (so nothing
+can be released or installed yet, see [below](#setting-up-the-release-key-maintainers)),
+and forwarding hostd's own logs as OTLP (W6).
+
+## Install
+
+On a Debian or Ubuntu server (amd64 or arm64, 2 GB of memory, systemd), as root:
+
+```sh
+curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
+sha256sum install.sh   # compare with the release notes
+sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<secret> \
+    bash install.sh --control-plane https://<control plane origin> --bucket <bucket> \
+    [--endpoint <s3 url>] [--region <region>] [--version <version>] [--single-trust]
+```
+
+`install.sh` ([`install/install.sh`](./install/install.sh)) installs any missing
+`curl`, `jq`, `openssl`, `nftables`, `util-linux` (`setpriv`) and `gzip`; creates
+the users `lunora-hostd` and `lunora-fleet` (system users, no shell, no home);
+creates `/etc/lunora-hostd` (`lunora-hostd`, 0700), `/var/lib/lunora-hostd`
+(`lunora-hostd:lunora-fleet`, 0710) and `/opt/lunora-hostd`; downloads and
+verifies the release (below) into `/opt/lunora-hostd/<releaseId>/` and points
+`/opt/lunora-hostd/current` at it; writes `/etc/systemd/system/lunora-hostd.service`;
+runs `lunora-hostd enrol` **as `lunora-hostd`**, passing the flags through; and
+enables and starts the service. The token comes from `LUNORA_HOSTD_ENROL_TOKEN`
+(or `--token`) and the bucket credentials from `AWS_*`; both reach `enrol`
+through its environment, never a command line, and are never printed. Without
+`--version` it installs the newest stable `hostd-v*` release.
+
+**Re-running it upgrades the box in place:** it installs the newest (or
+`--version`) release beside the running one, switches `current`, keeps the
+release that ran before (point `current` back at it to roll back), removes older
+ones, rewrites the unit and restarts the service. An enrolled box is not enrolled
+again unless `--force` (and a new token) is given.
+
+**Uninstall:** `sudo bash install.sh --uninstall` stops and removes the unit,
+the nftables table, `/opt/lunora-hostd`, `/var/lib/lunora-hostd`,
+`/etc/lunora-hostd` and both users. It never touches the bucket: each fleet's
+data stays under `fleets/<alias>/`, and `celld` can run it directly. Revoke the
+box in the studio as well.
+
+### What the studio's install command must say
+
+The command the studio shows (`installCommandFor` in
+`apps/cloud/src/boxes/enrolment.ts`) is still `sudo lunora-hostd enrol --token
+<token>`: it assumes hostd is installed, runs `enrol` as root (the files it writes
+would belong to root, not `lunora-hostd`), and omits `--control-plane`, which
+`enrol` requires until a production origin is compiled in, and `--bucket`. It
+should show the three lines above, with the cell's origin filled in for
+`--control-plane`, the version the control plane wants boxes on for
+`--version`, and the token in `LUNORA_HOSTD_ENROL_TOKEN` (plan 458 W7
+follow-up for the `apps/cloud` branch).
+
+### How install.sh trusts a release
+
+1. **Trust root: the release keys pinned in `install.sh`** (`trusted_key()`, the
+   same set as `HOSTD_TRUSTED_RELEASE_KEYS` in
+   [`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts); a test keeps
+   them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
+   with its SHA-256 in the release notes and a provenance attestation.
+2. It downloads `manifest.json`, looks its `keyId` up among the pinned keys
+   (never a key the manifest brings), refuses a placeholder, checks that the
+   pinned key's fingerprint is that key id (`ed25519-` + 16 hex digits of
+   SHA-256 over the raw key), and verifies the Ed25519 signature over the
+   canonical bytes with `openssl pkeyutl -verify` exactly as
+   [protocol §8.2](../../protocol/hostd/README.md#82-signed-bytes) shows —
+   **before** trusting any hash in it.
+3. It downloads `lunora-hostd`, celld and Caddy for its platform, each checked
+   against the size and SHA-256 the verified manifest pins.
+4. It then runs the just-verified `lunora-hostd verify-release`, which validates
+   the manifest strictly and verifies it again with the keys compiled into that
+   binary, and checks every download against it. The binary is trusted for that
+   only because its bytes matched the manifest the script had already verified.
+5. It runs each binary once (`--version`) and only then switches `current`.
+
+The `upgrade` job does steps 2–5 inside the running daemon with the keys
+compiled into it, then exits for systemd to restart into the new release (or
+restarts the fleets in place when `lunora-hostd` itself did not change).
+
+## The daemon
+
+### Commands
+
+| Command                                                                        | What it does                                                                                                   |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `lunora-hostd enrol …`                                                         | Binds the machine to an organization with the one-time token the studio shows, and writes the configuration    |
+| `lunora-hostd run`                                                             | The daemon, in the foreground (what systemd runs). Exit 0 on SIGTERM or after replacing itself, 2 when revoked |
+| `lunora-hostd status`                                                          | The enrolment and the fleets, from the files on disk                                                           |
+| `lunora-hostd verify-release <manifest.json> [--hostd/--celld/--caddy <file>]` | Verify a release manifest with the compiled-in keys, and downloaded files against it (install.sh runs it)      |
+
+`enrol` takes `--control-plane <origin>` (required until a production origin
+is published), `--bucket <name|s3://name>`, `--endpoint <url>` for an
+S3-compatible store, `--region`, `--ipv4` / `--ipv6` (detected when omitted),
+`--single-trust`, `--data-dir`, `--install-dir` (default `/opt/lunora-hostd`)
+and `--force` (enrol again, as a new box). It
+probes the bucket with `celld diagnose` before it spends the token. The token
+may come from `--token` or `LUNORA_HOSTD_ENROL_TOKEN`; the bucket credentials
+come only from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+`AWS_SESSION_TOKEN` in the environment. Neither is ever printed, and the
+credentials never leave the box. Every command takes `--config <path>`
+(default `/etc/lunora-hostd/config.json`, or `LUNORA_HOSTD_CONFIG`).
+
+### Files
+
+| Path                                    | Holds                                                                                   | Mode |
+| --------------------------------------- | --------------------------------------------------------------------------------------- | ---- |
+| `/etc/lunora-hostd/`                    | the directory below, `lunora-hostd`'s alone                                             | 0700 |
+| `/etc/lunora-hostd/config.json`         | control-plane origin, box id and hostname, bucket name/endpoint/region, ports, paths    | 0640 |
+| `/etc/lunora-hostd/box.key`             | the box's Ed25519 private key (PKCS#8 PEM)                                              | 0600 |
+| `/etc/lunora-hostd/bucket.env`          | the bucket credentials (`AWS_*`); refused when anyone but the owner can read it         | 0600 |
+| `/var/lib/lunora-hostd/state.json`      | each fleet's ports, state and last deployment                                           | 0600 |
+| `/var/lib/lunora-hostd/releases/<id>/`  | a downloaded release: `worker.js`, `assets/`, `wrangler.json` (holds the app's secrets) | 0600 |
+| `/var/lib/lunora-hostd/fleets/<alias>/` | a celld node's working directory, `HOME` and `TMPDIR`; owned by `lunora-fleet`          | 0700 |
+| `/var/lib/lunora-hostd/caddy/`          | Caddy's config (`caddy.json`), certificates, and the JSON `access.log` hostd tails      |      |
+| `/opt/lunora-hostd/<releaseId>/`        | one release: `lunora-hostd`, `celld`, `caddy` and its `manifest.json`                   | 0755 |
+| `/opt/lunora-hostd/current`             | a link to the release that runs; the unit and every child start from it                 |      |
+
+### What runs, and how
+
+`lunora-hostd run` holds one WebSocket to the control plane and supervises
+every other process as its child:
+
+- **one celld node per deployment alias** (plan 458 D8): `celld --bucket
+s3://<bucket>/fleets/<alias> [--endpoint] [--region] --listen
+127.0.0.1:<port> --internal-listen 127.0.0.1:<port+1> --advertise
+127.0.0.1:<port+1> --trust-forwarded-headers`, as `lunora-fleet` (see
+  [Isolation](#isolation)), with `CELLD_DURABILITY=bucket` and
+  `RUST_LOG=error,celld=warn` in an allowlisted environment. Both
+  listeners are loopback; ports come in pairs from `ports` (default
+  20000–20999). A `deploy` runs `celld deploy` on the release directory; a
+  running node adopts the new version at its next pointer poll, without a
+  restart;
+- **Caddy**, configured through its JSON admin API on loopback from the
+  `routes` the control plane pushes: each alias's hostnames proxy to its
+  node, readiness-gated on `/.well-known/celld/health`, compressed (never an
+  event stream), rate-limited per client, with on-demand TLS that hostd's own
+  loopback `ask` endpoint approves only for routed hostnames and the box's own.
+
+Children restart with a 1–30 s backoff; a stop is SIGTERM, then SIGKILL past
+a budget; shutdown drains the fleets before Caddy. The control plane is the
+source of truth: a fleet it stops routing is stopped (its data stays), and
+`hello` reports the fleets on every connect. `destroy` with `deleteData`
+deletes exactly the `fleets/<alias>/` prefix.
+
+hostd refuses to run as root unless the config sets `allowRoot`; it runs as its
+own user (`lunora-hostd`) under [`install/lunora-hostd.service`](./install/lunora-hostd.service).
+
+## Isolation
+
+The box is single-customer, but its apps run third-party npm code. What stands
+between that code — should it escape celld's isolate — and the box's key, the
+celld operator API and the rest of the machine (plan 458 W8, after Noite's
+tenant sandbox):
+
+- **Users.** `lunora-hostd` runs the daemon and Caddy and owns `/etc/lunora-hostd`
+  (0700: the box key and the bucket credentials, 0600 each). Every celld
+  process — each node, `celld deploy`, `celld diagnose` — runs as
+  `lunora-fleet`. Neither user has a shell.
+- **Capabilities.** The unit grants the daemon exactly `CAP_NET_BIND_SERVICE`
+  (Caddy on 80/443), `CAP_NET_ADMIN` (the nftables table), `CAP_SETUID` and
+  `CAP_SETGID` (starting fleets as `lunora-fleet`), `CAP_KILL` (stopping them)
+  and `CAP_CHOWN` (handing them their directories), as ambient capabilities —
+  which every program the daemon starts would inherit, across the uid change
+  too. So every child is started through `setpriv`, which empties the
+  inheritable and ambient sets and sets `no_new_privs` before executing it:
+  a fleet runs with no capabilities, Caddy with `net_bind_service` alone.
+- **Environment.** A fleet's environment is built from nothing and held to an
+  allowlist (`PATH`, `HOME`/`TMPDIR` = its own directory, `LANG`, celld's
+  `RUST_LOG` and `CELLD_DURABILITY`, `AWS_*` for the bucket): never the config
+  path, the control plane's origin, the enrolment token or systemd's variables.
+- **Egress.** hostd installs the nftables table `inet lunora_hostd` at start: for
+  sockets of the fleet uid only, it accepts replies on established connections,
+  DNS, and the bucket endpoint's resolved addresses on its port (re-resolved
+  every 30 s), and rejects loopback, RFC 1918, link-local (with the
+  `169.254.169.254` metadata service), CGNAT `100.64.0.0/10`, `0.0.0.0/8`,
+  and IPv6 loopback, unspecified, v4-mapped, ULA and link-local. That keeps a
+  fleet from every celld operator API (each node's internal listener is on
+  loopback, siblings' included), hostd's on-demand-TLS `ask` endpoint and
+  Caddy's admin API.
+- **Memory.** With `Delegate=yes`, hostd moves itself into `hostd/` under its
+  service cgroup, enables the memory controller, and puts each fleet's node in
+  `fleet-<alias>/` with `memory.max` (the box's memory less 512 MiB, at least
+  256 MiB, or `fleetMemoryMaxMb` in the config) and no swap.
+
+**The self-check.** At start hostd checks all three: a process started as
+`lunora-fleet` really has that uid, no capabilities and `no_new_privs`; the
+nftables table is loaded; the delegated cgroup takes the memory controller.
+All pass: `enforced`. One fails on a box enrolled with `--single-trust`:
+`single-trust`, and fleets start with whatever does work. One fails otherwise:
+`refused` — no fleet starts and a `deploy` fails with `ISOLATION_FAILED`. Each
+failed check is logged, printed by `diagnose`, and sent in every `hello`
+(`isolation`, protocol §5.1).
+
+**The unit** ([`install/lunora-hostd.service`](./install/lunora-hostd.service))
+adds `ProtectSystem=strict` with only `/var/lib/lunora-hostd` and
+`/opt/lunora-hostd` writable (not `/etc/lunora-hostd`: the running daemon never
+writes its key or config), `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
+`RestrictSUIDSGID`, `RestrictNamespaces`, `LockPersonality`, the address
+families it uses, `UMask=0027`, `KillMode=mixed` with `TimeoutStopSec=90` (fleets
+drain in parallel within 45 s, then Caddy within 10 s), `Restart=always`, and
+`RestartPreventExitStatus=2` so a revoked box stays down.
+
+`NoNewPrivileges=yes` is compatible with dropping to `lunora-fleet`: that is a
+`setuid()`/`setgid()` call made with `CAP_SETUID`/`CAP_SETGID`, which
+`no_new_privs` does not restrict; what it rules out is an exec gaining
+privilege (a set-user-ID helper like `sudo` or `runuser`, or file
+capabilities). The trade-off is that Caddy cannot be given
+`cap_net_bind_service` as a file capability — hence the ambient capability,
+narrowed by `setpriv`. Left out on purpose: `ProtectControlGroups` and
+`ProtectKernelTunables` (both make `/sys/fs/cgroup` read-only, which the
+delegated cgroup needs), `MemoryDenyWriteExecute` (V8 compiles code at run
+time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
+
+### Known limits
+
+- **One fleet user per box.** All fleets share `lunora-fleet`: a fleet that
+  escapes its isolate can read another fleet's working directory and the
+  release files it deploys from (which hold that app's secrets). The box serves
+  one organization.
+- **The bucket key is the box's.** Every fleet gets the credentials hostd holds,
+  which reach the whole bucket, not just `fleets/<alias>/`. Scoping them needs a
+  store that mints prefix-scoped credentials (AWS STS session policies, R2's
+  temporary credentials, MinIO's STS) and a refresh before they expire; hostd
+  does not do that yet. Secrets live in the bucket anyway (plan 458 D10).
+- **The public internet is open.** A fleet may reach any public address,
+  including the box's own public IPs — any service the box exposes publicly
+  (say `sshd`) is reachable from a fleet as from anywhere. DNS (port 53) is open
+  to every address, and the bucket endpoint's port is open on its addresses
+  even when they are private (a MinIO on the LAN).
+- **Memory only.** No CPU, pids or I/O limit per fleet yet, and a fleet's first
+  milliseconds (between spawn and the move into its cgroup) are charged to
+  `hostd/`.
+- **Caddy runs as `lunora-hostd`.** It parses untrusted HTTP with the same uid
+  that can read the box key.
+- **No `esbuild` on the box, by design.** A stored release is already bundled,
+  and `celldConfigFromRelease` deploys it with `no_bundle: true`, so neither
+  `celld deploy` nor the node calls esbuild — checked against celld v0.6.0 with
+  a Worker that imports `cloudflare:workers`, deployed to an S3 bucket and served
+  with no esbuild on `PATH`. A config without `no_bundle` would fail with
+  "esbuild not found"; never hand `celld deploy` one.
+- **The customer has root.** Nothing on the box is hidden from them; nothing
+  billed depends on what the box reports (plan 458 D12).
+
+## The `test:hostd` lane
+
+`pnpm run test:hostd` (vitest project `integration`, gated behind
+`LUNORA_HOSTD_TESTS=1`) drives the built daemon against real celld, a Caddy
+built with `caddy-ratelimit`, an S3-compatible bucket and an in-process fake
+control plane: enrol, session, deploy, HTTP through Caddy, a usage report,
+destroy with `deleteData`. It reads `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
+`LUNORA_HOSTD_S3_ENDPOINT` and, optionally, `LUNORA_HOSTD_BIN` (the single
+executable; otherwise `dist/bin.mjs`). With `LUNORA_HOSTD_ISOLATION=1`, as root
+on a systemd host (the `hostd integration` CI job, under sudo), it sets the box
+up with `install.sh`'s own functions, runs hostd under the real unit with Caddy
+on port 80, and asserts the isolation with probes from inside a deployed app and
+as the fleet user. See [`__tests__/integration/lane.ts`](./__tests__/integration/lane.ts).
 
 ## Wire protocol
 
@@ -79,7 +334,8 @@ the control plane verifies a release with the same function a box does.
   pinned in the workflow. The build is reproducible (CGO off, `-trimpath`, no
   VCS stamping, `gzip -n`), is smoke-tested with `caddy version` and
   `caddy list-modules` (it must list `http.handlers.rate_limit`), and ships as
-  `caddy-<platform>.gz` on the same GitHub Release.
+  `caddy-<platform>.gz` on the same GitHub Release, next to `install.sh` and
+  `lunora-hostd.service`.
 - `scripts/make-release-manifest.mjs` writes and signs `manifest.json`: `hostd`
   and Caddy entries are hashed from the built files in `--artifacts-dir`
   (`lunora-hostd-<platform>`, `caddy-<platform>.gz`), celld entries and the
@@ -99,12 +355,12 @@ Keep the two in step.
 
 ### What is not real yet
 
-- **No release key is committed.** `src/trusted-release-keys.ts` holds a
-  placeholder, which verification and signing refuse. That is the only manual
-  step left before a first release: a maintainer generates the key, commits its
-  public half and sets the `hostd-release` environment secret (below). Until
-  then the release workflow builds and smoke-tests every binary, then stops at
-  the signing step.
+- **No release key is committed.** `src/trusted-release-keys.ts` and
+  `install/install.sh` hold a placeholder, which verification, signing and
+  `install.sh` refuse. That is the only manual step left before a first
+  release: a maintainer generates the key, commits its public half to both and
+  sets the `hostd-release` environment secret (below). Until then the release
+  workflow builds and smoke-tests every binary, then stops at the signing step.
 
 ### Setting up the release key (maintainers)
 
@@ -114,8 +370,9 @@ Keep the two in step.
    `pnpm --filter @lunora/hostd run build && node apps/hostd/scripts/release-public-key.mjs hostd-release.pem`.
    The key id is `ed25519-` plus the first 16 hex digits of SHA-256 over the
    raw public key, so it cannot drift from the key.
-3. Commit the printed entry to `HOSTD_TRUSTED_RELEASE_KEYS` in
-   `src/trusted-release-keys.ts` and delete the placeholder entry.
+3. Commit the two printed entries — to `HOSTD_TRUSTED_RELEASE_KEYS` in
+   `src/trusted-release-keys.ts` and to `trusted_key()` in `install/install.sh`
+   — and delete both placeholder entries.
 4. Create the GitHub Environment `hostd-release` with a required reviewer, and
    store the **whole PEM file** as its secret `HOSTD_RELEASE_SIGNING_KEY`.
 5. Keep an offline backup of `hostd-release.pem`, then delete the local copy.

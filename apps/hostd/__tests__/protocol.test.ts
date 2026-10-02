@@ -164,7 +164,7 @@ describe("golden fixtures", () => {
             [decodeCloudMessage, fixtures.cloud],
         ] as const) {
             for (const [name, message] of Object.entries(messages)) {
-                for (const key of Object.keys(message).filter((field) => !["error", "type", "url"].includes(field))) {
+                for (const key of Object.keys(message).filter((field) => !["error", "isolation", "type", "url"].includes(field))) {
                     const rest = Object.fromEntries(Object.entries(message).filter(([field]) => field !== key));
 
                     expect(decode(JSON.stringify(rest)).ok, `${name} without ${key}`).toBe(false);

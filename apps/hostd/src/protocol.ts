@@ -15,6 +15,7 @@ export { challengeSigningPayload, HOSTD_AUTH_DOMAIN, HOSTD_REQUEST_DOMAIN, HOSTD
 export type {
     AliasReport,
     AuthMessage,
+    BoxIsolation,
     BoxMessage,
     BoxResources,
     BoxVersions,
@@ -32,6 +33,7 @@ export type {
     HelloMessage,
     HostdJob,
     HostdMessage,
+    IsolationStatus,
     JobMessage,
     PingMessage,
     PongMessage,

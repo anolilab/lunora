@@ -172,6 +172,17 @@ The decoder reports the offending field as a JSONPath-like `path`
 | `fleets[].state`         | `"running"`, `"stopped"`, `"starting"` or `"failed"` |
 | `resources.memMb`        | integer, free memory in MiB                          |
 | `resources.diskFreeMb`   | integer, free disk in MiB                            |
+| `isolation`?             | `{status, problems?}`; absent before a self-check    |
+| `isolation.status`       | `"enforced"`, `"single-trust"` or `"refused"`        |
+| `isolation.problems`?    | array, ≤ 8, each ≤ 512 UTF-8 bytes                   |
+
+`isolation` reports the box's fleet-isolation self-check (plan 458 W8;
+`apps/hostd/README.md`, "Isolation"): `enforced` when every check passed,
+`single-trust` when one failed but the box was enrolled with `--single-trust`
+and runs its fleets anyway, `refused` when one failed and the box starts no
+fleet (a `deploy` fails with `ISOLATION_FAILED`). `problems` names each failed
+check. The field is optional, so a control plane of this version accepts a
+`hello` with or without it.
 
 **`auth`** — `{type, signature}`: signature over the challenge payload (§6.1).
 

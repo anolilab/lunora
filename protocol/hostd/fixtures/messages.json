@@ -42,6 +42,25 @@
                 "diskFreeMb": 0
             }
         },
+        "hello-isolation": {
+            "type": "hello",
+            "protocol": 1,
+            "boxId": "box_01J9ZK3Q",
+            "versions": {
+                "hostd": "1.0.0",
+                "celld": "0.9.2",
+                "caddy": "v2.8.4"
+            },
+            "fleets": [],
+            "resources": {
+                "memMb": 1024,
+                "diskFreeMb": 2048
+            },
+            "isolation": {
+                "status": "single-trust",
+                "problems": ["no nftables table: nft: Operation not permitted"]
+            }
+        },
         "auth": {
             "type": "auth",
             "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -515,6 +534,53 @@
                 },
                 "code": "INVALID_MESSAGE",
                 "path": "$.resources.memMb"
+            },
+            {
+                "name": "unknown isolation status",
+                "frame": {
+                    "type": "hello",
+                    "protocol": 1,
+                    "boxId": "box_1",
+                    "versions": {
+                        "hostd": "1",
+                        "celld": "1",
+                        "caddy": "1"
+                    },
+                    "fleets": [],
+                    "resources": {
+                        "memMb": 0,
+                        "diskFreeMb": 0
+                    },
+                    "isolation": {
+                        "status": "partial"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.isolation.status"
+            },
+            {
+                "name": "too many isolation problems",
+                "frame": {
+                    "type": "hello",
+                    "protocol": 1,
+                    "boxId": "box_1",
+                    "versions": {
+                        "hostd": "1",
+                        "celld": "1",
+                        "caddy": "1"
+                    },
+                    "fleets": [],
+                    "resources": {
+                        "memMb": 0,
+                        "diskFreeMb": 0
+                    },
+                    "isolation": {
+                        "status": "refused",
+                        "problems": ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.isolation.problems"
             },
             {
                 "name": "boxId with a colon",

@@ -11,6 +11,7 @@ import { HOSTD_PROTOCOL_LIMITS } from "./constants";
 import type {
     AliasReport,
     AuthMessage,
+    BoxIsolation,
     BoxMessage,
     BoxResources,
     BoxVersions,
@@ -24,6 +25,7 @@ import type {
     FleetSummary,
     HelloMessage,
     HostdJob,
+    IsolationStatus,
     JobMessage,
     PingMessage,
     PongMessage,
@@ -100,6 +102,8 @@ const COMPATIBILITY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const MAX_CRON_LENGTH = 256;
 
 const FLEET_STATES: ReadonlySet<string> = new Set<FleetState>(["failed", "running", "starting", "stopped"]);
+
+const ISOLATION_STATUSES: ReadonlySet<string> = new Set<IsolationStatus>(["enforced", "refused", "single-trust"]);
 
 const readObject = (value: unknown, path: string, required: ReadonlyArray<string>, optional: ReadonlyArray<string> = []): Record<string, unknown> => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -345,8 +349,27 @@ const readResources = (value: unknown, path: string): BoxResources => {
     };
 };
 
+const readIsolation = (value: unknown, path: string): BoxIsolation => {
+    const record = readObject(value, path, ["status"], ["problems"]);
+    const status = readString(record.status, `${path}.status`);
+
+    if (!ISOLATION_STATUSES.has(status)) {
+        fail(`${path}.status`, `must be one of ${[...ISOLATION_STATUSES].join(", ")}`);
+    }
+
+    const isolation: BoxIsolation = { status: status as IsolationStatus };
+
+    if (record.problems !== undefined) {
+        isolation.problems = readArray(record.problems, `${path}.problems`, HOSTD_PROTOCOL_LIMITS.maxIsolationProblems).map((problem, index) =>
+            readText(problem, `${path}.problems[${String(index)}]`, HOSTD_PROTOCOL_LIMITS.maxIsolationProblemBytes),
+        );
+    }
+
+    return isolation;
+};
+
 const readHello = (value: unknown, path: string): HelloMessage => {
-    const record = readObject(value, path, ["type", "protocol", "boxId", "versions", "fleets", "resources"]);
+    const record = readObject(value, path, ["type", "protocol", "boxId", "versions", "fleets", "resources"], ["isolation"]);
     const fleets = readArray(record.fleets, `${path}.fleets`, HOSTD_PROTOCOL_LIMITS.maxFleets).map((fleet, index) =>
         readFleet(fleet, `${path}.fleets[${String(index)}]`),
     );
@@ -360,6 +383,7 @@ const readHello = (value: unknown, path: string): HelloMessage => {
     return {
         boxId: readId(record.boxId, `${path}.boxId`),
         fleets,
+        ...(record.isolation === undefined ? {} : { isolation: readIsolation(record.isolation, `${path}.isolation`) }),
         protocol: readInteger(record.protocol, `${path}.protocol`, 1),
         resources: readResources(record.resources, `${path}.resources`),
         type: "hello",
