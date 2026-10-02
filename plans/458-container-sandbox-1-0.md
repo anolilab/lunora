@@ -410,3 +410,44 @@ handle types on a target that rates them unsupported, and emits
 4. No work needed: `jsCodeTool` already runs JS on a worker loader.
 5. Still open; celld rates `containerSandboxTools` unsupported, and
    `spawn`/`terminal` refuse there until a TCK run proves native exec.
+
+## 10. Local validation (`wrangler dev`, real containers in Docker, 2026-10-02)
+
+A throwaway harness ran every surface against a real container: a Debian image
+with the shim copied in, a Worker extending the built `LunoraSandboxContainer`,
+wrangler 4.143.1 and the local workerd.
+
+| Surface                                                                                                                                               | Result                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `exec` (regression)                                                                                                                                   | ✅                                                                                                                                                                                                                       |
+| `spawn`: streams + `RpcTarget` control over DO RPC, piped stdin (`WritableStream` over RPC), live interactive stdin, PTY + `resize`, `timeoutMs` kill | ✅, after two fixes (below)                                                                                                                                                                                              |
+| `files.*`: mkdir, writeFile (string and stream), readFile, stat, readDirectory, rename, remove                                                        | ✅. Errors arrive over RPC as `NOT_FOUND` with `data.errno`                                                                                                                                                              |
+| Preview: `port(8080).fetch` to an HTTP server in the container                                                                                        | ✅ (no WebSocket upgrade exercised)                                                                                                                                                                                      |
+| `terminal()` over a real WebSocket: keystrokes, initial size, resize, `1000` close on exit                                                            | ✅, after two fixes (below)                                                                                                                                                                                              |
+| `backup` / `restore`                                                                                                                                  | ❌ locally, **also with upstream `DirectoryBackup` called directly** ("gateway connection failed: Connection reset by peer"). The gateway route through `wrangler dev`'s proxy sidecar does not work; needs a remote run |
+| `mount`                                                                                                                                               | not run (needs S3 credentials); same gateway path as backups                                                                                                                                                             |
+
+Defects the unit tests could not see, fixed in the follow-up commit:
+
+1. **`spawn` deadlock.** The runtime finishes a process's streams, and settles
+   its exit code, only while every piped stream is being drained. A caller
+   reading `stdout` to the end before `stderr`, or awaiting `exitCode` first,
+   hung. Fix: the DO drains both streams into a 1 MiB buffer each and hands the
+   caller the buffered end.
+2. **PTY `stderr` is `undefined`, not `null`.** Draining crashed on it.
+3. **Terminal binary frames arrive as `Blob`** behind `wrangler dev`'s proxy,
+   and the bridge dropped them. It now accepts `Blob`, `ArrayBuffer` and views,
+   treats non-resize text frames as keystrokes, and applies frames strictly in
+   order.
+4. **Image guidance was wrong.** `cloudflare/sandbox:1.0.0` contains only
+   `/usr/local/bin/sandbox-shim` and is not a base image. The docs and hints now
+   say to `COPY --from` it.
+
+Known upstream or local behaviour, left as is: on a cold container, the first
+`Files.readFile` occasionally hangs. This reproduces with upstream `Files`
+called directly in the DO, with no Lunora code involved. A PTY resize is
+applied asynchronously relative to stdin, so a command typed in the same
+instant may still see the old size.
+
+Remaining for a remote (`wrangler versions upload` preview) run: backups,
+mounts, and a WebSocket upgrade through `port(n).fetch`.
