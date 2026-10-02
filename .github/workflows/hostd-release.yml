@@ -1,0 +1,271 @@
+"name": "hostd Release"
+
+# Builds `lunora-hostd` (apps/hostd) as a Node single executable for each Linux
+# platform a box can run, signs a release manifest over the binaries and the
+# pinned celld + Caddy builds, attests provenance, and publishes all of it as the
+# GitHub Release `hostd-v<version>` (plan 458 W7, §9 Q2).
+#
+# How a box trusts a release: `manifest.json` is an Ed25519-signed envelope, and
+# the public key that verifies it is compiled into `hostd` and the control plane
+# (apps/hostd/src/trusted-release-keys.ts). Each binary is then checked against
+# the SHA-256 and size the manifest pins. The attestations are extra provenance
+# for humans and auditors (`gh attestation verify`); a box does not need them.
+#
+# `hostd-v*` is deliberately outside the `@lunora/<pkg>@<version>` tag shape
+# semantic-release owns: `@lunora/hostd` is private and never published to npm,
+# so a tag in that namespace would be read by multi-semantic-release as a package
+# release that never happened. Same reasoning as `cloud-v*` in deploy-cloud.yml.
+#
+# The version lives in the tag (or the dispatch input), not in the committed
+# package.json, which stays at 0.0.0: the build stamps it in before compiling, so
+# `lunora-hostd --version` prints exactly the released version.
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "tags": ["hostd-v*"]
+    "workflow_dispatch":
+        "inputs":
+            "version":
+                "description": "Version to release, e.g. 1.0.0 or 1.0.0-alpha.1 (published as hostd-v<version>)"
+                "required": true
+                "type": "string"
+
+# Never cancel a release in flight: a run killed between `gh release create` and
+# the last upload leaves a release with a manifest but no binaries.
+"concurrency":
+    "group": "${{ github.workflow }}-${{ inputs.version || github.ref_name }}"
+    "cancel-in-progress": false
+
+"permissions": {}
+
+"jobs":
+    "prepare":
+        "name": "Resolve the release version"
+        "if": "github.repository == 'anolilab/lunora'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "permissions": {}
+        "outputs":
+            "version": "${{ steps.version.outputs.version }}"
+            "tag": "${{ steps.version.outputs.tag }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            # The same alphabet as a protocol version string (protocol/hostd/README.md
+            # §4.1), so the version a box reports in `hello` is the one released here.
+            - "name": "Resolve and check the version"
+              "id": "version"
+              "shell": "bash"
+              "env":
+                  "INPUT_VERSION": "${{ inputs.version }}"
+                  "REF_NAME": "${{ github.ref_name }}"
+                  "REF_TYPE": "${{ github.ref_type }}"
+              "run": |
+                  set -euo pipefail
+
+                  if [ "${REF_TYPE}" = "tag" ]; then
+                      version="${REF_NAME#hostd-v}"
+                  else
+                      version="${INPUT_VERSION#v}"
+                  fi
+
+                  if ! [[ "${version}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]]; then
+                      echo "::error::Not a release version: expected e.g. 1.0.0 or 1.0.0-alpha.1, at most 64 characters of [A-Za-z0-9_.+~-]."
+                      exit 1
+                  fi
+
+                  echo "version=${version}" >> "$GITHUB_OUTPUT"
+                  echo "tag=hostd-v${version}" >> "$GITHUB_OUTPUT"
+                  echo "Releasing lunora-hostd ${version} as hostd-v${version}."
+
+    "build":
+        "name": "Build (${{ matrix.platform }})"
+        "needs": "prepare"
+        # Node cannot cross-build a single executable: each platform builds, and is
+        # smoke-tested, on a runner of its own architecture. `ubuntu-24.04-arm` is
+        # GitHub's hosted arm64 runner, free for public repositories.
+        "runs-on": "${{ matrix.runner }}"
+        "timeout-minutes": 30
+        "permissions":
+            "contents": "read" # for checkout
+        "strategy":
+            "fail-fast": true
+            "matrix":
+                "include":
+                    - "platform": "linux-x64"
+                      "runner": "ubuntu-24.04"
+                    - "platform": "linux-arm64"
+                      "runner": "ubuntu-24.04-arm"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # The single executable embeds the very `node` that builds it, so this
+            # pin IS the runtime every box runs. Kept on the `.nvmrc` line.
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "24.16"
+                  "cache-prefix": "hostd-release-${{ matrix.platform }}"
+                  "install-node-gyp": "false"
+                  "skip-playwright": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Stamp the release version"
+              "working-directory": "apps/hostd"
+              "env":
+                  "VERSION": "${{ needs.prepare.outputs.version }}"
+              "run": |
+                  npm pkg set version="${VERSION}"
+
+            - "name": "Build @lunora/hostd"
+              "run": "pnpm --filter @lunora/hostd run build"
+
+            - "name": "Test @lunora/hostd"
+              "run": "pnpm --filter @lunora/hostd run test"
+
+            - "name": "Build the single executable"
+              "run": "pnpm --filter @lunora/hostd run build:sea"
+
+            # build-sea.mjs already refuses a binary whose --version is wrong; this
+            # re-checks it from the outside, under the exact name that gets published.
+            - "name": "Smoke-test the binary"
+              "shell": "bash"
+              "env":
+                  "PLATFORM": "${{ matrix.platform }}"
+                  "VERSION": "${{ needs.prepare.outputs.version }}"
+              "run": |
+                  set -euo pipefail
+
+                  binary="apps/hostd/dist/sea/lunora-hostd-${PLATFORM}"
+                  printed="$("${binary}" --version)"
+
+                  if [ "${printed}" != "${VERSION}" ]; then
+                      echo "::error::${binary} --version printed '${printed}', expected '${VERSION}'."
+                      exit 1
+                  fi
+
+                  "${binary}" --help > /dev/null
+                  echo "${binary} prints ${printed}."
+
+            - "name": "Upload the binary"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "lunora-hostd-${{ matrix.platform }}"
+                  "path": "apps/hostd/dist/sea/lunora-hostd-${{ matrix.platform }}"
+                  "if-no-files-found": "error"
+                  "retention-days": 7
+
+    "release":
+        "name": "Sign, attest and publish"
+        "needs": ["prepare", "build"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        # Holds HOSTD_RELEASE_SIGNING_KEY (secret): the Ed25519 private key, PKCS#8
+        # PEM, whose public half is in apps/hostd/src/trusted-release-keys.ts. Give
+        # the environment a required reviewer: every box installs whatever this key
+        # signs. See apps/hostd/README.md ("Releases & signing").
+        "environment": "hostd-release"
+        "permissions":
+            "contents": "write" # to create the tag + GitHub release
+            "id-token": "write" # to mint the attestation's OIDC identity
+            "attestations": "write" # to store the provenance attestations
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "24.16"
+                  "cache-prefix": "hostd-release-sign"
+                  "install-node-gyp": "false"
+                  "skip-playwright": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The manifest tooling imports the built release modules.
+            - "name": "Build @lunora/hostd"
+              "run": "pnpm --filter @lunora/hostd run build"
+
+            - "name": "Download the binaries"
+              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "with":
+                  "pattern": "lunora-hostd-*"
+                  "path": "apps/hostd/dist/sea"
+                  "merge-multiple": true
+
+            # Refuses while release-pins.json holds a placeholder, and unless the
+            # signature verifies against a key pinned in trusted-release-keys.ts.
+            - "name": "Make and sign the release manifest"
+              "working-directory": "apps/hostd"
+              "env":
+                  "HOSTD_RELEASE_SIGNING_KEY": "${{ secrets.HOSTD_RELEASE_SIGNING_KEY }}"
+                  "REPOSITORY": "${{ github.repository }}"
+                  "TAG": "${{ needs.prepare.outputs.tag }}"
+                  "VERSION": "${{ needs.prepare.outputs.version }}"
+              "run": |
+                  set -euo pipefail
+
+                  chmod 0755 dist/sea/lunora-hostd-*
+                  node scripts/make-release-manifest.mjs \
+                      --version "${VERSION}" \
+                      --base-url "https://github.com/${REPOSITORY}/releases/download/${TAG}" \
+                      --artifacts-dir dist/sea \
+                      --out dist/sea/manifest.json
+
+            # What a box will do, done once before anything is published.
+            - "name": "Verify the manifest and binaries"
+              "working-directory": "apps/hostd"
+              "run": "node scripts/make-release-manifest.mjs --verify dist/sea/manifest.json --artifacts-dir dist/sea"
+
+            - "name": "Attest build provenance"
+              "uses": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" # v4.2.2
+              "with":
+                  "subject-path": |
+                      apps/hostd/dist/sea/lunora-hostd-*
+                      apps/hostd/dist/sea/manifest.json
+
+            # `gh release create --target` mints the tag on a dispatch run (on a tag
+            # push it already exists), rather than `git tag && git push`: the shared
+            # checkout composite does not persist credentials. A release that already
+            # exists fails the run instead of being overwritten: replacing the assets
+            # of a signed release would swap binaries under a manifest boxes trust.
+            - "name": "Publish the GitHub Release"
+              "working-directory": "apps/hostd/dist/sea"
+              "shell": "bash"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "SHA": "${{ github.sha }}"
+                  "TAG": "${{ needs.prepare.outputs.tag }}"
+                  "VERSION": "${{ needs.prepare.outputs.version }}"
+              "run": |
+                  set -euo pipefail
+
+                  if gh release view "${TAG}" > /dev/null 2>&1; then
+                      echo "::error::Release ${TAG} already exists; a signed release is never replaced. Release a new version."
+                      exit 1
+                  fi
+
+                  args=(--target "${SHA}" --title "lunora-hostd ${VERSION}" --latest=false)
+
+                  if [[ "${VERSION}" == *-* ]]; then
+                      args+=(--prerelease)
+                  fi
+
+                  gh release create "${TAG}" "${args[@]}" \
+                      --notes "lunora-hostd ${VERSION}. Verify \`manifest.json\` against the release keys pinned in apps/hostd/src/trusted-release-keys.ts (protocol/hostd/README.md §8); provenance: \`gh attestation verify <file> --repo anolilab/lunora\`." \
+                      manifest.json lunora-hostd-linux-x64 lunora-hostd-linux-arm64
