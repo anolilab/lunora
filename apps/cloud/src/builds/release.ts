@@ -90,10 +90,32 @@ export const releaseRoute = (target: BuildReleaseTarget, execution: Pick<BuildEx
  */
 export const FORK_RELEASE_SKIP_REASON = "fork pull requests are built but not deployed";
 
-const text = (frame: ReleaseFrame, key: string): string | undefined => {
-    const value = frame[key];
+/** A release event frame — everything that is not a phase, a log line or the terminal frame. */
+type EventFrame = Extract<ReleaseFrame, { event: string }>;
 
-    return typeof value === "string" ? value : undefined;
+const describeEvent = (frame: EventFrame): { level: "error" | "info"; line: string } => {
+    switch (frame.event) {
+        case "accepted":
+        case "released": {
+            return { level: "info", line: `release: ${frame.event}` };
+        }
+        case "not_reverted": {
+            return { level: "info", line: `release: not_reverted: ${frame.reason}` };
+        }
+        case "revert_failed": {
+            return { level: "error", line: `release: revert_failed to ${frame.to}: ${frame.error}` };
+        }
+        case "reverted":
+        case "reverting": {
+            return { level: "info", line: `release: ${frame.event} to ${frame.to}` };
+        }
+        default: {
+            // A frame added to `ReleaseFrame` without a case here fails to compile.
+            const unhandled: never = frame;
+
+            return { level: "info", line: `release: ${JSON.stringify(unhandled)}` };
+        }
+    }
 };
 
 /**
@@ -101,27 +123,23 @@ const text = (frame: ReleaseFrame, key: string): string | undefined => {
  * prints; here they read as a continuation of the build's own output.
  */
 export const describeReleaseFrame = (frame: ReleaseFrame): { level: "error" | "info"; line: string } => {
-    const error = text(frame, "error");
-    const phase = text(frame, "phase");
-    const event = text(frame, "event");
-    const url = text(frame, "url");
-    const to = text(frame, "to");
-    const reason = text(frame, "reason");
-
-    let line: string;
-
-    if (frame["done"] === true) {
-        line = `release: done (${text(frame, "status") ?? "unknown"})`;
-    } else if (phase === undefined) {
-        line = `release: ${event ?? "progress"}${to === undefined ? "" : ` to ${to}`}`;
-    } else {
-        line = `release: ${phase}${url === undefined ? "" : ` ${url}`}`;
+    if ("log" in frame) {
+        // The target's own progress (a box's job output) — the lines that say
+        // what a slow or failed converge was doing.
+        return { level: "info", line: `release: ${frame.log}` };
     }
 
-    const detail = error ?? reason;
-    const failed = error !== undefined || phase === "failed";
+    if ("done" in frame) {
+        return { level: "info", line: `release: done (${frame.status})` };
+    }
 
-    return { level: failed ? "error" : "info", line: detail === undefined ? line : `${line}: ${detail}` };
+    if ("phase" in frame) {
+        const line = `release: ${frame.phase}${frame.url === undefined ? "" : ` ${frame.url}`}`;
+
+        return frame.error === undefined ? { level: frame.phase === "failed" ? "error" : "info", line } : { level: "error", line: `${line}: ${frame.error}` };
+    }
+
+    return describeEvent(frame);
 };
 
 /**

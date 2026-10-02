@@ -47,7 +47,7 @@ interface Harness {
     statuses: string[];
 }
 
-const harness = (options: { provisioner?: Provisioner; target?: BuildReleaseTarget | null } = {}): Harness => {
+const harness = (options: { progress?: string[]; provisioner?: Provisioner; target?: BuildReleaseTarget | null } = {}): Harness => {
     const created: Record<string, unknown>[] = [];
     const statuses: string[] = [];
     const logs: string[] = [];
@@ -77,7 +77,21 @@ const harness = (options: { provisioner?: Provisioner; target?: BuildReleaseTarg
     };
     const deps: DeployHandlerDeps = {
         backend,
-        driverFor: () => fakeDriver(options.provisioner ?? okProvisioner),
+        driverFor: (_placement, driverOptions) => {
+            const provisioner = options.provisioner ?? okProvisioner;
+
+            return fakeDriver({
+                ...provisioner,
+                // A target that streams its converge, as a box does.
+                deploy: (spec) => {
+                    for (const line of options.progress ?? []) {
+                        driverOptions?.onProgress?.(line);
+                    }
+
+                    return provisioner.deploy(spec);
+                },
+            });
+        },
         healthCheck: () => Promise.resolve(true),
         releases: store,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
@@ -171,6 +185,25 @@ describe(describeReleaseFrame, () => {
         });
         expect(describeReleaseFrame({ deploymentId: "dep_1", done: true, status: "live" })).toStrictEqual({ level: "info", line: "release: done (live)" });
     });
+
+    it("writes the target's own progress lines into the build log", () => {
+        expect(describeReleaseFrame({ deploymentId: "dep_1", log: "pulling release dep_1 onto the box" })).toStrictEqual({
+            level: "info",
+            line: "release: pulling release dep_1 onto the box",
+        });
+    });
+
+    it("reads every event frame, failures as errors", () => {
+        expect(describeReleaseFrame({ deploymentId: "dep_1", event: "accepted" })).toStrictEqual({ level: "info", line: "release: accepted" });
+        expect(describeReleaseFrame({ deploymentId: "dep_1", event: "not_reverted", reason: "no previous release to revert to" })).toStrictEqual({
+            level: "info",
+            line: "release: not_reverted: no previous release to revert to",
+        });
+        expect(describeReleaseFrame({ deploymentId: "dep_1", error: "box offline", event: "revert_failed", to: "dep_0" })).toStrictEqual({
+            level: "error",
+            line: "release: revert_failed to dep_0: box offline",
+        });
+    });
 });
 
 describe(releaseBuild, () => {
@@ -198,6 +231,14 @@ describe(releaseBuild, () => {
         expect(logs).toContain("info:release: live https://from-wrangler.lunora.app");
         expect(logs.at(-1)).toBe("info:release: done (live)");
         expect(keys).toStrictEqual({ minted: [{ buildId: "bld_1", kind: "production", projectId: "prj_1" }], revoked: 1 });
+    });
+
+    it("writes a target's converge progress into the build log", async () => {
+        const { logs, ports } = harness({ progress: ["fetching release dep_1", "fleet web healthy"] });
+
+        await releaseBuild(build, execution, ports);
+
+        expect(logs).toStrictEqual(expect.arrayContaining(["info:release: fetching release dep_1", "info:release: fleet web healthy"]));
     });
 
     it("records a pull request's build as a preview, with a preview-ceiling key", async () => {

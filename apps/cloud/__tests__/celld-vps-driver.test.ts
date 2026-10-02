@@ -360,7 +360,7 @@ describe("the deploy stream", () => {
 
         expect("run" in started).toBe(true);
 
-        const outcome = "run" in started ? await started.run((frame) => frames.push(frame)) : undefined;
+        const outcome = "run" in started ? await started.run((frame) => frames.push({ ...frame })) : undefined;
 
         expect(outcome).toMatchObject({ status: "live", url: "https://web.bslug000001.boxes.test" });
         expect(frames.map((frame) => frame["phase"] ?? frame["log"] ?? frame["event"] ?? (frame["done"] === true ? "done" : "?"))).toStrictEqual([

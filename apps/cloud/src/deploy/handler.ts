@@ -586,7 +586,7 @@ const bearerKey = (request: Request): null | string => {
 const revertFailedRelease = async (
     input: { deploymentId: string; key: string; organizationId: string; previousDeploymentId: string | undefined },
     deps: ReleaseDeps,
-    write: (line: Record<string, unknown>) => void,
+    write: (frame: ReleaseFrame) => void,
 ): Promise<void> => {
     const { deploymentId, previousDeploymentId } = input;
 
@@ -637,8 +637,22 @@ export interface ReleaseOutcome {
     url?: string;
 }
 
-/** One progress frame: an NDJSON line on `POST /v1/deploy`, a `buildLogs` line for a git build. */
-export type ReleaseFrame = Record<string, unknown>;
+/**
+ * One progress frame: an NDJSON line on `POST /v1/deploy`, a `buildLogs` line
+ * for a git build. A closed union, so every reader of the stream (the CLI's
+ * printer, `describeReleaseFrame` for git builds) is told when a frame is added.
+ */
+export type ReleaseFrame =
+    /** An orchestrator phase — the deployment-state transitions, `failed` carrying its error. */
+    | (DeployProgress & { deploymentId: string })
+    /** The release's last frame. */
+    | { deploymentId: string; done: true; status: ReleaseOutcome["status"] }
+    | { deploymentId: string; error: string; event: "revert_failed"; to: string }
+    | { deploymentId: string; event: "accepted" | "released" }
+    | { deploymentId: string; event: "not_reverted"; reason: string }
+    | { deploymentId: string; event: "reverted" | "reverting"; to: string }
+    /** One progress line from the target while it converges (`celld-vps`: the box's job output). */
+    | { deploymentId: string; log: string };
 
 /**
  * A release that passed validation and has a deployment row, ready to run — or
