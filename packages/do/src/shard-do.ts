@@ -21,6 +21,7 @@ import type {
     RequestLogWriteOptions,
     SpanCollection,
     SpanCollector,
+    SqlClientLike,
     TraceAnchor,
 } from "@lunora/observability";
 import {
@@ -39,6 +40,7 @@ import {
     formatTally,
     FUNCTION_METRICS_MAX_PATHS,
     instrumentDatabase,
+    instrumentSqlClient,
     ISSUE_STATE_TABLE,
     LogBuffer,
     mergeScanAttribution,
@@ -491,7 +493,9 @@ interface TelemetrySink {
     fuseCloudflareTraces?: boolean;
 
     /**
-     * Detail level for automatic `ctx.db` instrumentation. Default `"summary"` —
+     * Detail level for automatic `ctx.db` instrumentation — and for the
+     * action-only `ctx.sql` (Hyperdrive), which rides the same knob with its own
+     * `sql.*` tally. Default `"summary"` —
      * aggregate counters folded onto the dispatch's root span when one is recorded,
      * so cost does not grow with call count and an uninstrumented handler still
      * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
@@ -1480,11 +1484,13 @@ const WIDE_EVENT_NAME = "lunora.dispatch";
  */
 const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
 
-/** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` tally, and the sink they go to. */
+/** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` / `ctx.sql` tallies, and the sink they go to. */
 interface DispatchSpanEntry {
     collector?: SpanCollector;
     dbTally?: DatabaseTally;
     sink?: TelemetrySink;
+    /** `ctx.sql`'s own tally — kept apart from `dbTally` and folded as `sql.*` (see `instrumentSqlClient`). */
+    sqlTally?: DatabaseTally;
 }
 
 /**
@@ -1498,9 +1504,10 @@ interface DispatchSpanEntry {
  * request database-bound", and a handler that only reads `ctx.db` (the common
  * shape) has no other way to say so. Counting it here is what makes those
  * counters reach a reader instead of being tallied on the hot path and dropped.
+ * A non-empty `ctx.sql` tally counts for the same reason.
  */
 const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
-    entry !== undefined && (entry.collector !== undefined || (entry.dbTally?.calls ?? 0) > 0);
+    entry !== undefined && (entry.collector !== undefined || (entry.dbTally?.calls ?? 0) > 0 || (entry.sqlTally?.calls ?? 0) > 0);
 
 /**
  * Base class for shard Durable Objects.
@@ -6476,7 +6483,41 @@ abstract class ShardDO {
             // record that root span (see `hasRootSpanContent`) — otherwise the
             // counters were computed on the hot path of every db-touching
             // dispatch and discarded, which is the common shape.
-            tally: this.dispatchTally(anchor),
+            tally: this.dispatchTally(anchor, "dbTally"),
+            userId: () => this.getCurrentUserId(),
+        });
+    }
+
+    /**
+     * Wrap the action-only `ctx.sql` (Hyperdrive) client in the same automatic
+     * instrumentation as `ctx.db` — see {@link instrumentSqlClient}. Same knob
+     * (`instrumentDatabase`), same levels, same span cap; its own tally, folded
+     * onto the dispatch root span as `sql.*` so external-database time stays
+     * distinguishable from the shard's own SQLite. The generated `buildCtx`
+     * calls this for a configured `sql` thunk (never for the throwing stub).
+     *
+     * `fuseCloudflareTraces` applies exactly as it does to `ctx.db`: per-call
+     * spans go to the sink, and the folded counters reach the host invocation
+     * span through the root-span mirroring in `recordDispatchRootSpan`.
+     */
+    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
+        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+
+        if (mode === "off") {
+            return client;
+        }
+
+        return instrumentSqlClient(client, {
+            anchor,
+            // Raw driver error messages in dev only — matches `instrumentDb`.
+            captureRaw: isDevEnvironment(this.env),
+            functionPath,
+            mode,
+            record: (recorded) => {
+                this.recordSpan(recorded, sink, anchor.sampled);
+            },
+            shardKey: this.runner.shardKey,
+            tally: this.dispatchTally(anchor, "sqlTally"),
             userId: () => this.getCurrentUserId(),
         });
     }
@@ -7684,20 +7725,21 @@ abstract class ShardDO {
     }
 
     /**
-     * The dispatch entry's db tally, created on first use. Shares the entry with
-     * `ctx.span`'s collector but is deliberately a separate slot — see
-     * `instrumentDb`.
+     * The dispatch entry's `ctx.db` (`dbTally`) or `ctx.sql` (`sqlTally`) tally,
+     * created on first use. Shares the entry with `ctx.span`'s collector but is
+     * deliberately a separate slot — see `instrumentDb` / `instrumentSql`.
      */
-    private dispatchTally(anchor: TraceAnchor): DatabaseTally {
+    private dispatchTally(anchor: TraceAnchor, slot: "dbTally" | "sqlTally"): DatabaseTally {
         evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
 
         const key = dispatchSpanKey(anchor);
         const entry = this.dispatchSpans.get(key) ?? {};
+        const tally = entry[slot] ?? createDatabaseTally();
 
-        entry.dbTally ??= createDatabaseTally();
+        entry[slot] = tally;
         this.dispatchSpans.set(key, entry);
 
-        return entry.dbTally;
+        return tally;
     }
 
     /**
@@ -7801,11 +7843,13 @@ abstract class ShardDO {
         // Auto-instrumentation counters ride whatever root span is being recorded;
         // they never cause one (see `instrumentDb`).
         const databaseAttributes = wide?.dbTally === undefined || wide.dbTally.calls === 0 ? undefined : formatTally(wide.dbTally);
+        // `ctx.sql`'s tally rides alongside under its own `sql.*` keys.
+        const sqlAttributes = wide?.sqlTally === undefined || wide.sqlTally.calls === 0 ? undefined : formatTally(wide.sqlTally, "sql");
         // Mirrors `db.spans_truncated`: the per-dispatch statement-sample buffer
         // (see `currentStmtSamples`) hit its distinct-statement cap, so the
         // query-metrics leaderboard's contribution from this dispatch is partial.
         const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
-        const attributes = { ...databaseAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
+        const attributes = { ...databaseAttributes, ...sqlAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
         // Built whenever there is anything to carry, not only when the handler
         // opened a `ctx.span` — the auto-instrumentation counters are attributes
         // in their own right, and gating them on the wide event's collector is

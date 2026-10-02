@@ -158,6 +158,37 @@ determinism/realtime caveat.
 
 The package never rewrites SQL; use your driver's native positional syntax.
 
+### Telemetry
+
+With an observability sink configured, `ctx.sql` is instrumented automatically
+at the same level as `ctx.db` — the sink's `instrumentDatabase` field (see
+[Observability: database telemetry](/docs/concepts/observability)):
+
+- **`"summary"` (default)** folds `sql.calls`, `sql.duration_ms`, `sql.errors`
+  and a per-operation count (`sql.op.SELECT`, `sql.op.INSERT`, …) onto the
+  dispatch's root span. These are separate from `ctx.db`'s `db.*` counters, so
+  time spent in your external database stays distinguishable from the shard's
+  own SQLite.
+- **`"spans"`** adds one CLIENT span per `query` (`sql.SELECT`, …), capped at
+  100 per dispatch (`sql.spans_truncated` past that), carrying
+  `db.system.name` (`postgresql` for `fromPostgresJs` / `fromNodePg`, `mysql`
+  for `fromMysql2`, `other_sql` for a hand-built client), `db.operation.name`
+  and `db.response.returned_rows`.
+- **`"off"`** hands the action your client untouched.
+
+The operation is the statement's leading keyword only. **Statement text and
+parameters are never recorded**, there is no `db.collection.name`, and a failed
+query records its error type rather than the driver's message (outside
+development), since Postgres and MySQL errors quote row values. `SqlClient` has
+a single `query` method, so there are no transaction or batch spans — a
+`BEGIN`/`COMMIT` you issue yourself is counted under its own keyword.
+
+Queries you run through your own driver or ORM instance **outside** `ctx.sql`
+are not seen. For a Drizzle instance on Hyperdrive,
+[`cloudflare-drizzle-tracing`](https://github.com/Cherry/cloudflare-drizzle-tracing)'s
+`instrumentDrizzle()` adds Cloudflare-native `drizzle.execute` / `transaction` /
+`batch` spans — be aware it records query text and parameters.
+
 ## Making external data reactive
 
 Lunora cannot observe external writes, so a subscription over a `defineSchema`

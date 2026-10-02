@@ -115,6 +115,103 @@ describe('instrumentDatabase: "summary" — where the counters land', () => {
         }
     });
 
+    // `ctx.sql` (Hyperdrive) rides the same knob but keeps its own `sql.*`
+    // tally, so an action's external-database time is not summed into the
+    // shard's own SQLite counters.
+    it("folds the ctx.sql tally as sql.* alongside db.* for a handler that touched both", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+        const sqlClient = {
+            dbSystem: "postgresql" as const,
+            query: async (_text: string, _params?: ReadonlyArray<unknown>): Promise<unknown[]> => [{ id: 1 }],
+        };
+
+        try {
+            const shard = new (class extends DatabaseOnlyShard {
+                public override async handleRpc(functionPath: string): Promise<unknown> {
+                    const anchor = this.resolveDispatchAnchor(false);
+                    const instrumentedDb = this.instrumentDb(fakeDatabase, functionPath, anchor, this.sink);
+                    const sql = this.instrumentSql(sqlClient, functionPath, anchor, this.sink);
+
+                    await instrumentedDb.findMany();
+                    await sql.query("select id from orders");
+                    await sql.query("update orders set total = 0");
+
+                    return { ok: true };
+                }
+            })(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(rpcRequest("orders:sync"));
+
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getTraces"));
+            const body = await response.json<TracesResult>();
+            const root = body.result.traces.flatMap((trace) => trace.spans).find((span) => span.name === "orders:sync");
+
+            expect(root).toBeDefined();
+            expect(root?.attributes).toMatchObject({ "db.calls": 1, "sql.calls": 2, "sql.op.SELECT": 1, "sql.op.UPDATE": 1 });
+            // Summary mode: the counters, not a span per statement.
+            expect(body.result.traces.flatMap((trace) => trace.spans).some((span) => span.name.startsWith("sql."))).toBe(false);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("records the dispatch root span for a handler that only touched ctx.sql, and per-statement spans in spans mode", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+        const sqlClient = { dbSystem: "mysql" as const, query: async (_text: string, _params?: ReadonlyArray<unknown>): Promise<unknown[]> => [] };
+
+        try {
+            const shard = new (class extends ShardDO {
+                public readonly sink: TelemetrySink = { instrumentDatabase: "spans" };
+
+                public override async handleRpc(functionPath: string): Promise<unknown> {
+                    await this.instrumentSql(sqlClient, functionPath, this.resolveDispatchAnchor(false), this.sink).query("insert into t values (?)", [1]);
+
+                    return { ok: true };
+                }
+            })(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(rpcRequest("orders:push"));
+
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getTraces"));
+            const body = await response.json<TracesResult>();
+            const spans = body.result.traces.flatMap((trace) => trace.spans);
+
+            expect(spans.find((span) => span.name === "orders:push")?.attributes).toMatchObject({ "sql.calls": 1, "sql.op.INSERT": 1 });
+            expect(spans.find((span) => span.name === "sql.INSERT")?.attributes).toMatchObject({ "db.operation.name": "INSERT", "db.system.name": "mysql" });
+            expect(JSON.stringify(spans)).not.toContain("insert into t");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("hands ctx.sql back untouched with no sink configured", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+        const sqlClient = { query: async (_text: string, _params?: ReadonlyArray<unknown>): Promise<unknown[]> => [] };
+        let seen: unknown;
+
+        try {
+            const shard = new (class extends ShardDO {
+                public override async handleRpc(functionPath: string): Promise<unknown> {
+                    seen = this.instrumentSql(sqlClient, functionPath, this.resolveDispatchAnchor(false));
+
+                    return { ok: true };
+                }
+            })(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(rpcRequest("orders:noop"));
+
+            expect(seen).toBe(sqlClient);
+        } finally {
+            database.close();
+        }
+    });
+
     it("still records no root span for a dispatch that touched nothing", async () => {
         expect.assertions(1);
 

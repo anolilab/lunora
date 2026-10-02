@@ -494,8 +494,13 @@ const emitBindingClientFragments = (property: string, moduleSpecifier: string, f
     });
 
     if (binding === undefined) {
+        const configured =
+            facet.instrument === undefined
+                ? `config.${property}(env)`
+                : `this.${facet.instrument}(config.${property}(env), logFunctionPath, traceAnchor, observability)`;
+
         return {
-            build: `\n${BUILD_INDENT}const ${property}: ${clientType} = config.${property} ? config.${property}(env) : ${property}Stub;\n`,
+            build: `\n${BUILD_INDENT}const ${property}: ${clientType} = config.${property} ? ${configured} : ${property}Stub;\n`,
             configField: `\n    ${property}?: (env: Record<string, unknown>) => ${clientType};`,
             importLines: [`import type { ${clientType} } from "${moduleSpecifier}";`],
             stub,
