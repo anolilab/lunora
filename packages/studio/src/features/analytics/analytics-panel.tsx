@@ -1,6 +1,7 @@
 import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
+import type { AnalyticsSqlParams, AnalyticsSqlQueryResult } from "@lunora/bindings/analytics-sql";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -17,6 +18,17 @@ interface AnalyticsPanelProps {
     readonly dataset?: string;
 
     /**
+     * Run one **Analytics SQL** statement through the worker's Analytics SQL
+     * binding — typically a host runner that calls an action doing
+     * `ctx.analyticsSql.query(sql, params)`. Preferred over `runQuery` when both
+     * are given: the binding needs no API token anywhere. The panel then speaks
+     * the Analytics SQL dialect (`FROM events.analyticsEngine."<dataset>"`, with
+     * the required lower `timestamp` bound passed as `$since`, the last 24 hours).
+     * Thread it in as `StudioProps.analyticsSqlQuery`.
+     */
+    readonly runAnalyticsSql?: (sql: string, params?: AnalyticsSqlParams) => Promise<AnalyticsSqlQueryResult>;
+
+    /**
      * Run one Analytics Engine SQL statement and resolve its result. The panel has
      * no default: the AE SQL API authenticates with an **account-scoped Cloudflare
      * API token**, and a browser bundle is the last place that may hold one. The
@@ -30,6 +42,31 @@ interface AnalyticsPanelProps {
 /** The default reconciled dataset/binding name (see `reconcile-bindings.ts`). */
 const DEFAULT_DATASET = "ANALYTICS";
 
+/** The Analytics SQL dialect requires a lower `timestamp` bound; the panels read the last 24 hours. */
+const ANALYTICS_SQL_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** `events.analyticsEngine."<dataset>"`, the dataset as a double-quoted identifier (embedded quotes doubled). */
+const analyticsEngineTable = (dataset: string): string => `events.analyticsEngine."${dataset.replaceAll('"', '""')}"`;
+
+/**
+ * The binding returns rows without column metadata, so the table's columns are
+ * the first row's keys, in the order the SELECT list produced them.
+ */
+const toPanelResult = (result: AnalyticsSqlQueryResult): AnalyticsSqlResult => {
+    const [first] = result.rows;
+
+    return {
+        columns:
+            first === undefined
+                ? []
+                : Object.keys(first).map((name) => {
+                      return { name, type: "" };
+                  }),
+        rowCount: result.rowCount,
+        rows: result.rows,
+    };
+};
+
 /**
  * One named usage panel: a title and the SQL that backs it. The columns are
  * `@lunora/bindings/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
@@ -37,24 +74,33 @@ const DEFAULT_DATASET = "ANALYTICS";
  * data points `ctx.analytics.track("function_call", …)` emits.
  */
 interface PanelQuery {
+    /** The same panel in the Analytics SQL dialect, given the quoted `events.analyticsEngine` table; its `COUNT` is sample-weighted by the SQL API. */
+    readonly analyticsSql: (table: string) => string;
     readonly key: string;
+    /** The panel in the Workers Analytics Engine SQL API dialect, for `runQuery`. */
     readonly sql: (dataset: string) => string;
     readonly title: MessageId;
 }
 
 const PANEL_QUERIES: ReadonlyArray<PanelQuery> = [
     {
+        analyticsSql: (table) =>
+            `SELECT blob2 AS fn, COUNT(*) AS calls FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY fn ORDER BY calls DESC LIMIT 25`,
         key: "volume",
         sql: (dataset) => `SELECT blob2 AS fn, count() AS calls FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY fn ORDER BY calls DESC LIMIT 25`,
         title: "Request volume per function",
     },
     {
+        analyticsSql: (table) =>
+            `SELECT blob2 AS fn, quantileWeighted(0.50, double1, sampleInterval) AS p50, quantileWeighted(0.95, double1, sampleInterval) AS p95 FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY fn ORDER BY p95 DESC LIMIT 25`,
         key: "latency",
         sql: (dataset) =>
             `SELECT blob2 AS fn, quantileWeighted(0.50)(double1, _sample_interval) AS p50, quantileWeighted(0.95)(double1, _sample_interval) AS p95 FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY fn ORDER BY p95 DESC LIMIT 25`,
         title: "Latency p50 / p95 per function",
     },
     {
+        analyticsSql: (table) =>
+            `SELECT blob3 AS shard, COUNT(*) AS calls FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY shard ORDER BY calls DESC LIMIT 25`,
         key: "hotShards",
         sql: (dataset) => `SELECT blob3 AS shard, count() AS calls FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY shard ORDER BY calls DESC LIMIT 25`,
         title: "Hot shards",
@@ -139,14 +185,26 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
  * call. The analytics panel is optional and degrades gracefully, it never
  * hard-fails when AE is unwired.
  */
-export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runQuery }: AnalyticsPanelProps = {}): ReactElement => {
+export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runAnalyticsSql, runQuery }: AnalyticsPanelProps = {}): ReactElement => {
     const t = useT();
 
     const [states, setStates] = useState<Record<string, PanelState>>({});
 
-    // `null` when the host wired no runner — the panel then renders the
-    // not-wired empty state and never fetches.
-    const run = runQuery ?? null;
+    // The binding-backed runner wins over the token one; `null` when the host
+    // wired neither — the panel then renders the not-wired empty state and
+    // never fetches.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: `load` depends on this, so a fresh one re-runs the load every render
+    const run = useMemo((): ((panel: PanelQuery) => Promise<AnalyticsSqlResult>) | null => {
+        if (runAnalyticsSql !== undefined) {
+            return async (panel) => {
+                const since = new Date(Date.now() - ANALYTICS_SQL_WINDOW_MS).toISOString();
+
+                return toPanelResult(await runAnalyticsSql(panel.analyticsSql(analyticsEngineTable(dataset)), { since }));
+            };
+        }
+
+        return runQuery === undefined ? null : async (panel) => runQuery(panel.sql(dataset));
+    }, [dataset, runAnalyticsSql, runQuery]);
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect depends on this, so a fresh one re-runs the load every render
     const load = useCallback(
@@ -167,7 +225,7 @@ export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runQuery }: Analytic
                 try {
                     /* eslint-disable no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit. */
                     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: each read is a separate worker round-trip and firing them together would burst the very analytics endpoint being measured
-                    const result = await run(panel.sql(dataset));
+                    const result = await run(panel);
                     /* eslint-enable no-await-in-loop */
 
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
@@ -186,7 +244,7 @@ export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runQuery }: Analytic
                 }
             }
         },
-        [run, dataset],
+        [run],
     );
 
     useEffect(() => {
@@ -203,7 +261,7 @@ export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runQuery }: Analytic
         return (
             <EmptyState
                 description={t(
-                    "Analytics Engine reads need an account-scoped Cloudflare API token, which cannot be shipped to a browser. The host must pass studio.analyticsQuery — a runner that proxies the SQL through your worker — to enable these panels.",
+                    "Analytics Engine reads run through your worker, never from the browser. Pass studio.analyticsSqlQuery (an action calling ctx.analyticsSql, backed by the Analytics SQL binding) or studio.analyticsQuery (a runner holding an API token server-side) to enable these panels.",
                 )}
                 icon={
                     <svg

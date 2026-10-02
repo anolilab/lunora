@@ -173,6 +173,15 @@ interface StudioProps {
     readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
 
     /**
+     * Run one Analytics SQL statement (with its `$since` parameter) through the
+     * worker's Analytics SQL binding — e.g. a runner calling an action that
+     * returns `ctx.analyticsSql.query(sql, params)`. Preferred over
+     * `analyticsQuery` when both are set: no API token is involved anywhere.
+     * Same stability rule as `analyticsQuery`.
+     */
+    readonly analyticsSqlQuery?: AnalyticsPanelProps["runAnalyticsSql"];
+
+    /**
      * URL path prefix the studio is mounted under, passed to the router as its
      * `basepath`. Defaults to `/` (mounted at the origin root). The `@lunora/vite`
      * dev route serves the studio under `/__lunora`, so it sets this — without
@@ -1041,6 +1050,7 @@ const NotFoundRedirect = (): null => {
  */
 const buildRouter = ({
     analyticsQuery,
+    analyticsSqlQuery,
     basePath,
     dataEditable = false,
     functions,
@@ -1057,7 +1067,7 @@ const buildRouter = ({
 
     const panels: Record<StudioTab, ReactElement> = {
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
-        analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
+        analytics: <AnalyticsPanel runAnalyticsSql={analyticsSqlQuery} runQuery={analyticsQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         architecture: <ArchitecturePanel />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
@@ -1171,6 +1181,7 @@ const buildRouter = ({
  */
 const StudioShell = ({
     analyticsQuery,
+    analyticsSqlQuery,
     basePath,
     chrome,
     dataEditable,
@@ -1189,6 +1200,7 @@ const StudioShell = ({
     // survives unrelated re-renders.
     const router = buildRouter({
         analyticsQuery,
+        analyticsSqlQuery,
         basePath,
         dataEditable,
         functions,

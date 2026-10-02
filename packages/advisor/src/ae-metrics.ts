@@ -8,11 +8,19 @@
  * {@link LintContext} arrays `shardTraffic` / `tableScans` / `indexHits`. By
  * default the studio backend fills those from each shard's durable in-DO
  * counters (`__lunora_metrics*`). This module sketches an **alternative feeder**:
- * given a read client over the Analytics Engine SQL API (the one
- * `@lunora/bindings/analytics` exposes as `createAnalyticsSqlClient`), it would
- * reconstruct the same arrays from cross-shard scan-attribution data in AE —
- * so the advisors could be backed by AE instead of (or alongside) the in-DO
- * counters.
+ * given a read client over Analytics Engine, it would reconstruct the same
+ * arrays from cross-shard scan-attribution data in AE — so the advisors could be
+ * backed by AE instead of (or alongside) the in-DO counters.
+ *
+ * Two read clients fit, and `options.dialect` picks the SQL to send:
+ * - `"analytics-sql"` — `ctx.analyticsSql` / `createAnalyticsSql` from
+ * `@lunora/bindings/analytics-sql`, backed by the Worker's Analytics SQL binding
+ * (no API token). Prefer it wherever the binding exists. The dialect needs a
+ * lower `timestamp` bound, so `options.since` is required, and its `COUNT(*)` is
+ * already sample-weighted by the SQL API.
+ * - `"analytics-engine"` (the default) — `createAnalyticsSqlClient` from
+ * `@lunora/bindings/analytics`, the API-token client over the older Workers
+ * Analytics Engine SQL API, which sums `_sample_interval` itself.
  *
  * It never shipped a writer: nothing in the runtime calls
  * `ctx.analytics.track("lunora.index.hit" | "lunora.shard.request" |
@@ -49,13 +57,15 @@ import type { LintContext } from "./types";
 const DATASET_NAME_PATTERN = /^[\w.-]+$/u;
 
 /**
- * Minimal structural view of the `@lunora/bindings/analytics` SQL client — just its
- * `query(sql)` method. Kept structural (not an `import type` from
- * `@lunora/bindings/analytics`) so the advisor needn't depend on the analytics package;
- * the real `AnalyticsSqlClient` satisfies it, as does a plain test double.
+ * Minimal structural view of an Analytics Engine read client — just its
+ * `query(sql, params?)` method. Kept structural (not an `import type` from
+ * `@lunora/bindings`) so the advisor needn't depend on the bindings package.
+ * Both `createAnalyticsSql`'s client (which binds `params`) and
+ * `createAnalyticsSqlClient`'s (which takes only `sql`, and is only ever sent
+ * parameterless statements) satisfy it, as does a plain test double.
  */
 interface AnalyticsMetricsSource {
-    query: (sql: string) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
+    query: (sql: string, params?: Readonly<Record<string, string>>) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
 }
 
 /**
@@ -71,8 +81,22 @@ const AE_METRIC_EVENTS = {
     tableScan: { event: "lunora.table.scan", table: "blob2" },
 } as const;
 
+/** Which SQL dialect the {@link AnalyticsMetricsSource} speaks. */
+type AnalyticsMetricsDialect =
+    | {
+          /** The Analytics SQL API, through the binding-backed `createAnalyticsSql` client. */
+          dialect: "analytics-sql";
+          /** ISO-8601 lower `timestamp` bound — required by the Analytics SQL dialect. */
+          since: string;
+      }
+    | {
+          /** The Workers Analytics Engine SQL API, through the API-token `createAnalyticsSqlClient` (the default). */
+          dialect?: "analytics-engine";
+          since?: never;
+      };
+
 /** Options for the AE-backed runtime-metrics feeder. */
-interface AnalyticsMetricsOptions {
+type AnalyticsMetricsOptions = AnalyticsMetricsDialect & {
     /** The AE dataset (the wrangler `analytics_engine_datasets[].dataset`) to read from. */
     dataset: string;
 
@@ -91,7 +115,7 @@ interface AnalyticsMetricsOptions {
      * Omit to read the whole deployment's shard set.
      */
     group?: string;
-}
+};
 
 /** The runtime-lint input arrays this module reconstructs from AE. */
 interface AnalyticsRuntimeMetrics {
@@ -142,10 +166,37 @@ const assertDataset = (dataset: string): void => {
  */
 const sqlString = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
 
+/**
+ * The pieces of one aggregate read that differ between the two dialects: the
+ * `FROM` table, the sample-weighted count, and the leading `WHERE` filter.
+ *
+ * Analytics SQL names an AE dataset `events.analyticsEngine."<dataset>"`, needs
+ * the lower `timestamp` bound (bound as `$since`), and weights `COUNT(*)` by the
+ * sample interval itself ("For adaptively sampled event and log datasets, the
+ * SQL API automatically applies sample weights to `COUNT`…"). The AE SQL API
+ * names the bare dataset and leaves the weighting to `sum(_sample_interval)`.
+ */
+const dialectParts = (options: AnalyticsMetricsOptions, event: string): { count: string; from: string; params?: Record<string, string>; where: string } => {
+    if (options.dialect === "analytics-sql") {
+        return {
+            count: "COUNT(*)",
+            from: `events.analyticsEngine."${options.dataset}"`,
+            params: { event, since: options.since },
+            where: "timestamp >= $since AND blob1 = $event",
+        };
+    }
+
+    return { count: "sum(_sample_interval)", from: options.dataset, where: `blob1 = ${sqlString(event)}` };
+};
+
 /** Run one query, mapping a transport/SQL error to an empty result so one bad metric never aborts the whole feed. */
-const queryOrEmpty = async (source: AnalyticsMetricsSource, sql: string): Promise<ReadonlyArray<Record<string, unknown>>> => {
+const queryOrEmpty = async (
+    source: AnalyticsMetricsSource,
+    sql: string,
+    params?: Readonly<Record<string, string>>,
+): Promise<ReadonlyArray<Record<string, unknown>>> => {
     try {
-        const result = await source.query(sql);
+        const result = params === undefined ? await source.query(sql) : await source.query(sql, params);
 
         return result.rows;
     } catch {
@@ -160,13 +211,16 @@ const queryOrEmpty = async (source: AnalyticsMetricsSource, sql: string): Promis
  */
 const loadShardTraffic = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorShardTraffic[]> => {
     const { event, group, shardKey } = AE_METRIC_EVENTS.shardRequest;
-    const groupFilter = options.group === undefined ? "" : ` AND ${group} = ${sqlString(options.group)}`;
-    const sql =
-        `SELECT ${shardKey} AS shardKey, ${group} AS shardGroup, sum(_sample_interval) AS requests ` +
-        `FROM ${options.dataset} WHERE blob1 = ${sqlString(event)}${groupFilter} ` +
-        `GROUP BY shardKey, shardGroup`;
+    const { count, from, params, where } = dialectParts(options, event);
+    let groupFilter = "";
 
-    const rows = await queryOrEmpty(source, sql);
+    if (options.group !== undefined) {
+        groupFilter = params === undefined ? ` AND ${group} = ${sqlString(options.group)}` : ` AND ${group} = $group`;
+    }
+
+    const sql = `SELECT ${shardKey} AS shardKey, ${group} AS shardGroup, ${count} AS requests FROM ${from} WHERE ${where}${groupFilter} GROUP BY shardKey, shardGroup`;
+
+    const rows = await queryOrEmpty(source, sql, params === undefined || options.group === undefined ? params : { ...params, group: options.group });
 
     return rows.map((row) => {
         const shardGroup = toText(row.shardGroup);
@@ -185,9 +239,10 @@ const loadShardTraffic = async (source: AnalyticsMetricsSource, options: Analyti
  */
 const loadTableScans = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorTableScan[]> => {
     const { event, table } = AE_METRIC_EVENTS.tableScan;
-    const sql = `SELECT ${table} AS scanTable, sum(_sample_interval) AS scans FROM ${options.dataset} WHERE blob1 = ${sqlString(event)} GROUP BY scanTable`;
+    const { count, from, params, where } = dialectParts(options, event);
+    const sql = `SELECT ${table} AS scanTable, ${count} AS scans FROM ${from} WHERE ${where} GROUP BY scanTable`;
 
-    const rows = await queryOrEmpty(source, sql);
+    const rows = await queryOrEmpty(source, sql, params);
 
     return rows.map((row) => {
         return { scans: toCount(row.scans), table: toText(row.scanTable) };
@@ -203,12 +258,10 @@ const loadTableScans = async (source: AnalyticsMetricsSource, options: Analytics
  */
 const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorIndexHit[]> => {
     const { event, index, table } = AE_METRIC_EVENTS.indexHit;
-    const sql =
-        `SELECT ${table} AS hitTable, ${index} AS hitIndex, sum(_sample_interval) AS reads ` +
-        `FROM ${options.dataset} WHERE blob1 = ${sqlString(event)} ` +
-        `GROUP BY hitTable, hitIndex`;
+    const { count, from, params, where } = dialectParts(options, event);
+    const sql = `SELECT ${table} AS hitTable, ${index} AS hitIndex, ${count} AS reads FROM ${from} WHERE ${where} GROUP BY hitTable, hitIndex`;
 
-    const rows = await queryOrEmpty(source, sql);
+    const rows = await queryOrEmpty(source, sql, params);
     const hits = rows.map((row) => {
         return { index: toText(row.hitIndex), reads: toCount(row.reads), table: toText(row.hitTable) };
     });
@@ -265,4 +318,4 @@ const loadAnalyticsRuntimeMetrics = async (source: AnalyticsMetricsSource, optio
 };
 
 export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics };
-export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics };
+export type { AnalyticsMetricsDialect, AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics };

@@ -124,7 +124,7 @@ export type { AdvisorAdminRoute } from "./admin-routes";
 // types stay public — `AnalyticsRuntimeMetrics` is the shape of that still-valid,
 // still-optional extension point — but the reader is a design note, not a
 // package export, until something actually writes those events.
-export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
+export type { AnalyticsMetricsDialect, AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
 export type { AdvisorAiRawRun } from "./ai-raw-runs";
 export type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
 export type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";

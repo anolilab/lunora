@@ -147,6 +147,46 @@ describe("loadAnalyticsRuntimeMetrics", () => {
         await expect(loadAnalyticsRuntimeMetrics(stubSource({}), { dataset: "ANALYTICS; DROP TABLE x" })).rejects.toThrow(/invalid Analytics Engine dataset/u);
     });
 
+    it("speaks the Analytics SQL dialect to a binding-backed source, binding the event, group and lower bound as params", async () => {
+        expect.assertions(4);
+
+        const query = vi.fn<(sql: string, params?: Readonly<Record<string, string>>) => Promise<{ rows: Record<string, unknown>[] }>>(async (_sql, params) => {
+            if (params?.event === AE_METRIC_EVENTS.shardRequest.event) {
+                return { rows: [{ requests: 5, shardGroup: "messages", shardKey: "room-1" }] };
+            }
+
+            return { rows: [] };
+        });
+
+        const metrics = await loadAnalyticsRuntimeMetrics(
+            { query },
+            { dataset: "app", dialect: "analytics-sql", group: "it's", since: "2026-10-01T00:00:00.000Z" },
+        );
+
+        const shardCall = query.mock.calls.find(([, params]) => params?.event === AE_METRIC_EVENTS.shardRequest.event);
+
+        expect(shardCall?.[0]).toBe(
+            'SELECT blob2 AS shardKey, blob3 AS shardGroup, COUNT(*) AS requests FROM events.analyticsEngine."app" WHERE timestamp >= $since AND blob1 = $event AND blob3 = $group GROUP BY shardKey, shardGroup',
+        );
+        // Values travel as parameters, never spliced into the statement.
+        expect(shardCall?.[1]).toStrictEqual({ event: "lunora.shard.request", group: "it's", since: "2026-10-01T00:00:00.000Z" });
+        expect(query.mock.calls.every(([sql]) => !sql.includes("_sample_interval") && sql.includes("timestamp >= $since"))).toBe(true);
+        expect(metrics.shardTraffic).toStrictEqual([{ group: "messages", requests: 5, shardKey: "room-1" }]);
+    });
+
+    it("keeps the Analytics Engine dialect parameterless for the token client", async () => {
+        expect.assertions(2);
+
+        const source = stubSource({});
+
+        await loadAnalyticsRuntimeMetrics(source, { dataset: "ANALYTICS" });
+
+        const { calls } = (source.query as ReturnType<typeof vi.fn>).mock;
+
+        expect(calls.every((call) => call.length === 1)).toBe(true);
+        expect(calls.every((call) => (call[0] as string).includes("sum(_sample_interval)"))).toBe(true);
+    });
+
     it("escapes backslashes in the group filter so a trailing backslash cannot consume the closing quote", async () => {
         expect.assertions(1);
 
