@@ -356,9 +356,12 @@ export class BoxSessionDO {
         switch (effect.kind) {
             case "authenticated": {
                 // One live session per box: a reconnect supersedes the socket it replaces.
+                // The jobs sent on it fail now — their `result` would arrive on a socket
+                // that is gone — rather than hold a caller until their timeout.
                 for (const other of this.readySockets()) {
                     if (other !== socket) {
                         refuseSocket(other, "SUPERSEDED", "a newer session for this box authenticated");
+                        this.jobs.failOwner(other, "SUPERSEDED", "the box reconnected before the job finished; its result will not arrive");
                     }
                 }
 
@@ -404,6 +407,9 @@ export class BoxSessionDO {
         const attachment = attachmentOf(socket);
         const database = this.database();
 
+        // Whatever happens to the box, the jobs sent on this socket can no longer finish.
+        this.jobs.failOwner(socket, "BOX_OFFLINE", "the socket the job was sent on closed");
+
         if (attachment.phase === "ready" && this.readySockets().every((other) => other === socket) && database !== undefined) {
             // The box's authenticated session is gone and no other replaced it.
             this.jobs.failAll("BOX_OFFLINE", "the box's session ended");
@@ -447,6 +453,7 @@ export class BoxSessionDO {
             onProgress: (line) => {
                 write({ line, type: "progress" });
             },
+            owner: socket,
             timeoutMs,
         });
 
@@ -467,7 +474,9 @@ export class BoxSessionDO {
      * Hand a box that just authenticated the `upgrade` it missed (plan 458 W2):
      * when its row names a desired release whose versions it does not run yet.
      * Fire-and-forget — the job settles on the box's `result` like any other,
-     * and the next `hello` shows whether it took.
+     * and the next `hello` shows whether it took. It takes no job slot (nobody
+     * waits on it, and a box that reconnects repeatedly would otherwise fill the
+     * slots a deploy needs with upgrades), and it fails with its socket.
      */
     private async replayDesiredRelease(database: ControlPlaneStore, socket: SessionSocket, boxId: string, running: ReleaseVersions): Promise<void> {
         const box = await loadBox(database, boxId);
@@ -487,7 +496,7 @@ export class BoxSessionDO {
         const jobId = crypto.randomUUID();
 
         // Never rejects (the registry resolves every job); nothing waits on it.
-        this.jobs.start(jobId, { onProgress: () => undefined, timeoutMs: MAX_JOB_TIMEOUT_MS }).catch(() => undefined);
+        this.jobs.start(jobId, { counted: false, onProgress: () => undefined, owner: socket, timeoutMs: MAX_JOB_TIMEOUT_MS }).catch(() => undefined);
         sendFrame(socket, {
             job: {
                 kind: "upgrade",

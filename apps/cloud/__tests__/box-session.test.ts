@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";
-import { JobRegistry } from "../src/boxes/jobs";
+import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "../src/boxes/jobs";
 import type { SessionAttachment, SessionEffect, SessionPorts } from "../src/boxes/session";
 import { FRAME_BUCKET, HANDSHAKE_TIMEOUT_MS, livenessOf, openSession, receiveFrame, SILENCE_LIMIT_MS } from "../src/boxes/session";
 import { boxSession, BoxSessionError } from "../src/boxes/session-client";
@@ -183,6 +183,39 @@ describe("job correlation", () => {
     });
 });
 
+describe("job ownership", () => {
+    it("fails only the jobs sent on a socket that went away", async () => {
+        const jobs = new JobRegistry();
+        const old = {};
+        const current = {};
+        const stranded = jobs.start("job_old", { onProgress: () => undefined, owner: old, timeoutMs: 60_000 });
+        const live = jobs.start("job_new", { onProgress: () => undefined, owner: current, timeoutMs: 60_000 });
+
+        jobs.failOwner(old, "SUPERSEDED", "reconnected");
+
+        await expect(stranded).resolves.toStrictEqual({ error: { code: "SUPERSEDED", message: "reconnected" }, ok: false });
+        expect(jobs.size).toBe(1);
+
+        jobs.result({ jobId: "job_new", ok: true, type: "result" });
+
+        await expect(live).resolves.toStrictEqual({ ok: true });
+    });
+
+    it("keeps fire-and-forget jobs out of the in-flight count", () => {
+        const jobs = new JobRegistry();
+
+        for (let index = 0; index < MAX_JOBS_IN_FLIGHT; index += 1) {
+            jobs.start(`upgrade_${String(index)}`, { counted: false, onProgress: () => undefined, timeoutMs: 60_000 }).catch(() => undefined);
+        }
+
+        jobs.start("deploy", { onProgress: () => undefined, timeoutMs: 60_000 }).catch(() => undefined);
+
+        expect(jobs.size).toBe(1);
+
+        jobs.failAll("BOX_OFFLINE", "test cleanup");
+    });
+});
+
 describe("boxSessionDO", () => {
     const setup = async (row: Record<string, unknown> = {}) => {
         const key = await boxKey();
@@ -283,6 +316,23 @@ describe("boxSessionDO", () => {
             code: "BAD_JOB",
         });
         expect(socket.sent).toHaveLength(sentBefore);
+    });
+
+    it("fails the jobs of a superseded socket at once, instead of at their timeout", async () => {
+        const { key, session, state } = await setup();
+        const first = await handshake(session, state, key, "box_1");
+        const running = boxSession(namespaceOver(session), "box_1").dispatch({ kind: "diagnose" });
+
+        await vi.waitFor(() => {
+            expect(first.received().some((frame) => frame.type === "job")).toBe(true);
+        });
+
+        // The box reconnects: its new socket authenticates and supersedes the first.
+        const second = await handshake(session, state, key, "box_1");
+
+        await expect(running).resolves.toMatchObject({ error: { code: "SUPERSEDED" }, ok: false });
+        expect(first.closedWith).toMatchObject({ reason: "SUPERSEDED" });
+        expect(second.closedWith).toBeUndefined();
     });
 
     it("closes every socket on revoke and fails the jobs in flight", async () => {

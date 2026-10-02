@@ -13,7 +13,11 @@ import type { ProgressMessage, ResultMessage } from "@lunora/hostd/protocol";
 export type JobOutcome = Pick<ResultMessage, "error" | "ok" | "url">;
 
 interface PendingJob {
+    /** Whether the job counts against {@link MAX_JOBS_IN_FLIGHT}. */
+    counted: boolean;
     onProgress: (line: string) => void;
+    /** The socket the job was sent on: the one place its `result` can come from. */
+    owner: unknown;
     settle: (outcome: JobOutcome) => void;
     timer: ReturnType<typeof setTimeout>;
 }
@@ -24,17 +28,31 @@ export const MAX_JOBS_IN_FLIGHT = 16;
 export class JobRegistry {
     private readonly pending = new Map<string, PendingJob>();
 
-    /** Jobs waiting for their `result`. */
+    /**
+     * Jobs waiting for their `result` that count against
+     * {@link MAX_JOBS_IN_FLIGHT}. A fire-and-forget job started with `counted:
+     * false` (the `upgrade` replayed on every reconnect) waits without taking a
+     * slot a caller's deploy needs.
+     */
     public get size(): number {
-        return this.pending.size;
+        let counted = 0;
+
+        for (const job of this.pending.values()) {
+            if (job.counted) {
+                counted += 1;
+            }
+        }
+
+        return counted;
     }
 
     /**
      * Wait for `jobId`'s result. Resolves — never rejects — with the box's
      * result, or with a synthetic failure when the job times out or is failed
-     * by {@link failAll}.
+     * by {@link failAll} or {@link failOwner}. `owner` is the socket the job
+     * was sent on.
      */
-    public start(jobId: string, options: { onProgress: (line: string) => void; timeoutMs: number }): Promise<JobOutcome> {
+    public start(jobId: string, options: { counted?: boolean; onProgress: (line: string) => void; owner?: unknown; timeoutMs: number }): Promise<JobOutcome> {
         return new Promise<JobOutcome>((resolve) => {
             const timer = setTimeout(() => {
                 this.finish(jobId, {
@@ -43,7 +61,7 @@ export class JobRegistry {
                 });
             }, options.timeoutMs);
 
-            this.pending.set(jobId, { onProgress: options.onProgress, settle: resolve, timer });
+            this.pending.set(jobId, { counted: options.counted ?? true, onProgress: options.onProgress, owner: options.owner, settle: resolve, timer });
         });
     }
 
@@ -66,6 +84,19 @@ export class JobRegistry {
         // Deleting the entry being visited is safe while iterating a Map.
         for (const jobId of this.pending.keys()) {
             this.finish(jobId, { error: { code, message }, ok: false });
+        }
+    }
+
+    /**
+     * Fail every pending job sent on `owner` — its socket was superseded or
+     * closed, so no `result` for them will ever come, even while the box itself
+     * stays connected on a newer socket.
+     */
+    public failOwner(owner: unknown, code: string, message: string): void {
+        for (const [jobId, job] of this.pending) {
+            if (job.owner === owner) {
+                this.finish(jobId, { error: { code, message }, ok: false });
+            }
         }
     }
 
