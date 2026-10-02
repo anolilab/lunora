@@ -15,7 +15,6 @@ export const cells = sqliteTable("cells", {
     name: text("name").notNull(),
     status: text("status", { mode: "json" }).$type<"active" | "draining" | "suspended">().notNull(),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
-    usageReadAtMs: real("usageReadAtMs"),
 }, (t) => ({
     by_name: uniqueIndex("by_name").on(t.name),
 }));

@@ -33,7 +33,6 @@ export interface Doc_cells {
     name: string;
     status: "active" | "draining" | "suspended";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    usageReadAtMs?: number;
 }
 
 export interface Doc_organizations {
@@ -867,7 +866,6 @@ export interface Insert_cells {
     name: string;
     status: "active" | "draining" | "suspended";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
-    usageReadAtMs?: number;
 }
 
 export interface Insert_organizations {

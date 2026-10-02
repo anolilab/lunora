@@ -216,9 +216,6 @@ const reader =
 describe(usageRollbackPorts, () => {
     it("resolves a script to its owning org/deployment from the deployments table", async () => {
         const database = fakeControlPlaneDb({
-            // `name` matters: the port reads the checkpoint `where: { name: cellName }`,
-            // so a row without it is a different cell. The old fake returned it anyway.
-            cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }],
             deployments: [
                 { _id: "dep_old", organizationId: "org_a", scriptName: "a", status: "superseded" },
                 { _id: "dep_a", organizationId: "org_a", scriptName: "a", status: "live" },
@@ -231,12 +228,10 @@ describe(usageRollbackPorts, () => {
         // Every release shares the alias's script; its usage lands on the live one.
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
         expect(ports.resolveResource("missing")).toBeUndefined();
-        await expect(ports.getCheckpoint()).resolves.toBe(999);
     });
 
     it("attributes only the swept target's deployments, by resourceRef where a row has one", async () => {
         const database = fakeControlPlaneDb({
-            cells: [{ _id: "cell_1", name: "default" }],
             deployments: [
                 { _id: "dep_wfp", organizationId: "org_a", resourceRef: "a", scriptName: "a", status: "live", target: "cloudflare-wfp" },
                 { _id: "dep_box", organizationId: "org_b", resourceRef: "fleets/b", scriptName: "b", status: "live", target: "celld-vps" },
@@ -253,7 +248,7 @@ describe(usageRollbackPorts, () => {
 
     it("records a requests row into platformUsage with the period + attribution", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
-        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { insert });
+        const database = fakeControlPlaneDb({ deployments: [] }, { insert });
 
         const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "default", target: "cloudflare-wfp" });
         await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, quantity: 12 });
@@ -298,17 +293,16 @@ describe(usageRollbackPorts, () => {
         expect(insert).toHaveBeenCalledWith("platformUsage", expect.objectContaining({ cloudflareAccountId: "cfa_1", deploymentId: "dep_byo", quantity: 5 }));
     });
 
-    it("seeds a cloudflare-wfp cell's first checkpoint from its old cells.usageReadAtMs", async () => {
-        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }], deployments: [], usageCheckpoints: [] });
+    it("starts a scope with no checkpoint row from nothing, so the rollback reads its bootstrap window", async () => {
+        const database = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] });
 
         const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
 
-        await expect(ports.getCheckpoint()).resolves.toBe(999);
+        await expect(ports.getCheckpoint()).resolves.toBeUndefined();
     });
 
-    it("reads the scope's own checkpoint row, never the old column, once one exists", async () => {
+    it("reads the scope's own checkpoint row, never another scope's", async () => {
         const database = fakeControlPlaneDb({
-            cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }],
             deployments: [],
             usageCheckpoints: [
                 { _id: "cp_other", readAtMs: 7, scopeKey: "eu-1", target: "cloudflare-wfp" },
@@ -324,7 +318,7 @@ describe(usageRollbackPorts, () => {
     it("inserts the scope's checkpoint row on its first advance and patches it after", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("cp_new"));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const first = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] }, { insert, patch });
+        const first = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] }, { insert, patch });
 
         const firstPorts = await usageRollbackPorts(first, reader([]), { now: 1000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
 
@@ -334,7 +328,7 @@ describe(usageRollbackPorts, () => {
         expect(patch).not.toHaveBeenCalled();
 
         const later = fakeControlPlaneDb(
-            { cells: [], deployments: [], usageCheckpoints: [{ _id: "cp_1", readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp" }] },
+            { deployments: [], usageCheckpoints: [{ _id: "cp_1", readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp" }] },
             { insert, patch },
         );
 
@@ -346,7 +340,7 @@ describe(usageRollbackPorts, () => {
     });
 
     it("starts a scope with no checkpoint and no old cell column from nothing (the bootstrap window applies)", async () => {
-        const database = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] });
+        const database = fakeControlPlaneDb({ deployments: [], usageCheckpoints: [] });
 
         const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "ghost", target: "cloudflare-wfp" });
 

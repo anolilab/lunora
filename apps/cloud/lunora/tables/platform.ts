@@ -32,10 +32,6 @@ export const platformTables = {
         // The target this cell's capacity serves; absent → `cloudflare-wfp`,
         // which every cell registered before targets is.
         target: v.optional(deployTarget),
-        // The metering readback checkpoint from before `usageCheckpoints`:
-        // read once, as the initial value of this cell's `cloudflare-wfp` row
-        // there, and never written again. Drop it once every cell has swept.
-        usageReadAtMs: v.optional(v.number()),
     })
         .global()
         .index("by_name", ["name"], { unique: true }),

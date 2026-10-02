@@ -510,7 +510,8 @@ Deviations from the §5.1 sketch, and why:
   has no reader. _Superseded by Phase 3 (2026-10-02):_ `usage` is now a
   `UsageReadback` of scopes, each with its own checkpoint row in
   `usageCheckpoints` (keyed by target and scope). `cloudflare-wfp`'s one scope
-  is its cell, seeded once from the old `cells.usageReadAtMs`.
+  is its cell. (The old `cells.usageReadAtMs` column is gone; a scope with no
+  row starts from the rollback's bootstrap window.)
 - **Added members** the sketch did not have: `reach`, `dispatch` and
   `domains.onVerified` — each replaced a Cloudflare assumption a sweep or route
   had inlined — and the per-target `TARGETS` descriptor.

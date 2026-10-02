@@ -60,8 +60,6 @@ export const billingTables = {
     // advances it after, so repeated runs never double-count. A scope is one
     // independent source (`TargetFleet.usage.scopes()`): the cell's name for
     // `cloudflare-wfp`, a connected account's row id for `cloudflare-workers`.
-    // Replaces `cells.usageReadAtMs`, which seeds a `cloudflare-wfp` cell's row
-    // the first time it is swept.
     usageCheckpoints: defineTable({
         readAtMs: v.number(),
         scopeKey: v.string(),

@@ -183,38 +183,21 @@ interface AttributionRow {
     target?: string;
 }
 
-interface CellRow {
-    _id: string;
-    usageReadAtMs?: null | number;
-}
-
 interface CheckpointRow {
     _id: string;
     readAtMs: number;
 }
 
-/**
- * The checkpoint of one (target, scope), and how to advance it. A
- * `cloudflare-wfp` cell swept for the first time since checkpoints moved to
- * `usageCheckpoints` starts from its old `cells.usageReadAtMs`, so the move
- * neither re-reads nor skips a window.
- */
+/** The checkpoint of one (target, scope), and how to advance it. */
 const checkpointPorts = async (
     database: ControlPlaneDatabase,
     options: { now: number; scope: string; target: TargetId },
 ): Promise<Pick<UsageRollbackPorts, "getCheckpoint" | "setCheckpoint">> => {
     const { page } = await database.findMany("usageCheckpoints", { where: { scopeKey: options.scope, target: options.target } });
     const row = (page as CheckpointRow[]).at(0);
-    let seed: number | undefined;
-
-    if (row === undefined && options.target === "cloudflare-wfp") {
-        const { page: cells } = await database.findMany("cells", { where: { name: options.scope } });
-
-        seed = (cells as CellRow[])[0]?.usageReadAtMs ?? undefined;
-    }
 
     return {
-        getCheckpoint: () => Promise.resolve(row?.readAtMs ?? seed),
+        getCheckpoint: () => Promise.resolve(row?.readAtMs),
         setCheckpoint: async (ms) => {
             await (row === undefined
                 ? database.insert("usageCheckpoints", { readAtMs: ms, scopeKey: options.scope, target: options.target, updatedAt: options.now })
