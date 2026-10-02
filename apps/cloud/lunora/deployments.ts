@@ -344,6 +344,23 @@ const placementColumns = (
     return { resourceRef: alias };
 };
 
+/**
+ * The deployments of a set the teardown sweep (`src/deploy/teardown.ts`) has
+ * not finished with — what keeps a project on its target and a connected
+ * account connected, because the tenant they name may still live there.
+ *
+ * The sweep acts on `destroyed` and `failed` rows whose `teardownAt` is unset,
+ * and stamps `teardownAt` once it reclaimed them; it never revisits a stamped
+ * row. So a row is pending while it is anything else (`live`, `queued`,
+ * `superseded`, …: its tenant is running or about to), or while it is
+ * `destroyed`/`failed` and not stamped yet. A stamped `failed` row is done —
+ * the sweep reclaims only its stored release — and counting it would block a
+ * target change or a disconnect forever, with nothing left that could unblock it.
+ * `!= null`: `.global()` rows answer SQL NULL for an unset column.
+ */
+export const pendingTeardown = <Row extends { status: string; teardownAt?: null | number }>(rows: ReadonlyArray<Row>): Row[] =>
+    rows.filter((row) => (row.status !== "destroyed" && row.status !== "failed") || row.teardownAt == null);
+
 /** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
 interface CreatedDeployment {
     deploymentId: Id<"deployments">;

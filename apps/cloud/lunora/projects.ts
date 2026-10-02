@@ -10,7 +10,7 @@ import { revokedBoxError } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { claimFirstFreeAlias } from "./deployments";
+import { claimFirstFreeAlias, pendingTeardown } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
@@ -313,7 +313,7 @@ export const setTarget = mutation
         }
 
         const { page: deployments } = await context.db.deployments.findMany({ where: { projectId } });
-        const pending = (deployments as { status: string; teardownAt?: null | number }[]).filter((row) => row.status !== "destroyed" || row.teardownAt == null);
+        const pending = pendingTeardown(deployments);
 
         if (pending.length > 0) {
             throw new LunoraError(

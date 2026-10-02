@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
+import { pendingTeardown } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -92,9 +93,7 @@ const usersOf = async (
     const { page: deployments } = await context.db.deployments.findMany({ where: { cloudflareAccountId: id } });
     // A deployment counts until the teardown sweep has reclaimed it: its Worker and
     // data still live in the account, and only this token can remove them.
-    const pending = (deployments as { status: string; teardownAt?: null | number }[]).filter((row) => row.status !== "destroyed" || row.teardownAt == null);
-
-    return { deployments: pending.length, projects: projects.length };
+    return { deployments: pendingTeardown(deployments).length, projects: projects.length };
 };
 
 /** The verified, sealed token the edge route hands {@link connect}. */

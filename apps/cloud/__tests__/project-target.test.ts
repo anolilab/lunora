@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { pendingTeardown } from "../lunora/deployments";
 import { setTarget } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -65,6 +66,20 @@ describe("projects.setTarget", () => {
         expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
     });
 
+    it("refuses while a failed deployment waits for the sweep, and moves once the sweep stamped it", async () => {
+        const failed = (teardownAt: null | number): Row[] => [{ _id: "dep_1", projectId: "proj_1", status: "failed", teardownAt }];
+
+        await expect(call({ boxes: [box()], deployments: failed(null) }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
+
+        const { ops, run } = call({ boxes: [box()], deployments: failed(NOW) }, { boxId: "box_1", target: "celld-vps" });
+
+        await run();
+
+        expect(ops).toContainEqual(expect.objectContaining({ id: "proj_1", kind: "patch" }));
+    });
+
     it("moves a project back to cloudflare-wfp and clears its box", async () => {
         const { ops, run } = call(
             {
@@ -107,5 +122,20 @@ describe("projects.setTarget", () => {
         await expect(
             call({ cloudflareAccounts: [account({ organizationId: "org_2" })] }, { cloudflareAccountId: "cfa_1", target: "cloudflare-workers" }).run(),
         ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+});
+
+describe(pendingTeardown, () => {
+    it("keeps every row the teardown sweep still has to act on, and only those", () => {
+        const rows = [
+            { id: "live", status: "live" },
+            { id: "superseded", status: "superseded", teardownAt: NOW },
+            { id: "destroyed-waiting", status: "destroyed", teardownAt: null },
+            { id: "failed-waiting", status: "failed" },
+            { id: "destroyed-done", status: "destroyed", teardownAt: NOW },
+            { id: "failed-done", status: "failed", teardownAt: NOW },
+        ];
+
+        expect(pendingTeardown(rows).map((row) => row.id)).toStrictEqual(["live", "superseded", "destroyed-waiting", "failed-waiting"]);
     });
 });

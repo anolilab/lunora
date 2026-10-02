@@ -230,6 +230,25 @@ describe("cloudflareAccounts", () => {
         await expect(connect.handler(fake.ctx, connectArgs() as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    it("disconnects once the sweep has stamped the account's failed and destroyed deployments", async () => {
+        const fake = makeCtx(
+            {
+                cloudflareAccounts: [account()],
+                deployments: [
+                    { _id: "dep_1", cloudflareAccountId: "cfa_1", status: "failed", teardownAt: NOW },
+                    { _id: "dep_2", cloudflareAccountId: "cfa_1", status: "destroyed", teardownAt: NOW },
+                ],
+                members: [owner("org_1")],
+                projects: [],
+            },
+            { now: NOW },
+        );
+
+        await disconnect.handler(fake.ctx, { id: "cfa_1" as never, organizationId: "org_1" as never });
+
+        expect(fake.ops).toContainEqual({ id: "cfa_1", kind: "delete" });
+    });
+
     it("disconnects an unused account and deletes its credential", async () => {
         const fake = makeCtx({ cloudflareAccounts: [account()], deployments: [], members: [owner("org_1")], projects: [] }, { now: NOW });
 
