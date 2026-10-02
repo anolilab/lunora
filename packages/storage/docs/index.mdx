@@ -317,6 +317,9 @@ export default {
 ```
 
 `protocol` defaults to `"tus"` (the resumable, pause/resume-capable path); pass
-`"chunked-rest"` or `"multipart"` to mount a different one. Use a memory provider
+`"chunked-rest"` or `"multipart"` to mount a different one. One handler speaks one
+protocol, so mount each on its own route. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+covers mounting it as an HTTP action gated on `ctx.auth`, client authentication,
+and the request-size limits. Use a memory provider
 (`@visulima/storage/provider/memory`) in tests to exercise the whole flow
 (progress, pause/resume, resume-after-drop) without a live bucket.
