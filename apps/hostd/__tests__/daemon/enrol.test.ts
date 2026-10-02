@@ -125,6 +125,28 @@ describe("lunora-hostd enrol", () => {
         expect(plane.enrolments).toHaveLength(1);
     });
 
+    it("keeps the enrolled key and config when a --force re-enrolment is refused", async () => {
+        expect.assertions(5);
+
+        const configPath = join(root, "etc", "config.json");
+        const keyFile = join(root, "etc", "box.key");
+
+        await run(enrolArgs("--token", TOKEN));
+
+        const [key, config] = [readFileSync(keyFile, "utf8"), readFileSync(configPath, "utf8")];
+
+        await expect(run(enrolArgs("--force", "--token", `lbe_${"zz".repeat(32)}`))).resolves.toBe(1);
+        // Still the box it was: same key, same config, no half-written key beside them.
+        expect(readFileSync(keyFile, "utf8")).toBe(key);
+        expect(readFileSync(configPath, "utf8")).toBe(config);
+        expect(existsSync(`${keyFile}.pending`)).toBe(false);
+
+        // An accepted --force replaces the key.
+        await run(enrolArgs("--force", "--token", TOKEN));
+
+        expect(readFileSync(keyFile, "utf8")).not.toBe(key);
+    });
+
     it("needs a control plane while no production default is published", async () => {
         expect.assertions(3);
 
