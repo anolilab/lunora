@@ -98,4 +98,6 @@ export type {
     VoiceTurnResult,
 } from "./voice-turn";
 export { runVoiceTurn } from "./voice-turn";
+export type { WebSearchToolInput, WebSearchToolOptions } from "./web-search-tool";
+export { webSearchTool } from "./web-search-tool";
 export { default as compileAgentWorkflow } from "./workflow";

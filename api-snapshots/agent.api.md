@@ -396,6 +396,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `WebSearchToolInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `WebSearchToolOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `adaptMcpResult` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -529,6 +537,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `voiceClassName` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `webSearchTool` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
