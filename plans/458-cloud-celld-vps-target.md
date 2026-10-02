@@ -414,7 +414,7 @@ package shape. Housekeeping:
 - **`install.sh`:** Debian/Ubuntu, amd64/arm64, 2 GB RAM minimum. It:
     - creates `lunora-hostd`, `lunora-fleet` and `lunora-build` users;
     - downloads `hostd`, celld and Caddy (with the `caddy-ratelimit` module
-      compiled in) from a **signed release manifest** (minisign or Sigstore;
+      compiled in) from a **signed release manifest** (Ed25519, pinned keys;
       §9 Q2) and verifies each checksum;
     - installs the systemd unit and runs `hostd enrol`.
       Re-running it upgrades the box in place.
@@ -433,6 +433,27 @@ package shape. Housekeeping:
 
 **Gate:** `test:hostd` upgrades a live box from release N to N+1 with a serving
 alias, and the alias answers before and after the upgrade.
+
+**Landed (2026-10-02, G17 part a):** the signed release pipeline, without
+control-plane changes.
+
+- `@lunora/hostd/release` (manifest + envelope types, strict validator,
+  canonical bytes; runs in workerd) and `@lunora/hostd/release/verify` (Node:
+  sign, verify against pinned keys, artifact size + hash checks).
+- `apps/hostd/scripts/build-sea.mjs`: Node 24 single executable (esbuild
+  bundle + SEA blob + postject), smoke-tested with `--version`.
+- `apps/hostd/scripts/make-release-manifest.mjs` + `release-pins.json`: make,
+  sign and `--verify` manifests. celld is pinned to v0.6.0 (checksums verified
+  against the downloaded assets).
+- `.github/workflows/hostd-release.yml`: on a `hostd-v*` tag or dispatch, build
+  and test, single executables on x64 and arm64 (`ubuntu-24.04-arm`) runners,
+  sign in the `hostd-release` environment, attest, publish the GitHub Release.
+
+Still open: no release key is committed (a placeholder that verification
+refuses); Caddy with `caddy-ratelimit` needs our own xcaddy build before its
+pins are real, so the workflow stops at signing until then. Next in W7:
+`install.sh`, the control plane's `hostdReleases` table and `boxes.desiredReleaseId`,
+and the `upgrade` job on the box.
 
 ### W8 — Hardening on the box (M)
 
@@ -591,8 +612,16 @@ the interface in two directions:
 
 1. ~~License of `hostd`.~~ **Answered 2026-10-02:** FSL-1.1-Apache-2.0; usable
    only with Lunora Cloud; lives in `apps/hostd`. See D15–D17.
-2. **Signing:** minisign (small, offline key) or Sigstore keyless (CI-bound
-   identity)? Pick whatever the release workflow can enforce.
+2. ~~**Signing:** minisign (small, offline key) or Sigstore keyless (CI-bound
+   identity)?~~ **Answered 2026-10-02:** neither as a runtime dependency. A
+   release is authenticated by an **Ed25519 signature over the canonical bytes
+   of a SHA-256 release manifest**, verified with `node:crypto` (zero
+   dependencies) against public keys pinned in the `hostd` binary and in the
+   control plane (`apps/hostd/src/trusted-release-keys.ts`). The private key
+   lives only in the `hostd-release` GitHub Environment, behind a required
+   reviewer. GitHub artifact attestations (`actions/attest-build-provenance`)
+   add build provenance for auditors; a box never needs them. Format:
+   `protocol/hostd/README.md` §8.
 3. **Bucket for trial boxes:** require bring-your-own from day one, or allow a
    bundled RustFS under `--dev` with a visible "not for production" badge?
 4. **Docker install path** (Coolify, Railway, Fly) as a second shape of
