@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
-import type { CapabilityKey } from "./capabilities";
+import type { AppMethodFacet, CapabilityKey } from "./capabilities";
 import { APP_METHOD_CAPABILITIES } from "./capabilities";
 import { GENERATED_HEADER } from "./emit";
 import type { IdentityIR, JurisdictionIR, TableIR } from "./ir";
@@ -13,8 +13,8 @@ interface EmitAppOptions {
      * `defineApp` method (`.ai()`, `.kv()`, `.payment()`, …), which sets the
      * matching `createShardDO` config key. Usage-driven on purpose: each method's
      * parameter reads `ShardConfig[configKey]`, and the shard emits that config
-     * field on the same usage signal. `vectors` is the exception — its method
-     * follows {@link EmitAppOptions.hasVectors} + `vectorIndexCount`, not usage.
+     * field on the same usage signal. `.vectors()` is not among them — it is
+     * declaration-gated on {@link EmitAppOptions.hasVectors} + `vectorIndexCount`.
      */
     capabilities: ReadonlySet<CapabilityKey>;
 
@@ -137,22 +137,21 @@ interface EmitAppOptions {
 const usedLongTail = (options: EmitAppOptions): typeof APP_METHOD_CAPABILITIES => APP_METHOD_CAPABILITIES.filter(({ key }) => options.capabilities.has(key));
 
 /**
- * The usage set with its `vectors` entry replaced by the normalised gate verdict:
- * the `.vectors()` method follows the platform verdict AND the declared index
- * count, never the `@lunora/bindings/vectors` import probe.
+ * The `.vectors()` builder method — `shardExtras`-backed like the long tail, but
+ * gated on the normalised declaration verdict ({@link EmitAppOptions.hasVectors}),
+ * never on the `@lunora/bindings/vectors` import probe. Emitted after the long
+ * tail, in the slot the table's former `vectors` row held.
  */
-const withVectorsVerdict = (capabilities: ReadonlySet<CapabilityKey>, hasVectors: boolean): ReadonlySet<CapabilityKey> => {
-    const verdict = new Set<CapabilityKey>([...capabilities].filter((key) => key !== "vectors"));
+const VECTORS_APP_METHOD: AppMethodFacet = { configKey: "vectors", doc: "Wire the Vectorize index map backing `ctx.vectors`.", method: "vectors" };
 
-    if (hasVectors) {
-        verdict.add("vectors");
-    }
-
-    return verdict;
-};
+/** The `shardExtras`-backed builder methods emitted: the used long tail, then `.vectors()` when declared. */
+const shardExtrasMethods = (options: EmitAppOptions): ReadonlyArray<AppMethodFacet> => [
+    ...usedLongTail(options).map(({ appMethod }) => appMethod),
+    ...(options.hasVectors === true ? [VECTORS_APP_METHOD] : []),
+];
 
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
-const hasAnyLongTail = (options: EmitAppOptions): boolean => usedLongTail(options).length > 0;
+const hasAnyLongTail = (options: EmitAppOptions): boolean => shardExtrasMethods(options).length > 0;
 
 /**
  * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
@@ -434,8 +433,8 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
  * `Selector` returns `T | undefined` and these factories do not.
  */
 const buildLongTailMethods = (options: EmitAppOptions): string[] =>
-    usedLongTail(options).map(
-        ({ appMethod: { configKey, doc, method } }) => `    /** ${doc} */
+    shardExtrasMethods(options).map(
+        ({ configKey, doc, method }) => `    /** ${doc} */
     public ${method}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${configKey}"]>>): this {
         this.shardExtras.${configKey} = factory as NonNullable<ShardConfig["${configKey}"]>;
 
@@ -1551,10 +1550,9 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     // `schema`. Normalising up front keeps the three emitters on one convention
     // instead of leaving the conjunction to whichever call site remembered to
     // make it. The `vectors` usage flag (an `@lunora/bindings/vectors` import)
-    // does not decide the method; the normalised verdict replaces it in the set
-    // the long-tail methods are read from.
+    // does not decide the method — no `appMethod` hangs off that row.
     const hasVectors = (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0;
-    const options: EmitAppOptions = { ...rawOptions, capabilities: withVectorsVerdict(rawOptions.capabilities, hasVectors), hasVectors };
+    const options: EmitAppOptions = { ...rawOptions, hasVectors };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);

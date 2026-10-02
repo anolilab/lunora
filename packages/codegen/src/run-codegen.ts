@@ -15,7 +15,6 @@ import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertArtifactsJurisdiction from "./assert-artifacts-jurisdiction";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
-import { usedCapabilities } from "./capabilities";
 import { buildDeclarationSurface } from "./declaration-surface";
 import discoverAdminRoutes from "./discover/admin-routes";
 import discoverAiRawRuns from "./discover/ai-raw-runs";
@@ -635,6 +634,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // pass 1 infer against the previous run's declarations.
     const {
         agents,
+        capabilities,
         containers,
         crons,
         dataModelContent,
@@ -931,9 +931,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // in its `__lunora_schema_history` ledger on cold start (plan 200). One
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
-    // The post-gate usage record as the capability set the shard and app emitters
-    // take (`declaration-surface.ts` hands `emitServer` the same set).
-    const capabilities = usedCapabilities(featureUsage);
     const shardContent = emitShard({
         // `_generated/shard.ts` is committed, and this finding is a fact about
         // the machine codegen ran on rather than about the app — regenerating

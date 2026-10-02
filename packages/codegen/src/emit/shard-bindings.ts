@@ -51,18 +51,20 @@ const renderThrowingStub = (
     return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;
 };
 
-interface HelperFragments {
+/** What one capability row contributes to the generated ShardDO, before it is placed by tier. */
+interface CapabilityShardFragments {
     /** Lines built inside `buildCtx` (resolve the binding, construct the helper, else fall to the stub). */
     build: string;
     /** Optional `ShardDOConfig` field declaration (the config thunk override). */
     configField: string;
-    /** Property woven into the `ctx` object literal (e.g. `\n                kv,`). */
-    contextField: string;
     /** `import` lines added to the generated ShardDO module. */
-    importLines: string[];
+    importLines: ReadonlyArray<string>;
     /** Module-level throwing stub the build falls back to when no binding/thunk resolves. */
     stub: string;
 }
+
+/** A declaration-gated helper's fragments: a capability's, plus the property it weaves into the `ctx` object literal itself (e.g. `\n                flags,`). */
+type HelperFragments = CapabilityShardFragments & { contextField: string };
 
 const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", contextField: "", importLines: [], stub: "" };
 
@@ -299,18 +301,6 @@ const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string
     return { constant, evaluateOverride, subscriptionOverride };
 };
 
-/** What one capability row contributes to the generated ShardDO, before it is placed by tier. */
-interface CapabilityShardFragments {
-    /** Lines built inside `buildCtx` (resolve the binding, construct the helper, else fall to the stub). */
-    build: string;
-    /** Optional `ShardDOConfig` field declaration (the config thunk override). */
-    configField: string;
-    /** `import` lines added to the generated ShardDO module. */
-    importLines: ReadonlyArray<string>;
-    /** Module-level throwing stub the build falls back to when no binding/thunk resolves. */
-    stub: string;
-}
-
 /**
  * `ctx.ai` (Workers AI). Bespoke because the build threads the dispatch's
  * function path, trace id and telemetry into `createAi`. createAi is
@@ -407,11 +397,38 @@ const emitR2sqlFragments = (): CapabilityShardFragments => {
 };
 /* eslint-enable no-secrets/no-secrets */
 
+/**
+ * `ctx.x402` (the x402 agent-wallet pay rail). Bespoke because `lazyX402Pay`
+ * keeps `buildCtx` synchronous: it returns immediately and builds the real
+ * (async, secret-reading, signer-importing) rail on the first `fetch`, memoising
+ * it so one spend-policy state is shared for the ctx's lifetime. The wallet
+ * secret is read through `ctx.secrets` (a Secrets Store binding), which is why
+ * `getSecret` closes over the in-scope `secrets` facade. Falls back to
+ * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
+ */
+const emitX402Fragments = (): CapabilityShardFragments => {
+    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
+
+    return {
+        // Built lazily off `secrets` (the Secrets Store facade already in scope) and
+        // the `config.x402` thunk over env; falls back to `x402Stub`.
+        build: `
+            const x402: X402Pay = config.x402
+                ? lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })
+                : x402Stub;
+`,
+        configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
+        importLines: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
+        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
+    };
+};
+
 /** The bespoke ShardDO emitters, one per `shardBinding: "bespoke"` row — exhaustive over {@link BespokeShardKey}. */
 const BESPOKE_SHARD_FRAGMENTS: Readonly<Record<BespokeShardKey, () => CapabilityShardFragments>> = {
     access: emitAccessFragments,
     ai: emitAiFragments,
     r2sql: emitR2sqlFragments,
+    x402: emitX402Fragments,
 };
 
 /** Indentation of a statement inside the emitted `buildCtx` body. */
@@ -472,7 +489,7 @@ ${BUILD_INDENT}]);
  */
 const emitBindingClientFragments = (property: string, moduleSpecifier: string, facet: ShardBindingFacet): CapabilityShardFragments => {
     const { binding, clientType } = facet;
-    const stub = renderThrowingStub(`${property}Stub: ${clientType}`, `throw new Error("${facet.missingMessage}");`, facet.stubMethods, {
+    const stub = renderThrowingStub(`${property}Stub: ${clientType}`, `throw new Error(${JSON.stringify(facet.missingMessage)});`, facet.stubMethods, {
         sync: facet.syncStubMethods,
     });
 
@@ -520,9 +537,6 @@ interface CapabilityShardWiring {
     stubs: string;
 }
 
-/** Whether a capability's ShardDO wiring is one of the {@link BESPOKE_SHARD_FRAGMENTS} emitters. */
-const isBespokeShardKey = (key: CapabilityKey): key is BespokeShardKey => Object.hasOwn(BESPOKE_SHARD_FRAGMENTS, key);
-
 /**
  * Wire every used capability that declares a `shardBinding` into the generated
  * ShardDO, walking {@link CAPABILITIES} in table order. The row's `tier` decides
@@ -548,17 +562,13 @@ const emitCapabilityShardWiring = (capabilities: ReadonlySet<CapabilityKey>): Ca
         }
 
         const property = capability.contextProperty;
-        let fragments: CapabilityShardFragments | undefined;
-
-        if (isBespokeShardKey(key)) {
-            fragments = BESPOKE_SHARD_FRAGMENTS[key]();
-        } else if (shardBinding !== "bespoke") {
-            fragments = emitBindingClientFragments(property, capability.moduleSpecifier, shardBinding);
-        }
-
-        if (fragments === undefined) {
-            continue;
-        }
+        // A row is marked bespoke exactly when `BESPOKE_SHARD_FRAGMENTS` has its
+        // emitter (`BespokeShardKey` is derived from the same marker), so the cast
+        // only restates what the table's types already guarantee.
+        const fragments =
+            shardBinding === "bespoke"
+                ? BESPOKE_SHARD_FRAGMENTS[key as BespokeShardKey]()
+                : emitBindingClientFragments(property, capability.moduleSpecifier, shardBinding);
 
         importLines.push(...fragments.importLines);
         configFields += fragments.configField;

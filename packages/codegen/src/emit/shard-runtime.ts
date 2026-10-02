@@ -643,39 +643,6 @@ const emitPaymentFragments = (
 };
 
 /**
- * The bespoke `ctx.x402` fragments (mirrors {@link emitPaymentFragments}). The
- * pay rail signs and settles USDC per request, so — like `ctx.payments` — it is
- * built inline rather than from a capability row's `serverCtxField`.
- *
- * `lazyX402Pay` keeps `buildCtx` synchronous: it returns immediately and builds
- * the real (async, secret-reading, signer-importing) rail on the first `fetch`,
- * memoising it so one spend-policy state is shared for the ctx's lifetime. The
- * wallet secret is read through `ctx.secrets` (a Secrets Store binding), which is
- * why `getSecret` closes over the in-scope `secrets` facade. Falls back to
- * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
- */
-const emitX402Fragments = (hasX402: boolean): { build: string; configField: string; imports: ReadonlyArray<string>; stub: string } => {
-    if (!hasX402) {
-        return { build: "", configField: "", imports: [], stub: "" };
-    }
-
-    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
-
-    return {
-        imports: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
-        // Built lazily off `secrets` (the Secrets Store facade already in scope) and
-        // the `config.x402` thunk over env; falls back to `x402Stub`.
-        build: `
-            const x402: X402Pay = config.x402
-                ? lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })
-                : x402Stub;
-`,
-        configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
-        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
-    };
-};
-
-/**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
  * declares workflows / queues (their `*Metadata()` overrides reference them),
@@ -741,5 +708,4 @@ export {
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,
-    emitX402Fragments,
 };

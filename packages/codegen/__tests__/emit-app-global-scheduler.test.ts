@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { CapabilityKey } from "../src/capabilities";
 import { emitApp } from "../src/emit-app";
+import baseOptions from "./emit-app-options";
 
 /**
  * `ctx.scheduler` inside a `.global()` table's triggers.
@@ -13,29 +13,6 @@ import { emitApp } from "../src/emit-app";
  * `ctx.scheduler.runAfter(...)` in a global trigger fails at runtime in an app
  * that has a scheduler wired — and nothing rejects it at build time.
  */
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    capabilities: new Set<CapabilityKey>(),
-    hasAccess: false,
-    hasAuth: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdriveGlobal: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasQueue: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
 
 /** The writer entry the emitter must produce, parameterised by that backend's options type. */
 const schedulerEntry = (optionsType: string): string =>

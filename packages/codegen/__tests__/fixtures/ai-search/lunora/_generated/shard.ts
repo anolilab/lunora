@@ -125,22 +125,22 @@ const storageStub = {
 
 const aiSearchStub: AiSearch = {
     chatCompletions: async () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
     create: async () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
     delete: async () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
     get: () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
     list: async () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
     search: async () => {
-        throw new Error("ctx.aiSearch: no AI Search binding found. Add an \`ai_search_namespaces\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \`defineApp().aiSearch((env) => …)\` at yours.");
+        throw new Error("ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.");
     },
 };
 

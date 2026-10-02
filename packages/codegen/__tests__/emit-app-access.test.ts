@@ -1,30 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { CapabilityKey } from "../src/capabilities";
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    capabilities: new Set<CapabilityKey>(),
-    hasAccess: false,
-    hasAuth: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdriveGlobal: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasQueue: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — Cloudflare Access", () => {
     it("emits the .access() method, field and import when the package is a dependency", () => {

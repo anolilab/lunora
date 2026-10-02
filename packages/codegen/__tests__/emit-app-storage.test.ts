@@ -1,31 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { CapabilityKey } from "../src/capabilities";
 import { emitShard } from "../src/emit";
 import { emitApp } from "../src/emit-app";
+import allOffOptions from "./emit-app-options";
 
 /** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    capabilities: new Set<CapabilityKey>(),
-    hasAccess: false,
-    hasAuth: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdriveGlobal: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasQueue: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: true,
-    hasVectors: false,
-    hasWorkflow: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+const baseOptions = { ...allOffOptions, hasStorage: true };
 
 describe("emitApp — storage bucket factory", () => {
     // The DO resolver and the studio admin deriver both build one `Storage` per

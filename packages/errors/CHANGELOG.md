@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.48...@lunora/errors@1.0.0-alpha.49) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
 ## @lunora/errors [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.47...@lunora/errors@1.0.0-alpha.48) (2026-09-30)
 
 ### Features

@@ -1,3 +1,20 @@
+## @lunora/agent [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.162...@lunora/agent@1.0.0-alpha.163) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.106
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/mail:** upgraded to 1.0.0-alpha.95
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+* **@lunora/container:** upgraded to 1.0.0-alpha.66
+
 ## @lunora/agent [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.161...@lunora/agent@1.0.0-alpha.162) (2026-10-02)
 
 
