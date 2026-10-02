@@ -61,6 +61,6 @@ describe(mcpDiscoveryPaths, () => {
         const responses = await Promise.all(mcpDiscoveryPaths(RESOURCE).map(async (path) => await auth.handler(new Request(`${ORIGIN}${path}`))));
 
         expect(responses.map((response) => response.status)).toStrictEqual([200, 200]);
-        expect(() => mcpDiscoveryPaths("mcp")).toThrow(expect.objectContaining({ code: "AUTH_MCP_RESOURCE_INVALID" }));
+        expect(() => mcpDiscoveryPaths("mcp")).toThrow(TypeError);
     });
 });

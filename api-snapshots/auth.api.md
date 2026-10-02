@@ -923,6 +923,14 @@ const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAu
 const authDiscoveryPaths: (options: LunoraAuthOptions) => ReadonlyArray<string>;
 ```
 
+### `authDiscoveryPathsFor` (const)
+
+```ts
+const authDiscoveryPathsFor: <Env>(declaration: {
+    options: (env: Env) => LunoraAuthOptions;
+}, env: Env) => ReadonlyArray<string>;
+```
+
 ### `authDoColumnAdditions` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

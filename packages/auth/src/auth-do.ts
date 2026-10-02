@@ -495,6 +495,8 @@ class LunoraAuthDO {
         }
 
         const auth = this.#ensureReady();
+        // The worker already filtered discovery requests to the derived paths; the object
+        // re-checks against its own options on purpose (defence in depth).
         const response = (await handleAuthRequest(auth, request)) ?? (await handleAuthDiscoveryRequest(auth, request));
 
         return response ?? Response.json({ error: "not an auth route" }, { status: 404 });

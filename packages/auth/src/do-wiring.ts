@@ -15,7 +15,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
-import { isDiscoveryRequest } from "./discovery";
+import { isDiscoveryRequest, unlessNotFound } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
 import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
@@ -242,9 +242,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
                 return undefined;
             }
 
-            const response = await stub()?.fetch(request);
-
-            return response?.status === 404 ? undefined : response;
+            return unlessNotFound(await stub()?.fetch(request));
         },
         resolveIdentity: async (request) => {
             // Fail closed on a missing secret. The object would refuse the call anyway;

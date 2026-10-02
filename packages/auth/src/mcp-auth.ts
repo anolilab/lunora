@@ -14,8 +14,9 @@
  */
 import type { McpOptions, RequireMcpAuthOptions } from "@better-auth/mcp";
 import { mcp as betterAuthMcp, requireMcpAuth as betterAuthRequireMcpAuth } from "@better-auth/mcp";
+import { LunoraError } from "@lunora/errors";
 
-import { authorizationServerPath, MCP_RESOURCE_KEY, parseMcpResource, protectedResourcePath } from "./discovery";
+import { authorizationServerPath, MCP_RESOURCE_KEY, protectedResourcePath } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH } from "./handler";
 
 /** better-auth's `requireMcpAuth` options, with `resource` required. */
@@ -32,6 +33,18 @@ type McpAuthInstance = Parameters<typeof betterAuthRequireMcpAuth>[0];
 
 /** The protected handler: receives the request and the verified token claims. */
 type McpProtectedHandler = Parameters<typeof betterAuthRequireMcpAuth>[1];
+
+/** Check `resource` is an absolute URL before anything is served, or fail closed. */
+const assertMcpResource = (resource: unknown): void => {
+    if (typeof resource === "string" && URL.canParse(resource)) {
+        return;
+    }
+
+    throw new LunoraError(
+        "AUTH_MCP_RESOURCE_INVALID",
+        `requireMcpAuth needs \`resource\` set to the absolute URL passed to mcp({ resource }), got ${JSON.stringify(resource)}. Without it no issued token's audience matches and every request is refused.`,
+    );
+};
 
 /**
  * The MCP authorization server: better-auth's `oauthProvider` configured for MCP,
@@ -60,7 +73,7 @@ const requireMcpAuth = (
     handler: McpProtectedHandler,
     options: LunoraRequireMcpAuthOptions,
 ): ((request: Request) => Promise<Response>) => {
-    parseMcpResource(options.resource);
+    assertMcpResource(options.resource);
 
     return betterAuthRequireMcpAuth(auth, handler, options);
 };
@@ -75,7 +88,7 @@ const requireMcpAuth = (
  * `mcp()`; this is for routing them yourself, e.g. in front of a hand-built
  * worker. Pass `authBasePath` when `createAuth` was given a `basePath` other
  * than `/api/auth`.
- * @throws LunoraError when `resource` is not an absolute URL.
+ * @throws TypeError when `resource` is not an absolute URL.
  */
 const mcpDiscoveryPaths = (resource: string, authBasePath: string = DEFAULT_AUTH_BASE_PATH): ReadonlyArray<string> => [
     protectedResourcePath(resource),

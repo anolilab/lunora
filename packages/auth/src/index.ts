@@ -43,7 +43,7 @@ export {
 } from "./auth-do";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
-export { authDiscoveryPaths, handleAuthDiscoveryRequest } from "./discovery";
+export { authDiscoveryPaths, authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
 export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 export type { AuthJurisdiction, AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
 export { createDoAuthWiring } from "./do-wiring";

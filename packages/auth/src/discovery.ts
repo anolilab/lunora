@@ -29,24 +29,12 @@ const PROTECTED_RESOURCE_PREFIX = "/.well-known/oauth-protected-resource";
 
 const AUTHORIZATION_SERVER_PREFIX = "/.well-known/oauth-authorization-server";
 
-/** Parse `resource` as an absolute URL, or fail closed. */
-const parseMcpResource = (resource: unknown): URL => {
-    if (typeof resource === "string" && resource !== "") {
-        try {
-            return new URL(resource);
-        } catch {
-            // Fall through to the error below.
-        }
-    }
-
-    throw new LunoraError(
-        "AUTH_MCP_RESOURCE_INVALID",
-        `the MCP \`resource\` must be the absolute URL passed to mcp({ resource }), got ${JSON.stringify(resource)}. Without it no issued token's audience matches and every request is refused.`,
-    );
-};
-
-/** The RFC 9728 path-inserted protected-resource metadata path for `resource`. */
-const protectedResourcePath = (resource: string): string => `${PROTECTED_RESOURCE_PREFIX}${parseMcpResource(resource).pathname.replace(TRAILING_SLASH, "")}`;
+/**
+ * The RFC 9728 path-inserted protected-resource metadata path for `resource`.
+ * `mcp()` has already validated the resource as an absolute URL by the time it
+ * reaches here.
+ */
+const protectedResourcePath = (resource: string): string => `${PROTECTED_RESOURCE_PREFIX}${new URL(resource).pathname.replace(TRAILING_SLASH, "")}`;
 
 /** The RFC 8414 path-inserted authorization-server metadata path for an issuer path. */
 const authorizationServerPath = (issuerPath: string): string => `${AUTHORIZATION_SERVER_PREFIX}${issuerPath.replace(TRAILING_SLASH, "")}`;
@@ -58,14 +46,37 @@ interface PluginLike {
     readonly options?: unknown;
 }
 
+/** oauth-provider's options, as far as the derivation reads them. */
+interface ProviderOptionsLike {
+    readonly clientRegistrationDefaultResources?: unknown;
+    readonly disableJwtPlugin?: unknown;
+    readonly resources?: unknown;
+}
+
+/** The path of a path-bearing `baseURL`, which better-auth keeps in place of `basePath`. */
+const baseUrlPath = (baseURL: unknown): string | undefined => {
+    if (typeof baseURL !== "string") {
+        return undefined;
+    }
+
+    try {
+        const path = new URL(baseURL).pathname.replace(TRAILING_SLASH, "");
+
+        return path === "" ? undefined : path;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
- * The issuer's path. oauth-provider takes it from the `jwt()` plugin's
- * `jwt.issuer` when one is set, else from the auth base URL, whose path is the
- * base path.
+ * The issuer's path, derived the way oauth-provider derives the issuer: the
+ * `jwt()` plugin's `jwt.issuer` when one is set and the provider does not set
+ * `disableJwtPlugin`, else the auth base URL — the path of a path-bearing
+ * `baseURL` (better-auth then ignores `basePath`), or `basePath`.
  */
-const issuerPathOf = (options: LunoraAuthOptions, plugins: ReadonlyArray<PluginLike>): string => {
+const issuerPathOf = (options: LunoraAuthOptions, plugins: ReadonlyArray<PluginLike>, provider: ProviderOptionsLike | undefined): string => {
     const jwtOptions = plugins.find((plugin) => plugin.id === "jwt")?.options as undefined | { jwt?: { issuer?: unknown } };
-    const issuer = jwtOptions?.jwt?.issuer;
+    const issuer = provider?.disableJwtPlugin === true ? undefined : jwtOptions?.jwt?.issuer;
 
     if (typeof issuer === "string") {
         try {
@@ -75,30 +86,93 @@ const issuerPathOf = (options: LunoraAuthOptions, plugins: ReadonlyArray<PluginL
         }
     }
 
-    return options.basePath ?? DEFAULT_AUTH_BASE_PATH;
+    return baseUrlPath(options.baseURL) ?? options.basePath ?? DEFAULT_AUTH_BASE_PATH;
+};
+
+/** The identifier of each configured resource (a string, or `{ identifier }`). */
+const resourceIdentifiers = (resources: unknown): string[] =>
+    (Array.isArray(resources) ? resources : [])
+        .map((resource: unknown) => (typeof resource === "object" && resource !== null ? (resource as { identifier?: unknown }).identifier : resource))
+        .filter((identifier): identifier is string => typeof identifier === "string");
+
+/**
+ * The MCP resource of an `oauth-provider` plugin: the one Lunora's `mcp` recorded,
+ * else — for `@better-auth/mcp`'s own `mcp`, or a copy of the plugin object that
+ * dropped the mark — the provider's only resource. `undefined` for a plain
+ * `oauthProvider()`.
+ * @throws LunoraError `AUTH_MCP_RESOURCE_AMBIGUOUS` when an unmarked MCP-shaped
+ * provider (it carries `clientRegistrationDefaultResources`, which `mcp()` always
+ * sets) names several resources, so the MCP one cannot be told apart.
+ */
+const mcpResourceOf = (plugin: PluginLike): string | undefined => {
+    const marked = plugin[MCP_RESOURCE_KEY];
+
+    if (typeof marked === "string") {
+        return marked;
+    }
+
+    const provider = plugin.options as ProviderOptionsLike | undefined;
+    const resources = [...new Set(resourceIdentifiers(provider?.resources))];
+
+    if (resources.length === 1) {
+        return resources[0];
+    }
+
+    if (resources.length > 1 && Array.isArray(provider?.clientRegistrationDefaultResources)) {
+        throw new LunoraError(
+            "AUTH_MCP_RESOURCE_AMBIGUOUS",
+            `@lunora/auth cannot tell which of the provider's resources (${resources.join(", ")}) is the MCP resource. Use \`mcp\` from "@lunora/auth/plugins", which records it, and pass the plugin object as is.`,
+        );
+    }
+
+    return undefined;
 };
 
 /**
  * The exact `.well-known` paths this auth configuration serves outside its base
- * path: the protected-resource metadata for each `mcp({ resource })` (only
- * Lunora's `mcp`, which records its resource), and the authorization-server
- * metadata for the issuer. Empty unless an `oauthProvider()` or `mcp()` plugin is
- * configured.
+ * path: the protected-resource metadata for each MCP resource, and the
+ * authorization-server metadata for the issuer. Empty unless an
+ * `oauthProvider()` or `mcp()` plugin is configured.
+ * @throws LunoraError `AUTH_MCP_RESOURCE_AMBIGUOUS` — see {@link mcpResourceOf}.
  */
 const authDiscoveryPaths = (options: LunoraAuthOptions): ReadonlyArray<string> => {
     const plugins = (options.plugins ?? []) as ReadonlyArray<PluginLike>;
+    const providers = plugins.filter((plugin) => plugin.id === "oauth-provider");
 
-    if (!plugins.some((plugin) => plugin.id === "oauth-provider")) {
+    if (providers.length === 0) {
         return [];
     }
 
-    const resourcePaths = plugins
-        .map((plugin) => plugin[MCP_RESOURCE_KEY])
-        .filter((resource): resource is string => typeof resource === "string")
+    const resourcePaths = providers
+        .map((plugin) => mcpResourceOf(plugin))
+        .filter((resource): resource is string => resource !== undefined)
         .map((resource) => protectedResourcePath(resource));
+    const issuerPath = issuerPathOf(options, plugins, providers[0]?.options as ProviderOptionsLike | undefined);
 
-    return [...new Set([...resourcePaths, authorizationServerPath(issuerPathOf(options, plugins))])];
+    return [...new Set([...resourcePaths, authorizationServerPath(issuerPath)])];
 };
+
+/** Per declaration object: one isolate's `options(env)` is fixed, so derive it once. */
+const pathsByDeclaration = new WeakMap<object, ReadonlyArray<string>>();
+
+/**
+ * Derive {@link authDiscoveryPaths} for an `.auth()` declaration, memoised on the
+ * declaration object. A framework-hosted worker rebuilds its options on every
+ * request, and calling `options(env)` each time would rebuild every plugin.
+ */
+const authDiscoveryPathsFor = <Env>(declaration: { options: (env: Env) => LunoraAuthOptions }, env: Env): ReadonlyArray<string> => {
+    let paths = pathsByDeclaration.get(declaration);
+
+    if (paths === undefined) {
+        paths = authDiscoveryPaths(declaration.options(env));
+        pathsByDeclaration.set(declaration, paths);
+    }
+
+    return paths;
+};
+
+/** A 404 from better-auth (or the auth object) means "not mine": pass it over so the caller's 404 stands. */
+const unlessNotFound = (response: Response | undefined): Response | undefined => (response?.status === 404 ? undefined : response);
 
 /** One derivation per auth instance; the options never change after `createAuth`. */
 const pathsByAuth = new WeakMap<object, ReadonlySet<string>>();
@@ -128,17 +202,16 @@ const handleAuthDiscoveryRequest = async (auth: LunoraAuth, request: Request): P
         return undefined;
     }
 
-    const response = await auth.handler(request);
-
-    return response.status === 404 ? undefined : response;
+    return unlessNotFound(await auth.handler(request));
 };
 
 export {
     authDiscoveryPaths,
+    authDiscoveryPathsFor,
     authorizationServerPath,
     handleAuthDiscoveryRequest,
     isDiscoveryRequest,
     MCP_RESOURCE_KEY,
-    parseMcpResource,
     protectedResourcePath,
+    unlessNotFound,
 };
