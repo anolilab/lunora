@@ -547,9 +547,14 @@ const readReloadJob = (value: unknown, path: string): ReloadJob => {
 };
 
 const readUpgradeJob = (value: unknown, path: string): UpgradeJob => {
-    const record = readObject(value, path, ["kind", "releaseId", "manifestUrl"]);
+    const record = readObject(value, path, ["kind", "releaseId", "manifestUrl"], ["allowDowngrade"]);
 
-    return { kind: "upgrade", manifestUrl: readUrl(record.manifestUrl, `${path}.manifestUrl`), releaseId: readId(record.releaseId, `${path}.releaseId`) };
+    return {
+        ...(record.allowDowngrade === undefined ? {} : { allowDowngrade: readBoolean(record.allowDowngrade, `${path}.allowDowngrade`) }),
+        kind: "upgrade",
+        manifestUrl: readUrl(record.manifestUrl, `${path}.manifestUrl`),
+        releaseId: readId(record.releaseId, `${path}.releaseId`),
+    };
 };
 
 const readDiagnoseJob = (value: unknown, path: string): DiagnoseJob => {

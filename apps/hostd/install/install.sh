@@ -72,6 +72,7 @@ Install or upgrade (run it again):
   --force                    enrol again, as a new box
   --token <token>            the enrolment token (or LUNORA_HOSTD_ENROL_TOKEN)
   --version <version>        install this release instead of the latest
+  --allow-downgrade          install it even when it is older than the installed one
 
 Remove:
   --uninstall                remove hostd, its users and files (never the bucket)
@@ -85,6 +86,7 @@ VERSION=""
 TOKEN="${LUNORA_HOSTD_ENROL_TOKEN:-}"
 UNINSTALL=0
 FORCE=0
+ALLOW_DOWNGRADE=0
 ENROL_ARGS=()
 PLATFORM=""
 RELEASE_ID=""
@@ -120,6 +122,10 @@ parse_args() {
                 need_value "$@"
                 VERSION="${2#v}"
                 shift 2
+                ;;
+            --allow-downgrade)
+                ALLOW_DOWNGRADE=1
+                shift
                 ;;
             --uninstall)
                 UNINSTALL=1
@@ -351,8 +357,14 @@ install_release() {
     # lunora-hostd's bytes match the manifest this script verified; now its own strict
     # verifier checks the manifest and every download again, and installs the release
     # exactly as an upgrade does — as lunora-hostd, which owns the install directory.
+    local downgrade=()
+
+    if [ "${ALLOW_DOWNGRADE}" -eq 1 ]; then
+        downgrade=(--allow-downgrade)
+    fi
+
     as_hostd "${WORK}/bootstrap" install-release "${WORK}/manifest.json" --from "${WORK}" \
-        --install-dir "${INSTALL_DIR}" --platform "${PLATFORM}" > /dev/null ||
+        --install-dir "${INSTALL_DIR}" --platform "${PLATFORM}" "${downgrade[@]}" > /dev/null ||
         die "lunora-hostd refused the release"
     say "installed ${RELEASE_ID}"
 }

@@ -128,6 +128,105 @@ const releaseArtifactFor = (
     platform: HostdReleasePlatform,
 ): HostdReleaseArtifact | undefined => manifest[component].artifacts.find((artifact) => artifact.platform === platform);
 
+/** The `major.minor.patch` core of a semantic version (2.0.0): no leading zeros. */
+const SEMVER_CORE_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+
+/** One pre-release or build identifier. */
+const SEMVER_IDENTIFIER_PATTERN = /^[\dA-Za-z-]+$/u;
+
+/** A version as `[major, minor, patch]` and its pre-release identifiers, or `undefined` when it is not a semantic version (a leading `v` is allowed). */
+const parseSemver = (version: string): { core: [bigint, bigint, bigint]; prerelease?: string[] } | undefined => {
+    const withoutV = version.startsWith("v") ? version.slice(1) : version;
+    const [release = "", build, ...extra] = withoutV.split("+");
+    const dash = release.indexOf("-");
+    const core = SEMVER_CORE_PATTERN.exec(dash === -1 ? release : release.slice(0, dash));
+    const prerelease = dash === -1 ? undefined : release.slice(dash + 1).split(".");
+    const identifiersValid = [...(prerelease ?? []), ...(build === undefined ? [] : build.split("."))].every((identifier) =>
+        SEMVER_IDENTIFIER_PATTERN.test(identifier),
+    );
+
+    if (core === null || extra.length > 0 || !identifiersValid) {
+        return undefined;
+    }
+
+    return {
+        core: [BigInt(core[1] as string), BigInt(core[2] as string), BigInt(core[3] as string)],
+        ...(prerelease === undefined ? {} : { prerelease }),
+    };
+};
+
+const NUMERIC_IDENTIFIER = /^\d+$/u;
+
+const compareNumbers = (left: bigint, right: bigint): -1 | 0 | 1 => {
+    if (left === right) {
+        return 0;
+    }
+
+    return left < right ? -1 : 1;
+};
+
+/** Semver §11.4: numeric identifiers numerically and below alphanumeric ones, which compare in ASCII order. */
+const compareIdentifiers = (left: string, right: string): -1 | 0 | 1 => {
+    const leftNumeric = NUMERIC_IDENTIFIER.test(left);
+    const rightNumeric = NUMERIC_IDENTIFIER.test(right);
+
+    if (leftNumeric && rightNumeric) {
+        return compareNumbers(BigInt(left), BigInt(right));
+    }
+
+    if (leftNumeric !== rightNumeric) {
+        return leftNumeric ? -1 : 1;
+    }
+
+    if (left === right) {
+        return 0;
+    }
+
+    return left < right ? -1 : 1;
+};
+
+/**
+ * Order two release versions by semantic-version precedence (a pre-release
+ * below its release, `1.0.0-alpha.2` below `1.0.0-alpha.10`, build metadata
+ * ignored).
+ * @returns -1, 0 or 1 as `left` is older than, as new as, or newer than `right`; `undefined` when either is not a semantic version
+ */
+const compareReleaseVersions = (left: string, right: string): -1 | 0 | 1 | undefined => {
+    const a = parseSemver(left);
+    const b = parseSemver(right);
+
+    if (a === undefined || b === undefined) {
+        return undefined;
+    }
+
+    for (const index of [0, 1, 2] as const) {
+        const order = compareNumbers(a.core[index], b.core[index]);
+
+        if (order !== 0) {
+            return order;
+        }
+    }
+
+    if (a.prerelease === undefined || b.prerelease === undefined) {
+        if (a.prerelease === b.prerelease) {
+            return 0;
+        }
+
+        // A version without a pre-release is newer than any of its pre-releases.
+        return a.prerelease === undefined ? 1 : -1;
+    }
+
+    for (let index = 0; index < Math.min(a.prerelease.length, b.prerelease.length); index += 1) {
+        const order = compareIdentifiers(a.prerelease[index] as string, b.prerelease[index] as string);
+
+        if (order !== 0) {
+            return order;
+        }
+    }
+
+    return compareNumbers(BigInt(a.prerelease.length), BigInt(b.prerelease.length));
+};
+
 const readHttpsUrl = (value: unknown, path: string): string => {
     const text = readString(value, path);
 
@@ -395,6 +494,7 @@ export type {
 };
 export {
     canonicalManifestBytes,
+    compareReleaseVersions,
     HOSTD_RELEASE_PLATFORMS,
     HOSTD_RELEASE_SCHEMA,
     HOSTD_RELEASE_SIGNING_DOMAIN,

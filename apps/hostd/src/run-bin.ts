@@ -57,14 +57,15 @@ Usage:
   lunora-hostd run         Run the daemon in the foreground (systemd runs this)
   lunora-hostd status      Show this box's enrolment and fleets
   lunora-hostd install-release <manifest.json> --from <directory>
-               [--install-dir <path>] [--platform <p>]
+               [--install-dir <path>] [--platform <p>] [--allow-downgrade]
       Install the release a manifest describes from the files downloaded
       into <directory> (lunora-hostd, celld, caddy, as published), exactly
       as an upgrade does: verify the manifest against the release keys
       compiled into this binary, check each file against the size and
       SHA-256 it pins for this platform (linux-x64 or linux-arm64), run it
       once, then install it beside the running release and switch current
-      to it. Prints the release id. install.sh runs it.
+      to it. A release older than the installed one is refused without
+      --allow-downgrade. Prints the release id. install.sh runs it.
   lunora-hostd --version   Print the version
   lunora-hostd --help      Print this help
 
@@ -91,6 +92,7 @@ const ENROL_OPTIONS = {
 const CONFIG_ONLY = { config: { type: "string" } } as const;
 
 const INSTALL_OPTIONS = {
+    "allow-downgrade": { type: "boolean" },
     from: { type: "string" },
     "install-dir": { type: "string" },
     platform: { type: "string" },
@@ -191,6 +193,7 @@ const runInstallRelease = async (args: ReadonlyArray<string>, output: BinOutput,
     const { from } = values;
 
     await installRelease({
+        allowDowngrade: values["allow-downgrade"] === true,
         envelope: verified.envelope,
         installDir: values["install-dir"] ?? DEFAULT_INSTALL_DIR,
         // What install.sh downloaded, named after the binary it holds (compressed when the manifest says so).

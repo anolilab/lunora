@@ -218,7 +218,7 @@ nonce is single use.
 | `deploy`   | `alias`, `deploymentId` (id), `releaseUrl` (URL), `vars` (object of var name → string), `crons` (string[]), `compatibilityDate`? (date) |
 | `destroy`  | `alias`, `deleteData` (boolean)                                                                                                         |
 | `reload`   | `alias`                                                                                                                                 |
-| `upgrade`  | `releaseId` (id), `manifestUrl` (URL)                                                                                                   |
+| `upgrade`  | `releaseId` (id), `manifestUrl` (URL), `allowDowngrade`? (boolean)                                                                      |
 | `diagnose` | none                                                                                                                                    |
 
 A job object with an unknown `kind` is rejected. `vars` merges vars and secrets
@@ -226,6 +226,18 @@ A job object with an unknown `kind` is rejected. `vars` merges vars and secrets
 a signed request (§6.2); a box MUST refuse a `releaseUrl` or `manifestUrl`
 whose origin is not the control plane it enrolled with, since it would
 otherwise sign requests for a third party.
+
+`upgrade` is **anti-rollback** by default: a box MUST refuse
+(`UPGRADE_REFUSED`) a release whose `manifest.hostd.version` is older than the
+`lunora-hostd` it has installed, by semantic-version precedence (a pre-release
+is older than its release; build metadata is ignored; a version that is not a
+semantic version cannot be ordered and is refused too). An old release is
+still validly signed, so the signature alone cannot stop a control plane — or
+whoever holds its admin token — from rolling a box back onto a release with a
+fixed vulnerability. `allowDowngrade: true` lifts the check for that one job;
+a control plane sends it only when an operator explicitly asks for a rollback.
+A release equal to the installed one is not a downgrade; the release already
+running is a no-op.
 
 **`routes`** — `{type, table}`: the full routing table, ≤ 2 000 entries
 (§4), each `{hostname, alias}`, hostnames unique.
@@ -431,7 +443,8 @@ A box (and the control plane, before it offers a release):
    fetched or taken from the envelope.
 3. MUST verify `signature` over §8.2 with that key.
 4. For an `upgrade` job, MUST refuse a manifest whose `releaseId` differs from
-   the job's.
+   the job's, and one whose `hostd.version` is older than the installed
+   `lunora-hostd` unless the job sets `allowDowngrade` (§5.2).
 5. MUST check each artifact it installs against `size`, then `sha256`, before
    decompressing or executing it, and refuse any mismatch.
 

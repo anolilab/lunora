@@ -88,10 +88,13 @@ follow-up for the `apps/cloud` branch).
    checked against its size and SHA-256, decompressed, run once
    (`--version`), staged in `<releaseId>.partial/`, renamed into place, and
    `current` is switched in one rename. The release that ran before stays, for
-   a rollback; older ones are removed.
+   a rollback; older ones are removed. A release whose `lunora-hostd` is
+   older than the installed one is refused (anti-rollback: an old release is
+   still validly signed) unless `install.sh` is given `--allow-downgrade`.
 
 The `upgrade` job does steps 2–4 inside the running daemon with the keys
-compiled into it, downloading each artifact itself, then exits for systemd to
+compiled into it, downloading each artifact itself and refusing a downgrade
+unless the job carries `allowDowngrade: true` (protocol §5.2), then exits for systemd to
 restart into the new release (or restarts the fleets in place when
 `lunora-hostd` itself did not change).
 

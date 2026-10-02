@@ -373,6 +373,7 @@ interface RoutesMessage {
 
 ```ts
 interface UpgradeJob {
+    allowDowngrade?: boolean;
     kind: "upgrade";
     manifestUrl: string;
     releaseId: string;
@@ -833,6 +834,12 @@ type TrustedReleaseKey = string | Uint8Array;
 
 ```ts
 const canonicalManifestBytes: (manifest: HostdReleaseManifest) => Uint8Array;
+```
+
+### `compareReleaseVersions` (const)
+
+```ts
+const compareReleaseVersions: (left: string, right: string) => -1 | 0 | 1 | undefined;
 ```
 
 ### `releaseSigningPayload` (const)

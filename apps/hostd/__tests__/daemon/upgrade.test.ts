@@ -229,6 +229,33 @@ describe("the upgrade job", () => {
         expect(versionOf(binaryPaths(box.config).celld, ["--version"])).toBe("celld 0.6.0");
     });
 
+    it("refuses an older lunora-hostd unless the job allows a downgrade", async () => {
+        expect.assertions(4);
+
+        const older = await buildRelease(box, "hostd-v0_0_0-rc_1", "0.0.0-rc.1");
+
+        published = older.files;
+        publish(signReleaseManifest(older.manifest, privateKey), "hostd-v0_0_0-rc_1");
+
+        const refused = await upgrade("hostd-v0_0_0-rc_1");
+
+        expect(refused.result.error).toMatchObject({
+            code: "UPGRADE_REFUSED",
+            message: expect.stringMatching(/0\.0\.0-rc\.1 is older than the installed 0\.0\.0/u),
+        });
+        expect(readlinkSync(join(box.config.installDir, "current"))).toBe(INITIAL_RELEASE);
+
+        const allowed = await plane.dispatch({
+            allowDowngrade: true,
+            kind: "upgrade",
+            manifestUrl: `${plane.origin}/v1/hostd/releases/hostd-v0_0_0-rc_1/manifest`,
+            releaseId: "hostd-v0_0_0-rc_1",
+        });
+
+        expect(allowed.result).toMatchObject({ ok: true });
+        expect(readlinkSync(join(box.config.installDir, "current"))).toBe("hostd-v0_0_0-rc_1");
+    });
+
     it("refuses a manifest for another release than the job names", async () => {
         expect.assertions(1);
 

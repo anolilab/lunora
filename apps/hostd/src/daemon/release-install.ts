@@ -16,7 +16,9 @@
  * directory changes until all three passed. Then the directory is renamed
  * into place and `current` swapped to it in one rename. The release that ran
  * before stays, for a manual rollback (point `current` back at it); older
- * ones are removed. A release that already runs is left alone.
+ * ones are removed. A release that already runs is left alone, and one whose
+ * `lunora-hostd` is older than the installed one is refused unless the caller
+ * explicitly allows a downgrade.
  */
 import {
     chmodSync,
@@ -25,6 +27,7 @@ import {
     existsSync,
     mkdirSync,
     readdirSync,
+    readFileSync,
     readlinkSync,
     renameSync,
     rmSync,
@@ -36,7 +39,7 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 
 import type { HostdReleaseArtifact, HostdReleaseEnvelope, HostdReleasePlatform } from "../release";
-import { releaseArtifactFor } from "../release-manifest";
+import { compareReleaseVersions, releaseArtifactFor } from "../release-manifest";
 import { verifyArtifact } from "../release-verify";
 import HOSTD_VERSION from "../version";
 import { DIRECT_LAUNCH } from "./capabilities";
@@ -177,13 +180,61 @@ const stage = async (
 };
 
 interface InstallReleaseInput {
+    /** Install a release whose `lunora-hostd` is older than the installed one. Off unless asked for explicitly. */
+    allowDowngrade: boolean;
     /** A release envelope whose signature the caller verified against the compiled-in keys. */
     envelope: HostdReleaseEnvelope;
     installDir: string;
     obtain: ObtainArtifact;
     platform: HostdReleasePlatform;
     progress: (line: string) => void;
+    /** The running `lunora-hostd`'s version, for when the installed release's manifest cannot be read. */
+    runningVersion?: string;
 }
+
+/** The `lunora-hostd` version of the release `current` points at, from the manifest kept beside it. */
+const installedHostdVersion = (installDirectory: string): string | undefined => {
+    try {
+        const kept = JSON.parse(readFileSync(join(installDirectory, CURRENT_RELEASE_LINK, "manifest.json"), "utf8")) as {
+            manifest?: { hostd?: { version?: unknown } };
+        };
+        const version = kept.manifest?.hostd?.version;
+
+        return typeof version === "string" ? version : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Anti-rollback: refuse a release whose `lunora-hostd` is older than the one
+ * installed, unless the caller explicitly allows it. An older release is
+ * still signed — the key cannot tell it from a new one — and installing it
+ * would bring back whatever its successors fixed. A version that is not a
+ * semantic version cannot be ordered, so it is refused too.
+ * @throws {JobError} `UPGRADE_REFUSED`.
+ */
+const assertNotDowngrade = (candidate: string, installed: string | undefined, allowDowngrade: boolean): void => {
+    if (installed === undefined || allowDowngrade) {
+        return;
+    }
+
+    const order = compareReleaseVersions(candidate, installed);
+
+    if (order === undefined) {
+        throw new JobError(
+            "UPGRADE_REFUSED",
+            `cannot tell whether lunora-hostd ${candidate} is older than the installed ${installed} (not semantic versions); allow a downgrade to install it anyway`,
+        );
+    }
+
+    if (order < 0) {
+        throw new JobError(
+            "UPGRADE_REFUSED",
+            `lunora-hostd ${candidate} is older than the installed ${installed}: refusing a downgrade that was not explicitly allowed`,
+        );
+    }
+};
 
 /** What {@link installRelease} did. */
 interface InstalledRelease {
@@ -195,7 +246,7 @@ interface InstalledRelease {
 
 /**
  * Install a verified release beside the running one and switch `current` to it.
- * @throws {JobError} `UPGRADE_REFUSED` when it ships nothing for this platform, `FETCH_FAILED` / `ARTIFACT_INVALID` for an artifact. Nothing outside the staging directory has changed then.
+ * @throws {JobError} `UPGRADE_REFUSED` for a downgrade not allowed or nothing for this platform, `FETCH_FAILED` / `ARTIFACT_INVALID` for an artifact. Nothing outside the staging directory has changed then.
  */
 const installRelease = async (input: InstallReleaseInput): Promise<InstalledRelease> => {
     const { envelope, installDir, platform, progress } = input;
@@ -207,6 +258,8 @@ const installRelease = async (input: InstallReleaseInput): Promise<InstalledRele
 
         return { installed: false, previous: running };
     }
+
+    assertNotDowngrade(manifest.hostd.version, installedHostdVersion(installDir) ?? input.runningVersion, input.allowDowngrade);
 
     const artifacts = RELEASE_COMPONENTS.map((component) => {
         const artifact = releaseArtifactFor(manifest, component, platform);
@@ -247,4 +300,16 @@ const installRelease = async (input: InstallReleaseInput): Promise<InstalledRele
 };
 
 export type { InstalledRelease, InstallReleaseInput, ObtainArtifact, ReleaseComponent };
-export { currentPlatform, currentRelease, installedVersions, installRelease, pruneReleases, RELEASE_COMPONENTS, switchCurrent, versionOutput, versionToken };
+export {
+    assertNotDowngrade,
+    currentPlatform,
+    currentRelease,
+    installedHostdVersion,
+    installedVersions,
+    installRelease,
+    pruneReleases,
+    RELEASE_COMPONENTS,
+    switchCurrent,
+    versionOutput,
+    versionToken,
+};

@@ -133,6 +133,7 @@ const runUpgrade = async (job: UpgradeJob, options: UpgradeOptions, progress: (l
 
     const fetcher = options.fetch ?? globalThis.fetch;
     const outcome = await installRelease({
+        allowDowngrade: job.allowDowngrade === true,
         envelope: verified.envelope,
         installDir: options.config.installDir,
         obtain: async (component, artifact, path) => {
@@ -141,6 +142,7 @@ const runUpgrade = async (job: UpgradeJob, options: UpgradeOptions, progress: (l
         },
         platform,
         progress,
+        runningVersion: HOSTD_VERSION,
     });
 
     if (!outcome.installed) {

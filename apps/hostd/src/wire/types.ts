@@ -154,6 +154,11 @@ export interface ReloadJob {
 
 /** Replace the box's own binaries with release `releaseId`, described by the signed manifest at `manifestUrl`. */
 export interface UpgradeJob {
+    /**
+     * Install the release even when its `lunora-hostd` is older than the box's.
+     * Absent (or `false`): the box refuses a downgrade with `UPGRADE_REFUSED`.
+     */
+    allowDowngrade?: boolean;
     kind: "upgrade";
     manifestUrl: string;
     releaseId: string;

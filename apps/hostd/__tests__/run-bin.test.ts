@@ -157,6 +157,39 @@ describe("lunora-hostd install-release", () => {
         expect(again.stderr).toMatch(/hostd-v1_0_0 is the one running; nothing to install/u);
     });
 
+    it("refuses an older release unless --allow-downgrade is given", async () => {
+        expect.assertions(4);
+
+        await install();
+
+        const keys = generateKeyPairSync("ed25519");
+        const older = JSON.parse(readFileSync(manifestPath, "utf8")) as { manifest: HostdReleaseManifest };
+
+        trustedKeys = { [releaseKeyId(keys.publicKey)]: keys.publicKey.export({ format: "pem", type: "spki" }) };
+        writeFileSync(
+            manifestPath,
+            JSON.stringify(
+                signReleaseManifest(
+                    { ...older.manifest, hostd: { ...older.manifest.hostd, version: "1.0.0-rc.1" }, releaseId: "hostd-v1_0_0-rc_1" },
+                    keys.privateKey,
+                ),
+            ),
+        );
+
+        const refused = await install();
+
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toMatch(/lunora-hostd 1\.0\.0-rc\.1 is older than the installed 1\.0\.0/u);
+
+        const forced = await run(
+            ["install-release", manifestPath, "--from", from, "--install-dir", installDirectory, "--platform", "linux-x64", "--allow-downgrade"],
+            { trustedKeys },
+        );
+
+        expect(forced.code).toBe(0);
+        expect(readlinkSync(join(installDirectory, "current"))).toBe("hostd-v1_0_0-rc_1");
+    });
+
     it("refuses a manifest no compiled-in key signed, and installs nothing", async () => {
         expect.assertions(3);
 

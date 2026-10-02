@@ -166,6 +166,16 @@
                 "manifestUrl": "https://api.lunora.sh/v1/boxes/upgrades/hostd_1_0_1/manifest.json"
             }
         },
+        "job-upgrade-downgrade": {
+            "type": "job",
+            "jobId": "job_48",
+            "job": {
+                "kind": "upgrade",
+                "releaseId": "hostd_1_0_0",
+                "manifestUrl": "https://api.lunora.sh/v1/hostd/releases/hostd_1_0_0/manifest",
+                "allowDowngrade": true
+            }
+        },
         "job-diagnose": {
             "type": "job",
             "jobId": "job_47",
@@ -770,6 +780,21 @@
                 },
                 "code": "INVALID_MESSAGE",
                 "path": "$.job.kind"
+            },
+            {
+                "name": "upgrade allowDowngrade that is not a boolean",
+                "frame": {
+                    "type": "job",
+                    "jobId": "job_1",
+                    "job": {
+                        "kind": "upgrade",
+                        "releaseId": "hostd_1_0_0",
+                        "manifestUrl": "https://api.lunora.sh/v1/hostd/releases/hostd_1_0_0/manifest",
+                        "allowDowngrade": "yes"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.job.allowDowngrade"
             },
             {
                 "name": "unknown job field",

@@ -20,6 +20,7 @@ export type {
 } from "./release-manifest";
 export {
     canonicalManifestBytes,
+    compareReleaseVersions,
     HOSTD_RELEASE_PLATFORMS,
     HOSTD_RELEASE_SCHEMA,
     HOSTD_RELEASE_SIGNING_DOMAIN,

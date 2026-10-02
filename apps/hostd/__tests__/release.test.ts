@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HostdReleaseEnvelope, HostdReleaseManifest } from "../src/release";
 import {
     canonicalManifestBytes,
+    compareReleaseVersions,
     HOSTD_RELEASE_KEY_PLACEHOLDER,
     HOSTD_TRUSTED_RELEASE_KEYS,
     releaseSigningPayload,
@@ -121,6 +122,40 @@ describe(releaseArtifactFor, () => {
         expect(releaseArtifactFor(manifest, "hostd", "linux-arm64")).toStrictEqual(artifact("linux-arm64", "hostd", SHA_B));
         expect(releaseArtifactFor({ ...manifest, celld: { ...manifest.celld, artifacts: [] } }, "celld", "linux-x64")).toBeUndefined();
         expect(["linux-x64", "linux-arm64", "darwin-arm64", ""].map((platform) => isReleasePlatform(platform))).toStrictEqual([true, true, false, false]);
+    });
+});
+
+describe(compareReleaseVersions, () => {
+    it.each([
+        ["1.0.0", "1.0.0", 0],
+        ["v1.0.0", "1.0.0", 0],
+        ["1.0.1", "1.0.0", 1],
+        ["1.10.0", "1.9.9", 1],
+        ["1.0.0", "1.0.0-alpha.1", 1],
+        ["1.0.0-alpha.2", "1.0.0-alpha.10", -1],
+        ["1.0.0-alpha", "1.0.0-alpha.1", -1],
+        ["1.0.0-alpha.1", "1.0.0-beta", -1],
+        ["1.0.0-1", "1.0.0-alpha", -1],
+        ["1.0.0+build.2", "1.0.0+build.1", 0],
+        ["2.0.0-rc.1", "1.99.99", 1],
+    ] as const)("orders %s against %s as %i", (newer, older, order) => {
+        expect.assertions(2);
+
+        expect(compareReleaseVersions(newer, older)).toBe(order);
+        expect(compareReleaseVersions(older, newer)).toBe(order === 0 ? 0 : -order);
+    });
+
+    it("cannot order what is not a semantic version", () => {
+        expect.assertions(3);
+
+        expect(compareReleaseVersions("1.0", "1.0.0")).toBeUndefined();
+        expect(compareReleaseVersions("1.0.0", "nightly")).toBeUndefined();
+        expect(["01.0.0", "1.0.0-", "1.0.0-a..b", "1.0.0+a+b"].map((version) => compareReleaseVersions(version, "1.0.0"))).toStrictEqual([
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+        ]);
     });
 });
 
