@@ -153,7 +153,7 @@ type CapabilityDescriptor = (
 /**
  * The canonical capability list. **Order is load-bearing** — every consumer
  * emits in row order (see the module doc). The `appMethod` rows reproduce the
- * original `LONG_TAIL` builder sequence (ai, analytics, artifacts, browser, hyperdrive,
+ * original `LONG_TAIL` builder sequence (ai, aiSearch, analytics, artifacts, browser, hyperdrive,
  * images, kv, payment, x402, r2sql, vectors), and the same order places the
  * `ctx.*` fields and the ShardDO wiring.
  */
@@ -187,7 +187,35 @@ const CAPABILITY_ROWS = [
         shardBinding: "bespoke",
         tier: "action",
     },
-    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
+    // `ctx.aiSearch` — Cloudflare AI Search, the raw `ai_search_namespaces`
+    // binding passed through unwrapped (no factory: the binding IS the client).
+    // Its own types-only `@lunora/bindings/ai-search` subpath, so the emitted
+    // field does not depend on the app's ambient `types`. ActionCtx ONLY: a
+    // ranked search over a re-indexing corpus is billed, non-deterministic
+    // network I/O, and a query running it would re-bill on every subscription
+    // re-run.
+    {
+        appMethod: {
+            configKey: "aiSearch",
+            doc: "Override the AI Search namespace binding backing `ctx.aiSearch` (defaults to `env.AI_SEARCH`).",
+            method: "aiSearch",
+        },
+        contextProperty: "aiSearch",
+        key: "aiSearch",
+        moduleSpecifier: "@lunora/bindings/ai-search",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Cloudflare AI Search namespace (\`ai_search_namespaces\`): \`.get(name)\` an instance, then \`search\` / \`chatCompletions\`. Billed, non-deterministic network I/O — available only in actions. */\n    readonly aiSearch: import("@lunora/bindings/ai-search").AiSearch;`,
+        shardBinding: {
+            binding: { envName: "AI_SEARCH" },
+            clientType: "AiSearch",
+            missingMessage:
+                "ctx.aiSearch: no AI Search binding found. Add an \\`ai_search_namespaces\\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \\`defineApp().aiSearch((env) => …)\\` at yours.",
+            stubMethods: ["chatCompletions", "create", "delete", "get", "list", "search"],
+            syncStubMethods: ["get"],
+        },
+        tier: "action",
+    },
+    // `ctx.analytics` —Analytics Engine write helper. EVERY ctx: a write-only,
     // fire-and-forget side effect, not a determinism hazard for reads.
     // `createAnalytics` takes the binding POSITIONALLY.
     {

@@ -76,6 +76,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/bindings": "1.0.0-alpha.90",
         "@lunora/do": "1.0.0-alpha.187",
         "@lunora/server": "1.0.0-alpha.168",
         "@lunora/shard-engine": "1.0.0-alpha.105",
