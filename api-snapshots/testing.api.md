@@ -40,6 +40,29 @@ interface AgentRunOverrides {
 }
 ```
 
+### `ArtifactsFake` (interface)
+
+```ts
+interface ArtifactsFake {
+    binding: ArtifactsBindingLike;
+    failNext: (code: ArtifactsErrorCode) => void;
+    readonly handles: {
+        disposed: number;
+        opened: number;
+    };
+    putBlob: (repo: string, hash: string, content: Blob | string) => Blob;
+    putCommit: (repo: string, commit: ArtifactsCommitMetadata) => void;
+    putFile: (repo: string, file: {
+        content: Blob | string;
+        path: string;
+        ref: string;
+        type?: string;
+    }) => Blob;
+    putTree: (repo: string, hash: string, entries: ArtifactsTreeEntry[]) => void;
+    repoNames: () => string[];
+}
+```
+
 ### `EvalCase` (interface)
 
 ```ts
@@ -306,6 +329,14 @@ const agentHarness: (agent: AgentDefinition, options: AgentHarnessOptions) => Ag
 const containsScorer: (needle: string, options?: {
     caseSensitive?: boolean;
 }) => Scorer;
+```
+
+### `createArtifactsFake` (const)
+
+```ts
+const createArtifactsFake: (options?: {
+    namespace?: string;
+}) => ArtifactsFake;
 ```
 
 ### `evaluate` (const)

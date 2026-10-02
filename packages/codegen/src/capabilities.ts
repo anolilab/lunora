@@ -153,7 +153,7 @@ type CapabilityDescriptor = (
 /**
  * The canonical capability list. **Order is load-bearing** — every consumer
  * emits in row order (see the module doc). The `appMethod` rows reproduce the
- * original `LONG_TAIL` builder sequence (ai, analytics, browser, hyperdrive,
+ * original `LONG_TAIL` builder sequence (ai, analytics, artifacts, browser, hyperdrive,
  * images, kv, payment, x402, r2sql, vectors), and the same order places the
  * `ctx.*` fields and the ShardDO wiring.
  */
@@ -210,6 +210,32 @@ const CAPABILITY_ROWS = [
             syncStubMethods: ["track", "writeDataPoint"],
         },
         tier: "every",
+    },
+    // `ctx.artifacts` — Cloudflare Artifacts (Git-backed repos). ActionCtx ONLY:
+    // every call is remote, billed network I/O. Without a binding the stub's
+    // `authenticatedRemote` throws like every other method rather than delegating
+    // to the pure helper — import `authenticatedRemote` from
+    // `@lunora/bindings/artifacts` directly to build a remote URL with no binding.
+    {
+        appMethod: {
+            configKey: "artifacts",
+            doc: "Override the Artifacts binding backing `ctx.artifacts` (defaults to `env.ARTIFACTS`).",
+            method: "artifacts",
+        },
+        contextProperty: "artifacts",
+        key: "artifacts",
+        moduleSpecifier: "@lunora/bindings/artifacts",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Cloudflare Artifacts repos (create/import/fork, Git tokens, read commits and files). Non-deterministic — available only in actions. Writes go through \`git push\` with a token, not this client. */\n    readonly artifacts: import("@lunora/bindings/artifacts").ArtifactsClient;`,
+        shardBinding: {
+            binding: { bindingType: "ArtifactsBindingLike", envName: "ARTIFACTS", factory: { name: "createArtifacts", option: "binding" } },
+            clientType: "ArtifactsClient",
+            missingMessage:
+                'ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\"ARTIFACTS\\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).',
+            stubMethods: ["authenticatedRemote", "create", "delete", "import", "info", "list", "withRepo"],
+            syncStubMethods: ["authenticatedRemote"],
+        },
+        tier: "action",
     },
     // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network
     // I/O. Thunk-only: `createBrowser` needs an injected Playwright `launch` (the

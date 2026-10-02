@@ -685,12 +685,14 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
     services: ServiceBindingIR[] | undefined;
     signals: string[];
     usesAi: boolean;
     usesAnalytics: boolean;
+    usesArtifacts: boolean;
     usesAuth: boolean;
     usesBrowser: boolean;
     usesFlags: boolean;

@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths</h3>
+<h3 align="center">Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts — one install, per-binding subpaths</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 

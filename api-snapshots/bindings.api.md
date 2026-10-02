@@ -114,6 +114,327 @@ const createAnalytics: (binding: AnalyticsEngineDatasetLike) => AnalyticsClient;
 const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClient;
 ```
 
+## `@lunora/bindings/artifacts`
+
+### `ArtifactsActivityEnvelope` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsBindingLike` (interface)
+
+```ts
+interface ArtifactsBindingLike {
+    create: (name: string, options?: ArtifactsCreateOptions) => Promise<ArtifactsCreateRepoResult>;
+    delete: (name: string) => Promise<boolean>;
+    get: (name: string) => Promise<ArtifactsRepoLike>;
+    import: (params: ArtifactsImportParams) => Promise<ArtifactsCreateRepoResult>;
+    list: (options?: ArtifactsListOptions) => Promise<ArtifactsRepoListResult>;
+}
+```
+
+### `ArtifactsClient` (type)
+
+```ts
+type ArtifactsClient = {
+    authenticatedRemote: (remote: string, token: string) => string;
+    info: (name: string) => Promise<ArtifactsRepoInfo>;
+    withRepo: <T>(name: string, callback: (repo: ArtifactsRepoClient) => Promise<T> | T) => Promise<T>;
+} & Omit<ArtifactsBindingLike, "get">;
+```
+
+### `ArtifactsCommitIdentity` (interface)
+
+```ts
+interface ArtifactsCommitIdentity {
+    email: string;
+    name: string;
+}
+```
+
+### `ArtifactsCommitMetadata` (interface)
+
+```ts
+interface ArtifactsCommitMetadata {
+    author: ArtifactsCommitIdentity;
+    authoredAt: number;
+    committedAt: number;
+    committer: ArtifactsCommitIdentity;
+    hash: string;
+    message: string;
+    parents: string[];
+    treeHash: string;
+}
+```
+
+### `ArtifactsCreateOptions` (interface)
+
+```ts
+interface ArtifactsCreateOptions {
+    description?: string;
+    readOnly?: boolean;
+    setDefaultBranch?: string;
+}
+```
+
+### `ArtifactsCreateRepoResult` (interface)
+
+```ts
+interface ArtifactsCreateRepoResult {
+    defaultBranch: string;
+    description: string | null;
+    id: string;
+    name: string;
+    remote: string;
+    token: string;
+}
+```
+
+### `ArtifactsCreateTokenResult` (interface)
+
+```ts
+interface ArtifactsCreateTokenResult {
+    expiresAt: string;
+    id: string;
+    plaintext: string;
+    scope: ArtifactsTokenScope;
+}
+```
+
+### `ArtifactsErrorCode` (type)
+
+```ts
+type ArtifactsErrorCode = "ALREADY_EXISTS" | "CREATE_IN_PROGRESS" | "FORK_IN_PROGRESS" | "IMPORT_IN_PROGRESS" | "INTERNAL_ERROR" | "INVALID_INPUT" | "INVALID_REPO_NAME" | "INVALID_TTL" | "INVALID_URL" | "MEMORY_LIMIT" | "NOT_FOUND" | "REMOTE_AUTH_REQUIRED" | "UPSTREAM_UNAVAILABLE";
+```
+
+### `ArtifactsErrorData` (interface)
+
+```ts
+interface ArtifactsErrorData {
+    code: string;
+    numericCode?: number;
+}
+```
+
+### `ArtifactsEvent` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsEventMetadata` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsForkOptions` (interface)
+
+```ts
+interface ArtifactsForkOptions {
+    defaultBranchOnly?: boolean;
+    description?: string;
+    readOnly?: boolean;
+}
+```
+
+### `ArtifactsImportParams` (interface)
+
+```ts
+interface ArtifactsImportParams {
+    source: {
+        branch?: string;
+        depth?: number;
+        url: string;
+    };
+    target: {
+        name: string;
+        opts?: {
+            description?: string;
+            readOnly?: boolean;
+        };
+    };
+}
+```
+
+### `ArtifactsLifecycleEnvelope` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsListOptions` (interface)
+
+```ts
+interface ArtifactsListOptions {
+    cursor?: string;
+    limit?: number;
+}
+```
+
+### `ArtifactsLogOptions` (interface)
+
+```ts
+interface ArtifactsLogOptions {
+    limit?: number;
+    offset?: number;
+    ref?: string;
+}
+```
+
+### `ArtifactsPushedCommit` (interface)
+
+```ts
+interface ArtifactsPushedCommit {
+    author: ArtifactsCommitIdentity;
+    committer: ArtifactsCommitIdentity;
+    id: string;
+    message: string;
+    messageTruncated: boolean;
+    parents: string[];
+    timestamp: string;
+}
+```
+
+### `ArtifactsReadFileArgs` (interface)
+
+```ts
+interface ArtifactsReadFileArgs {
+    path: string;
+    ref: string;
+}
+```
+
+### `ArtifactsRepoActivityEvent` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsRepoClient` (interface)
+
+```ts
+interface ArtifactsRepoClient {
+    createToken: (scope?: ArtifactsTokenScope, ttl?: number) => Promise<ArtifactsCreateTokenResult>;
+    fork: (name: string, options?: ArtifactsForkOptions) => Promise<ArtifactsCreateRepoResult>;
+    info: () => Promise<ArtifactsRepoInfo>;
+    listTokens: () => Promise<ArtifactsTokenListResult>;
+    log: (options?: ArtifactsLogOptions) => Promise<ArtifactsCommitMetadata[]>;
+    readBlob: (hash: string) => Promise<Blob | null>;
+    readCommit: (hash: string) => Promise<ArtifactsCommitMetadata | null>;
+    readFile: (args: ArtifactsReadFileArgs) => Promise<Blob | null>;
+    readTree: (hash: string) => Promise<ArtifactsTreeEntry[] | null>;
+    revokeToken: (tokenOrId: string) => Promise<boolean>;
+}
+```
+
+### `ArtifactsRepoEventState` (interface)
+
+```ts
+interface ArtifactsRepoEventState {
+    createdAt: string;
+    defaultBranch: string;
+    description: string | null;
+    lastPushAt: string | null;
+    readOnly: boolean;
+    repoId: string;
+    updatedAt: string;
+}
+```
+
+### `ArtifactsRepoInfo` (interface)
+
+```ts
+interface ArtifactsRepoInfo {
+    createdAt: string;
+    defaultBranch: string;
+    description: string | null;
+    id: string;
+    lastPushAt: string | null;
+    name: string;
+    readOnly: boolean;
+    remote: string;
+    source: string | null;
+    updatedAt: string;
+}
+```
+
+### `ArtifactsRepoLifecycleEvent` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ArtifactsRepoLike` (interface)
+
+```ts
+interface ArtifactsRepoLike extends ArtifactsRepoClient, Partial<Disposable> {
+}
+```
+
+### `ArtifactsRepoListResult` (interface)
+
+```ts
+interface ArtifactsRepoListResult {
+    cursor?: string;
+    repos: Omit<ArtifactsRepoInfo, "remote">[];
+    total: number;
+}
+```
+
+### `ArtifactsTokenInfo` (interface)
+
+```ts
+interface ArtifactsTokenInfo {
+    createdAt: string;
+    expiresAt: string;
+    id: string;
+    scope: ArtifactsTokenScope;
+    state: "active" | "expired" | "revoked";
+}
+```
+
+### `ArtifactsTokenListResult` (interface)
+
+```ts
+interface ArtifactsTokenListResult {
+    tokens: ArtifactsTokenInfo[];
+    total: number;
+}
+```
+
+### `ArtifactsTokenScope` (type)
+
+```ts
+type ArtifactsTokenScope = "read" | "write";
+```
+
+### `ArtifactsTreeEntry` (interface)
+
+```ts
+interface ArtifactsTreeEntry {
+    hash: string;
+    mode: string;
+    name: string;
+    type: ArtifactsTreeEntryType;
+}
+```
+
+### `ArtifactsTreeEntryType` (type)
+
+```ts
+type ArtifactsTreeEntryType = "blob" | "exec" | "gitlink" | "symlink" | "tree";
+```
+
+### `LunoraArtifactsOptions` (interface)
+
+```ts
+interface LunoraArtifactsOptions {
+    binding: ArtifactsBindingLike;
+}
+```
+
+### `authenticatedRemote` (const)
+
+```ts
+const authenticatedRemote: (remote: string, token: string) => string;
+```
+
+### `createArtifacts` (const)
+
+```ts
+const createArtifacts: (options: LunoraArtifactsOptions) => ArtifactsClient;
+```
+
 ## `@lunora/bindings/images`
 
 ### `ImageCompositeMode` (type)
