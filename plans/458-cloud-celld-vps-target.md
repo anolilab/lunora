@@ -7,8 +7,10 @@
 and so did G2, the control-plane side of G11–G17, the `celld-vps` driver and the
 studio pages (G18)
 (§1.5). W3's `celldConfigFromRelease` landed in `c302205ac` and W4 (`hostd`'s
-daemon, with the on-box halves of W5 and W6) in `763c5ca96`; `install.sh`,
-the `test:hostd` lane and W8 are still open. Decision recorded in
+daemon, with the on-box halves of W5 and W6) in `763c5ca96`; W8 (fleet
+isolation) and W7's on-box half (side-by-side upgrades, `install.sh`, the
+systemd unit) in `c49b828af`, `84b440493` and `4ccec3791`; the `test:hostd`
+lane in `aba5561f7`. Decision recorded in
 [`apps/cloud/MULTIPLATFORM.md` §7.9](../apps/cloud/MULTIPLATFORM.md).
 **Rulings (2026-10-02):**
 
@@ -448,9 +450,25 @@ the daemon started was skipped). Decisions made while building:
 - **Root:** `run` refuses uid 0 unless the config sets `allowRoot`; the
   supervisor takes a uid/gid per child for W8's `lunora-fleet`.
 
-Still open: the `test:hostd` lane and the conformance run through a real
-`hostd`, `install.sh` and the systemd unit (W7), hostd's own log forwarding
-(W6), and W8.
+Still open: the conformance run through a real `hostd`, and hostd's own log
+forwarding (W6). The `test:hostd` lane, `install.sh` and the unit (W7) and W8
+landed since — see their sections.
+
+**Landed (2026-10-03, `aba5561f7`):** the `test:hostd` lane — vitest project
+`integration` in `apps/hostd`, gated behind `LUNORA_HOSTD_TESTS=1`, root script
+`pnpm run test:hostd`, and the `hostd integration` job in `test.yml`
+(path-filtered on `apps/hostd`, `packages/config`, `protocol/hostd`; part of the
+required Test check). It drives the built daemon against real celld v0.6.0, a
+Caddy built from `release-pins.json` with xcaddy exactly as the release does,
+moto and the in-process fake control plane: enrol (with celld's bucket check),
+session, deploy, HTTP through Caddy, a `report`, `destroy` with `deleteData`,
+SIGTERM. In CI (`LUNORA_HOSTD_ISOLATION=1`, under sudo) it sets the box up with
+`install.sh`'s own functions, runs the single executable under the real unit
+with Caddy on port 80, and runs the W8 probe suite. Locally (no root, no
+systemd) the functional path ran green from `dist/bin.mjs` and from the single
+executable, and once as root in a user namespace with a real fleet uid (node as
+that uid, the nftables table loaded, the fleet directories owned as designed);
+the systemd unit, `Delegate=yes` and the probe suite run only in CI.
 
 ### W5 — Routing, DNS and TLS (M)
 
@@ -635,8 +653,61 @@ newest stable release's.
   alert drain delivers it. A dedicated alert target would need a label in the
   studio's alert form (W9).
 
-Still open: `install.sh`, the `upgrade` job on the box, and a pinned release
-key (see above).
+Still open: a pinned release key (see above).
+
+**Landed (2026-10-03, on-box half, `c49b828af`, `84b440493`):**
+
+- **Layout and `upgrade`.** Releases live side by side as
+  `/opt/lunora-hostd/<releaseId>/{lunora-hostd,celld,caddy,manifest.json}`
+  with `current` a symlink; the config's `binaries` is gone (always
+  `{installDir}/current/…`). The `upgrade` job stages `<releaseId>.partial/`,
+  verifies as before, renames it into place, swaps `current` in one rename,
+  keeps the previous release for rollback and prunes older ones; when
+  `lunora-hostd` itself changed it exits for systemd (the new hostd starts every
+  child on the new binaries), otherwise it restarts the fleets one at a time,
+  then Caddy. A release already running is a no-op.
+- **`install.sh`** (`apps/hostd/install/install.sh`, shellcheck-clean):
+  Debian/Ubuntu, amd64/arm64, ≥ 2 GB; installs missing packages; creates
+  `lunora-hostd` and `lunora-fleet` (no shell) and the directories; resolves
+  the newest stable `hostd-v*` (or `--version`); verifies `manifest.json`'s
+  Ed25519 signature with OpenSSL against keys pinned in the script (fingerprint
+  checked) before trusting any hash, checks each download's size and SHA-256,
+  then has the verified `lunora-hostd verify-release` check everything again
+  with its compiled-in keys; installs the unit; enrols as `lunora-hostd` with
+  the token in the environment only; enables and starts the service. Re-running
+  upgrades in place; `--uninstall` removes units, users, files and the nft
+  table, never the bucket. A test keeps its pinned keys and embedded unit equal
+  to `trusted-release-keys.ts` and the unit file.
+- **`lunora-hostd.service`**: six ambient capabilities (NET_BIND_SERVICE,
+  NET_ADMIN, SETUID, SETGID, KILL, CHOWN), `NoNewPrivileges=yes` (compatible:
+  the uid drop is a `setuid()` with `CAP_SETUID`, not a set-user-ID exec),
+  `ProtectSystem=strict` with only the data and install directories writable,
+  `Delegate=yes`, `KillMode=mixed`, `TimeoutStopSec=90`, `Restart=always`,
+  `RestartPreventExitStatus=2`. The trade-offs are in `apps/hostd/README.md`
+  ("Isolation").
+- **Release**: `hostd-release.yml` publishes `install.sh` and the unit with
+  each release (attested) and puts their SHA-256 in the release notes.
+
+Decided while building: `lunora-build` is not created (no build runs on the box
+yet); `install.sh` never runs anything from `/opt/lunora-hostd` as root after
+installing it (enrol runs as `lunora-hostd`), since that directory is
+`lunora-hostd`-writable for upgrades.
+
+**Follow-ups:**
+
+- **`apps/cloud` branch:** the studio's install command (`installCommandFor` in
+  `src/boxes/enrolment.ts`) is still `sudo lunora-hostd enrol --token …`. It
+  must become the three-line `install.sh` invocation in `apps/hostd/README.md`
+  ("What the studio's install command must say"): download `install.sh`, then
+  `sudo LUNORA_HOSTD_ENROL_TOKEN=… AWS_…=… bash install.sh --control-plane
+<origin> --bucket <bucket> [--endpoint …] --version <desired release>`.
+  `--control-plane` is required until a production origin is compiled in.
+- **`esbuild` on the box:** `celld deploy` re-bundles every release and needs
+  `esbuild` (on `PATH` or `CELLD_ESBUILD`) for any Worker with imports — every
+  Lunora app. Neither the manifest nor `install.sh` ships it; found while
+  validating W8 (the lane's fixture Worker has no imports). Ship a pinned
+  esbuild in the release manifest (a schema change on both sides) and set
+  `CELLD_ESBUILD` for the one-shots.
 
 ### W8 — Hardening on the box (M)
 
@@ -662,6 +733,38 @@ and shown in the studio.
 `apps/noite/test/` isolation probe, runs in `test:hostd`. The probe deploys an
 app that tries to reach the celld operator API, `hostd`'s config, the metadata
 IP and a sibling fleet; every attempt must fail.
+
+**Landed (2026-10-03, `c49b828af`, `4ccec3791`):** `apps/hostd/src/daemon/`
+`isolation.ts` (self-check + decision), `capabilities.ts`, `accounts.ts`,
+`fleet-environment.ts`, `nftables.ts`, `cgroups.ts`.
+
+- Every celld process (node, `deploy`, `diagnose`) runs as `lunora-fleet`
+  through `setpriv`, which empties the inheritable and ambient sets (the unit's
+  ambient capabilities would otherwise survive the uid change) and sets
+  `no_new_privs`; Caddy keeps only `net_bind_service`. Fleets get an
+  environment built from an allowlist. Release directories are shared with the
+  fleet group (0750/0640); a fleet's working directory is its own (0700); the
+  data directory is `lunora-hostd:lunora-fleet` 0710.
+- `inet lunora_hostd` (nftables, `meta skuid`): established/related, DNS and the
+  bucket endpoint's addresses (re-resolved every 30 s) pass; loopback, RFC 1918,
+  link-local + metadata, CGNAT, `0.0.0.0/8`, IPv6 loopback/unspecified/
+  v4-mapped/ULA/link-local are rejected.
+- Per-fleet `memory.max` in `fleet-<alias>/` under the delegated service cgroup
+  (the daemon moves itself to `hostd/` first).
+- The self-check (uid drop, table loaded, cgroup delegation) decides
+  `enforced` / `single-trust` / `refused`; `refused` starts no fleet and fails a
+  deploy with `ISOLATION_FAILED`. Reported in `diagnose` and in `hello` as the
+  new optional field `isolation` (protocol §5.1, fixtures, API snapshot; the
+  control plane may read it to show the box's isolation in the studio — W9).
+- Unit tests cover the ruleset, the allowlist, the cgroup path logic and the
+  decision table. Verified locally in user namespaces: the uid drop and
+  capability drop under ambient capabilities, the table rejecting the fleet uid
+  on loopback while the bucket stays reachable, celld (with a Durable Object)
+  serving as the fleet uid under the table, and moving a fleet-uid process
+  between delegated cgroups from the daemon's uid. The probe suite itself runs
+  in the CI lane. Known limits (one fleet uid per box, the box's bucket key in
+  every fleet, open public egress, memory-only limits, Caddy as
+  `lunora-hostd`) are in `apps/hostd/README.md`.
 
 ### W9 — Studio (M)
 
