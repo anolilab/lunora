@@ -1806,6 +1806,12 @@ interface ExportGap {
 }
 ```
 
+### `GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG` (const)
+
+```ts
+const GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
+```
+
 ### `ManifestConfigShape` (interface)
 
 ```ts

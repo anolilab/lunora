@@ -619,7 +619,6 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
         ["@lunora/x402/charge", "usesX402Charge", /hint: @lunora\/x402\/charge/u],
         ["@lunora/x402/pay", "usesX402Pay", /hint: @lunora\/x402\/pay/u],
-        ["@lunora/auth/cimd/workers", "usesCimdWorkers", /global_fetch_strictly_public/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 
@@ -631,6 +630,26 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result[flag]).toBe(true);
         expect(result.signals.join(" ")).toMatch(signalRe);
+    });
+
+    // The CIMD transport has no binding, so no signal either: the flag it needs is
+    // `lunora doctor`'s to check, against the wrangler config inference never reads.
+    it.each([
+        ["a static import", `import workersCimdFetch from "@lunora/auth/cimd/workers";\nexport const transport = workersCimdFetch;`],
+        ["a dynamic import()", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default();`],
+        // Unparseable mid-edit file: inference falls back to the regex sweep.
+        ["a dynamic import() in a file the lexer rejects", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default(;`],
+    ] as const)("infers usesCimdWorkers from %s without emitting a signal", async (_label, code) => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/auth.ts", code);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesCimdWorkers).toBe(true);
+        expect(result.signals.join(" ")).not.toContain("cimd");
     });
 
     it("leaves every Cloudflare-coverage flag false for a project importing none of them", async () => {
