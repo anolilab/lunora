@@ -91,6 +91,18 @@ const CODE_PATTERNS: ReadonlyArray<RegExp> = [
  * original site is edited or removed.
  */
 const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
+    // Lunora Cloud's per-box session (plan 458, apps/cloud/src/boxes): the
+    // refusal codes of the session object's internal JSON API, the job-outcome
+    // codes a job settles with when the box never answers (the shape of a hostd
+    // protocol `result.error`), and `BoxSessionError` — a plain `Error` subclass
+    // the control plane catches itself. None is ever a `LunoraError` or reaches
+    // a client's wire mapper. (Two more, sorted further down.)
+    ["BAD_JOB", "apps/cloud/src/boxes/session-do.ts"],
+    ["BAD_RESPONSE", "apps/cloud/src/boxes/session-client.ts"],
+    ["BOX_BUSY", "apps/cloud/src/boxes/session-do.ts"],
+    ["BOX_OFFLINE", "apps/cloud/src/boxes/session-do.ts"],
+    ["DISPATCH_FAILED", "apps/cloud/src/deploy/routes/hostd.ts"],
+    ["JOB_TIMEOUT", "apps/cloud/src/boxes/jobs.ts"],
     // A hand-rolled `Response.json(...)` error body for an oversized upload,
     // never a `LunoraError` construction.
     ["REQUEST_ENTITY_TOO_LARGE", "packages/storage/src/upload-handler.ts"],
@@ -104,6 +116,9 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     // `fanSubscriptionError`'s callback payload — a plain object, never a
     // `LunoraError` construction.
     ["SUBSCRIPTION_CANCELLED", "packages/client/src/lunora-client.ts"],
+    // The box session's internal API again (see the first group).
+    ["TOO_MANY_SESSIONS", "apps/cloud/src/boxes/session-do.ts"],
+    ["UPGRADE_REQUIRED", "apps/cloud/src/boxes/session-do.ts"],
 ]);
 
 // `@visulima/task-runner`'s build-cache restore materializes a cached `dist`
@@ -232,7 +247,7 @@ describe("error catalog registration", () => {
     });
 
     it("every KNOWN_NON_LUNORA_CODES entry still occurs in its expected file", () => {
-        expect.assertions(5);
+        expect.assertions(13);
 
         for (const [code, relativeFile] of KNOWN_NON_LUNORA_CODES) {
             const content = readFileSync(join(REPO_ROOT, relativeFile), "utf8");
