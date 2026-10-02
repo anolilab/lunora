@@ -284,16 +284,16 @@ deploy` does not deploy services there either.
   is deployed into the same fleet / `celld dev` state as the app (celld resolves
   a binding from the target's `deploy/<name>/current.json`). `lunora deploy`
   deploys each service through the target's driver (celld: from a projection of
-  the service's config), and `lunora dev --target celld` boots each service once
-  from a projection beside the app's (`DeployDriver.projectServiceConfig`),
-  then starts the app. `vite dev` and Rsbuild run the Worker on celld too
-  (`startCelldDevSession` in `@lunora/config`): the Cloudflare plugin builds
-  only, `/_lunora` is proxied to the session, and a change under a service's
-  folder re-registers it and restarts the app. A Vite virtual `main` keeps the
-  workerd fallback (celld dev cannot resolve it). Verified live on
-  `examples/services` with all three dev servers, including the service-edit
-  restart under Vite and Rsbuild; a real fleet deploy (S3 bucket) was not run,
-  only `--dry-run`.
+  the service's config). Every dev server — `lunora dev --target celld`,
+  `vite dev` and Rsbuild — runs one `startCelldDevSession` (`@lunora/config`):
+  it boots each service once from a projection beside the app's
+  (`DeployDriver.projectServiceConfig`), starts the app, and on a change under
+  a service's folder re-registers it and restarts the app. Under Vite the
+  Cloudflare plugin builds only and `/_lunora` is proxied to the session. A
+  Vite virtual `main` keeps the workerd fallback (celld dev cannot resolve it).
+  Verified live on `examples/services` with all three dev servers, including
+  the service-edit restart; a real fleet deploy (S3 bucket) was not run, only
+  `--dry-run`.
 - **Limits lifted after review:** `vite build` no longer builds services (the
   auxiliary Workers are added on `serve` only), and the SvelteKit / Nuxt sidecar
   runs them (reconcile writes `wrangler.dev.jsonc`'s `services[]`, ownership

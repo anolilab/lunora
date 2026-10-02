@@ -161,7 +161,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         services: {
             level: "native",
-            note: "Verified against celld v0.6.0 for a fetch service and a WorkerEntrypoint RPC service. celld resolves a binding from the target Worker's deployment record, so the service must be deployed into the same fleet (or `celld dev` state) first: `lunora deploy` deploys each service before the app, and every dev server (`lunora dev`, `vite dev`, Rsbuild) boots each once into the app's local state before the app starts. Under `vite dev` and Rsbuild a service edit re-registers it and restarts the app; under `lunora dev` it needs a restart",
+            note: "Verified against celld v0.6.0 for a fetch service and a WorkerEntrypoint RPC service. celld resolves a binding from the target Worker's deployment record, so the service must be deployed into the same fleet (or `celld dev` state) first: `lunora deploy` deploys each service before the app, and every dev server (`lunora dev`, `vite dev`, Rsbuild) boots each once into the app's local state before the app starts. On each of them a service edit re-registers it and restarts the app",
         },
         topics: {
             level: "emulated",

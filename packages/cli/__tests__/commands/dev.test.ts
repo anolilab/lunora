@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
 import { detectDevFlavor } from "../../src/commands/dev/lifecycle";
+import { startCelldWorker } from "../../src/commands/dev/own-dev-server";
 import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
 import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
 import type { DevCommandOptions } from "../../src/commands/dev/types";
@@ -716,12 +717,13 @@ describe("lunora dev", () => {
         // keys, so its dev server runs on the projected config — as the
         // `celld` binary itself, not through the package manager — even in a
         // project whose dependencies would otherwise pick the Vite flavor.
-        it("serves a celld-target app with `celld dev` on the projected config", async () => {
-            expect.assertions(3);
+        it("serves a celld-target app on a celld dev session over the projected config", async () => {
+            expect.assertions(4);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app", observability: { enabled: true } }), "utf8");
 
-            let spawned: string[] | undefined;
+            const started: { port: number; projectRoot: string }[] = [];
+            let stopped = 0;
 
             const result = await runDevCommand({
                 codegen: false,
@@ -729,116 +731,78 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8790,
                 flavor: "vite",
                 logger: silentLogger(),
+                // The session (services first, restart on edit) has its own suite in `@lunora/config`.
+                startCelldSession: async (options) => {
+                    started.push({ port: options.port, projectRoot: options.projectRoot });
+
+                    return {
+                        // The app crashes once it is up, which ends `lunora dev` the way a worker exit does.
+                        exited: Promise.resolve(1),
+                        restartService: async () => {},
+                        stop: async () => {
+                            stopped += 1;
+                        },
+                    };
+                },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
                 },
-                startWorker: (descriptor) => {
-                    spawned = [descriptor.command, ...descriptor.args];
-
-                    return { exited: Promise.resolve(0), kill: () => {} };
+                startWorker: () => {
+                    throw new Error("the celld target runs a dev session, not a bare worker process");
                 },
                 target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
             });
 
-            expect(result.plan.flavor).toBe("wrangler");
-            expect(spawned).toStrictEqual(["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"]);
+            expect(result.code).toBe(1);
+            expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
             // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
             expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
                 main: "src/server.ts",
                 name: "app",
                 vars: { WORKER_ENV: "development" },
             });
+            // A crashed app is already gone; only a stop the user asks for stops the session.
+            expect(stopped).toBe(0);
         });
 
-        it("boots each lunora.config service into celld's local state before the app", async () => {
-            expect.assertions(4);
+        it("stops the celld session when the worker is killed", async () => {
+            expect.assertions(1);
+
+            const worker = await startCelldWorker({
+                logger: silentLogger(),
+                port: 8790,
+                projectRoot: workdir,
+                start: async () => {
+                    return { exited: new Promise<number>(() => {}), restartService: async () => {}, stop: async () => {} };
+                },
+            });
+
+            worker.kill("SIGTERM");
+
+            await expect(worker.exited).resolves.toBe(0);
+        });
+
+        it("stops before anything is served when the celld session cannot start", async () => {
+            expect.assertions(1);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
-            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
-            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
-            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts", "workers_dev": false }\n`);
-
-            const spawned: string[][] = [];
-            const killed: string[] = [];
 
             const result = await runDevCommand({
                 codegen: false,
                 cwd: workdir,
                 findFreePort: async () => 8790,
                 logger: silentLogger(),
-                probeReady: async () => true,
+                startCelldSession: async () => {
+                    throw new Error("celld dev exited with code 1 before it was ready");
+                },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
-                },
-                // A dev server runs until it is killed.
-                startWorker: (descriptor) => {
-                    spawned.push([descriptor.command, ...descriptor.args]);
-
-                    let exit: (code: number) => void = () => {};
-                    const exited = new Promise<number>((resolve) => {
-                        exit = resolve;
-                    });
-
-                    // The app's own server: let the run end once it has started.
-                    if (!descriptor.tag.startsWith("service:")) {
-                        exit(0);
-                    }
-
-                    return {
-                        exited,
-                        kill: () => {
-                            killed.push(descriptor.tag);
-                            exit(0);
-                        },
-                    };
-                },
-                target: "celld",
-            });
-            const service = join(workdir, ".celld.service.parser.wrangler.json");
-
-            expect(result.code).toBe(0);
-            // The service first, from a projection beside the app's so both share `.celld/dev`; then the app.
-            expect(spawned).toStrictEqual([
-                ["celld", "dev", service, "--port", "8790"],
-                ["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"],
-            ]);
-            expect(killed).toStrictEqual(["service:parser"]);
-            expect(JSON.parse(readFileSync(service, "utf8"))).toStrictEqual({
-                main: "services/parser/src/index.ts",
-                name: "parser",
-                vars: { WORKER_ENV: "development" },
-            });
-        });
-
-        it("stops before the app when a celld service never starts", async () => {
-            expect.assertions(2);
-
-            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
-            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
-            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
-            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
-
-            const tags: string[] = [];
-            const result = await runDevCommand({
-                codegen: false,
-                cwd: workdir,
-                findFreePort: async () => 8790,
-                logger: silentLogger(),
-                probeReady: async () => false,
-                startStudio: async () => {
-                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
-                },
-                // The service's dev server exits at once (a bundle error, say).
-                startWorker: (descriptor) => {
-                    tags.push(descriptor.tag);
-
-                    return { exited: Promise.resolve(1), kill: () => {} };
                 },
                 target: "celld",
             });
 
             expect(result.code).toBe(EXIT_CODE.FAILURE);
-            expect(tags).toStrictEqual(["service:parser"]);
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {

@@ -181,6 +181,7 @@ const COMPOSED_WORKER_ENTRY = "src/worker.ts";
 
 ```ts
 interface CelldDevSession {
+    exited: Promise<number>;
     restartService: (worker: string) => Promise<void>;
     stop: () => Promise<void>;
 }

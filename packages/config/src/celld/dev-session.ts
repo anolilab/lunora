@@ -1,6 +1,6 @@
 /**
- * A `celld dev` session for a dev server that is not `lunora dev` —
- * `@lunora/vite` and `@lunora/rspack/rsbuild` with the celld target.
+ * A `celld dev` session for every dev server with the celld target —
+ * `lunora dev`, `@lunora/vite` and `@lunora/rspack/rsbuild`.
  *
  * celld resolves a service binding (plan 457) from the target Worker's
  * deployment record in the local state, which `celld dev` keeps beside the
@@ -50,6 +50,8 @@ interface CelldDevSessionOptions {
 }
 
 interface CelldDevSession {
+    /** Resolves with the exit code when the app's `celld dev` exits on its own — a crash, not a stop or restart. */
+    exited: Promise<number>;
     /** Re-register the service whose Worker is `worker`, then restart the app. */
     restartService: (worker: string) => Promise<void>;
     /** Stop watching, then stop the app. */
@@ -58,6 +60,8 @@ interface CelldDevSession {
 
 /** A running `celld dev` and the handle that stops it. */
 interface Running {
+    /** Resolves when the process exits without {@link Running.stop} asking it to. */
+    crashed: Promise<number>;
     stop: () => Promise<void>;
 }
 
@@ -138,6 +142,7 @@ const startCelldDev = async (options: {
 }): Promise<Running> => {
     const child = options.spawn(["dev", options.configPath, "--port", String(options.port)], options.cwd);
     let failure: Error | undefined;
+    let stopping = false;
 
     pipeLines(child.stdout, options.log);
     pipeLines(child.stderr, options.log);
@@ -148,7 +153,17 @@ const startCelldDev = async (options: {
         failure ??= new Error(`celld dev exited with code ${String(code)} before it was ready`);
     });
 
+    const crashed = new Promise<number>((resolve) => {
+        child.once("exit", (code) => {
+            if (!stopping) {
+                resolve(code ?? 1);
+            }
+        });
+    });
+
     const stop = async (): Promise<void> => {
+        stopping = true;
+
         if (child.exitCode !== null || child.signalCode !== null) {
             return;
         }
@@ -175,7 +190,7 @@ const startCelldDev = async (options: {
 
         // eslint-disable-next-line no-await-in-loop -- a readiness poll is sequential by definition
         if (await accepts(options.port)) {
-            return { stop };
+            return { crashed, stop };
         }
 
         // eslint-disable-next-line no-await-in-loop -- a readiness poll is sequential by definition
@@ -242,7 +257,20 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
         await register(service.worker);
     }
 
-    let running = await run(app.configPath, "app");
+    let settleExited: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+        settleExited = resolve;
+    });
+
+    const runApp = async (): Promise<Running> => {
+        const started = await run(app.configPath, "app");
+
+        started.crashed.then(settleExited).catch(() => undefined);
+
+        return started;
+    };
+
+    let running = await runApp();
 
     const restartNow = async (worker: string): Promise<void> => {
         await running.stop();
@@ -251,7 +279,7 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
             await register(worker);
         } finally {
             // The app comes back even when the service did not, so only the service's error surfaces.
-            running = await run(app.configPath, "app");
+            running = await runApp();
         }
     };
 
@@ -275,12 +303,20 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
         }),
     );
 
+    const closeWatchers = (): void => {
+        for (const watcher of watchers) {
+            watcher.close();
+        }
+    };
+
+    // A crashed app leaves nothing to restart, and open watchers would keep the process alive.
+    exited.then(closeWatchers).catch(() => undefined);
+
     return {
+        exited,
         restartService,
         stop: async () => {
-            for (const watcher of watchers) {
-                watcher.close();
-            }
+            closeWatchers();
 
             await queue;
             await running.stop();

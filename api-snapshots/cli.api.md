@@ -203,6 +203,7 @@ interface DevCommandOptions {
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
+    startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
@@ -218,15 +219,12 @@ interface DevCommandOptions {
 
 ```ts
 interface DevCommandPlan {
+    celldSession?: true;
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
-    serviceRegistrations?: ReadonlyArray<SpawnDescriptor & {
-        name: string;
-        tag: string;
-    }>;
     sidecar?: SpawnDescriptor & {
         tag: string;
     };

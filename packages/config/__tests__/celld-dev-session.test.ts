@@ -29,7 +29,7 @@ const freePort = async (): Promise<number> =>
  * is killed, recording the config it was started with.
  */
 const fakeCelld =
-    (started: string[]): CelldSpawner =>
+    (started: string[], children: ChildProcess[] = []): CelldSpawner =>
     (args) => {
         // An unspawned ChildProcess: the real class, so `once`/`emit`/`exitCode` behave as the session expects.
         const child = new ChildProcess();
@@ -37,6 +37,7 @@ const fakeCelld =
         const server: Server = createServer().listen(port, "127.0.0.1");
 
         started.push(basename(String(args[1])));
+        children.push(child);
         child.kill = () => {
             server.close(() => {
                 Object.defineProperty(child, "exitCode", { value: 0 });
@@ -76,6 +77,20 @@ describe("celld dev session", () => {
         await session.stop();
 
         expect(started.slice(2)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
+    });
+
+    it("reports an app that exits on its own, but not one it stops", async () => {
+        expect.assertions(1);
+
+        const children: ChildProcess[] = [];
+        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([], children) });
+
+        // children[0] registered the service and was stopped; children[1] is the app.
+        children[1]!.emit("exit", 3);
+
+        await expect(session.exited).resolves.toBe(3);
+
+        children[1]!.kill();
     });
 
     it("refuses a port something else already holds", async () => {

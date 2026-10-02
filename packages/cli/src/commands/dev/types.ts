@@ -1,5 +1,5 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
-import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets } from "@lunora/config";
+import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
 import type { materializeRemoteWranglerConfig } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -64,11 +64,13 @@ interface DevCommandOptions {
     probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
+    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
+    /** Starts the celld dev session for the celld target; injected in tests. */
+    startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
-    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
 
     /** Disable the embedded studio server. */
@@ -108,6 +110,13 @@ interface DevRemotePlan {
 }
 
 interface DevCommandPlan {
+    /**
+     * `true` when the worker is a celld dev session (`lunora dev --target
+     * celld`) rather than {@link DevCommandPlan.wrangler}'s process: services
+     * registered first, a service edit re-registering it and restarting the app.
+     */
+    celldSession?: true;
+
     /** Which stack the child runs — see {@link DevFlavor}. */
     flavor: DevFlavor;
 
@@ -132,14 +141,6 @@ interface DevCommandPlan {
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
-
-    /**
-     * `lunora.config` services (plan 457) to boot once, in order, before the
-     * worker on a host whose dev server resolves a service binding from a local
-     * deployment record (celld): each runs until it answers on the worker port,
-     * which records it, and is then stopped. Absent for every other host.
-     */
-    serviceRegistrations?: ReadonlyArray<SpawnDescriptor & { name: string; tag: string }>;
 
     /**
      * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /

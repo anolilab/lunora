@@ -3,19 +3,14 @@
  * (`devServer: "own"` — celld): the standalone flavor, with the host's dev
  * server on the projected wrangler config as the worker.
  */
-import { dirname } from "node:path";
-
-import { readServiceBindings } from "@lunora/codegen";
 import type { DeployDriver } from "@lunora/config";
-import { planToolchainInvocation, targetRunsOwnDevServer } from "@lunora/config";
+import { planToolchainInvocation, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
 
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import type { ReadinessProbe } from "../../util/dev-probe";
-import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
 import type { DevFlavor } from "./lifecycle";
 import { codegenRequested } from "./lifecycle";
-import type { DevCommandOptions, DevCommandPlan, WorkerSpawner } from "./types";
+import type { DevCommandOptions, DevCommandPlan, WorkerProcess } from "./types";
 
 /**
  * The flavor `lunora dev` actually runs for `target`.
@@ -39,94 +34,41 @@ const resolveTargetFlavor = (target: string, detected: DevFlavor, logger: Logger
 };
 
 /**
- * One dev-server run per `lunora.config` service (plan 457), from the
- * driver's projection of the service's config into `root` — the app
- * projection's directory, whose local state the app resolves its bindings
- * from. Writes the projections. Empty when the driver needs no such step or
- * no service is declared (a declaration codegen rejects is codegen's to report).
+ * The worker for `lunora dev --target celld`: a celld dev session
+ * (`@lunora/config`), the same one `@lunora/vite` and `@lunora/rspack/rsbuild`
+ * run. It registers each `lunora.config` service (plan 457) in the local state
+ * before the app, and re-registers a service and restarts the app when a file
+ * under its folder changes. Wrapped as a {@link WorkerProcess} so the dev
+ * supervisor stops it like any other worker.
  */
-const planServiceRegistrations = (inputs: {
-    cwd: string;
-    driver: DeployDriver;
-    manager: ReturnType<typeof detectPackageManager>;
-    root: string;
-    workerPort: number;
-}): NonNullable<DevCommandPlan["serviceRegistrations"]> => {
-    const { cwd, driver, manager, root, workerPort } = inputs;
-    const { projectServiceConfig, toolchain } = driver;
-
-    if (projectServiceConfig === undefined || toolchain === undefined) {
-        return [];
-    }
-
-    // Two keys may bind two entrypoints of one Worker: it registers once.
-    const workers = [...new Map(readServiceBindings(cwd).services.map((service) => [service.wranglerPath, service])).values()];
-
-    return workers.map((service) => {
-        const projected = projectServiceConfig(root, service.wranglerPath);
-
-        projected.write();
-
-        const exec = toolchainExecArgs(manager, toolchain.dev({ configPath: projected.configPath, extraArgs: ["--port", String(workerPort)] }));
-
-        return { args: exec.args, command: exec.command, cwd, name: service.worker, tag: `service:${service.name}` };
+const startCelldWorker = async (inputs: { logger: Logger; port: number; projectRoot: string; start?: typeof startCelldDevSession }): Promise<WorkerProcess> => {
+    const { logger } = inputs;
+    const session = await (inputs.start ?? startCelldDevSession)({
+        log: (line, source) => {
+            logger.info(source === "app" ? `[celld] ${line}` : `[celld:${source}] ${line}`);
+        },
+        port: inputs.port,
+        projectRoot: inputs.projectRoot,
     });
-};
+    let settle: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+        settle = resolve;
+    });
 
-/** Whether `origin` answers before the deadline, giving up early once the process behind it has exited. */
-const waitUntilServing = async (origin: string, probe: ReadinessProbe, exited: Promise<number>): Promise<boolean> => {
-    const deadline = Date.now() + resolveReadyTimeoutMs();
-    const ended = exited.then(() => "exited" as const);
-
-    while (Date.now() < deadline) {
-        // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-        const outcome = await Promise.race([probe(origin).then((answered) => (answered ? "ready" : "pending")), ended]);
-
-        if (outcome !== "pending") {
-            return outcome === "ready";
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
-        await new Promise((resolve) => {
-            setTimeout(resolve, POLL_INTERVAL_MS);
-        });
-    }
-
-    return false;
-};
-
-/**
- * Boot each service registration until it answers on `origin` — the moment
- * the host has recorded its deployment — then stop it, one at a time on the
- * worker's own port. Returns the error that stops `lunora dev`, if any.
- */
-const registerServices = async (inputs: {
-    logger: Logger;
-    origin: string;
-    probe?: ReadinessProbe;
-    registrations: NonNullable<DevCommandPlan["serviceRegistrations"]>;
-    spawn: WorkerSpawner;
-}): Promise<string | undefined> => {
-    const { logger, origin, registrations, spawn } = inputs;
-    const probe = inputs.probe ?? defaultProbe;
-
-    for (const registration of registrations) {
-        logger.info(`registering service ${registration.name} in the local dev state`);
-
-        const child = spawn(registration, logger);
-        // eslint-disable-next-line no-await-in-loop -- one registration at a time, on one port
-        const ready = await waitUntilServing(origin, probe, child.exited);
-
-        child.kill("SIGTERM");
-        // eslint-disable-next-line no-await-in-loop -- the port must be free before the next run
-        await child.exited;
-
-        if (!ready) {
-            return `service ${registration.name} did not start under the dev server — see its output above`;
-        }
-    }
-
-    return undefined;
+    return {
+        // A crash of the app's `celld dev` ends `lunora dev`, as any worker exit does.
+        exited: Promise.race([exited, session.exited]),
+        kill: () => {
+            session
+                .stop()
+                .then(
+                    () => 0,
+                    () => 1,
+                )
+                .then(settle)
+                .catch(() => undefined);
+        },
+    };
 };
 
 /**
@@ -169,16 +111,15 @@ const planOwnDevServer = (inputs: {
         options.logger.info(`${driver.name} ignores these wrangler keys, so its dev server runs without them: ${projection.dropped.join(", ")}`);
     }
 
-    const manager = detectPackageManager(cwd);
-    const exec = toolchainExecArgs(manager, command);
-    const serviceRegistrations = planServiceRegistrations({ cwd, driver, manager, root: dirname(projection?.configPath ?? cwd), workerPort });
+    const exec = toolchainExecArgs(detectPackageManager(cwd), command);
 
     return {
         flavor: "wrangler",
         ipv4LoopbackForced: false,
         remote: { bindings: [], cleanup: () => {}, enabled: false },
         runsCodegenWatch: codegenRequested(options),
-        ...(serviceRegistrations.length === 0 ? {} : { serviceRegistrations }),
+        // celld runs as a dev session (services registered first, restarted on edit), not a bare `celld dev`.
+        ...(driver.id === "celld" ? { celldSession: true } : {}),
         studioEnabled: options.studio !== false,
         studioPort,
         workerEnabled: options.worker !== false,
@@ -188,4 +129,4 @@ const planOwnDevServer = (inputs: {
     };
 };
 
-export { planOwnDevServer, registerServices, resolveTargetFlavor };
+export { planOwnDevServer, resolveTargetFlavor, startCelldWorker };
