@@ -55,19 +55,15 @@ const MIN_TOKEN_TTL_SECONDS = 60;
 const MAX_TOKEN_TTL_SECONDS = 31_536_000;
 const DEFAULT_TOKEN_TTL_SECONDS = 86_400;
 
-/** The error the fake throws — the same `{ name, code, numericCode }` shape the binding's `ArtifactsError` has. */
-class FakeArtifactsError extends Error {
-    public readonly code: ArtifactsErrorCode;
-
-    public readonly numericCode: number | undefined;
-
-    public constructor(code: ArtifactsErrorCode, message: string) {
-        super(message);
-        this.name = "ArtifactsError";
-        this.code = code;
-        this.numericCode = NUMERIC_CODES[code];
-    }
-}
+/**
+ * Build the error the fake throws, in the shape the binding's errors reach a
+ * Worker: over RPC there is no `ArtifactsError` class to `instanceof`, only an
+ * `Error` named `ArtifactsError` carrying the binding's `code` and
+ * `numericCode`. These are the binding's own codes, not `LunoraError` codes —
+ * `createArtifacts` maps them, which is what a test using the fake exercises.
+ */
+const artifactsError = (code: ArtifactsErrorCode, message: string): Error & { code: ArtifactsErrorCode; numericCode: number | undefined } =>
+    Object.assign(new Error(message), { code, name: "ArtifactsError", numericCode: NUMERIC_CODES[code] });
 
 interface FakeToken {
     info: ArtifactsTokenInfo;
@@ -136,7 +132,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
             pendingFailure = undefined;
 
-            throw new FakeArtifactsError(code, `injected ${code}`);
+            throw artifactsError(code, `injected ${code}`);
         }
     };
 
@@ -144,7 +140,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
         const repo = repos.get(name);
 
         if (repo === undefined) {
-            throw new FakeArtifactsError("NOT_FOUND", `repository "${name}" does not exist`);
+            throw artifactsError("NOT_FOUND", `repository "${name}" does not exist`);
         }
 
         return repo;
@@ -168,11 +164,11 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
         settings: { defaultBranch?: string; description?: string; readOnly?: boolean; source?: string },
     ): ArtifactsCreateRepoResult => {
         if (!REPO_NAME_PATTERN.test(name)) {
-            throw new FakeArtifactsError("INVALID_REPO_NAME", `invalid repository name "${name}"`);
+            throw artifactsError("INVALID_REPO_NAME", `invalid repository name "${name}"`);
         }
 
         if (repos.has(name)) {
-            throw new FakeArtifactsError("ALREADY_EXISTS", `repository "${name}" already exists`);
+            throw artifactsError("ALREADY_EXISTS", `repository "${name}" already exists`);
         }
 
         const now = new Date().toISOString();
@@ -205,7 +201,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
             checkFailure();
 
             if (repos.get(repo.info.name) !== repo) {
-                throw new FakeArtifactsError("NOT_FOUND", `repository "${repo.info.name}" does not exist`);
+                throw artifactsError("NOT_FOUND", `repository "${repo.info.name}" does not exist`);
             }
         };
 
@@ -217,7 +213,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 checkLive();
 
                 if (!Number.isInteger(ttl) || ttl < MIN_TOKEN_TTL_SECONDS || ttl > MAX_TOKEN_TTL_SECONDS) {
-                    throw new FakeArtifactsError("INVALID_TTL", `ttl must be between ${String(MIN_TOKEN_TTL_SECONDS)} and ${String(MAX_TOKEN_TTL_SECONDS)}`);
+                    throw artifactsError("INVALID_TTL", `ttl must be between ${String(MIN_TOKEN_TTL_SECONDS)} and ${String(MAX_TOKEN_TTL_SECONDS)}`);
                 }
 
                 return mintToken(repo, scope, ttl);
@@ -300,7 +296,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 checkLive();
 
                 if (ref === "" || path === "") {
-                    throw new FakeArtifactsError("INVALID_INPUT", "ref and path must be non-empty");
+                    throw artifactsError("INVALID_INPUT", "ref and path must be non-empty");
                 }
 
                 return repo.files.get(`${ref}:${path}`) ?? null;
@@ -314,7 +310,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 checkLive();
 
                 if (tokenOrId === "") {
-                    throw new FakeArtifactsError("INVALID_INPUT", "tokenOrId must be non-empty");
+                    throw artifactsError("INVALID_INPUT", "tokenOrId must be non-empty");
                 }
 
                 const token = [...repo.tokens.values()].find((candidate) => candidate.info.id === tokenOrId || candidate.plaintext === tokenOrId);
@@ -344,7 +340,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
             checkFailure();
 
             if (!REPO_NAME_PATTERN.test(name)) {
-                throw new FakeArtifactsError("INVALID_REPO_NAME", `invalid repository name "${name}"`);
+                throw artifactsError("INVALID_REPO_NAME", `invalid repository name "${name}"`);
             }
 
             // A repo's tokens go with it: none of them authenticates against a later same-named repo.
@@ -361,7 +357,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
             checkFailure();
 
             if (!source.url.startsWith("https://")) {
-                throw new FakeArtifactsError("INVALID_INPUT", "source url must be https");
+                throw artifactsError("INVALID_INPUT", "source url must be https");
             }
 
             return addRepo(target.name, { description: target.opts?.description, readOnly: target.opts?.readOnly, source: source.url });
@@ -375,7 +371,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
             // The fake's cursor is a decimal offset; anything else is a cursor it never handed out.
             if (!DECIMAL_CURSOR_PATTERN.test(cursor)) {
-                throw new FakeArtifactsError("INVALID_INPUT", "invalid cursor");
+                throw artifactsError("INVALID_INPUT", "invalid cursor");
             }
 
             const start = Number(cursor);
