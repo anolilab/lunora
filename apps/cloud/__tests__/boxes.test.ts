@@ -11,6 +11,13 @@ import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const NOW = 1_700_000_000_000;
 
+/** Stored hostd releases: an older and a newer stable one, and a newer canary that enrolment must skip. */
+const RELEASES = [
+    { _id: "rel_1", channel: "stable", createdAt: 1, releaseId: "hostd-v1_1_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.1.0" } },
+    { _id: "rel_2", createdAt: 2, releaseId: "hostd-v1_2_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.2.0" } },
+    { _id: "rel_3", channel: "canary", createdAt: 3, releaseId: "hostd-v1_3_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.3.0" } },
+];
+
 /** A real Ed25519 key pair, the way `hostd enrol` makes one. */
 const keyPair = async (): Promise<{ privateKey: CryptoKey; publicKey: string }> => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
@@ -118,13 +125,22 @@ describe("boxes.createEnrolment", () => {
     };
 
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
-        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }));
+        const { ctx, ops } = withOrigin(
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: RELEASES, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+        );
 
         const result = await createEnrolment.handler(ctx, { name: " edge ", organizationId: "org_1" as never });
 
         expect(isEnrolmentTokenShape(result.token)).toBe(true);
-        // `lunora-hostd enrol` requires --control-plane: this control plane's own origin.
-        expect(result.installCommand).toBe(`sudo lunora-hostd enrol --control-plane https://cloud.lunora.test --token ${result.token}`);
+        // install.sh of the newest STABLE release (not the newer canary), enrolling with this control
+        // plane's own origin; the token rides in the environment, the bucket stays the customer's.
+        expect(result.installCommand.split("\n")).toStrictEqual([
+            "curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v1.2.0/install.sh",
+            "sha256sum install.sh   # compare with the release notes",
+            // eslint-disable-next-line no-secrets/no-secrets -- env-var NAMES and placeholders, not a credential
+            `sudo LUNORA_HOSTD_ENROL_TOKEN=${result.token} AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \\`,
+            "    bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0",
+        ]);
         expect(result.expiresAt).toBe(NOW + 15 * 60 * 1000);
 
         const stored = ops.find((op) => op.kind === "insert" && op.table === "boxEnrolments");
@@ -155,6 +171,18 @@ describe("boxes.createEnrolment", () => {
         const { ctx } = withOrigin(makeCtx({ members: [{ ...owner("org_1"), role: "member" }] }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("mints nothing while the control plane offers no hostd release to install", async () => {
+        const { ctx, ops } = withOrigin(
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+        );
+
+        await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
+            code: "SERVICE_UNAVAILABLE",
+            message: expect.stringContaining("no lunora-hostd release") as unknown,
+        });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "boxEnrolments")).toStrictEqual([]);
     });
 
     it("mints nothing on a control plane that does not know its own origin", async () => {

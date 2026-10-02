@@ -42,10 +42,25 @@ export const mintBoxSlug = (): string => {
 };
 
 /**
- * The command the studio shows next to a fresh token. `lunora-hostd enrol`
- * requires `--control-plane`: the origin the box enrols with, dials its
- * session to, and alone fetches releases from (protocol README §5.2) — so it
- * is always this control plane's own public origin (`LUNORA_ORIGIN_URL`).
+ * The command the studio shows next to a fresh token: install the stable
+ * `lunora-hostd` release this control plane offers, then enrol. `--control-plane`
+ * is the origin the box enrols with, dials its session to, and alone fetches
+ * releases from (protocol README §5.2) — always this control plane's own public
+ * origin (`LUNORA_ORIGIN_URL`).
  */
-export const installCommandFor = (token: string, controlPlaneOrigin: string): string =>
-    `sudo lunora-hostd enrol --control-plane ${stripTrailingSlashes(controlPlaneOrigin)} --token ${token}`;
+export const installCommandFor = (input: { controlPlaneOrigin: string; hostdVersion: string; token: string }): string => {
+    const version = input.hostdVersion;
+
+    // The three lines `apps/hostd/README.md` § Install documents: fetch the
+    // release's install.sh, compare its hash with the release notes, then run it
+    // as root. install.sh hands the token to `lunora-hostd enrol` through the
+    // environment, so it never sits on enrol's command line; the bucket and its
+    // key are the customer's, so they stay placeholders.
+    return [
+        `curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v${version}/install.sh`,
+        "sha256sum install.sh   # compare with the release notes",
+        // eslint-disable-next-line no-secrets/no-secrets -- env-var NAMES and placeholders, not a credential
+        `sudo LUNORA_HOSTD_ENROL_TOKEN=${input.token} AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \\`,
+        `    bash install.sh --control-plane ${stripTrailingSlashes(input.controlPlaneOrigin)} --bucket <bucket> --version ${version}`,
+    ].join("\n");
+};

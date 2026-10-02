@@ -170,6 +170,15 @@ export const createEnrolment = action
 
         await assertWithinQuota(context, organizationId, "boxes", (await activeBoxCount(context, organizationId)) + pending);
 
+        const stable = await latestStableVersions(context);
+        const hostdVersion = stable?.hostd;
+
+        // Nothing to install yet: a release is stored only once it verifies
+        // against the pinned release keys (`POST /v1/hostd/releases`).
+        if (hostdVersion === undefined) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", "this control plane offers no lunora-hostd release yet, so there is nothing for a box to install");
+        }
+
         const token = mintEnrolmentToken();
         const expiresAt = context.now + ENROLMENT_TTL_MS;
 
@@ -189,7 +198,7 @@ export const createEnrolment = action
             target: name.trim(),
         });
 
-        return { expiresAt, installCommand: installCommandFor(token, origin), token };
+        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion, token }), token };
     });
 
 /** An organization's boxes, revoked ones included (members). */
