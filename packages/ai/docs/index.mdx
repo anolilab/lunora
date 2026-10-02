@@ -169,11 +169,16 @@ provider key stored on the gateway.
 
 ```ts
 const { items } = await ctx.ai.websearch("cloudflare durable objects pricing", { limit: 5, provider: "exa" });
-// items: [{ url, title, description? }, …]
+// items: [{ url, title, description?, lastModifiedDate?, imageUrl?, faviconUrl? }, …]
 ```
 
-A rejected request throws a `LunoraError` with code `BAD_REQUEST`, a throttled
-one `RATE_LIMITED`, and a provider or gateway failure `SERVICE_UNAVAILABLE`.
+`limit` defaults to 10 and is capped at 20. Results describe pages; reading a
+page is a separate `fetch` of its `url`.
+
+A rejected request throws a `LunoraError` with code `BAD_REQUEST`. Gateway or
+credential problems keep their own codes (`UNAUTHORIZED`, `FORBIDDEN`,
+`NOT_FOUND`), a throttled search is `RATE_LIMITED`, and a provider or gateway
+failure `SERVICE_UNAVAILABLE`. An unreadable response is `INTERNAL`.
 For agents, `webSearchTool()` from `@lunora/agent` wraps this as a tool.
 
 ## RAG — `defineRag` (`@lunora/ai/rag`)

@@ -1,9 +1,8 @@
-import type { AiBindingLike } from "@lunora/ai";
-import { createAi } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 import { generateText, jsonSchema, Output, streamText, tool as aiTool } from "ai";
 
+import resolveAgentAi from "./agent-ai";
 import type {
     AgentCompact,
     AgentDefinition,
@@ -69,9 +68,9 @@ const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>)
     }
 
     if (typeof model === "string") {
-        const binding = env["AI"];
+        const ai = resolveAgentAi(env);
 
-        if (!binding) {
+        if (!ai) {
             throw new LunoraError(
                 "INTERNAL",
                 `@lunora/agent: the agent model "${model}" is a Workers AI id but there is no \`AI\` binding on the workflow env — declare the ai binding in wrangler.jsonc`,
@@ -81,7 +80,7 @@ const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>)
         // Pass `env` so an opt-in Cloudflare AI Gateway (LUNORA_AI_GATEWAY_*)
         // routes this Workers AI model, letting the gateway compute token +
         // dollar-cost telemetry. No gateway vars → unchanged (direct Workers AI).
-        return createAi({ binding: binding as AiBindingLike, env }).model(model);
+        return ai.model(model);
     }
 
     return model;

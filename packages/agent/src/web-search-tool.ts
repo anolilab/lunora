@@ -1,8 +1,8 @@
-import type { AiBindingLike, AiWebSearchItem, AiWebSearchProvider } from "@lunora/ai";
-import { createAi } from "@lunora/ai";
+import type { AiWebSearchItem, AiWebSearchProvider } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
 import { jsonSchema } from "ai";
 
+import resolveAgentAi from "./agent-ai";
 import type { AgentToolDefinition } from "./types";
 
 /**
@@ -18,7 +18,7 @@ interface WebSearchToolOptions {
      * `LUNORA_AI_GATEWAY_ID`, else the account's `default` gateway.
      */
     gatewayId?: string;
-    /** Maximum results per search, 1–10. Defaults to 5: every result is prompt the next turn pays for. */
+    /** Maximum results per search, 1–20. Defaults to 5: every result is prompt the next turn pays for. */
     limit?: number;
     /** Defaults to the Web Search API's own default (`"ceramic"`). */
     provider?: AiWebSearchProvider;
@@ -44,11 +44,14 @@ const WEB_SEARCH_TOOL_SCHEMA = jsonSchema<WebSearchToolInput>({
 });
 
 /**
- * Codes a retry cannot fix. Returned to the model as the tool's result rather
- * than thrown: a throw out of `execute` is retried by the durable step to
- * exhaustion and fails the run, where a string lets the next turn carry on.
+ * Codes a retry cannot fix and the model can route around: a rejected query,
+ * a runtime without `websearch()`, an unreadable response. Returned to the
+ * model as the tool's result rather than thrown, since a throw out of
+ * `execute` is retried by the durable step to exhaustion and fails the run.
+ * The deployment's own misconfiguration (401 / 403 / 404 on the gateway) is
+ * deliberately not here: failing the run is how the developer finds out.
  */
-const DETERMINISTIC_CODES = new Set(["BAD_REQUEST", "NOT_IMPLEMENTED"]);
+const DETERMINISTIC_CODES = new Set(["BAD_REQUEST", "INTERNAL", "NOT_IMPLEMENTED"]);
 
 /**
  * A batteries-included agent tool over the Cloudflare Web Search API (beta,
@@ -71,21 +74,19 @@ const DETERMINISTIC_CODES = new Set(["BAD_REQUEST", "NOT_IMPLEMENTED"]);
  * @experimental
  */
 const webSearchTool = (options: WebSearchToolOptions = {}): AgentToolDefinition<WebSearchToolInput, AiWebSearchItem[] | string> => {
-    return {
-        description: options.description ?? DEFAULT_DESCRIPTION,
-        execute: async (input, context) => {
-            const binding = context.env["AI"];
+    const { description = DEFAULT_DESCRIPTION, limit = DEFAULT_LIMIT, ...search } = options;
 
-            if (!binding) {
+    return {
+        description,
+        execute: async (input, context) => {
+            const ai = resolveAgentAi(context.env);
+
+            if (!ai) {
                 return "Web search is unavailable: this Worker has no `AI` binding. Answer from what you already know, and say that you could not search.";
             }
 
             try {
-                const result = await createAi({ binding: binding as AiBindingLike, env: context.env }).websearch(input.query, {
-                    ...(options.gatewayId === undefined ? {} : { gatewayId: options.gatewayId }),
-                    limit: options.limit ?? DEFAULT_LIMIT,
-                    ...(options.provider === undefined ? {} : { provider: options.provider }),
-                });
+                const result = await ai.websearch(input.query, { ...search, limit });
 
                 return result.items;
             } catch (error) {

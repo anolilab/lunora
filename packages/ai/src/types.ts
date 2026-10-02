@@ -18,7 +18,7 @@ export interface AiBindingLike {
      * predate it have no such method; `ctx.ai.websearch` reports that instead of
      * a bare `TypeError`.
      */
-    websearch?: (input: { byokAlias?: string; gatewayId: string; limit?: number; provider?: string; query: string }) => Promise<Response>;
+    websearch?: (input: Omit<AiWebSearchOptions, "gatewayId"> & { gatewayId: string; query: string }) => Promise<Response>;
 }
 
 /**
@@ -225,18 +225,24 @@ export interface AiWebSearchOptions {
      * account's `default` gateway.
      */
     gatewayId?: string;
-    /** Maximum results, 1–10. Defaults to 10. */
+    /** Maximum results, 1–20. Defaults to 10. */
     limit?: number;
     /** Defaults to `"ceramic"`. */
     provider?: AiWebSearchProvider;
 }
 
 /**
- * One result. `description` is present only when the provider returns one.
+ * One result. Web search is discovery only: a result describes a page, and
+ * reading the page is a separate `fetch` of its `url`. The optional fields are
+ * present only when the provider returns them.
  * @experimental
  */
 export interface AiWebSearchItem {
     description?: string;
+    faviconUrl?: string;
+    imageUrl?: string;
+    /** Naive (no timezone) ISO-8601 datetime, e.g. `"2025-11-30T04:39:48"`. */
+    lastModifiedDate?: string;
     title: string;
     url: string;
 }
