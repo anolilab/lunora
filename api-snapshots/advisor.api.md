@@ -830,24 +830,36 @@ interface AdvisorWranglerVariable {
 }
 ```
 
-### `AnalyticsMetricsOptions` (interface)
+### `AnalyticsMetricsDialect` (type)
 
 ```ts
-interface AnalyticsMetricsOptions {
+type AnalyticsMetricsDialect = {
+    dialect: "analytics-sql";
+    since: string;
+} | {
+    dialect?: "analytics-engine";
+    since?: never;
+};
+```
+
+### `AnalyticsMetricsOptions` (type)
+
+```ts
+type AnalyticsMetricsOptions = AnalyticsMetricsDialect & {
     dataset: string;
     declaredIndexes?: ReadonlyArray<{
         index: string;
         table: string;
     }>;
     group?: string;
-}
+};
 ```
 
 ### `AnalyticsMetricsSource` (interface)
 
 ```ts
 interface AnalyticsMetricsSource {
-    query: (sql: string) => Promise<{
+    query: (sql: string, params?: Readonly<Record<string, string>>) => Promise<{
         rows: ReadonlyArray<Record<string, unknown>>;
     }>;
 }

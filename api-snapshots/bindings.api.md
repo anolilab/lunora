@@ -633,6 +633,127 @@ const createAnalytics: (binding: AnalyticsEngineDatasetLike) => AnalyticsClient;
 const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClient;
 ```
 
+## `@lunora/bindings/analytics-sql`
+
+### `AnalyticsSql` (interface)
+
+```ts
+interface AnalyticsSql {
+    query: <T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: AnalyticsSqlParams) => Promise<AnalyticsSqlQueryResult<T>>;
+}
+```
+
+### `AnalyticsSqlBindingLike` (interface)
+
+```ts
+interface AnalyticsSqlBindingLike {
+    query: <T extends Record<string, unknown> = Record<string, unknown>>(request: AnalyticsSqlRequest) => Promise<AnalyticsSqlRawResult<T>>;
+}
+```
+
+### `AnalyticsSqlOptions` (interface)
+
+```ts
+interface AnalyticsSqlOptions {
+    binding: AnalyticsSqlBindingLike;
+}
+```
+
+### `AnalyticsSqlParameter` (type)
+
+```ts
+type AnalyticsSqlParameter = boolean | number | string | null;
+```
+
+### `AnalyticsSqlParams` (type)
+
+```ts
+type AnalyticsSqlParams = Readonly<Record<string, AnalyticsSqlParameter>> | ReadonlyArray<AnalyticsSqlParameter>;
+```
+
+### `AnalyticsSqlQueryError` (class)
+
+```ts
+class AnalyticsSqlQueryError extends LunoraError {
+    readonly retryable: boolean;
+    constructor(detail: string, options: {
+        cause?: unknown;
+        retryable: boolean;
+        status?: number;
+    });
+}
+```
+
+### `AnalyticsSqlQueryErrorData` (interface)
+
+```ts
+interface AnalyticsSqlQueryErrorData {
+    retryable: boolean;
+}
+```
+
+### `AnalyticsSqlQueryResult` (interface)
+
+```ts
+interface AnalyticsSqlQueryResult<T extends Record<string, unknown> = Record<string, unknown>> {
+    rowCount: number;
+    rows: T[];
+    statistics?: AnalyticsSqlStatistics;
+}
+```
+
+### `AnalyticsSqlRawResult` (interface)
+
+```ts
+interface AnalyticsSqlRawResult<T extends Record<string, unknown> = Record<string, unknown>> {
+    data: T[];
+    rows: number;
+    statistics?: AnalyticsSqlStatistics;
+}
+```
+
+### `AnalyticsSqlRequest` (interface)
+
+```ts
+interface AnalyticsSqlRequest {
+    params?: AnalyticsSqlParams;
+    query: string;
+}
+```
+
+### `AnalyticsSqlRestConfig` (interface)
+
+```ts
+interface AnalyticsSqlRestConfig {
+    accountId: string;
+    apiToken: string;
+    fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
+}
+```
+
+### `AnalyticsSqlStatistics` (interface)
+
+```ts
+interface AnalyticsSqlStatistics {
+    bytes_read: number;
+    elapsed_ms: number;
+    rows_read: number;
+}
+```
+
+### `createAnalyticsSql` (const)
+
+```ts
+const createAnalyticsSql: (options: AnalyticsSqlOptions) => AnalyticsSql;
+```
+
+### `createAnalyticsSqlRest` (const)
+
+```ts
+const createAnalyticsSqlRest: (config: AnalyticsSqlRestConfig) => AnalyticsSqlBindingLike;
+```
+
 ## `@lunora/bindings/artifacts`
 
 ### `ArtifactsActivityEnvelope` (interface)

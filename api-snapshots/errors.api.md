@@ -260,6 +260,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Analytics Engine SQL API error";
     };
+    readonly ANALYTICS_SQL_QUERY_ERROR: {
+        readonly status: 502;
+        readonly title: "Analytics SQL query error";
+    };
     readonly BROWSER_RUN_ERROR: {
         readonly status: 502;
         readonly title: "Browser Run API error";
