@@ -166,6 +166,7 @@ const buildDatabaseSpan = (input: {
         name: table === undefined ? `db.${operation}` : `db.${operation} ${table}`,
         ok: failure === undefined,
         parentSpanId: deps.anchor.rootSpanId,
+        ...(deps.anchor.rayId === undefined ? {} : { rayId: deps.anchor.rayId }),
         shardKey: deps.shardKey,
         spanId: otlpRandomHex(8),
         startTs,

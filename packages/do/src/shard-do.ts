@@ -259,6 +259,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { RAY_ID_HEADER } from "../../../shared/ray-id";
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
@@ -883,7 +884,7 @@ interface RequestScope {
      * a queued mutation admitted after a sibling's prologue would otherwise
      * forward the sibling's trace.
      */
-    trace: { rootSpanId: string; traceId: string } | undefined;
+    trace: { rayId?: string; rootSpanId: string; traceId: string } | undefined;
 
     /**
      * The inbound W3C `traceparent`, which `buildCtx` hands to
@@ -1958,7 +1959,7 @@ abstract class ShardDO {
      * `traceparent`. Cleared in the same `finally` as the other per-request
      * fields.
      */
-    private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
+    private currentRequestTrace: { rayId?: string; rootSpanId: string; traceId: string } | undefined;
 
     /**
      * Anchor of the in-flight trigger (`withTriggerTrace`), handed across the
@@ -3644,7 +3645,7 @@ abstract class ShardDO {
      * {@link makeTracer}. `undefined` outside a dispatch (an alarm, a lifecycle
      * hook), where the tracer mints its own anchor.
      */
-    protected getCurrentTrace(): { rootSpanId: string; traceId: string } | undefined {
+    protected getCurrentTrace(): { rayId?: string; rootSpanId: string; traceId: string } | undefined {
         return this.currentRequestTrace;
     }
 
@@ -6319,6 +6320,7 @@ abstract class ShardDO {
             functionPath,
             level,
             message,
+            ...(trace?.rayId === undefined ? {} : { rayId: trace.rayId }),
             shardKey: this.runner.shardKey,
             spanId: trace?.rootSpanId,
             traceId: trace?.traceId,
@@ -9993,6 +9995,8 @@ abstract class ShardDO {
             functionPath,
             identity: this.currentRequestIdentity,
             outcome,
+            // Same by-value capture as `traceId` below.
+            ...(trace.rayId === undefined ? {} : { rayId: trace.rayId }),
             redactedArgs: Object.keys(args).length === 0 ? undefined : args,
             shardKey: this.runner.shardKey,
             tablesRead: attribution.readTables === undefined ? [] : [...attribution.readTables],
@@ -12780,7 +12784,7 @@ abstract class ShardDO {
         dispatchBookmark: DispatchBookmark;
         dispatchHeadroom: TransactionHeadroomTracker;
         dispatchStartedAt: number;
-        dispatchTrace: { rootSpanId: string; traceId: string };
+        dispatchTrace: { rayId?: string; rootSpanId: string; traceId: string };
     } {
         this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
         this.currentResponseBookmark = undefined;
@@ -12826,7 +12830,10 @@ abstract class ShardDO {
         // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
         // the synthetic root span recorded on the way out agree on the ids even
         // when there is no inbound `traceparent` to derive them from.
-        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent);
+        // The Cloudflare Ray ID rides the anchor too, forwarded by the runtime next
+        // to `traceparent`, so this dispatch's logs and spans carry it. Telemetry
+        // only — nothing on the shard ever branches on it.
+        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent, request.headers.get(RAY_ID_HEADER));
         // Captured into a local as well: the `finally` below runs after the
         // handler's awaits, by which point an interleaved dispatch may have
         // re-set the shared field — reading it there would file this dispatch's

@@ -52,6 +52,7 @@ interface AppendRequestLogEntry {
     functionPath: string;
     identity?: Record<string, unknown>;
     outcome: RequestOutcome;
+    rayId?: string;
     redactedArgs?: unknown;
     shardKey?: string;
     subscriptionsReRun?: number;
@@ -803,6 +804,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    rayId?: string;
     sampled?: boolean;
     shardKey?: string;
     spanId: string;
@@ -866,6 +868,7 @@ interface SpanOptions {
 
 ```ts
 interface TraceAnchor {
+    rayId?: string;
     rootSpanId: string;
     sampled?: boolean;
     traceId: string;
@@ -1188,7 +1191,8 @@ const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ### `resolveTraceAnchor` (const)
 
 ```ts
-const resolveTraceAnchor: (traceparent: string | undefined) => {
+const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => {
+    rayId?: string;
     rootSpanId: string;
     sampled: boolean;
     traceId: string;
@@ -1252,6 +1256,7 @@ interface LogEvent {
     functionPath: string;
     level: ContextLogLevel;
     message: string;
+    rayId?: string;
     shardKey?: string;
     spanId?: string;
     traceId?: string;
