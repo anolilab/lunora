@@ -172,6 +172,7 @@ overrides:
   "@lunora/errors": "workspace:*"
   "@lunora/fingerprint": "workspace:*"
   "@lunora/flags": "workspace:*"
+  "@lunora/hostd": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"
   "@lunora/mcp": "workspace:*"
