@@ -808,3 +808,35 @@ the interface in two directions:
 9. **Preview deployments on a box:** they share the box's resources with
    production. Offer them, cap them per box, or route previews to WfP while
    production runs on the box?
+
+## 10. Follow-ups (`feat/cloud-followups`, 2026-10-02)
+
+Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
+
+- **Box diagnostics and fleets** (W9) — `192929f02`: `POST /v1/boxes/diagnose`
+  (owner/admin, `sensitive` bucket, audited) runs the `diagnose` job over
+  `BoxSessionDO.dispatch`, output capped at 4 000 lines / 256 KiB; the Boxes tab
+  has a Diagnose dialog and lists each box's fleets (`boxes.fleets`, written from
+  `hello` and moved on by successful deploy / reload / destroy results). The
+  install command names `--control-plane <LUNORA_ORIGIN_URL>`, which
+  `lunora-hostd enrol` requires (`boxes.createEnrolment` is now an action).
+  `1dea0abe8` keeps the `hello` fleets out of the socket attachment (up to
+  ~100 KB against workerd's 16 KiB cap), found while measuring for the bench.
+- **Deploy pacing per target** — `58cc121af`: `TARGETS[target].convergeBudget`
+  and `src/deploy/pacing.ts`; `cloudflare-wfp` keeps the platform account's
+  1,200 / 5 min budget, `cloudflare-workers` spends the connected account's,
+  `celld-vps` only its box's four converge slots.
+- **Re-releasing a commit already built** — `9333ea9a5`: a push whose build
+  exists but no longer serves re-releases that build's stored release
+  (`builds.reusesBuildId`), or rebuilds once it was pruned.
+- **First production alias** — `937f26fd5`: `projects.create` claims
+  `projects.productionAlias` (slug, then `<slug>-<org id prefix>`), which a git
+  build's first production release uses.
+- **Perf bench** (§8) — `adbfcdf4e`: `apps/cloud/__bench__/box-session.bench.ts`
+  in CodSpeed's `vis run test:bench`.
+- **Custom-domain certificates on `cloudflare-wfp`** — `a904654eb`: the
+  driver's `domains.onVerified` / `onRemoved` create and delete
+  Cloudflare-for-SaaS custom hostnames on `LUNORA_SAAS_ZONE_ID`; an hourly sweep
+  follows them to `active` (GAPS.md B1; zone setup is 🌐, RUNBOOK step 6a).
+- **Pre-rename dev databases** — `bf8515923`: the seed renames a lone
+  `dev-cell` to `default` in the local D1 file, or prints the reseed steps.
