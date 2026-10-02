@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { connect, disconnect, list } from "../lunora/cloudflare-accounts";
+import { CloudflareTokenError } from "../src/cloudflare/fetch";
 import { handleCloudflareAccountConnectRoute } from "../src/deploy/routes/cloudflare-accounts";
 import { decryptSecret } from "../src/secrets/crypto";
-import { CloudflareTokenError, inspectAccount, readScriptRequests, verifyToken } from "../src/targets/cloudflare-workers/api";
+import { inspectAccount, readScriptRequests, verifyToken } from "../src/targets/cloudflare-workers/api";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 

@@ -13,60 +13,25 @@
  * reported by status and Cloudflare's own error text, which never echoes it.
  */
 
+import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
+import { CLOUDFLARE_API_ROOT, cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
 import type { CloudflarePermission } from "../../provision-contract";
 import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
-
-const API_ROOT = "https://api.cloudflare.com/client/v4";
 
 /** A Cloudflare account id: 32 lowercase hex characters. */
 const ACCOUNT_ID = /^[\da-f]{32}$/u;
 
 export const isCloudflareAccountId = (value: unknown): value is string => typeof value === "string" && ACCOUNT_ID.test(value);
 
-/** How every call reaches one account. */
-export interface CloudflareAccountAccess {
-    accountId: string;
-    apiToken: string;
-    fetch?: typeof globalThis.fetch;
-}
+/** GET one v4 endpoint's `result`; a refused token throws `CloudflareTokenError`, any other failure (or no result) a plain Error. */
+const call = async <T>(access: CloudflareAccountAccess, path: string): Promise<T> => {
+    const answer = await cloudflareFetch(access)<T>(path);
 
-/** The token was refused (401/403), or is not active. The message is safe to show the organization that pasted it. */
-export class CloudflareTokenError extends Error {
-    public constructor(message: string) {
-        super(message);
-        this.name = "CloudflareTokenError";
-    }
-}
-
-interface Envelope<T> {
-    errors?: { code?: number; message?: string }[];
-    result?: T;
-    success?: boolean;
-}
-
-const describeErrors = (envelope: Envelope<unknown> | null, status: number): string => {
-    const messages = (envelope?.errors ?? []).map((error) => error.message).filter((message): message is string => typeof message === "string");
-
-    return messages.length > 0 ? messages.join("; ").slice(0, 300) : `HTTP ${String(status)}`;
-};
-
-/** GET (or POST) one v4 endpoint; a refused token throws {@link CloudflareTokenError}, any other failure a plain Error. */
-const call = async <T>(access: CloudflareAccountAccess, path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await (access.fetch ?? globalThis.fetch)(`${API_ROOT}${path}`, {
-        ...init,
-        headers: { authorization: `Bearer ${access.apiToken}`, "content-type": "application/json" },
-    });
-    const envelope = (await response.json().catch(() => null)) as Envelope<T> | null;
-
-    if (response.status === 401 || response.status === 403) {
-        throw new CloudflareTokenError(`Cloudflare refused the token for ${path.split("?")[0] ?? path}: ${describeErrors(envelope, response.status)}`);
+    if (answer?.result === undefined) {
+        throw new Error(`Cloudflare API ${path.split("?")[0] ?? path} answered no result`);
     }
 
-    if (!response.ok || envelope?.success === false || envelope?.result === undefined) {
-        throw new Error(`Cloudflare API ${path.split("?")[0] ?? path} failed: ${describeErrors(envelope, response.status)}`);
-    }
-
-    return envelope.result;
+    return answer.result;
 };
 
 /** What `tokens/verify` reports about a token. */
@@ -197,7 +162,7 @@ const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since:
  * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
  */
 export const readScriptRequests = async (access: CloudflareAccountAccess, sinceMs: number): Promise<ScriptRequests[]> => {
-    const response = await (access.fetch ?? globalThis.fetch)(`${API_ROOT}/graphql`, {
+    const response = await (access.fetch ?? globalThis.fetch)(`${CLOUDFLARE_API_ROOT}/graphql`, {
         body: JSON.stringify({ query: REQUESTS_QUERY, variables: { accountTag: access.accountId, since: new Date(sinceMs).toISOString() } }),
         headers: { authorization: `Bearer ${access.apiToken}`, "content-type": "application/json" },
         method: "POST",

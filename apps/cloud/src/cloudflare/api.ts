@@ -7,10 +7,11 @@
  * `cloudflare-wfp` driver, `src/targets/cloudflare-wfp/`).
  *
  * The HTTP implementation ({@link createHttpCloudflareApi}) calls the
- * documented REST endpoints under `https://api.cloudflare.com/client/v4`.
+ * documented REST endpoints through the shared v4 caller (`./fetch`).
  */
 
-import stripTrailingSlashes from "../lib/strip-trailing-slashes";
+import type { CloudflareAccountAccess } from "./fetch";
+import { cloudflareFetch } from "./fetch";
 
 /**
  * A Cloudflare-for-SaaS custom hostname as the API reports it: its id, the
@@ -77,21 +78,7 @@ const DNS_PAGE_SIZE = 100;
 /** Pages {@link CloudflareApi.listDnsRecordsUnder} reads at most: 5,000 records, two per address family per box. */
 export const MAX_DNS_LIST_PAGES = 50;
 
-export interface HttpCloudflareApiOptions {
-    accountId: string;
-    apiToken: string;
-    /** Override for tests; defaults to the public API base. */
-    baseUrl?: string;
-    fetch?: typeof globalThis.fetch;
-}
-
-interface CloudflareEnvelope {
-    errors?: { code?: number; message?: string }[];
-    result?: unknown;
-    success?: boolean;
-}
-
-const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
+export type HttpCloudflareApiOptions = CloudflareAccountAccess;
 
 /** A custom hostname as the API returns it — only the fields the port reads. */
 interface CustomHostnameResult {
@@ -139,108 +126,47 @@ const EXPORT_POLL_INTERVAL_MS = 2000;
  * REST endpoints; supply an account id + a scoped API token to run it.
  */
 export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): CloudflareApi => {
-    const fetchImpl = options.fetch ?? globalThis.fetch;
-    const apiRoot = stripTrailingSlashes(options.baseUrl ?? DEFAULT_BASE);
-    const base = `${apiRoot}/accounts/${options.accountId}`;
-    const authHeader = `Bearer ${options.apiToken}`;
+    const call = cloudflareFetch(options);
+    const account = `/accounts/${options.accountId}`;
+
+    /** A call's `result`, throwing on any failure. */
+    const callAt = async (path: string, method: "DELETE" | "GET" | "POST", body?: unknown): Promise<unknown> => {
+        const answer = await call(path, { ...(body === undefined ? {} : { body }), method });
+
+        return answer?.result;
+    };
 
     /** A call that answers `null` on 404 rather than throwing — for reads and deletes of something that may be gone. */
-    const callOrMissing = async (fullUrl: string, method: string): Promise<unknown> => {
-        const response = await fetchImpl(fullUrl, { headers: { authorization: authHeader, "content-type": "application/json" }, method });
+    const callOrMissing = async (path: string, method: "DELETE" | "GET"): Promise<unknown> => {
+        const answer = await call(path, { allow404: true, method });
 
-        if (response.status === 404) {
-            return null;
-        }
-
-        const data: unknown = await response.json();
-        const envelope = data as CloudflareEnvelope;
-
-        if (!response.ok || envelope.success === false) {
-            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-            throw new Error(`cloudflare ${method} ${fullUrl} failed: ${message}`);
-        }
-
-        return envelope.result ?? {};
-    };
-
-    const callAt = async (fullUrl: string, method: string, body?: unknown): Promise<unknown> => {
-        const response = await fetchImpl(fullUrl, {
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-            headers: { authorization: authHeader, "content-type": "application/json" },
-            method,
-        });
-        const data: unknown = await response.json();
-        const envelope = data as CloudflareEnvelope;
-
-        if (!response.ok || envelope.success === false) {
-            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-            throw new Error(`cloudflare ${method} ${fullUrl} failed: ${message}`);
-        }
-
-        return envelope.result;
-    };
-
-    /** A GET whose envelope carries `result_info`, for paginated listings. */
-    const getPage = async (fullUrl: string): Promise<{ result: unknown; totalPages: number }> => {
-        const response = await fetchImpl(fullUrl, { headers: { authorization: authHeader, "content-type": "application/json" }, method: "GET" });
-        const data: unknown = await response.json();
-        const envelope = data as CloudflareEnvelope & { result_info?: { total_pages?: number } };
-
-        if (!response.ok || envelope.success === false) {
-            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-            throw new Error(`cloudflare GET ${fullUrl} failed: ${message}`);
-        }
-
-        return { result: envelope.result, totalPages: envelope.result_info?.total_pages ?? 1 };
-    };
-
-    const callJson = async (path: string, method: string, body: unknown): Promise<unknown> => {
-        const response = await fetchImpl(`${base}${path}`, {
-            body: JSON.stringify(body),
-            headers: { authorization: authHeader, "content-type": "application/json" },
-            method,
-        });
-        const data: unknown = await response.json();
-        const envelope = data as CloudflareEnvelope;
-
-        if (!response.ok || envelope.success === false) {
-            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-            throw new Error(`cloudflare ${method} ${path} failed: ${message}`);
-        }
-
-        return envelope.result;
+        return answer === null ? null : (answer.result ?? {});
     };
 
     return {
         createCustomHostname: async ({ hostname, zoneId }) => {
-            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames`, "POST", {
+            const result = (await callAt(`/zones/${zoneId}/custom_hostnames`, "POST", {
                 hostname,
                 ssl: { method: "http", type: "dv" },
             })) as CustomHostnameResult;
 
             return toCustomHostname(result, hostname);
         },
-        deleteCustomHostname: async ({ id, zoneId }) =>
-            (await callOrMissing(`${apiRoot}/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "DELETE")) !== null,
+        deleteCustomHostname: async ({ id, zoneId }) => (await callOrMissing(`/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "DELETE")) !== null,
         createDnsRecord: async ({ content, name, type, zoneId }) => {
             // DNS-only: a box terminates its own TLS (Caddy), so the record must
             // resolve to the box, not to a Cloudflare proxy in front of it.
-            const result = (await callAt(`${apiRoot}/zones/${zoneId}/dns_records`, "POST", { content, name, proxied: false, ttl: 300, type })) as {
-                id?: string;
-            };
+            const result = (await callAt(`/zones/${zoneId}/dns_records`, "POST", { content, name, proxied: false, ttl: 300, type })) as
+                undefined | { id?: string };
 
-            if (!result.id) {
+            if (!result?.id) {
                 throw new Error("cloudflare DNS record create returned no id");
             }
 
             return { id: result.id };
         },
         deleteDnsRecord: async ({ id, zoneId }) => {
-            await callAt(`${apiRoot}/zones/${zoneId}/dns_records/${encodeURIComponent(id)}`, "DELETE");
+            await callAt(`/zones/${zoneId}/dns_records/${encodeURIComponent(id)}`, "DELETE");
         },
         exportD1Database: async (databaseId) => {
             // Two-phase, per D1's REST contract: the first POST starts the export
@@ -252,14 +178,14 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
 
             for (let attempt = 0; attempt < MAX_EXPORT_POLLS; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- polling is sequential by definition
-                const response = (await callJson(`/d1/database/${databaseId}/export`, "POST", {
+                const response = (await callAt(`${account}/d1/database/${databaseId}/export`, "POST", {
                     ...(bookmark === undefined ? {} : { current_bookmark: bookmark }),
                     dump_options: { no_data: false, no_schema: false, tables: [] },
                     output_format: "polling",
-                })) as D1ExportResponse;
+                })) as D1ExportResponse | undefined;
 
-                if (response.status === "error" || response.success === false) {
-                    throw new Error(`cloudflare D1 export failed: ${response.error ?? response.messages?.join("; ") ?? "unknown error"}`);
+                if (response === undefined || response.status === "error" || response.success === false) {
+                    throw new Error(`cloudflare D1 export failed: ${response?.error ?? response?.messages?.join("; ") ?? "unknown error"}`);
                 }
 
                 if (response.status === "complete") {
@@ -283,21 +209,21 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             throw new Error(`cloudflare D1 export did not complete within ${String(MAX_EXPORT_POLLS)} polls`);
         },
         findCustomHostname: async ({ hostname, zoneId }) => {
-            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`, "GET")) as
+            const result = (await callAt(`/zones/${zoneId}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`, "GET")) as
                 CustomHostnameResult[] | undefined;
             const match = (result ?? []).find((candidate) => candidate.hostname?.toLowerCase() === hostname.toLowerCase());
 
             return match === undefined ? null : toCustomHostname(match, hostname);
         },
         getCustomHostname: async ({ id, zoneId }) => {
-            const result = (await callOrMissing(`${apiRoot}/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "GET")) as CustomHostnameResult | null;
+            const result = (await callOrMissing(`/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "GET")) as CustomHostnameResult | null;
 
             return result === null ? null : toCustomHostname(result, "");
         },
         listDnsRecords: async ({ name, zoneId }) => {
-            const result = (await callAt(`${apiRoot}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=100`, "GET")) as DnsRecord[];
+            const result = (await callAt(`/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=100`, "GET")) as DnsRecord[] | undefined;
 
-            return result.map((record) => {
+            return (result ?? []).map((record) => {
                 return { content: record.content, id: record.id, name: record.name, type: record.type };
             });
         },
@@ -306,11 +232,13 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
 
             for (let page = 1; page <= MAX_DNS_LIST_PAGES; page += 1) {
                 // eslint-disable-next-line no-await-in-loop -- pagination is sequential by construction
-                const { result, totalPages } = await getPage(
-                    `${apiRoot}/zones/${zoneId}/dns_records?name.endswith=${encodeURIComponent(`.${domain}`)}&per_page=${String(DNS_PAGE_SIZE)}&page=${String(page)}`,
+                const answer = await call<DnsRecord[]>(
+                    `/zones/${zoneId}/dns_records?name.endswith=${encodeURIComponent(`.${domain}`)}&per_page=${String(DNS_PAGE_SIZE)}&page=${String(page)}`,
                 );
 
-                for (const record of result as DnsRecord[]) {
+                const totalPages = answer?.totalPages ?? 1;
+
+                for (const record of answer?.result ?? []) {
                     records.push({ content: record.content, id: record.id, name: record.name, type: record.type });
                 }
 

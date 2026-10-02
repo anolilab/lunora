@@ -1,4 +1,5 @@
-import { BillableUsageAuthError, fetchBillableUsage, normalizeBillableUsage } from "../src/cloudflare/billable-usage";
+import { fetchBillableUsage, normalizeBillableUsage } from "../src/cloudflare/billable-usage";
+import { CloudflareTokenError } from "../src/cloudflare/fetch";
 import { decryptSecret } from "../src/secrets/crypto";
 import type { Id } from "./_generated/dataModel.js";
 import { action, mutation, query, v } from "./_generated/server.js";
@@ -172,7 +173,7 @@ export const summary = action
 
             return { cloudflareAccountId: row.cloudflareAccountId, status: "ok", view: normalizeBillableUsage(rows) };
         } catch (error) {
-            const resolvedStatus: CloudflareCostsStatus = error instanceof BillableUsageAuthError ? "unauthorized" : "error";
+            const resolvedStatus: CloudflareCostsStatus = error instanceof CloudflareTokenError ? "unauthorized" : "error";
 
             return { cloudflareAccountId: row.cloudflareAccountId, status: resolvedStatus, view: null };
         }

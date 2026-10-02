@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BillableUsageRow } from "../src/cloudflare/billable-usage";
-import { BillableUsageAuthError, fetchBillableUsage, normalizeBillableUsage } from "../src/cloudflare/billable-usage";
+import { fetchBillableUsage, normalizeBillableUsage } from "../src/cloudflare/billable-usage";
+import { CloudflareTokenError } from "../src/cloudflare/fetch";
 
 /** A CF envelope response with the given result rows. */
 const envelopeResponse = (rows: unknown, init?: ResponseInit): Response =>
@@ -60,18 +61,20 @@ describe(fetchBillableUsage, () => {
         expect((init?.headers as Record<string, string>).authorization).toBe("Bearer tok_secret");
     });
 
-    it("throws BillableUsageAuthError on 403 (missing Billing Read scope)", async () => {
+    it("throws CloudflareTokenError on 403 (missing Billing Read scope)", async () => {
         const fetchImpl = vi
             .fn<typeof globalThis.fetch>()
             .mockResolvedValue(Response.json({ errors: [{ message: "insufficient permissions" }], success: false }, { status: 403 }));
 
-        await expect(fetchBillableUsage({ accountId: "a", apiToken: "t", fetch: fetchImpl })).rejects.toBeInstanceOf(BillableUsageAuthError);
+        await expect(fetchBillableUsage({ accountId: "a", apiToken: "t", fetch: fetchImpl })).rejects.toBeInstanceOf(CloudflareTokenError);
     });
 
     it("throws a plain error on a non-ok, non-auth response", async () => {
         const fetchImpl = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ errors: [{ message: "boom" }], success: false }, { status: 500 }));
 
-        await expect(fetchBillableUsage({ accountId: "a", apiToken: "t", fetch: fetchImpl })).rejects.toThrow(/billable-usage read failed: boom/);
+        await expect(fetchBillableUsage({ accountId: "a", apiToken: "t", fetch: fetchImpl })).rejects.toThrow(
+            "Cloudflare GET /accounts/a/billable-usage failed: boom",
+        );
     });
 
     it("tolerates a non-array result by returning an empty list", async () => {

@@ -11,8 +11,9 @@
  * database, a log line or a response.
  */
 import { internal } from "../../../lunora/_generated/api.js";
+import { CloudflareTokenError } from "../../cloudflare/fetch";
 import { encryptSecret } from "../../secrets/crypto";
-import { CloudflareTokenError, inspectAccount, isCloudflareAccountId } from "../../targets/cloudflare-workers/api";
+import { inspectAccount, isCloudflareAccountId } from "../../targets/cloudflare-workers/api";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 

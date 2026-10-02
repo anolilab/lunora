@@ -21,71 +21,22 @@
  * names a field differently, and nothing else changes.
  */
 
-import stripTrailingSlashes from "../lib/strip-trailing-slashes";
-
-const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
+import type { CloudflareAccountAccess } from "./fetch";
+import { cloudflareFetch } from "./fetch";
 
 /** A raw billable-usage row (one product × charge period). Shape read defensively via {@link FIELD}. */
 export type BillableUsageRow = Record<string, unknown>;
 
-export interface FetchBillableUsageOptions {
-    accountId: string;
-    apiToken: string;
-    /** Override for tests; defaults to the public API base. */
-    baseUrl?: string;
-    fetch?: typeof globalThis.fetch;
-}
-
-interface CloudflareEnvelope {
-    errors?: { code?: number; message?: string }[];
-    result?: unknown;
-    success?: boolean;
-}
-
 /**
- * Raised when the Billable-Usage read is rejected as unauthorized (401/403) —
- * the token lacks the Billing Read scope, or the account isn't self-serve. The
- * summary action maps this to a distinct "unauthorized" status so the UI can
- * tell "wrong/insufficient token" apart from a transient failure.
+ * Read the account's billable usage. A token without Billing Read (or an
+ * account that is not self-serve) throws `CloudflareTokenError`, any other
+ * failure a plain `Error` — the cost summary maps both
+ * to a status, never surfacing the token or a raw stack to the client.
  */
-export class BillableUsageAuthError extends Error {
-    public constructor(message: string) {
-        super(message);
-        this.name = "BillableUsageAuthError";
-    }
-}
+export const fetchBillableUsage = async (access: CloudflareAccountAccess): Promise<BillableUsageRow[]> => {
+    const answer = await cloudflareFetch(access)<unknown>(`/accounts/${access.accountId}/billable-usage`);
 
-/**
- * Read the account's billable usage. Throws {@link BillableUsageAuthError} on
- * 401/403 (bad/insufficient token), and a plain `Error` on any other non-ok
- * response — the caller (`cloudflareBilling.summary`) catches both and fails
- * open to a status view, never surfacing the token or a raw stack to the client.
- */
-export const fetchBillableUsage = async (options: FetchBillableUsageOptions): Promise<BillableUsageRow[]> => {
-    const fetchImpl = options.fetch ?? globalThis.fetch;
-    const apiRoot = stripTrailingSlashes(options.baseUrl ?? DEFAULT_BASE);
-    const url = `${apiRoot}/accounts/${options.accountId}/billable-usage`;
-
-    const response = await fetchImpl(url, {
-        headers: { authorization: `Bearer ${options.apiToken}`, "content-type": "application/json" },
-        method: "GET",
-    });
-    const data: unknown = await response.json().catch(() => null);
-    const envelope = (data ?? {}) as CloudflareEnvelope;
-
-    if (response.status === 401 || response.status === 403) {
-        const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-        throw new BillableUsageAuthError(message);
-    }
-
-    if (!response.ok || envelope.success === false) {
-        const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
-
-        throw new Error(`cloudflare billable-usage read failed: ${message}`);
-    }
-
-    return Array.isArray(envelope.result) ? (envelope.result as BillableUsageRow[]) : [];
+    return Array.isArray(answer?.result) ? (answer.result as BillableUsageRow[]) : [];
 };
 
 /**

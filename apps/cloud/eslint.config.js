@@ -279,7 +279,8 @@ export default createConfig(
     // reaches a tenant only through a `TargetDriver` resolved by
     // `src/targets/registry.ts`, so the Cloudflare-specific code — the
     // `cloudflare-wfp` driver (provision-box client, dispatch namespace,
-    // Analytics Engine, hostname grammar) and the REST port in `src/cloudflare/` —
+    // Analytics Engine, hostname grammar) and the REST port in `src/cloudflare/`
+    // (with `fetch.ts`, the one v4 caller every Cloudflare reader shares) —
     // is imported only by the places listed in the next block. A new import from
     // anywhere else is a Cloudflare assumption leaking back into code every
     // target shares. `@typescript-eslint/no-restricted-imports` rather than the
