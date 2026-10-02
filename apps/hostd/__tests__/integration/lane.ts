@@ -92,17 +92,31 @@ interface EnrolInput {
 /** The S3 credentials the lane's bucket accepts (moto takes any). */
 const LANE_CREDENTIALS = { AWS_ACCESS_KEY_ID: "lane-access-key", AWS_SECRET_ACCESS_KEY: "lane-secret-key" } as const;
 
+/** How a box is laid out and run. */
+interface LaneBoxOptions {
+    /** Extra environment for the daemon (the systemd box gets it as a unit drop-in). */
+    environment?: Readonly<Record<string, string>>;
+
+    /**
+     * Lay the first release out in the install directory, `current` included;
+     * the lane's own release (the binaries under test) when absent.
+     */
+    layout?: (installDirectory: string) => Promise<void> | void;
+}
+
 interface LaneBox {
     configPath: string;
     dataDir: string;
     /** Enrol the box (`lunora-hostd enrol`), as install.sh would. */
     enrol: (input: EnrolInput) => Promise<RunResult>;
+    /** Where the releases are: `{installDir}/current` the one that runs. */
+    installDir: string;
     isolated: boolean;
     /** What hostd has logged so far. */
     logs: () => string;
     /** Remove everything the lane installed. */
     remove: () => Promise<void>;
-    /** Start the daemon. */
+    /** Start the daemon. Like systemd's `Restart=always`, a daemon that exits 0 (after replacing itself) is started again. */
     start: () => Promise<void>;
     /** Stop the daemon; resolves its exit status. */
     stop: () => Promise<number | null>;
@@ -148,16 +162,41 @@ const installRelease = (installDirectory: string, hostd: string | undefined, pla
 };
 
 /** The daemon as the current user, in a temp directory: functional, not isolated. */
-const localBox = (): LaneBox => {
+const localBox = async (options: LaneBoxOptions): Promise<LaneBox> => {
     const root = mkdtempSync(join(tmpdir(), "lunora-hostd-lane-"));
     const installDirectory = join(root, "opt");
     const configPath = join(root, "etc", "config.json");
     const dataDirectory = join(root, "data");
     const hostd = join(installDirectory, "current", "lunora-hostd");
     let daemon: ChildProcess | undefined;
+    let stopping = false;
     let output = "";
 
-    installRelease(installDirectory, process.env["LUNORA_HOSTD_BIN"], "link");
+    mkdirSync(installDirectory, { recursive: true });
+
+    if (options.layout === undefined) {
+        installRelease(installDirectory, process.env["LUNORA_HOSTD_BIN"], "link");
+    } else {
+        await options.layout(installDirectory);
+    }
+
+    const spawnDaemon = (): void => {
+        // `current/lunora-hostd` is resolved at each start: after an upgrade, the new release's.
+        const child = spawn(hostd, ["run", "--config", configPath], { env: { PATH: SYSTEM_PATH, ...options.environment }, stdio: ["ignore", "pipe", "pipe"] });
+
+        daemon = child;
+        child.stdout.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        child.once("exit", (code) => {
+            if (code === 0 && !stopping) {
+                setTimeout(spawnDaemon, 1000);
+            }
+        });
+    };
 
     return {
         configPath,
@@ -187,22 +226,20 @@ const localBox = (): LaneBox => {
                 ],
                 { ...LANE_CREDENTIALS, LUNORA_HOSTD_ENROL_TOKEN: input.token, PATH: SYSTEM_PATH },
             ),
+        installDir: installDirectory,
         isolated: false,
         logs: () => output,
         remove: async () => {
             rmSync(root, { force: true, recursive: true });
         },
         start: async () => {
-            daemon = spawn(hostd, ["run", "--config", configPath], { env: { PATH: SYSTEM_PATH }, stdio: ["ignore", "pipe", "pipe"] });
-            daemon.stdout?.on("data", (chunk: Buffer) => {
-                output += chunk.toString();
-            });
-            daemon.stderr?.on("data", (chunk: Buffer) => {
-                output += chunk.toString();
-            });
+            stopping = false;
+            spawnDaemon();
         },
         stop: async () =>
             new Promise((resolve) => {
+                stopping = true;
+
                 if (daemon?.exitCode !== null) {
                     resolve(daemon?.exitCode ?? null);
 
@@ -230,18 +267,36 @@ const mustSucceed = (result: RunResult, what: string): void => {
 /** The enrolment, as install.sh's `enrol` runs it: the token from `$LANE_TOKEN`, the flags as `$@`. */
 const ENROL_SCRIPT = 'TOKEN="$LANE_TOKEN"; ENROL_ARGS=("$@"); enrol';
 
+/** Where the systemd box's unit takes extra environment from (a drop-in). */
+const LANE_DROP_IN = "/etc/systemd/system/lunora-hostd.service.d/lane.conf";
+
 /** The daemon under the real systemd unit, set up by install.sh's functions at the real paths. */
-const systemdBox = async (): Promise<LaneBox> => {
+const systemdBox = async (options: LaneBoxOptions): Promise<LaneBox> => {
     if (process.getuid?.() !== 0) {
         throw new Error("LUNORA_HOSTD_ISOLATION=1 needs root (run the lane under sudo)");
     }
 
-    const hostd = required("LUNORA_HOSTD_BIN");
-
     mustSucceed(await installFunctions("install_packages; create_users; create_directories"), "install_packages / create_users / create_directories");
-    installRelease("/opt/lunora-hostd", hostd, "copy");
+
+    if (options.layout === undefined) {
+        installRelease("/opt/lunora-hostd", required("LUNORA_HOSTD_BIN"), "copy");
+    } else {
+        await options.layout("/opt/lunora-hostd");
+    }
+
     execFileSync(tool("chown"), ["-R", "-h", "lunora-hostd:lunora-hostd", "/opt/lunora-hostd"]);
     mustSucceed(await installFunctions("install_unit"), "install_unit");
+
+    if (options.environment !== undefined) {
+        mkdirSync(dirname(LANE_DROP_IN), { recursive: true });
+        writeFileSync(
+            LANE_DROP_IN,
+            `[Service]\n${Object.entries(options.environment)
+                .map(([name, value]) => `Environment=${name}=${value}\n`)
+                .join("")}`,
+        );
+        execFileSync(tool("systemctl"), ["daemon-reload"]);
+    }
 
     const configPath = "/etc/lunora-hostd/config.json";
 
@@ -265,6 +320,7 @@ const systemdBox = async (): Promise<LaneBox> => {
                 ],
                 { ...LANE_CREDENTIALS, LANE_TOKEN: input.token },
             ),
+        installDir: "/opt/lunora-hostd",
         isolated: true,
         logs: () => {
             try {
@@ -274,6 +330,7 @@ const systemdBox = async (): Promise<LaneBox> => {
             }
         },
         remove: async () => {
+            rmSync(dirname(LANE_DROP_IN), { force: true, recursive: true });
             mustSucceed(await run(tool("bash"), [INSTALL_SCRIPT, "--uninstall"], { PATH: SYSTEM_PATH }), "install.sh --uninstall");
         },
         start: async () => {
@@ -288,12 +345,12 @@ const systemdBox = async (): Promise<LaneBox> => {
 };
 
 /** The box for this run: the systemd one when `LUNORA_HOSTD_ISOLATION=1`. */
-const createLaneBox = async (): Promise<LaneBox> => (ISOLATED ? systemdBox() : localBox());
+const createLaneBox = async (options: LaneBoxOptions = {}): Promise<LaneBox> => (ISOLATED ? systemdBox(options) : localBox(options));
 
 /** Rewrite the enrolled config in place, so it keeps its owner and mode. */
 const patchConfig = (path: string, patch: (config: Record<string, unknown>) => Record<string, unknown>): void => {
     writeJson(path, patch(JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>));
 };
 
-export type { EnrolInput, LaneBox, RunResult };
+export type { EnrolInput, LaneBox, LaneBoxOptions, RunResult };
 export { createLaneBox, ISOLATED, LANE_CREDENTIALS, LANE_RELEASE, patchConfig, required, run, SYSTEM_PATH, tool };

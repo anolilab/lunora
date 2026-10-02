@@ -357,14 +357,40 @@ time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
 `pnpm run test:hostd` (vitest project `integration`, gated behind
 `LUNORA_HOSTD_TESTS=1`) drives the built daemon against real celld, a Caddy
 built with `caddy-ratelimit`, an S3-compatible bucket and an in-process fake
-control plane: enrol, session, deploy, HTTP through Caddy, a usage report,
-destroy with `deleteData`. It reads `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
+control plane. It reads `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
 `LUNORA_HOSTD_S3_ENDPOINT` and, optionally, `LUNORA_HOSTD_BIN` (the single
-executable; otherwise `dist/bin.mjs`). With `LUNORA_HOSTD_ISOLATION=1`, as root
-on a systemd host (the `hostd integration` CI job, under sudo), it sets the box
-up with `install.sh`'s own functions, runs hostd under the real unit with Caddy
-on port 80, and asserts the isolation with probes from inside a deployed app and
-as the fleet user. See [`__tests__/integration/lane.ts`](./__tests__/integration/lane.ts).
+executable; otherwise `dist/bin.mjs`). Its files run one at a time:
+
+- [`lane.test.ts`](./__tests__/integration/lane.test.ts): enrol, session,
+  deploy, HTTP through Caddy, a usage report, then the **target-driver
+  conformance legs** (`apps/cloud/__tests__/support/target-conformance.ts`)
+  through the real daemon, reimplemented here because hostd never depends on
+  `apps/cloud` — the same release twice converges on one fleet at one URL, a
+  new release lands on the same fleet and URL and is served, each alias gets
+  its own URL, destroy is idempotent and tolerates a fleet that never
+  existed, a destroyed fleet is re-created at the same URL ("running" is what
+  the host reports: `state.json`) — a refused release forwarded to the
+  control plane as an OTLP log, and destroy with `deleteData`.
+- [`upgrade.test.ts`](./__tests__/integration/upgrade.test.ts): the **N → N+1
+  gate** (plan 458 W7). Release N is installed by its own
+  `lunora-hostd install-release`, an alias is deployed and served, then an
+  `upgrade` job brings release N+1 (signed manifest from the control plane,
+  artifacts over HTTPS, celld gzipped); the daemon installs it beside N,
+  switches `current`, exits, is started again on N+1 (by systemd, or by the
+  lane standing in for it), and the alias answers again. Both releases'
+  `lunora-hostd` are builds of this source trusting a key the test generates
+  ([`__tests__/helpers/test-release.ts`](./__tests__/helpers/test-release.ts)
+  swaps `trusted-release-keys.ts` in an esbuild bundle) — no shipped build can
+  take a key from anywhere but its source.
+
+With `LUNORA_HOSTD_ISOLATION=1`, as root on a systemd host (the `hostd
+integration` CI job, under sudo), each box is set up with `install.sh`'s own
+functions, hostd runs under the real unit with Caddy on port 80, and the lane
+asserts the isolation with probes from inside a deployed app, as the fleet
+user and as the edge user. Locally, run it in an unprivileged network
+namespace (`unshare --user --map-current-user --net --keep-caps`, bring `lo`
+up, start the S3 endpoint inside), which also keeps a workstation firewall
+from blocking the binaries. See [`__tests__/integration/lane.ts`](./__tests__/integration/lane.ts).
 
 ## Wire protocol
 
