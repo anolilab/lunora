@@ -1,0 +1,193 @@
+---
+title: Testing AI features end to end
+description: Drive a Lunora app's AI flows in a real browser with the e2e runner, and judge non-deterministic model output with natural-language assertions.
+related:
+    - to: /docs/concepts/testing
+      note: "the in-memory harness and the AI scorers for function-level tests"
+    - to: /docs/packages/ai
+      note: "`ctx.ai`, the helper these flows call"
+---
+
+The [in-memory harness](/docs/concepts/testing) covers the logic around a model
+call: prompt assembly, tool dispatch, and the scorers in `@lunora/testing`. It
+can't tell you whether the chat screen shows a sensible answer once a real model,
+the worker, and the UI run together. Locator assertions don't help much there
+either, because the text changes from run to run.
+
+[e2e](https://e2e.tester.army/docs) (Apache-2.0, npm `e2e`) fills that gap. It
+runs on Playwright and mixes ordinary locator assertions with agent steps:
+`agent.act` carries out a goal, and `agent.assert` / `agent.extract` let a model
+judge what is on screen. Use it for the questions an `expect` can't express,
+such as "the reply answers the question about refunds".
+
+<Callout type="info">
+    e2e is a third-party, pre-1.0 project with its own runner. It is not the Playwright test runner, so `mockLunora` from `@lunora/testing/playwright` doesn't
+    plug in: the e2e `browser` fixture has `route` but no `routeWebSocket`. Tests run against a real `lunora dev` worker.
+</Callout>
+
+## Install
+
+e2e needs Node.js 22.12+, `playwright` `>=1.63.0 <2`, and AI SDK v7 (`ai@^7`, the
+major `@lunora/ai` already uses).
+
+<Tabs items={["pnpm","npm"]}>
+
+```sh tab="pnpm"
+pnpm add -D e2e @e2e-dev/web playwright ai@^7
+```
+
+```sh tab="npm"
+npm install -D e2e @e2e-dev/web playwright ai@^7
+```
+
+</Tabs>
+
+`npx e2e init` scaffolds the same setup interactively and can register the
+runner's MCP server for your coding agent.
+
+## Configure
+
+Two models are involved, and they need separate credentials:
+
+- **The tester model** is set in `agents.default.model`. It drives `agent.*`
+  steps. The runner process reads its key, for example `AI_GATEWAY_API_KEY`.
+- **Your app's model** is whatever `ctx.ai` calls inside the worker. The worker
+  reads its settings from `.dev.vars`, not from the runner's environment.
+
+The runner starts the dev server with a **stripped environment**: only `PATH`,
+`HOME`, and the temp-directory variables are passed through, plus anything you
+list in `app.command.env`. That matters only for variables the dev server process
+itself reads, such as `CLOUDFLARE_API_TOKEN` below.
+
+```ts title="e2e.config.ts"
+import { web } from "@e2e-dev/web";
+import { gateway } from "ai";
+import type { E2EConfig } from "e2e";
+
+export default {
+    tests: "tests/**/*.e2e.ts",
+    targets: [
+        {
+            engine: web(),
+            app: {
+                // Vite binds `localhost`, which is `::1` on macOS; `127.0.0.1` would never answer.
+                url: "http://localhost:5173",
+                command: {
+                    executable: "pnpm",
+                    args: ["dev"],
+                    startupTimeout: 120_000,
+                    log: ".e2e/logs/app.log",
+                },
+            },
+        },
+    ],
+    agents: {
+        default: { model: gateway("openai/gpt-6-luna-fast") },
+    },
+} satisfies E2EConfig;
+```
+
+### Does the dev server need Cloudflare?
+
+Importing `@lunora/ai` makes Lunora add `"ai": { "binding": "AI" }` to
+`wrangler.jsonc` on every codegen pass. Workers AI has no local emulation, so by
+default the dev server opens a remote session for that binding at boot, and the
+session needs Cloudflare credentials:
+
+- **Locally** it usually just works: a `wrangler login` is stored under `HOME`,
+  which the runner passes through.
+- **In CI**, or anywhere without a login, the dev server fails to boot with
+  "Failed to start the remote proxy session", and the runner reports
+  `APP_UNREACHABLE`. Every test fails, not only the AI ones.
+
+If your app calls Workers AI models (`@cf/…` ids), pass a token through:
+
+```ts
+command: {
+    executable: "pnpm",
+    args: ["dev"],
+    env: { CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN ?? "" },
+},
+```
+
+If it doesn't, Cloudflare isn't needed at all. Turn remote bindings off and route
+`"<provider>/<model>"` slugs through any OpenAI-compatible endpoint:
+
+```ts title="vite.config.ts"
+lunora({ cloudflare: { remoteBindings: false } });
+```
+
+```sh title=".dev.vars"
+LUNORA_AI_PROXY_URL=https://openrouter.ai/api/v1
+LUNORA_AI_PROXY_TOKEN=sk-or-...
+```
+
+`ctx.ai.model("openai/gpt-5-mini")` then sends the slug unchanged as the request's
+`model`. A token is only sent over HTTPS, except to a loopback host. Cloudflare
+still logs a warning that AI bindings access remote resources; it's harmless as
+long as nothing calls a `@cf/…` model.
+
+The same switch makes the app's side deterministic. Point `LUNORA_AI_PROXY_URL` at a
+local stub that answers `POST /v1/chat/completions` with a canned reply (for
+example `http://127.0.0.1:4399/v1`), and every run gets the same text for free.
+Keep `agent.assert` for the runs that use a real model.
+
+## Write a test
+
+Use locators for anything that is deterministic and agent steps for anything
+the model produces:
+
+```ts title="tests/assistant.e2e.ts"
+import { test } from "@e2e-dev/web";
+import { expect } from "e2e";
+import { z } from "zod";
+
+test("the assistant answers a refund question", async ({ app, agent, screen }) => {
+    await app.open("/assistant");
+
+    // Exact input: the prompt is the fixture, so type it rather than delegate it.
+    await screen.getByRole("textbox", "Message").fill("How long do I have to request a refund?");
+    await screen.getByRole("button", "Send").tap();
+
+    // Deterministic: the question and exactly one reply are rendered.
+    await expect(screen.getByRole("article")).toHaveCount(2);
+
+    // Non-deterministic: let the model judge the content.
+    await agent.waitFor("the assistant has finished streaming its reply", { timeout: 60_000 });
+    await agent.assert("the reply states a refund window measured in days");
+
+    const reply = await agent.extract("the number of days mentioned in the reply", {
+        schema: z.object({ days: z.number().int() }),
+    });
+    expect(reply.days).toBe(30);
+});
+```
+
+Some behaviours of the runner that matter for AI flows:
+
+- **Replay covers the tester only.** e2e records `agent.act` steps that a later
+  assertion verified and replays them without calling the tester model. Your
+  app's `ctx.ai` call still runs every time, so each run still pays for and
+  waits on the app's model.
+- **Judgments are never cached.** `agent.assert`, `agent.waitFor`, and
+  `agent.extract` call the tester model on every run.
+- **`assert` doesn't poll.** Use `agent.waitFor` until the stream finishes
+  first. Asserting against a half-rendered reply returns
+  `ASSERTION_INCONCLUSIVE`.
+
+## Run in CI
+
+```yaml
+- run: pnpm install --frozen-lockfile
+- run: pnpm exec playwright install chromium --with-deps
+- run: pnpm exec e2e run --reporter list,junit
+  env:
+      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      # Only when the app calls Workers AI (`@cf/…` models); see above.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+With `CI` set, the runner defaults to one worker, one retry, and a read-only
+replay cache. Commit `.e2e/cache/` (remove it from `.gitignore`) so CI replays
+recorded steps. Without it, every `agent.act` goes back to the model. The runner
+sends anonymous usage telemetry; set `E2E_TELEMETRY_DISABLED=1` to opt out.
