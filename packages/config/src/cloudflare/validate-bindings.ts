@@ -30,8 +30,15 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
 /** Named instance types Cloudflare accepts (plus the legacy `dev`/`standard` aliases). */
 const NAMED_INSTANCE_TYPES = new Set(["basic", "dev", "lite", "standard", "standard-1", "standard-2", "standard-3", "standard-4"]);
 
-/** Documented bounds for custom instance types. */
+/**
+ * Documented bounds for custom instance types (developers.cloudflare.com/containers/platform-details/limits):
+ * 1–4 vCPU, ≤ 12 GiB memory, ≤ 20 GB disk at any memory size, ≥ 3 GiB memory per vCPU. The former
+ * 2-GB-disk-per-GiB-memory ratio is gone — custom sizes are open to every account.
+ */
 const CUSTOM_INSTANCE_LIMITS = { disk_mb: 20_000, memory_mib: 12_288, vcpu: 4 } as const;
+
+/** Custom instance types start at 1 vCPU; below that, Cloudflare points at the named `lite` / `basic` types. */
+const CUSTOM_INSTANCE_MIN_VCPU = 1;
 
 /** Validate one entry's `instance_type` (named or custom object). */
 const validateInstanceType = (entry: WranglerContainerEntry, label: string, errors: string[]): void => {
@@ -59,20 +66,16 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
         }
     }
 
-    const { disk_mb: diskMb, memory_mib: memoryMib, vcpu } = instanceType;
+    const { memory_mib: memoryMib, vcpu } = instanceType;
+
+    if (typeof vcpu === "number" && vcpu > 0 && vcpu < CUSTOM_INSTANCE_MIN_VCPU) {
+        errors.push(
+            `${label} custom instance_type needs ≥ ${String(CUSTOM_INSTANCE_MIN_VCPU)} vCPU (got ${String(vcpu)}) — use the named "lite" or "basic" instance type below 1 vCPU`,
+        );
+    }
 
     if (typeof vcpu === "number" && typeof memoryMib === "number" && memoryMib < vcpu * 3072) {
         errors.push(`${label} custom instance_type needs ≥ 3 GiB (3072 MiB) memory per vCPU (got ${String(memoryMib)} MiB for ${String(vcpu)} vCPU)`);
-    }
-
-    if (typeof memoryMib === "number" && typeof diskMb === "number") {
-        const maxDiskMb = Math.floor((memoryMib / 1024) * 2000);
-
-        if (diskMb > maxDiskMb) {
-            errors.push(
-                `${label} custom instance_type allows ≤ 2 GB disk per GiB memory (≤ ${String(maxDiskMb)} MB for ${String(memoryMib)} MiB memory; got ${String(diskMb)} MB)`,
-            );
-        }
     }
 };
 

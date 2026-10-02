@@ -12,16 +12,17 @@
 type NamedContainerInstanceType = "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
 
 /**
- * A custom instance type. Cloudflare's bounds at the time of writing: up to
- * 4 vCPU, 12 GiB memory, 20 GB disk, ≥ 3 GiB memory per vCPU and ≤ 2 GB disk
- * per GiB memory. The config-layer validator enforces the documented ranges.
+ * A custom instance type, available to every Containers account. Cloudflare's
+ * documented bounds: 1–4 vCPU, up to 12 GiB memory, up to 20 GB disk at any
+ * memory size, and ≥ 3 GiB memory per vCPU. For less than 1 vCPU use the named
+ * `lite` or `basic` types. The config-layer validator enforces these ranges.
  */
 interface CustomContainerInstanceType {
-    /** Disk in MB. Cloudflare's default is 2000 (2 GB). */
+    /** Disk in MB, up to 20000 (20 GB) at any memory size. Cloudflare's default is 2000 (2 GB). */
     diskMb?: number;
-    /** Memory in MiB. Cloudflare's default is 256. */
+    /** Memory in MiB, up to 12288 (12 GiB) and ≥ 3072 MiB per vCPU. Cloudflare's default is 256. */
     memoryMib?: number;
-    /** vCPU count. Cloudflare's default is 0.0625 (1/16 vCPU). */
+    /** vCPU count, 1–4 when set. Cloudflare's default is 0.0625 (1/16 vCPU). */
     vcpu?: number;
 }
 

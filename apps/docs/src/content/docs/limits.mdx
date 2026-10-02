@@ -78,7 +78,7 @@ Two are yours to respect, because no rewrite can absorb them:
 
 | Limit                 | Value                                                    | Implication                                                          |
 | --------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
-| Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                  |
+| Bundle size           | **64 MiB** uncompressed (no compressed limit)            | Lazy-load big deps; avoid bundling unused providers                  |
 | CPU per request       | **30 s**                                                 | Same envelope as DO                                                  |
 | Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                            |
 | Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1; a cross-shard read spends one per shard |

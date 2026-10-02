@@ -16,6 +16,7 @@ import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-m
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
 import type { DoctorOptions } from "./index";
+import checkObservabilitySampling from "./observability-checks";
 import checkServices from "./service-checks";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -45,6 +46,7 @@ const DOCTOR_CODES = [
     "declared-export-unchecked",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "observability-full-sampling",
     "r2-lifecycle-unset",
     "scheduler-origin-missing",
     "schema-unreadable",
@@ -725,6 +727,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);
     checkR2Lifecycle(parsed, findings);
+    checkObservabilitySampling(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);

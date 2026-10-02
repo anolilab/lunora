@@ -2554,6 +2554,75 @@ export const schema = defineSchema({
         });
     });
 
+    describe("observability logs + traces export blocks", () => {
+        const withObservability = (observability: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability }) as WranglerConfig;
+
+        it("accepts the full documented block without errors or warnings", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    head_sampling_rate: 1,
+                    issues: { enabled: true },
+                    logs: { destinations: ["logs-destination"], enabled: true, head_sampling_rate: 0.6, invocation_logs: true, persist: false },
+                    traces: { destinations: ["tracing-destination"], enabled: true, head_sampling_rate: 0.05, persist: false },
+                }),
+            );
+
+            expect(report.errors.join(" ")).not.toContain("observability");
+            expect(report.warnings.join(" ")).not.toContain("observability");
+        });
+
+        it("warns on a typo'd key at every level", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    issues: { enable: true },
+                    logs: { destination: ["logs-destination"] },
+                    trace: { enabled: true },
+                    traces: { head_sample_rate: 0.1 },
+                }),
+            );
+            const warnings = report.warnings.join(" ");
+
+            expect(warnings).toContain("observability.trace is not a documented wrangler key");
+            expect(warnings).toContain("observability.logs.destination is not a documented wrangler key");
+            expect(warnings).toContain("observability.traces.head_sample_rate is not a documented wrangler key");
+            expect(warnings).toContain("observability.issues.enable is not a documented wrangler key");
+        });
+
+        it("rejects wrong types in the traces block", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({ traces: { destinations: "tracing-destination", enabled: "yes", head_sampling_rate: 2, persist: "false" } }),
+            );
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.traces.enabled must be a boolean");
+            expect(errors).toContain("observability.traces.persist must be a boolean");
+            expect(errors).toContain("observability.traces.head_sampling_rate must be a number in [0, 1]");
+            expect(errors).toContain("observability.traces.destinations must be an array of destination names");
+        });
+
+        it("rejects wrong types in the logs block and a non-object traces / issues block", () => {
+            expect.assertions(5);
+
+            const report = validateWranglerConfig(withObservability({ enabled: 1, issues: true, logs: { destinations: ["ok", 42], persist: 0 }, traces: [] }));
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.enabled must be a boolean");
+            expect(errors).toContain("observability.logs.destinations must be an array");
+            expect(errors).toContain("observability.logs.persist must be a boolean");
+            expect(errors).toContain("observability.traces must be an object");
+            expect(errors).toContain("observability.issues must be an object");
+        });
+    });
+
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
@@ -2661,8 +2730,18 @@ export const schema = defineSchema({
             expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
         });
 
-        it("rejects custom instance types that violate the memory/vcpu and disk/memory ratios", () => {
-            expect.assertions(4);
+        it("rejects custom instance types below 1 vCPU or under 3 GiB memory per vCPU, and allows 20 GB disk at any memory", () => {
+            expect.assertions(6);
+
+            const belowMinVcpu = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 0.5 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(belowMinVcpu.errors.join(" ")).toContain("needs ≥ 1 vCPU (got 0.5)");
 
             const tooLittleMemory = validateWranglerConfig(
                 baseConfig({
@@ -2674,15 +2753,31 @@ export const schema = defineSchema({
 
             expect(tooLittleMemory.errors.join(" ")).toContain("≥ 3 GiB");
 
-            const tooMuchDisk = validateWranglerConfig(
+            // 20 GB disk with only 3 GiB memory — the old 2-GB-per-GiB ratio would have capped this at 6 GB.
+            const maxDiskSmallMemory = validateWranglerConfig(
                 baseConfig({
                     containers: [
-                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 },
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./x/Dockerfile",
+                            instance_type: { disk_mb: 20_000, memory_mib: 3072, vcpu: 1 },
+                            max_instances: 1,
+                        },
                     ],
                 }),
             );
 
-            expect(tooMuchDisk.errors.join(" ")).toContain("≤ 2 GB disk");
+            expect(maxDiskSmallMemory.errors).toEqual([]);
+
+            const tooMuchDisk = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_001, memory_mib: 4096 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(tooMuchDisk.errors.join(" ")).toContain("disk_mb must be a positive number ≤ 20000");
 
             const valid = validateWranglerConfig(
                 baseConfig({

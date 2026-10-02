@@ -11,7 +11,7 @@ import { defaultSpawner } from "../../util/spawn";
 import { runDeployCommand } from "../deploy/handler";
 import type { DeployCommandResult } from "../deploy/types";
 import type { BundleSize } from "./bundle-size";
-import { measureBundle } from "./bundle-size";
+import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
 import type { BuildOptions } from "./index";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
@@ -147,10 +147,18 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         // recognise would measure as the healthiest possible bundle.
         logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
     } else {
-        logger.info(
-            `bundle: ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped across ${String(bundle.files)} file(s) — ` +
-                `Cloudflare's Worker size limit (3 MB Free, 10 MB Paid) applies to the gzipped number`,
-        );
+        const percent = ((bundle.rawBytes / WORKER_SIZE_LIMIT_BYTES) * 100).toFixed(1);
+        const summary =
+            `bundle: ${kib(bundle.rawBytes)} raw across ${String(bundle.files)} file(s) — ${percent}% of Cloudflare's ` +
+            `64 MiB uncompressed Worker size limit (${kib(bundle.gzipBytes)} gzipped, for reference; there is no compressed limit)`;
+
+        // Measuring is reporting: an oversized bundle warns but never changes the
+        // exit code — `wrangler deploy` is what rejects it at upload.
+        if (bundle.rawBytes > WORKER_SIZE_LIMIT_BYTES) {
+            logger.warn(`${summary} — Cloudflare will reject this upload`);
+        } else {
+            logger.info(summary);
+        }
     }
 
     return { ...result, bundle };

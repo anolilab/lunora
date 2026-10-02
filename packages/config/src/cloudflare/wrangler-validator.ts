@@ -226,7 +226,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateLogpush(wrangler, errors);
     validateLimits(wrangler, errors);
     validatePlacement(wrangler, errors);
-    validateObservability(wrangler, errors);
+    validateObservability(wrangler, errors, warnings);
     validateAssets(wrangler, errors);
     validateCache(wrangler, errors);
     validateExports(wrangler, errors);

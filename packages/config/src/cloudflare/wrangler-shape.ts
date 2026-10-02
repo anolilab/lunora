@@ -1,5 +1,7 @@
 /** The slice of `wrangler.jsonc` the binding reconciler reads and rewrites, and the step each reconcile returns. */
 
+import type { WranglerObservability } from "./wrangler-config";
+
 interface DurableObjectBinding {
     class_name?: string;
     name?: string;
@@ -93,7 +95,7 @@ interface WranglerShape {
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
     migrations?: ReadonlyArray<MigrationEntry | null | undefined>;
     name?: string;
-    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
+    observability?: WranglerObservability;
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.

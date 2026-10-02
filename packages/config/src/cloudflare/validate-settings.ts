@@ -6,6 +6,7 @@
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
 import { isNonEmptyString, objectBindingEntries } from "./validate-bindings";
+import { isPlainObject } from "./workflow-settings";
 import type { TailConsumer, WranglerConfig } from "./wrangler-config";
 
 /**
@@ -151,45 +152,132 @@ const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => 
 };
 
 /**
- * `observability` enables Workers Logs + Traces. Shape-check the block and the
- * `head_sampling_rate` (a 0–1 fraction, both at the top level and under the
- * nested `logs` block) so a typo'd key or an out-of-range rate is caught before
- * deploy instead of being silently ignored by wrangler.
+ * The keys wrangler documents for each level of the `observability` block
+ * (developers.cloudflare.com/workers/wrangler/configuration/#observability and
+ * …/observability/opentelemetry-export/). Anything else is almost always a typo
+ * (`head_sample_rate`, `destination`) that wrangler would drop silently.
  */
-const validateObservability = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { observability } = wrangler;
+const OBSERVABILITY_KEYS = new Set(["enabled", "head_sampling_rate", "issues", "logs", "traces"]);
+const OBSERVABILITY_TRACES_KEYS = new Set(["destinations", "enabled", "head_sampling_rate", "persist"]);
+const OBSERVABILITY_LOGS_KEYS = new Set([...OBSERVABILITY_TRACES_KEYS, "invocation_logs"]);
+const OBSERVABILITY_ISSUES_KEYS = new Set(["enabled"]);
+
+/** Shared sinks + helpers for one `observability` validation pass. */
+interface ObservabilityChecks {
+    errors: string[];
+    warnings: string[];
+}
+
+/**
+ * Unknown keys warn rather than fail: Cloudflare keeps adding keys to this
+ * block (`traces`, `issues`), and a hard error would block a deploy on a key
+ * wrangler accepts before this list catches up.
+ */
+const checkUnknownKeys = (block: Record<string, unknown>, known: ReadonlySet<string>, path: string, { warnings }: ObservabilityChecks): void => {
+    for (const key of Object.keys(block)) {
+        if (!known.has(key)) {
+            warnings.push(
+                `${path}.${key} is not a documented wrangler key (expected one of ${[...known].join(", ")}) — a typo is silently ignored by wrangler`,
+            );
+        }
+    }
+};
+
+const checkBoolean = (value: unknown, path: string, { errors }: ObservabilityChecks): void => {
+    if (value !== undefined && typeof value !== "boolean") {
+        errors.push(`${path} must be a boolean`);
+    }
+};
+
+const checkSamplingRate = (rate: unknown, path: string, { errors }: ObservabilityChecks): void => {
+    if (rate !== undefined && (typeof rate !== "number" || Number.isNaN(rate) || rate < 0 || rate > 1)) {
+        errors.push(`${path} must be a number in [0, 1] (the fraction of requests sampled)`);
+    }
+};
+
+/**
+ * Validate an `observability.logs` / `observability.traces` sub-block: the
+ * export knobs (`destinations`, `persist`) and the per-signal sampling rate.
+ */
+const validateObservabilitySignal = (
+    block: unknown,
+    path: string,
+    known: ReadonlySet<string>,
+    checks: ObservabilityChecks,
+): Record<string, unknown> | undefined => {
+    if (block === undefined) {
+        return undefined;
+    }
+
+    if (!isPlainObject(block)) {
+        checks.errors.push(`${path} must be an object`);
+
+        return undefined;
+    }
+
+    checkUnknownKeys(block, known, path, checks);
+    checkBoolean(block.enabled, `${path}.enabled`, checks);
+    checkBoolean(block.persist, `${path}.persist`, checks);
+    checkSamplingRate(block.head_sampling_rate, `${path}.head_sampling_rate`, checks);
+
+    const { destinations } = block;
+
+    if (
+        destinations !== undefined &&
+        (!Array.isArray(destinations) || destinations.some((destination) => typeof destination !== "string" || destination.length === 0))
+    ) {
+        checks.errors.push(`${path}.destinations must be an array of destination names configured in the Cloudflare dashboard`);
+    }
+
+    return block;
+};
+
+/**
+ * `observability` enables Workers Logs + Traces. Shape-check the block — the
+ * top-level switch and sampling rate, the `logs` / `traces` sub-blocks (each
+ * with `enabled`, `head_sampling_rate`, `destinations`, `persist`; `logs` adds
+ * `invocation_logs`) and `issues` — so a mistyped value is an error and a
+ * typo'd key a warning before deploy, instead of being silently ignored by
+ * wrangler.
+ */
+const validateObservability = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    // `unknown`: hand-edited JSONC, not a value TypeScript has vouched for.
+    const { observability }: { observability?: unknown } = wrangler;
 
     if (observability === undefined) {
         return;
     }
 
-    if (typeof observability !== "object" || Array.isArray(observability)) {
+    if (!isPlainObject(observability)) {
         errors.push('observability must be an object (e.g. { "enabled": true, "head_sampling_rate": 1 })');
 
         return;
     }
 
-    const checkSamplingRate = (rate: unknown, path: string): void => {
-        if (rate !== undefined && (typeof rate !== "number" || Number.isNaN(rate) || rate < 0 || rate > 1)) {
-            errors.push(`${path} must be a number in [0, 1] (the fraction of requests sampled)`);
-        }
-    };
+    const checks: ObservabilityChecks = { errors, warnings };
 
-    checkSamplingRate(observability.head_sampling_rate, "observability.head_sampling_rate");
+    checkUnknownKeys(observability, OBSERVABILITY_KEYS, "observability", checks);
+    checkBoolean(observability.enabled, "observability.enabled", checks);
+    checkSamplingRate(observability.head_sampling_rate, "observability.head_sampling_rate", checks);
 
-    if (observability.logs !== undefined) {
-        if (typeof observability.logs !== "object" || Array.isArray(observability.logs)) {
-            errors.push("observability.logs must be an object");
+    const logs = validateObservabilitySignal(observability.logs, "observability.logs", OBSERVABILITY_LOGS_KEYS, checks);
+
+    // `invocation_logs` is the per-invocation summary line (status, duration,
+    // outcome) that the Workers Logs Query Builder groups on.
+    if (logs?.invocation_logs !== undefined && typeof logs.invocation_logs !== "boolean") {
+        errors.push('observability.logs.invocation_logs must be a boolean (set "invocation_logs": true to keep per-invocation summaries)');
+    }
+
+    validateObservabilitySignal(observability.traces, "observability.traces", OBSERVABILITY_TRACES_KEYS, checks);
+
+    const { issues } = observability;
+
+    if (issues !== undefined) {
+        if (isPlainObject(issues)) {
+            checkUnknownKeys(issues, OBSERVABILITY_ISSUES_KEYS, "observability.issues", checks);
+            checkBoolean(issues.enabled, "observability.issues.enabled", checks);
         } else {
-            checkSamplingRate(observability.logs.head_sampling_rate, "observability.logs.head_sampling_rate");
-
-            // `invocation_logs` is the per-invocation summary line (status,
-            // duration, outcome) that the Workers Logs Query Builder groups on.
-            // Shape-checked rather than required: wrangler silently ignores a
-            // mistyped key, which is exactly the failure this catches.
-            if (observability.logs.invocation_logs !== undefined && typeof observability.logs.invocation_logs !== "boolean") {
-                errors.push('observability.logs.invocation_logs must be a boolean (set "invocation_logs": true to keep per-invocation summaries)');
-            }
+            errors.push("observability.issues must be an object");
         }
     }
 };
