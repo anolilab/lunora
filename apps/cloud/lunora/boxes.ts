@@ -1,3 +1,5 @@
+import type { BoxVersions } from "@lunora/hostd/protocol";
+import { isVersion } from "@lunora/hostd/protocol";
 import { LunoraError } from "@lunora/server";
 
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
@@ -5,8 +7,8 @@ import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
 import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
+import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
-import { DEFAULT_BOX_DOMAIN } from "../src/targets/celld-vps/driver";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -30,16 +32,7 @@ import { boundedString, LIMITS } from "./validators";
  * (`src/boxes/reconcile.ts`) removes any record a revoke or an org purge left.
  */
 
-/** The protocol's version-string format (`protocol/hostd/README.md` §4.1). */
-const VERSION_PATTERN = /^[\w.+~-]{1,64}$/u;
-
 type BoxStatus = "offline" | "online" | "pending" | "revoked";
-
-interface BoxVersions {
-    caddy: string;
-    celld: string;
-    hostd: string;
-}
 
 /** A `boxes` row as the store returns it. `.global()` rows answer SQL NULL for an unset column. */
 interface BoxRow {
@@ -214,9 +207,7 @@ export const domain = action
     .action(async ({ ctx: context, args: { organizationId } }): Promise<string> => {
         await assertMember(context, organizationId);
 
-        const configured = (context.env as { LUNORA_BOX_DOMAIN?: string } | undefined)?.LUNORA_BOX_DOMAIN;
-
-        return configured === undefined || configured === "" ? DEFAULT_BOX_DOMAIN : configured;
+        return boxDomainOf(context.env ?? {});
     });
 
 /** Rename a box (owner/admin). The slug — its DNS label — never changes. */
@@ -352,7 +343,7 @@ const assertEnrolmentShape = (args: { ipv4?: string; ipv6?: string; publicKey: s
         throw new LunoraError("BAD_REQUEST", "a box must report a public IPv4 or IPv6 address — its hostnames point there");
     }
 
-    if (![args.versions.caddy, args.versions.celld, args.versions.hostd].every((version) => VERSION_PATTERN.test(version))) {
+    if (![args.versions.caddy, args.versions.celld, args.versions.hostd].every((version) => isVersion(version))) {
         throw new LunoraError("BAD_REQUEST", "versions must be 1-64 characters of [A-Za-z0-9_.+~-]");
     }
 };

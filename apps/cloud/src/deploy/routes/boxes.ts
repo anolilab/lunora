@@ -10,13 +10,17 @@
  * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
  *   release, with a request signed by its key (plan 458 D6).
  */
+import { isProtocolId } from "@lunora/hostd/protocol";
+
 import { internal } from "../../../lunora/_generated/api.js";
 import type { EnrolResult } from "../../../lunora/boxes";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";
+import { REVOKED_MESSAGE } from "../../boxes/session";
 import type { BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
+import { BOX_RELEASE_PATH, boxDomainOf } from "../../boxes/urls";
 import type { BoxDnsEnvironment } from "../../targets/celld-vps/dns";
 import { boxDnsFromEnv, MAX_DNS_ERROR, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
 import { sha256Hex } from "../keys";
@@ -29,7 +33,7 @@ import { jsonError, rejected, requireContext } from "./shared";
 export type BoxRouteEnvironment = {
     /** The per-box session Durable Object namespace; absent → boxes cannot connect to this control plane. */
     BOX_SESSION?: BoxSessionNamespace;
-    /** The apex box hostnames live under (`{alias}.{slug}.{LUNORA_BOX_DOMAIN}`); defaults to `boxes.lunora.app`. */
+    /** The apex box hostnames live under (`{alias}.{slug}.{LUNORA_BOX_DOMAIN}`); `boxDomainOf` applies the default. */
     LUNORA_BOX_DOMAIN?: string;
 };
 
@@ -70,11 +74,6 @@ const applyBoxDns = async (
         );
     }
 };
-
-/** The apex box hostnames live under. */
-export const boxDomainOf = (environment: BoxRouteEnvironment): string => environment.LUNORA_BOX_DOMAIN ?? "boxes.lunora.app";
-
-const BOX_ID_PATTERN = /^[\w-]{1,128}$/u;
 
 interface EnrolBody {
     ipv4?: unknown;
@@ -149,7 +148,7 @@ export const handleBoxEnrolRoute = async (request: Request, environment: BoxRout
 export const handleBoxConnectRoute = (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const boxId = new URL(request.url).searchParams.get("box") ?? "";
 
-    if (!BOX_ID_PATTERN.test(boxId)) {
+    if (!isProtocolId(boxId)) {
         return Promise.resolve(jsonError(400, "box must be a box id"));
     }
 
@@ -204,7 +203,7 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
 
     const closed = environment.BOX_SESSION
         ? await boxSession(environment.BOX_SESSION, body.id)
-              .close("BOX_REVOKED", "this box has been revoked; enrol the machine again to use it")
+              .close("BOX_REVOKED", REVOKED_MESSAGE)
               .then(
                   () => true,
                   () => false,
@@ -245,9 +244,6 @@ export const verifiedBoxRequest = async (request: Request, environment: BoxRoute
         now: Date.now(),
     });
 };
-
-/** The release-download path; `:deploymentId` is a deployment's id. */
-export const BOX_RELEASE_PATH = "/v1/boxes/releases/:deploymentId";
 
 /**
  * `GET /v1/boxes/releases/:deploymentId` — a box fetches the stored release it

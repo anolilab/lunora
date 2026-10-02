@@ -15,11 +15,13 @@
  * when the box enrolled: a box enrolled on an old celld has not been behind for
  * longer than it has existed.
  */
+import type { BoxVersions } from "@lunora/hostd/protocol";
+
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, DeployRule } from "../telemetry/alerts";
 import { fireDeployRules } from "../telemetry/alerts";
-import type { ReleaseVersions, StoredReleaseSummary } from "./hostd-releases";
+import type { StoredReleaseSummary } from "./hostd-releases";
 import { newestStableRelease } from "./hostd-releases";
 
 /** How long a box may run an older celld before it alerts. */
@@ -34,7 +36,7 @@ interface OutdatedBoxRow {
     organizationId: string;
     slug: string;
     status: string;
-    versions?: null | ReleaseVersions;
+    versions?: null | BoxVersions;
 }
 
 interface DeployRuleRow {

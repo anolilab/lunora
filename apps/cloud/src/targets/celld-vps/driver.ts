@@ -20,6 +20,7 @@ import type { DeployJob } from "@lunora/hostd/protocol";
 import { tenantSender } from "../../backup/tenant-transport";
 import type { BoxSession, BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession, BoxSessionError } from "../../boxes/session-client";
+import { boxDomainOf, boxReleaseUrlOf } from "../../boxes/urls";
 import type { ControlPlaneStore } from "../../d1-store";
 import { controlPlaneDatabase } from "../../d1-store";
 import { sha256HexBytes } from "../../deploy/keys";
@@ -28,9 +29,6 @@ import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../../provision-contract";
 import type { TargetDriver, UsageRow } from "../driver";
 import type { BoxPlacement } from "../placement";
 import type { BoxDnsEnvironment } from "./dns";
-
-/** The apex box hostnames live under when `LUNORA_BOX_DOMAIN` is unset. */
-export const DEFAULT_BOX_DOMAIN = "boxes.lunora.app";
 
 /** How long a box may take to fetch, deploy and health-check a release. */
 const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
@@ -127,7 +125,7 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
                 crons: spec.crons ?? [],
                 deploymentId: spec.deploymentId,
                 kind: "deploy",
-                releaseUrl: `${ports.controlPlaneOrigin}/v1/boxes/releases/${encodeURIComponent(spec.deploymentId)}`,
+                releaseUrl: boxReleaseUrlOf(ports.controlPlaneOrigin, spec.deploymentId),
                 // celld has no secret store, so secrets ride as vars (plan 458 D10) and
                 // persist in the customer's own bucket. Secrets win a name clash, as on
                 // every target: `LUNORA_ADMIN_TOKEN` is platform-owned.
@@ -294,7 +292,7 @@ export const celldVpsDriverFromEnv = (
 
     return createCelldVpsDriver({
         ...(options.box === undefined ? {} : { box: options.box }),
-        boxDomain: environment.LUNORA_BOX_DOMAIN ?? DEFAULT_BOX_DOMAIN,
+        boxDomain: boxDomainOf(environment),
         boxById: async (id) => boxReference((await database().get(id, "boxes")) as BoxRow | null),
         boxForAlias: (alias) => boxForAliasIn(database())(alias),
         boxForSlug: async (slug) => {

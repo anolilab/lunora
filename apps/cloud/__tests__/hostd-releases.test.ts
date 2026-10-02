@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { list, setDesiredRelease } from "../lunora/boxes";
 import { store } from "../lunora/hostd-releases";
 import { randomBase64Url } from "../src/boxes/encoding";
-import { verifyReleaseEnvelope, versionKey, versionsOf } from "../src/boxes/hostd-releases";
+import { versionKey, versionsOf } from "../src/boxes/hostd-releases";
 import type { RolloutTarget } from "../src/boxes/rollout";
 import { planHostdRollout, resumeHostdRollouts, runHostdRollout } from "../src/boxes/rollout";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
@@ -32,61 +32,12 @@ const manifest = (overrides: Partial<HostdReleaseManifest> = {}): HostdReleaseMa
     };
 };
 
-/** A release signed by a fresh key, with that key as the only trusted one. */
+/** A release signed by a fresh key. */
 const signedRelease = (overrides: Partial<HostdReleaseManifest> = {}) => {
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    const envelope = signReleaseManifest(manifest(overrides), privateKey);
+    const { privateKey } = generateKeyPairSync("ed25519");
 
-    return { envelope, trusted: { [envelope.keyId]: publicKey.export({ format: "pem", type: "spki" }) } };
+    return { envelope: signReleaseManifest(manifest(overrides), privateKey) };
 };
-
-describe("verifying a release envelope in the Worker", () => {
-    it("accepts what the reference signer signed, checked with WebCrypto", async () => {
-        const { envelope, trusted } = signedRelease();
-
-        await expect(verifyReleaseEnvelope(structuredClone(envelope), trusted)).resolves.toStrictEqual({ envelope, ok: true });
-    });
-
-    it("refuses a tampered manifest", async () => {
-        const { envelope, trusted } = signedRelease();
-        const tampered = structuredClone(envelope);
-
-        tampered.manifest.celld.version = "v9.9.9";
-
-        await expect(verifyReleaseEnvelope(tampered, trusted)).resolves.toStrictEqual({ ok: false, reason: "the release signature does not verify" });
-    });
-
-    it("refuses a key it does not pin — never one the envelope brings", async () => {
-        const { envelope } = signedRelease();
-
-        await expect(verifyReleaseEnvelope(envelope, signedRelease().trusted)).resolves.toMatchObject({
-            ok: false,
-            reason: expect.stringContaining("not one this control plane trusts") as string,
-        });
-    });
-
-    it("refuses everything signed under the placeholder the pinned set still holds", async () => {
-        const { envelope } = signedRelease();
-
-        await expect(verifyReleaseEnvelope({ ...envelope, keyId: "ed25519-placeholder" })).resolves.toMatchObject({
-            ok: false,
-            reason: expect.stringContaining("placeholder") as string,
-        });
-    });
-
-    it("refuses an invalid envelope and a trusted entry that is not a key", async () => {
-        const { envelope, trusted } = signedRelease();
-
-        await expect(verifyReleaseEnvelope({ ...envelope, extra: true }, trusted)).resolves.toMatchObject({
-            ok: false,
-            reason: expect.stringContaining("invalid release envelope") as string,
-        });
-        await expect(verifyReleaseEnvelope(envelope, { [envelope.keyId]: "not a pem" })).resolves.toMatchObject({
-            ok: false,
-            reason: expect.stringContaining("not an SPKI PEM") as string,
-        });
-    });
-});
 
 describe("the hostd release store", () => {
     const args = { envelope: "{}", keyId: "ed25519-x", releaseId: "hostd-v1_1_0", versions: { caddy: "v2", celld: "v0.7.0", hostd: "1.1.0" } };

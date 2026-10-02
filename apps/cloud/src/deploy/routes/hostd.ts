@@ -10,12 +10,14 @@
  *   the response.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
+import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "@lunora/hostd/release";
 
 import { internal } from "../../../lunora/_generated/api.js";
 import type { RolloutBox } from "../../../lunora/boxes";
 import type { HostdReleaseView } from "../../../lunora/hostd-releases";
-import { verifyReleaseEnvelope, versionsOf } from "../../boxes/hostd-releases";
-import { manifestUrlOf, planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
+import { versionsOf } from "../../boxes/hostd-releases";
+import { planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
+import { HOSTD_MANIFEST_PATH, manifestUrlOf } from "../../boxes/urls";
 import { controlPlaneDatabase } from "../../d1-store";
 import { matchRoutePath } from "../route-path";
 import type { BoxRouteEnvironment } from "./boxes";
@@ -25,9 +27,6 @@ import { jsonError, rejected, requireContext } from "./shared";
 import { requireAdminToken } from "./tenant-admin";
 
 type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: string };
-
-/** The manifest path; `:releaseId` is a release id (`[A-Za-z0-9_-]`, the protocol's id alphabet). */
-export const HOSTD_MANIFEST_PATH = "/v1/hostd/releases/:releaseId/manifest";
 
 /**
  * `POST /v1/hostd/releases` — store a signed release. Body: `{ envelope, channel? }`,
@@ -48,10 +47,11 @@ export const handleHostdReleaseRoute = async (request: Request, environment: Hos
         return jsonError(400, 'channel must be "stable" or "canary"');
     }
 
-    const verified = await verifyReleaseEnvelope(body?.envelope);
+    // Exactly as a box verifies it: the pinned keys, never one the envelope brings.
+    const verified = await verifyReleaseManifest(body?.envelope, HOSTD_TRUSTED_RELEASE_KEYS);
 
     if (!verified.ok) {
-        return jsonError(422, verified.reason);
+        return jsonError(422, `${verified.error.code}: ${verified.error.message}`);
     }
 
     const { envelope } = verified;

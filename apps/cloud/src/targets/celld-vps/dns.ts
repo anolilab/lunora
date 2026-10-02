@@ -16,6 +16,7 @@
  * The cell's `CLOUDFLARE_API_TOKEN` needs Zone → DNS:Edit on it.
  */
 import { BOX_SLUG_PATTERN } from "../../boxes/enrolment";
+import { boxDomainOf } from "../../boxes/urls";
 import type { CloudflareApi, DnsRecord } from "../../cloudflare/api";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
 
@@ -284,7 +285,7 @@ export const boxDnsFromEnv = (environment: BoxDnsEnvironment): BoxDnsZone => {
     return {
         // The account id only prefixes account-scoped paths; DNS calls are zone-scoped.
         api: createHttpCloudflareApi({ accountId: environment.CLOUDFLARE_ACCOUNT_ID ?? "", apiToken: environment.CLOUDFLARE_API_TOKEN }),
-        domain: environment.LUNORA_BOX_DOMAIN ?? "boxes.lunora.app",
+        domain: boxDomainOf(environment),
         zoneId: environment.LUNORA_BOX_ZONE_ID,
     };
 };

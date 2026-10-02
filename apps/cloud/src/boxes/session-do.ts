@@ -17,18 +17,17 @@
  *   is reachable from outside. `./session-client` is their typed caller.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
-import type { CloudMessage, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
+import type { BoxVersions, CloudMessage, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
 import { encodeMessage, HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
-import stripTrailingSlashes from "../lib/strip-trailing-slashes";
-import type { ReleaseVersions } from "./hostd-releases";
 import { versionKey } from "./hostd-releases";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
-import { livenessOf, openSession, receiveFrame } from "./session";
+import { livenessOf, openSession, receiveFrame, REVOKED_MESSAGE } from "./session";
 import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf } from "./session-store";
+import { boxDomainOf, manifestUrlOf } from "./urls";
 import { MAX_REPORT_AGE_MS, recordBoxReport } from "./usage";
 
 /** The env slice the session reads. A `type` so the control plane's env types stay assignable to it. */
@@ -258,7 +257,7 @@ export class BoxSessionDO {
 
         if (known && (box === null || box.status === "revoked")) {
             for (const socket of sockets.filter((candidate) => attachmentOf(candidate).closed !== true)) {
-                refuseSocket(socket, "BOX_REVOKED", "this box has been revoked; enrol the machine again to use it");
+                refuseSocket(socket, "BOX_REVOKED", REVOKED_MESSAGE);
             }
         } else {
             for (const socket of sockets.filter((candidate) => attachmentOf(candidate).closed !== true)) {
@@ -478,7 +477,7 @@ export class BoxSessionDO {
      * waits on it, and a box that reconnects repeatedly would otherwise fill the
      * slots a deploy needs with upgrades), and it fails with its socket.
      */
-    private async replayDesiredRelease(database: ControlPlaneStore, socket: SessionSocket, boxId: string, running: ReleaseVersions): Promise<void> {
+    private async replayDesiredRelease(database: ControlPlaneStore, socket: SessionSocket, boxId: string, running: BoxVersions): Promise<void> {
         const box = await loadBox(database, boxId);
         const origin = this.environment.LUNORA_ORIGIN_URL;
 
@@ -487,7 +486,7 @@ export class BoxSessionDO {
         }
 
         const { page } = await database.findMany("hostdReleases", { where: { releaseId: box.desiredReleaseId } });
-        const release = page[0] as undefined | { releaseId: string; versions: ReleaseVersions };
+        const release = page[0] as undefined | { releaseId: string; versions: BoxVersions };
 
         if (release === undefined || versionKey(release.versions) === versionKey(running)) {
             return;
@@ -500,7 +499,7 @@ export class BoxSessionDO {
         sendFrame(socket, {
             job: {
                 kind: "upgrade",
-                manifestUrl: `${stripTrailingSlashes(origin)}/v1/hostd/releases/${encodeURIComponent(release.releaseId)}/manifest`,
+                manifestUrl: manifestUrlOf(origin, release.releaseId),
                 releaseId: release.releaseId,
             },
             jobId,
@@ -600,7 +599,7 @@ export class BoxSessionDO {
             return false;
         }
 
-        const table = await routesForBox(database, box, this.environment.LUNORA_BOX_DOMAIN ?? "boxes.lunora.app");
+        const table = await routesForBox(database, box, boxDomainOf(this.environment));
 
         for (const socket of sockets) {
             sendFrame(socket, { table, type: "routes" });
@@ -613,7 +612,7 @@ export class BoxSessionDO {
     private async closeAll(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => null)) as null | { code?: string; message?: string };
         const code = typeof body?.code === "string" && ERROR_CODE_PATTERN.test(body.code) ? body.code : "BOX_REVOKED";
-        const message = typeof body?.message === "string" ? body.message : "this box has been revoked; enrol the machine again to use it";
+        const message = typeof body?.message === "string" ? body.message : REVOKED_MESSAGE;
         const sockets = this.state.getWebSockets();
 
         for (const socket of sockets) {

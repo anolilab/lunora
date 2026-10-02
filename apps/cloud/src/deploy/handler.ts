@@ -1,7 +1,8 @@
 import { isLunoraError } from "@lunora/errors";
+import { isAlias } from "@lunora/hostd/protocol";
 
 import type { AssetFile, AssetsUpload, BindingRequirement, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
-import { ALIAS_PATTERN, tenantResourceName } from "../provision-contract";
+import { tenantResourceName } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
@@ -487,8 +488,8 @@ const parsePayload = (
 ): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
     // The script name is the project alias: it becomes the public subdomain and
     // keys every per-project resource, so it must be a shape that cannot collide.
-    if (!ALIAS_PATTERN.test(alias)) {
-        return { error: `scriptName must be lowercase letters and digits in dash-separated runs (${String(ALIAS_PATTERN)})` };
+    if (!isAlias(alias)) {
+        return { error: "scriptName must be lowercase letters and digits in dash-separated runs, at most 63 characters" };
     }
 
     const manifest = parseManifest(body.manifest, target);

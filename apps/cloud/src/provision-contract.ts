@@ -18,6 +18,7 @@
  * app needs from `wrangler.jsonc` by hand.
  */
 import type { BindingRequirement } from "@lunora/config/cloudflare";
+import { isAlias } from "@lunora/hostd/protocol";
 
 export type { BindingRequirement } from "@lunora/config/cloudflare";
 
@@ -190,13 +191,6 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
     },
 };
 
-/**
- * A project alias: dash-separated runs of `[a-z0-9]`, so it never contains `--`
- * and never starts or ends with `-`. That is what makes {@link tenantResourceName}
- * injective — the first `--` in a resource name is always the separator.
- */
-export const ALIAS_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-
 /** Cloudflare's tightest name limit across the provisioned types (R2 buckets, queues). */
 const MAX_RESOURCE_NAME = 63;
 
@@ -215,8 +209,8 @@ const MAX_RESOURCE_NAME = 63;
  * @throws when the alias is malformed or the name exceeds 63 characters.
  */
 export const tenantResourceName = (alias: string, requirement: Pick<BindingRequirement, "binding" | "type">): string => {
-    if (!ALIAS_PATTERN.test(alias)) {
-        throw new Error(`alias "${alias}" must match ${String(ALIAS_PATTERN)}`);
+    if (!isAlias(alias)) {
+        throw new Error(`alias "${alias}" must be dash-separated runs of [a-z0-9], at most 63 characters`);
     }
 
     const name = `${alias}--${requirement.binding.toLowerCase().replaceAll("_", "-")}`;
@@ -233,7 +227,7 @@ export const aliasOfResourceName = (name: string): string | undefined => {
     const separator = name.indexOf("--");
     const alias = separator === -1 ? "" : name.slice(0, separator);
 
-    return ALIAS_PATTERN.test(alias) && separator + 2 < name.length ? alias : undefined;
+    return isAlias(alias) && separator + 2 < name.length ? alias : undefined;
 };
 
 /**

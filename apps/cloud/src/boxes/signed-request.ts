@@ -16,16 +16,12 @@
  * Every refusal answers the same 401, so a caller learns nothing about which
  * box ids exist or which check failed.
  */
-import { HOSTD_REQUEST_HEADERS, requestSigningPayload } from "@lunora/hostd/protocol";
+import { HOSTD_REQUEST_HEADERS, isNonce, isProtocolId, requestSigningPayload } from "@lunora/hostd/protocol";
 
 import { verifyBoxSignature } from "./encoding";
 
 /** How far a signed request's timestamp may sit from the control plane's clock. */
 export const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
-
-const BOX_ID_PATTERN = /^[\w-]{1,128}$/u;
-
-const NONCE_PATTERN = /^[\w-]{22,128}$/u;
 
 const TIMESTAMP_PATTERN = /^\d{1,16}$/u;
 
@@ -60,7 +56,7 @@ export const verifyBoxRequest = async (request: Request, ports: SignedRequestPor
     const signature = request.headers.get(HOSTD_REQUEST_HEADERS.signature) ?? "";
     const stamp = request.headers.get(HOSTD_REQUEST_HEADERS.timestamp);
 
-    if (!BOX_ID_PATTERN.test(boxId) || !NONCE_PATTERN.test(nonce) || stamp === null || !TIMESTAMP_PATTERN.test(stamp)) {
+    if (!isProtocolId(boxId) || !isNonce(nonce) || stamp === null || !TIMESTAMP_PATTERN.test(stamp)) {
         return null;
     }
 

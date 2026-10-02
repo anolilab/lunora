@@ -12,6 +12,7 @@ import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from ".
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
 import { boxSession } from "../boxes/session-client";
+import { BOX_RELEASE_PATH, HOSTD_MANIFEST_PATH } from "../boxes/urls";
 import { dispatchBuilds } from "../builds/control-plane";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { createGitHubApp } from "../github/app";
@@ -39,8 +40,8 @@ import { createReleaseStore } from "./release-store";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { BOX_RELEASE_PATH, handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
-import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute, HOSTD_MANIFEST_PATH } from "./routes/hostd";
+import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";

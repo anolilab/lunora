@@ -6,10 +6,33 @@
  * segment of `[A-Za-z0-9_-]` — the protocol's id alphabet — so a parameter can
  * never smuggle a `/`, a `.` or an encoded byte into the handler.
  */
+import { isProtocolId } from "@lunora/hostd/protocol";
 
 const PARAMETER_SEGMENT = /^:(?<name>\w+)$/u;
 
-const ID_SEGMENT = /^[\w-]{1,128}$/u;
+/**
+ * Fill `pattern`'s parameters: the path a matching request would carry.
+ * @throws {TypeError} when a parameter is missing or is not an id segment — what {@link matchRoutePath} would refuse.
+ */
+export const fillRoutePath = (pattern: string, parameters: Readonly<Record<string, string>>): string =>
+    pattern
+        .split("/")
+        .map((segment) => {
+            const name = PARAMETER_SEGMENT.exec(segment)?.groups?.["name"];
+
+            if (name === undefined) {
+                return segment;
+            }
+
+            const value = parameters[name];
+
+            if (!isProtocolId(value)) {
+                throw new TypeError(`route parameter ${name} must be 1-128 characters of [A-Za-z0-9_-]`);
+            }
+
+            return value;
+        })
+        .join("/");
 
 /** Whether `path` is a pattern rather than an exact path. */
 export const isRoutePattern = (path: string): boolean => path.split("/").some((segment) => PARAMETER_SEGMENT.test(segment));
@@ -33,7 +56,7 @@ export const matchRoutePath = (pattern: string, pathname: string): null | Record
             if (segment !== value) {
                 return null;
             }
-        } else if (ID_SEGMENT.test(value)) {
+        } else if (isProtocolId(value)) {
             parameters[name] = value;
         } else {
             return null;

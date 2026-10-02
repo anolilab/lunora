@@ -24,14 +24,12 @@
  *   upgrade, so neither the sweep nor a reconnect spreads a release that failed
  *   its canary. Rolling it out again is a new `POST /v1/hostd/rollout`.
  */
-import type { UpgradeJob } from "@lunora/hostd/protocol";
+import type { BoxVersions, UpgradeJob } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 import type { FleetUpgradePlan, FleetUpgradeResult } from "../fleet/upgrade";
 import { planFleetUpgrade, runFleetUpgrade } from "../fleet/upgrade";
-import stripTrailingSlashes from "../lib/strip-trailing-slashes";
 import { drainTable } from "../store";
-import type { ReleaseVersions } from "./hostd-releases";
 import { versionKey } from "./hostd-releases";
 import type { JobOutcome } from "./jobs";
 import type { BoxSessionNamespace } from "./session-client";
@@ -39,10 +37,6 @@ import { boxSession } from "./session-client";
 
 /** How long one box may take to download, verify and restart onto a release. */
 const UPGRADE_TIMEOUT_MS = 15 * 60 * 1000;
-
-/** Where a box fetches a release's signed envelope. */
-export const manifestUrlOf = (origin: string, releaseId: string): string =>
-    `${stripTrailingSlashes(origin)}/v1/hostd/releases/${encodeURIComponent(releaseId)}/manifest`;
 
 /** Run an `upgrade` job over a box's session; a refusal before the box saw it is a failed upgrade. */
 export const upgradeDispatch =
@@ -57,7 +51,7 @@ export const upgradeDispatch =
 export interface RolloutTarget {
     boxId: string;
     status: string;
-    versions?: ReleaseVersions;
+    versions?: BoxVersions;
 }
 
 /** A planned rollout: what {@link runHostdRollout} executes, and what the route answers. */
@@ -84,7 +78,7 @@ export const planHostdRollout = (input: {
     boxes: ReadonlyArray<RolloutTarget>;
     canarySize?: number;
     manifestUrl: string;
-    release: { releaseId: string; versions: ReleaseVersions };
+    release: { releaseId: string; versions: BoxVersions };
 }): PlannedRollout => {
     const target = versionKey(input.release.versions);
     const online = input.boxes.filter((box) => box.status === "online");
@@ -163,7 +157,7 @@ interface DesiringBoxRow {
     _id: string;
     desiredReleaseId?: null | string;
     status: string;
-    versions?: null | ReleaseVersions;
+    versions?: null | BoxVersions;
 }
 
 /**
@@ -193,7 +187,7 @@ export const resumeHostdRollouts = async (ports: {
     for (const [releaseId, boxes] of byRelease) {
         // eslint-disable-next-line no-await-in-loop -- one release at a time; rarely more than one is in flight
         const { page } = await ports.database.findMany("hostdReleases", { where: { releaseId } });
-        const release = page[0] as undefined | { releaseId: string; versions: ReleaseVersions };
+        const release = page[0] as undefined | { releaseId: string; versions: BoxVersions };
 
         if (release === undefined) {
             continue;
