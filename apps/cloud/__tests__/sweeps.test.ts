@@ -58,6 +58,37 @@ describe(teardownPorts, () => {
         expect(pending.map((row) => row.destroyWorker)).toStrictEqual([false, false]);
     });
 
+    it("leaves the rows of a target that cannot converge here pending, and acts on the rest", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "wfp", alias: "a", kind: "production", scriptName: "a", status: "destroyed" },
+                { _id: "box", alias: "b", kind: "production", scriptName: "b", status: "destroyed", target: "celld-vps" },
+                // An id no target answers to waits too, rather than failing the sweep.
+                { _id: "odd", alias: "c", kind: "production", scriptName: "c", status: "destroyed", target: "aws-lambda" },
+            ],
+        });
+
+        const pending = await teardownPorts(database, noop, 1000, (target) => target === "cloudflare-wfp").listPending();
+
+        expect(pending).toStrictEqual([{ alias: "a", destroyWorker: true, id: "wfp", target: "cloudflare-wfp" }]);
+    });
+
+    it("hands each row to its own target, reading a NULL target as cloudflare-wfp", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "old", alias: "a", kind: "production", scriptName: "a", status: "destroyed", target: null },
+                { _id: "box", alias: "b", kind: "production", scriptName: "b", status: "destroyed", target: "celld-vps" },
+            ],
+        });
+
+        const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
+
+        expect(pending.map((row) => [row.id, row.target])).toStrictEqual([
+            ["old", "cloudflare-wfp"],
+            ["box", "celld-vps"],
+        ]);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
@@ -111,6 +142,23 @@ describe(usageRollbackPorts, () => {
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
         expect(ports.resolveResource("missing")).toBeUndefined();
         await expect(ports.getCheckpoint()).resolves.toBe(999);
+    });
+
+    it("attributes only the swept target's deployments, by resourceRef where a row has one", async () => {
+        const database = fakeControlPlaneDb({
+            cells: [{ _id: "cell_1", name: "default" }],
+            deployments: [
+                { _id: "dep_wfp", organizationId: "org_a", resourceRef: "a", scriptName: "a", status: "live", target: "cloudflare-wfp" },
+                { _id: "dep_box", organizationId: "org_b", resourceRef: "fleets/b", scriptName: "b", status: "live", target: "celld-vps" },
+            ],
+        });
+
+        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
+
+        expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_wfp", organizationId: "org_a" });
+        // Another target's resource never lands on this target's bill.
+        expect(ports.resolveResource("fleets/b")).toBeUndefined();
+        expect(ports.resolveResource("b")).toBeUndefined();
     });
 
     it("records a requests row into platformUsage with the period + attribution", async () => {

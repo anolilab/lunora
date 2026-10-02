@@ -3,8 +3,9 @@
  * `triggers.crons` for Workers uploaded into a Workers-for-Platforms dispatch
  * namespace, so tenant cron jobs never fire on their own. The control plane runs
  * an every-minute trigger and fans ticks out to each tenant whose cron is due,
- * POSTing the tenant runtime's `/_lunora/scheduled` endpoint through the
- * dispatcher. This module is the pure core: parse + match standard 5-field cron
+ * POSTing the tenant runtime's `/_lunora/scheduled` endpoint through its target
+ * driver's in-network `dispatch`. Only targets whose `capabilities.fanout` is
+ * `dispatcher` are fanned out; a `native` target (celld) fires crons itself. This module is the pure core: parse + match standard 5-field cron
  * expressions and compute which tenant ticks are due. The I/O (reading live
  * targets, dispatching) is injected so it stays unit-testable.
  */
@@ -15,7 +16,7 @@ export interface CronTarget {
     adminToken: string;
     /** The tenant's compiled cron expressions. */
     cronSpecs: ReadonlyArray<string>;
-    /** Dispatch-namespace script id. */
+    /** The deployment's handle on its target (`resourceRef`; the dispatch script on `cloudflare-wfp`). */
     scriptName: string;
 }
 
