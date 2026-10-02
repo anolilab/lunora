@@ -5,8 +5,8 @@ import type { ManifestConfigShape } from "@lunora/config/cloudflare";
 import { buildBindingManifest, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { dirname, relative, resolve } from "@visulima/path";
 
-import type { DeployEvent, DeployToCloudOptions, WranglerAssets } from "../../util/cloud-client";
-import { collectAssets, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment } from "../../util/cloud-client";
+import type { DeployEvent, DeployRequestBody, DeployToCloudOptions, WranglerAssets } from "../../util/cloud-client";
+import { collectAssets, deployRequestBody, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment } from "../../util/cloud-client";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { runEject } from "../../util/eject";
@@ -33,6 +33,8 @@ interface CloudCommandDeps {
     readWrangler: (cwd: string) => { config: CloudWranglerConfig; path: string } | undefined;
     /** Rollback client (injected for tests). */
     rollbackFn: typeof rollbackDeployment;
+    /** Write `deploy --out`'s request body to a file, creating its directory (injected for tests). */
+    writeDeployBody: (path: string, content: string) => Promise<void>;
     /** Write one eject output file under `<cwd>/<dir>` (injected for tests). */
     writeEjectFile: (directory: string, name: string, content: string) => Promise<void>;
 }
@@ -44,11 +46,16 @@ interface CloudCommandOptions {
     bundlePath?: string;
     cwd: string;
     deps?: Partial<CloudCommandDeps>;
-    /** Output directory for `eject`, relative to `cwd` (defaults to `eject`). */
-    ejectOut?: string;
     kind?: string;
     logger: Logger;
     org?: string;
+
+    /**
+     * `--out`, relative to `cwd`. For `eject`, the output directory (defaults to
+     * `eject`). For `deploy`, the file the request body is written to instead of
+     * being uploaded — no deploy key or API URL is needed then.
+     */
+    out?: string;
     project?: string;
     scriptName?: string;
     url?: string;
@@ -75,6 +82,12 @@ const defaultDeps = (): CloudCommandDeps => {
         },
         ejectFn: fetchEjectPackage,
         rollbackFn: rollbackDeployment,
+        writeDeployBody: (path, content) => {
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, content);
+
+            return Promise.resolve();
+        },
         writeEjectFile: (directory, name, content) => {
             mkdirSync(directory, { recursive: true });
             writeFileSync(join(directory, name), content);
@@ -154,25 +167,35 @@ const deployPayload = (
     }
 };
 
-const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, auth: { apiUrl: string; deployKey: string }): Promise<CloudCommandResult> => {
+/**
+ * Everything a deploy derives on this machine — the request body, minus the
+ * deploy key. Shared by the upload and by `--out`, so the file the Lunora Cloud
+ * build box writes is byte-for-byte what `lunora cloud deploy` would POST.
+ *
+ * `routed` is the upload: the control plane needs to know which project and
+ * script it is for. A body written to a file may leave both to whoever uploads
+ * it, so there they are carried only when known. Logs and returns `undefined`
+ * on a user error.
+ */
+const prepareDeployBody = (options: CloudCommandOptions, deps: CloudCommandDeps, routed: boolean): DeployRequestBody | undefined => {
     const { logger } = options;
 
-    if (!options.project) {
+    if (routed && !options.project) {
         logger.error("cloud deploy requires a project. Usage: lunora cloud deploy --project <id> --bundle <path>");
 
-        return { code: 1 };
+        return undefined;
     }
 
     if (!options.bundlePath) {
         logger.error("cloud deploy requires a bundle. Usage: lunora cloud deploy --project <id> --bundle <path-to-worker>");
 
-        return { code: 1 };
+        return undefined;
     }
 
     if (options.kind !== undefined && !DEPLOY_KINDS.has(options.kind as DeployKind)) {
         logger.error(`cloud deploy: invalid --kind "${options.kind}" — expected production | preview | dev`);
 
-        return { code: 1 };
+        return undefined;
     }
 
     const wrangler = deps.readWrangler(options.cwd);
@@ -183,21 +206,21 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
     if (!wrangler) {
         logger.error(`cloud deploy: no readable wrangler config in ${options.cwd} — the binding manifest is derived from it`);
 
-        return { code: 1 };
+        return undefined;
     }
 
     const scriptName = options.scriptName ?? wrangler.config.name;
 
-    if (!scriptName) {
+    if (routed && !scriptName) {
         logger.error("cloud deploy: no script name — pass --name or set `name` in wrangler config");
 
-        return { code: 1 };
+        return undefined;
     }
 
     const payload = deployPayload(wrangler, logger);
 
     if (!payload) {
-        return { code: 1 };
+        return undefined;
     }
 
     let bundle: string;
@@ -207,8 +230,61 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
     } catch (error) {
         logger.error(`cloud deploy: cannot read bundle "${options.bundlePath}": ${error instanceof Error ? error.message : String(error)}`);
 
+        return undefined;
+    }
+
+    return deployRequestBody({
+        ...payload,
+        branch: options.branch,
+        bundle,
+        ...(options.kind ? { kind: options.kind as DeployKind } : {}),
+        ...(options.project === undefined ? {} : { projectId: options.project }), // gitleaks:allow -- the --project flag's value, not a Cypress project id
+        ...(scriptName === undefined ? {} : { scriptName }),
+    });
+};
+
+/**
+ * `lunora cloud deploy --out <file>` — write the request body instead of
+ * uploading it.
+ *
+ * This is how the Lunora Cloud build box turns a git push into a release: it
+ * runs the project's own pinned CLI here, so the manifest, crons and assets a
+ * pushed build ships are derived by exactly the code a CLI deploy uses. Nothing
+ * authenticates, so no deploy key or API URL is read — the file holds no secret.
+ */
+const runDeployToFile = async (options: CloudCommandOptions, deps: CloudCommandDeps, out: string): Promise<CloudCommandResult> => {
+    const { logger } = options;
+    const body = prepareDeployBody(options, deps, false);
+
+    if (!body) {
         return { code: 1 };
     }
+
+    const path = resolve(options.cwd, out);
+
+    try {
+        await deps.writeDeployBody(path, JSON.stringify(body));
+    } catch (error) {
+        logger.error(`cloud deploy: cannot write "${path}": ${error instanceof Error ? error.message : String(error)}`);
+
+        return { code: 1 };
+    }
+
+    logger.success(`cloud deploy: wrote the deploy request body to ${path}`);
+
+    return { code: 0, outcome: path };
+};
+
+const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, auth: { apiUrl: string; deployKey: string }): Promise<CloudCommandResult> => {
+    const { logger } = options;
+    const body = prepareDeployBody(options, deps, true);
+
+    // `routed` guarantees both; narrowed here rather than asserted.
+    if (!body?.projectId || !body.scriptName) {
+        return { code: 1 };
+    }
+
+    const { projectId, scriptName } = body;
 
     logger.info(`cloud deploy: ${scriptName} (${options.kind ?? "production"}) → ${auth.apiUrl}`);
 
@@ -224,19 +300,7 @@ const runDeploy = async (options: CloudCommandOptions, deps: CloudCommandDeps, a
         }
     };
 
-    const result = await deps.deployFn(
-        {
-            ...payload,
-            apiUrl: auth.apiUrl,
-            branch: options.branch,
-            bundle,
-            deployKey: auth.deployKey,
-            ...(options.kind ? { kind: options.kind as DeployKind } : {}),
-            projectId: options.project, // gitleaks:allow -- the --project flag's value, not a Cypress project id
-            scriptName,
-        },
-        onEvent,
-    );
+    const result = await deps.deployFn({ ...body, apiUrl: auth.apiUrl, deployKey: auth.deployKey, projectId, scriptName }, onEvent);
 
     if (result.status === "live") {
         logger.success(`cloud deploy: live (${scriptName})`);
@@ -314,7 +378,7 @@ const runEjectCommand = async (
         return { code: 1 };
     }
 
-    const ejectOut = options.ejectOut ?? "eject";
+    const ejectOut = options.out ?? "eject";
     const outputDirectory = join(options.cwd, ejectOut);
 
     let result;
@@ -357,6 +421,11 @@ const runCloudCommand = async (options: CloudCommandOptions): Promise<CloudComma
         return { code: 1 };
     }
 
+    // Before auth: writing the body to a file talks to nobody.
+    if (subcommand === "deploy" && options.out !== undefined) {
+        return runDeployToFile(options, deps, options.out);
+    }
+
     const auth = resolveAuth(options, deps, logger);
 
     if (!auth) {
@@ -377,10 +446,10 @@ const execute: CommandHandler<CloudOptions> = defineHandler<CloudOptions>(({ arg
         branch: options.branch,
         bundlePath: options.bundle,
         cwd,
-        ejectOut: options.out,
         kind: options.kind,
         logger,
         org: options.org,
+        out: options.out,
         project: options.project,
         scriptName: options.name,
         url: options.url,

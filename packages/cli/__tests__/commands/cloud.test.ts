@@ -135,6 +135,97 @@ describe("lunora cloud", () => {
         );
     });
 
+    it("deploy --out writes the request body it would upload, without a key or URL", async () => {
+        expect.assertions(4);
+
+        const writes: { content: string; path: string }[] = [];
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>();
+        const { logger } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "dist/index.js",
+            cwd: "/x",
+            deps: deps({
+                deployFn,
+                // No LUNORA_DEPLOY_KEY / LUNORA_CLOUD_URL: writing a file authenticates nothing.
+                env: {},
+                writeDeployBody: (path, content) => {
+                    writes.push({ content, path });
+
+                    return Promise.resolve();
+                },
+            }),
+            logger,
+            out: "out/release.json",
+        });
+
+        expect(result).toStrictEqual({ code: 0, outcome: "/x/out/release.json" });
+        expect(deployFn).not.toHaveBeenCalled();
+        expect(writes.map((write) => write.path)).toStrictEqual(["/x/out/release.json"]);
+        // The body the upload sends, minus routing the caller did not give — and no key.
+        expect(JSON.parse(writes[0]?.content ?? "")).toStrictEqual({
+            bundle: "YnVuZGxl",
+            cronSpecs: ["0 0 * * *"],
+            manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", sqlite: false, type: "durable_object" }] },
+            scriptName: "app",
+        });
+    });
+
+    it("deploy --out carries the same body the upload sends when routing is given", async () => {
+        expect.assertions(1);
+
+        let uploaded: unknown;
+        let written: unknown;
+        const { logger } = capturingLogger();
+        const common = { argument: ["deploy"], branch: "feat/x", bundlePath: "dist/index.js", cwd: "/x", kind: "preview", logger, project: "prj_1" };
+
+        await runCloudCommand({
+            ...common,
+            deps: deps({
+                deployFn: async (options) => {
+                    // The transport fields are the upload's own; the rest is the body.
+                    uploaded = Object.fromEntries(Object.entries(options).filter(([key]) => key !== "apiUrl" && key !== "deployKey"));
+
+                    return { status: "live" };
+                },
+            }),
+        });
+        await runCloudCommand({
+            ...common,
+            deps: deps({
+                writeDeployBody: (_path, content) => {
+                    written = JSON.parse(content);
+
+                    return Promise.resolve();
+                },
+            }),
+            out: "release.json",
+        });
+
+        expect(written).toStrictEqual(uploaded);
+    });
+
+    it("deploy --out still refuses a project with no wrangler config", async () => {
+        expect.assertions(3);
+
+        const writeDeployBody = vi.fn<CloudCommandDeps["writeDeployBody"]>();
+        const { errors, logger } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "dist/index.js",
+            cwd: "/x",
+            deps: deps({ readWrangler: () => undefined, writeDeployBody }),
+            logger,
+            out: "release.json",
+        });
+
+        expect(result.code).toBe(1);
+        expect(writeDeployBody).not.toHaveBeenCalled();
+        expect(errors[0]).toMatch(/no readable wrangler config/);
+    });
+
     it("deploys: every binding type in the manifest passes through, with the compatibility settings", async () => {
         expect.assertions(3);
 
@@ -429,7 +520,7 @@ describe("lunora cloud", () => {
                     return Promise.resolve();
                 },
             }),
-            ejectOut: "backup",
+            out: "backup",
             logger,
         });
 

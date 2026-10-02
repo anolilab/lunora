@@ -61,6 +61,30 @@ interface DeployToCloudOptions {
     scriptName: string;
 }
 
+/**
+ * The deploy request body without its transport: everything `POST /v1/deploy`
+ * carries except the deploy key, which travels as a header. The routing fields
+ * are optional because a body written to a file (`lunora cloud deploy --out`)
+ * may be routed by whoever uploads it — the Lunora Cloud build box leaves them
+ * to the control plane, which knows the project and branch.
+ */
+type DeployRequestOptions = Omit<DeployToCloudOptions, "apiUrl" | "deployKey" | "fetch" | "projectId" | "scriptName"> & {
+    projectId?: string; // secret-scanner:allow -- domain field name
+    scriptName?: string;
+};
+
+/** The JSON object `POST /v1/deploy` sends. */
+interface DeployRequestBody {
+    assets?: AssetsUpload;
+    branch?: string;
+    bundle: string;
+    cronSpecs?: string[];
+    kind?: "dev" | "preview" | "production";
+    manifest: DeployManifest;
+    projectId?: string; // secret-scanner:allow -- domain field name
+    scriptName?: string;
+}
+
 interface DeployResult {
     status: string;
 }
@@ -142,21 +166,31 @@ const fetchEjectPackage = async (options: EjectOptions): Promise<EjectPackage> =
     return (await response.json()) as EjectPackage;
 };
 
+/**
+ * The body `POST /v1/deploy` sends, built once for both transports: the upload
+ * below, and `lunora cloud deploy --out`, which writes it to a file for the
+ * Lunora Cloud build box to hand to the control plane. One builder is what keeps
+ * a git-push release and a CLI release from drifting apart.
+ */
+const deployRequestBody = (options: DeployRequestOptions): DeployRequestBody => {
+    return {
+        ...(options.assets ? { assets: options.assets } : {}),
+        ...(options.branch === undefined ? {} : { branch: options.branch }),
+        bundle: options.bundle,
+        ...(options.cronSpecs && options.cronSpecs.length > 0 ? { cronSpecs: options.cronSpecs } : {}),
+        ...(options.kind === undefined ? {} : { kind: options.kind }),
+        manifest: options.manifest,
+        ...(options.projectId === undefined ? {} : { projectId: options.projectId }), // secret-scanner:allow -- domain field name
+        ...(options.scriptName === undefined ? {} : { scriptName: options.scriptName }),
+    };
+};
+
 /** `POST /v1/deploy` — push a prebuilt bundle and stream NDJSON progress via `onEvent`. */
 const deployToCloud = async (options: DeployToCloudOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
-        body: JSON.stringify({
-            ...(options.assets ? { assets: options.assets } : {}),
-            branch: options.branch,
-            bundle: options.bundle,
-            ...(options.cronSpecs && options.cronSpecs.length > 0 ? { cronSpecs: options.cronSpecs } : {}),
-            kind: options.kind,
-            manifest: options.manifest,
-            projectId: options.projectId, // secret-scanner:allow -- domain field name
-            scriptName: options.scriptName,
-        }), // secret-scanner:allow -- domain field name
+        body: JSON.stringify(deployRequestBody(options)),
         headers: { authorization: `Bearer ${options.deployKey}`, "content-type": "application/json" },
         method: "POST",
     });
@@ -361,12 +395,14 @@ const resolveDeployConfigPath = (cwd: string): string | undefined => {
     return existsSync(path) ? path : undefined;
 };
 
-export { collectAssets, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment };
+export { collectAssets, deployRequestBody, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment };
 export type {
     AssetFile,
     AssetsUpload,
     DeployEvent,
     DeployManifest,
+    DeployRequestBody,
+    DeployRequestOptions,
     DeployResult,
     DeployToCloudOptions,
     EjectOptions,

@@ -47,6 +47,7 @@ LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.
 | `--kind`    | `production` (default), `preview`, or `dev`.                                  |
 | `--branch`  | Git branch to record against the deployment — what preview URLs are keyed on. |
 | `--url`     | Control-plane API URL, if not using `LUNORA_CLOUD_URL`.                       |
+| `--out`     | Write the request body to this file instead of uploading it (see below).      |
 
 It reads your wrangler config — the built one a Vite build points
 `.wrangler/deploy/config.json` at when it exists (that is where the Cloudflare
@@ -73,6 +74,14 @@ leading `/` anchors to the directory, and `!` re-includes are not supported). A
 single file over 25 MiB, or more than 50 MiB in total, is refused.
 
 The command exits non-zero unless the deployment reaches `live`.
+
+`--out <file>` stops short of the upload: it writes the exact request body —
+bundle, manifest, crons and assets, plus `--project`, `--name`/wrangler `name`,
+`--kind` and `--branch` when known — to the file and exits. Nothing is sent and
+nothing authenticates, so it needs neither `LUNORA_DEPLOY_KEY` nor a URL, and
+`--project` becomes optional. The file never contains the deploy key. Lunora
+Cloud's own build box uses it to turn a git push into a release with your
+project's pinned CLI.
 
 Every deploy updates the project's one Worker in place and goes out to all
 traffic at once — Workers for Platforms cannot stage a user Worker's version, so

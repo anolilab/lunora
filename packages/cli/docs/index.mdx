@@ -693,7 +693,8 @@ lunora cloud eject dep_456 --out ./eject            # your data + BYO wrangler.j
 `deploy` sends the full binding manifest derived from your wrangler config (the
 same one `lunora info --bindings` prints), your crons, and — when wrangler has an
 `assets` section — the built files under `assets.directory`. It exits non-zero
-unless the deployment reaches `live`; `rollback` shifts
+unless the deployment reaches `live`. `deploy --out <file>` writes that same request
+body to a file instead of uploading it, and needs no deploy key; `rollback` shifts
 live traffic, so it requires `--yes`; `eject` derives both configs from your own
 wrangler config, so run it from the project directory. The full reference is in the
 [Lunora Cloud CLI](/docs/cloud/cli) guide.
