@@ -404,9 +404,10 @@
                       echo '```sh'
                       echo "curl -fsSLO https://github.com/anolilab/lunora/releases/download/${TAG}/install.sh"
                       echo "sha256sum install.sh  # $(sha256sum install.sh | cut -d ' ' -f 1)"
-                      echo 'sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<secret> \'
-                      echo "    bash install.sh --version ${VERSION} --control-plane <origin> --bucket <bucket> [--endpoint <url>]"
+                      echo "sudo bash install.sh --version ${VERSION} --control-plane <origin> --bucket <bucket> [--endpoint <url>]"
                       echo '```'
+                      echo
+                      echo "It asks for the enrolment token the studio shows and the bucket's access key, echoing neither secret."
                       echo
                       echo "SHA-256:"
                       echo

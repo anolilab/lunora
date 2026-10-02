@@ -19,10 +19,24 @@ On a Debian or Ubuntu server (amd64 or arm64, 2 GB of memory, systemd), as root:
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
 sha256sum install.sh   # compare with the release notes
-sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<secret> \
-    bash install.sh --control-plane https://<control plane origin> --bucket <bucket> \
-    [--endpoint <s3 url>] [--region <region>] [--version <version>] [--single-trust]
+sudo bash install.sh --control-plane https://<control plane origin> --bucket <bucket> --version <version> \
+    [--endpoint <s3 url>] [--region <region>] [--single-trust]
 ```
+
+It then asks for the **enrolment token** the studio shows — paste it; nothing
+is echoed — and for the bucket's access key id and secret access key (the
+secret is not echoed either; leave the key id empty to use the machine's own
+credentials, such as an instance role). No secret goes on the command line,
+where shell history, `ps` and sudo's log would keep it.
+
+For automation, `--token-file <path>` and `--credentials-file <path>` (lines
+`AWS_ACCESS_KEY_ID=…`, `AWS_SECRET_ACCESS_KEY=…`, optionally
+`AWS_SESSION_TOKEN=…`; nothing else is read and nothing is evaluated) name files
+that must belong to root and be readable by root alone (0600 or 0400).
+`LUNORA_HOSTD_ENROL_TOKEN` and `AWS_*` already in the environment are used too.
+`install.sh` takes them out of its environment at once, so nothing it runs
+inherits them except `lunora-hostd enrol`, which gets them through its
+environment alone. `--token` is refused, and so is `lunora-hostd enrol --token`.
 
 `install.sh` ([`install/install.sh`](./install/install.sh)) installs any missing
 `curl`, `jq`, `openssl`, `nftables`, `util-linux` (`setpriv`) and `gzip`; creates
@@ -33,9 +47,8 @@ verifies the release (below), and has `lunora-hostd install-release` install it
 into `/opt/lunora-hostd/<releaseId>/` and point `/opt/lunora-hostd/current` at
 it; writes `/etc/systemd/system/lunora-hostd.service`; runs `lunora-hostd enrol`
 **as `lunora-hostd`**, passing the flags through; and enables and starts the
-service. The token comes from `LUNORA_HOSTD_ENROL_TOKEN` (or `--token`) and the
-bucket credentials from `AWS_*`; both reach `enrol` through its environment,
-never a command line, and are never printed.
+service. Every secret is gathered before anything is downloaded, so a missing
+token fails at once.
 
 **Which release.** `--version <version>` installs exactly that one. Without it,
 `install.sh` installs the newest release on the box's channel: the newest
@@ -53,8 +66,9 @@ one is refused.
 **Re-running it upgrades the box in place:** it installs the newest release on
 the box's channel (or `--version`) beside the running one, switches `current`,
 keeps the release that ran before (point `current` back at it to roll back),
-removes older ones, rewrites the unit and restarts the service. An enrolled box is not enrolled
-again unless `--force` (and a new token) is given.
+removes older ones, rewrites the unit and restarts the service. An enrolled box
+asks for nothing and is not enrolled again unless `--force` (and a new token)
+is given.
 
 **Uninstall:** `sudo bash install.sh --uninstall` stops and removes the unit,
 the nftables table, `/opt/lunora-hostd`, `/var/lib/lunora-hostd`,
@@ -64,15 +78,25 @@ box in the studio as well.
 
 ### What the studio's install command must say
 
-The command the studio shows (`installCommandFor` in
-`apps/cloud/src/boxes/enrolment.ts`) is still `sudo lunora-hostd enrol --token
-<token>`: it assumes hostd is installed, runs `enrol` as root (the files it writes
-would belong to root, not `lunora-hostd`), and omits `--control-plane`, which
-`enrol` requires until a production origin is compiled in, and `--bucket`. It
-should show the three lines above, with the cell's origin filled in for
-`--control-plane`, the version the control plane wants boxes on for
-`--version`, and the token in `LUNORA_HOSTD_ENROL_TOKEN` (plan 458 W7
-follow-up for the `apps/cloud` branch).
+The studio's enrol dialog (`installCommandFor` in
+`apps/cloud/src/boxes/enrolment.ts`, on the `apps/cloud` branch) must show the
+command **without the token**, and the token separately, to paste when asked:
+
+```sh
+curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
+sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <version>
+```
+
+followed by "paste the token when prompted" and the token in a copy field of
+its own. `<origin>` is this control plane (`LUNORA_ORIGIN_URL`; `enrol`
+requires `--control-plane` until a production origin is compiled in),
+`<version>` the release the control plane wants boxes on (its
+`hostdReleases` entry, as `1.2.3`, the tag without `hostd-v`), and `<bucket>`
+whatever the user typed (`--endpoint <url>` / `--region <region>` appended when
+given). Neither the token nor a bucket credential may appear in the command:
+`install.sh` asks for both at a hidden prompt. The old forms — `sudo lunora-hostd
+enrol --token …`, and `LUNORA_HOSTD_ENROL_TOKEN=…` on the command line — leave
+the token in shell history and sudo's log; `--token` is now refused.
 
 ### How install.sh trusts a release
 
@@ -127,8 +151,9 @@ S3-compatible store, `--region`, `--ipv4` / `--ipv6` (detected when omitted),
 `--single-trust`, `--data-dir`, `--install-dir` (default `/opt/lunora-hostd`)
 and `--force` (enrol again, as a new box). It
 probes the bucket with `celld diagnose` before it spends the token. The token
-may come from `--token` or `LUNORA_HOSTD_ENROL_TOKEN`; the bucket credentials
-come only from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+comes only from `LUNORA_HOSTD_ENROL_TOKEN` (`--token` is refused: it would
+leave the token in shell history and `ps`); the bucket credentials come only
+from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
 `AWS_SESSION_TOKEN` in the environment. Neither is ever printed, and the
 credentials never leave the box. Every command takes `--config <path>`
 (default `/etc/lunora-hostd/config.json`, or `LUNORA_HOSTD_CONFIG`).

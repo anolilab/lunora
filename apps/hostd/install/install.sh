@@ -4,8 +4,11 @@
 # notes give its SHA-256.
 #
 #   curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
-#   sudo LUNORA_HOSTD_ENROL_TOKEN=lbe_... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-#       bash install.sh --control-plane https://<cloud> --bucket <name> [--endpoint <url>]
+#   sudo bash install.sh --control-plane https://<cloud> --bucket <name> [--endpoint <url>] --version <version>
+#
+# It asks for the enrolment token (the studio shows it) and the bucket's access
+# key, without echoing what is typed. For automation, --token-file and
+# --credentials-file name root-only files instead.
 #
 # Re-running it upgrades the box in place to the newest release on its channel
 # (stable, or pre-release for a box on one), or to --version.
@@ -19,9 +22,11 @@
 # its own strict verifier and installs the release (`install-release`), checking
 # celld and Caddy against it, exactly as an `upgrade` job does.
 #
-# The enrolment token and the bucket credentials are read from the environment
-# (or --token), handed to `lunora-hostd enrol` through its environment, never
-# its command line, and never printed.
+# Secrets — the enrolment token and the bucket credentials — never reach a
+# command line (shell history, `ps`, sudo's log): they are typed at a hidden
+# prompt, read from a file only root can read, or taken from the environment,
+# handed to `lunora-hostd enrol` through its environment alone, and never
+# printed. Nothing else this script runs inherits them.
 set -euo pipefail
 
 REPOSITORY="anolilab/lunora"
@@ -71,7 +76,11 @@ Install or upgrade (run it again):
   --single-trust             run fleets even when isolation is incomplete
   --skip-bucket-check        do not probe the bucket with celld first
   --force                    enrol again, as a new box
-  --token <token>            the enrolment token (or LUNORA_HOSTD_ENROL_TOKEN)
+  --token-file <path>        read the enrolment token from this file (root's, 0600)
+                             instead of asking for it
+  --credentials-file <path>  read AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+                             (/ AWS_SESSION_TOKEN) lines from this file (root's,
+                             0600) instead of asking for them
   --version <version>        install this release instead of the newest
   --prerelease               without --version: the newest pre-release too
                              (a box on a pre-release stays on pre-releases)
@@ -80,13 +89,22 @@ Install or upgrade (run it again):
 Remove:
   --uninstall                remove hostd, its users and files (never the bucket)
 
-Bucket credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-(/ AWS_SESSION_TOKEN) in the environment.
+Enrolling asks for the token and the bucket's access key at a hidden prompt.
+LUNORA_HOSTD_ENROL_TOKEN and AWS_* in the environment are used when set; never
+put a secret on the command line.
 USAGE
 }
 
 VERSION=""
+# Secrets, taken out of the environment at once so nothing this script runs inherits them;
+# only `lunora-hostd enrol` gets them back (enrol below).
 TOKEN="${LUNORA_HOSTD_ENROL_TOKEN:-}"
+BUCKET_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+BUCKET_SECRET="${AWS_SECRET_ACCESS_KEY:-}"
+BUCKET_SESSION="${AWS_SESSION_TOKEN:-}"
+unset LUNORA_HOSTD_ENROL_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+TOKEN_FILE=""
+CREDENTIALS_FILE=""
 UNINSTALL=0
 FORCE=0
 ALLOW_DOWNGRADE=0
@@ -117,10 +135,18 @@ parse_args() {
                 ENROL_ARGS+=("$1")
                 shift
                 ;;
-            --token)
+            --token-file)
                 need_value "$@"
-                TOKEN="$2"
+                TOKEN_FILE="$2"
                 shift 2
+                ;;
+            --credentials-file)
+                need_value "$@"
+                CREDENTIALS_FILE="$2"
+                shift 2
+                ;;
+            --token)
+                die "--token would leave the token in your shell history: paste it when asked, or use --token-file"
                 ;;
             --version)
                 need_value "$@"
@@ -397,6 +423,85 @@ install_release() {
     say "installed ${RELEASE_ID}"
 }
 
+# --- Secrets -----------------------------------------------------------------
+
+needs_enrolment() {
+    [ ! -f "${CONFIG_DIR}/config.json" ] || [ "${FORCE}" -eq 1 ]
+}
+
+# A file holding a secret for automation: a regular file, root's, readable by root alone.
+check_secret_file() {
+    local path="$1" what="$2"
+
+    [ -f "${path}" ] && [ ! -L "${path}" ] || die "${what} ${path} is not a regular file"
+    [ "$(stat -c %u "${path}")" = "0" ] || die "${what} ${path} must belong to root"
+
+    case "$(stat -c %a "${path}")" in
+        600 | 400) ;;
+        *) die "${what} ${path} must be readable by root alone (chmod 600 ${path})" ;;
+    esac
+}
+
+# Ask on the terminal without echoing what is typed. Only when stdin is a terminal.
+ask_secret() {
+    local prompt="$1" answer=""
+
+    [ -t 0 ] || return 1
+    printf '%s' "${prompt}" >&2
+    IFS= read -rs answer || true
+    printf '\n' >&2
+    printf '%s' "${answer}"
+}
+
+# KEY=value lines; only the AWS_* names enrol uses are read, nothing is evaluated.
+read_credentials_file() {
+    local name value
+
+    check_secret_file "${CREDENTIALS_FILE}" "the credentials file"
+
+    while IFS='=' read -r name value || [ -n "${name}" ]; do
+        case "${name}" in
+            AWS_ACCESS_KEY_ID) BUCKET_KEY_ID="${value}" ;;
+            AWS_SECRET_ACCESS_KEY) BUCKET_SECRET="${value}" ;;
+            AWS_SESSION_TOKEN) BUCKET_SESSION="${value}" ;;
+            *) ;;
+        esac
+    done < "${CREDENTIALS_FILE}"
+}
+
+# Gather what enrolling needs before anything is downloaded, so a missing token
+# fails at once rather than after the release is installed.
+read_secrets() {
+    needs_enrolment || return 0
+
+    if [ -n "${TOKEN_FILE}" ]; then
+        check_secret_file "${TOKEN_FILE}" "the token file"
+        IFS= read -r TOKEN < "${TOKEN_FILE}" || true
+    fi
+
+    if [ -z "${TOKEN}" ]; then
+        TOKEN="$(ask_secret "Enrolment token (the studio shows it; typing is not echoed): ")" || true
+    fi
+
+    TOKEN="${TOKEN//[[:space:]]/}"
+    [ -n "${TOKEN}" ] || die "no enrolment token: run install.sh in a terminal and paste it when asked, or pass --token-file <file>"
+
+    if [ -n "${CREDENTIALS_FILE}" ]; then
+        read_credentials_file
+    elif [ -z "${BUCKET_KEY_ID}" ] && [ -t 0 ]; then
+        printf '%s' "Bucket access key id (leave empty to use this machine's own credentials, e.g. an instance role): " >&2
+        IFS= read -r BUCKET_KEY_ID || true
+
+        if [ -n "${BUCKET_KEY_ID}" ]; then
+            BUCKET_SECRET="$(ask_secret "Bucket secret access key (typing is not echoed): ")" || true
+        fi
+    fi
+
+    if [ -n "${BUCKET_KEY_ID}" ] && [ -z "${BUCKET_SECRET}" ]; then
+        die "a bucket access key id needs its secret access key"
+    fi
+}
+
 # --- The service -------------------------------------------------------------
 
 install_unit() {
@@ -473,18 +578,29 @@ UNIT
 }
 
 enrol() {
-    if [ -f "${CONFIG_DIR}/config.json" ] && [ "${FORCE}" -eq 0 ]; then
+    if ! needs_enrolment; then
         say "this box is enrolled already: upgraded in place (pass --force with a new token to enrol it again)"
 
         return
     fi
 
-    [ -n "${TOKEN}" ] || die "no enrolment token: pass --token or set LUNORA_HOSTD_ENROL_TOKEN (the studio shows one)"
+    [ -n "${TOKEN}" ] || die "no enrolment token: run install.sh in a terminal and paste it when asked, or pass --token-file <file>"
 
-    # As lunora-hostd, so it owns what enrol writes. The token travels in the
-    # environment only, never on a command line another user can read.
-    LUNORA_HOSTD_ENROL_TOKEN="${TOKEN}" as_hostd "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}" ||
-        die "enrolment failed (see above); nothing was started"
+    # As lunora-hostd, so it owns what enrol writes. The secrets travel in its
+    # environment only (exported in this subshell alone), never on a command line.
+    (
+        export LUNORA_HOSTD_ENROL_TOKEN="${TOKEN}"
+
+        if [ -n "${BUCKET_KEY_ID}" ]; then
+            export AWS_ACCESS_KEY_ID="${BUCKET_KEY_ID}" AWS_SECRET_ACCESS_KEY="${BUCKET_SECRET}"
+        fi
+
+        if [ -n "${BUCKET_SESSION}" ]; then
+            export AWS_SESSION_TOKEN="${BUCKET_SESSION}"
+        fi
+
+        as_hostd "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}"
+    ) || die "enrolment failed (see above); nothing was started"
 }
 
 start_service() {
@@ -503,6 +619,7 @@ main() {
     fi
 
     check_machine
+    read_secrets
     install_packages
     create_users
     create_directories

@@ -35,9 +35,10 @@ interface BinDependencies {
 const HELP = `lunora-hostd — runs Lunora Cloud fleets on your own server.
 
 Usage:
-  lunora-hostd enrol --token <token> --bucket <name> [options]
+  lunora-hostd enrol --bucket <name> [options]
       Bind this machine to your organization with the one-time token the
-      studio shows. Options:
+      studio shows, read from LUNORA_HOSTD_ENROL_TOKEN (install.sh asks for
+      it and passes it on so). Options:
         --control-plane <origin>   Lunora Cloud's origin
         --bucket <name|s3://name>  the bucket your fleets' data lives in
         --endpoint <url>           S3-compatible endpoint (R2, Tigris, MinIO…)
@@ -50,10 +51,10 @@ Usage:
                                    default /opt/lunora-hostd
         --force                    enrol again as a new box
         --skip-bucket-check        do not probe the bucket with celld first
-      The token may also come from LUNORA_HOSTD_ENROL_TOKEN, and the bucket
-      credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-      (/ AWS_SESSION_TOKEN) in the environment; they are written to a file
-      only this box can read and never sent to Lunora Cloud.
+      The bucket credentials come from AWS_ACCESS_KEY_ID /
+      AWS_SECRET_ACCESS_KEY (/ AWS_SESSION_TOKEN) in the environment; they are
+      written to a file only this box can read and never sent to Lunora
+      Cloud. No secret is ever taken from the command line.
   lunora-hostd run         Run the daemon in the foreground (systemd runs this)
   lunora-hostd status      Show this box's enrolment and fleets
   lunora-hostd install-release <manifest.json> --from <directory>
@@ -101,10 +102,17 @@ const INSTALL_OPTIONS = {
 const runEnrol = async (args: ReadonlyArray<string>, output: BinOutput, dependencies: BinDependencies): Promise<number> => {
     const environment = dependencies.environment ?? process.env;
     const { values } = parseArgs({ args: [...args], options: ENROL_OPTIONS, strict: true });
-    const token = values.token ?? environment["LUNORA_HOSTD_ENROL_TOKEN"];
+    const token = environment["LUNORA_HOSTD_ENROL_TOKEN"];
 
-    if (token === undefined || values.bucket === undefined) {
-        output.stderr("lunora-hostd enrol needs --token (or LUNORA_HOSTD_ENROL_TOKEN) and --bucket\n");
+    if (values.token !== undefined) {
+        // Never echoed: it is the token.
+        output.stderr("lunora-hostd enrol takes the token from LUNORA_HOSTD_ENROL_TOKEN, not --token, which would leave it in shell history and ps\n");
+
+        return 1;
+    }
+
+    if (token === undefined || token === "" || values.bucket === undefined) {
+        output.stderr("lunora-hostd enrol needs LUNORA_HOSTD_ENROL_TOKEN in its environment, and --bucket\n");
 
         return 1;
     }
@@ -220,7 +228,7 @@ const runStatus = (args: ReadonlyArray<string>, output: BinOutput, dependencies:
 
 /**
  * Run `lunora-hostd` with the arguments after the executable and script.
- * Arguments are never echoed back — `enrol --token …` carries a secret.
+ * Arguments are never echoed back: one might be a secret pasted in the wrong place.
  * @returns the process exit code
  */
 const runBin = async (argv: ReadonlyArray<string>, output: BinOutput, dependencies: BinDependencies = {}): Promise<number> => {

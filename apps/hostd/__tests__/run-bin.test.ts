@@ -75,7 +75,7 @@ describe(runBin, () => {
         expect(status.stderr).toMatch(/enrol this box first/u);
     });
 
-    it("does not echo the token when enrol is missing its bucket", async () => {
+    it("does not echo a token passed on the command line", async () => {
         expect.assertions(2);
 
         const result = await run(["enrol", "--token", "secret-token"]);
