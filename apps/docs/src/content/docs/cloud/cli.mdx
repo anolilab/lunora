@@ -203,6 +203,12 @@ secrets.
 ## What is not here yet
 
 Lunora Cloud is early: the commands above talk to a control plane that is in
-private early access. Deploying into **your own Cloudflare account** or onto
-**your own server** is being built in parallel and is not in this command group
-yet; see the [roadmap](https://github.com/anolilab/lunora/blob/alpha/apps/cloud/ROADMAP.md).
+private early access; see the
+[roadmap](https://github.com/anolilab/lunora/blob/alpha/apps/cloud/ROADMAP.md).
+
+Deploying into [your own Cloudflare account](/docs/cloud/your-own-cloudflare-account)
+or onto [your own server](/docs/cloud/your-own-server) needs no command of its
+own: the deploy target is a setting of the project, chosen in the studio, and
+`lunora cloud deploy` sends the same release whichever target it lands on. Both
+targets are in private early access too, and each page says what does not work
+there yet.
