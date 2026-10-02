@@ -216,6 +216,31 @@ export const TARGETS = {
     },
 } as const satisfies Record<TargetId, TargetDescriptor>;
 
+/**
+ * The permissions a `cloudflare-workers` account token needs, least-privilege
+ * (account-scoped, on the connected account only). Edit on each resource type
+ * because the provision box creates the resources; only Workers Scripts is
+ * required — the rest are needed once an app binds that type. Zone → Workers
+ * Routes: Edit is deliberately absent: it is only needed for custom routes on
+ * the customer's zone, which the target does not wire yet. Shared by the
+ * connect route's probes (`src/targets/cloudflare-workers/api.ts`) and the
+ * studio's instructions, so both name the same list.
+ */
+export const CLOUDFLARE_TOKEN_PERMISSIONS = {
+    analytics: { label: "Account Analytics: Read", required: false, use: "request counts for the Usage tab" },
+    d1: { label: "D1: Edit", required: false, use: "d1 bindings" },
+    kv: { label: "Workers KV Storage: Edit", required: false, use: "kv bindings" },
+    queues: { label: "Queues: Edit", required: false, use: "queue bindings" },
+    r2: { label: "Workers R2 Storage: Edit", required: false, use: "r2 bindings" },
+    workersScripts: {
+        label: "Workers Scripts: Edit",
+        required: true,
+        use: "uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain",
+    },
+} as const satisfies Record<string, { label: string; required: boolean; use: string }>;
+
+export type CloudflarePermission = keyof typeof CLOUDFLARE_TOKEN_PERMISSIONS;
+
 /** The targets whose projects are placed on a box. */
 export type BoxTargetId = { [T in TargetId]: (typeof TARGETS)[T]["placedOn"] extends "box" ? T : never }[TargetId];
 

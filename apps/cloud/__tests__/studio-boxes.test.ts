@@ -125,27 +125,56 @@ describe(formatRelativeTime, () => {
 });
 
 describe(assessTargetDraft, () => {
-    const saved = { boxId: "", target: "cloudflare-wfp" };
+    const saved = { boxId: "", cloudflareAccountId: "", target: "cloudflare-wfp" };
 
     it("needs a box for celld-vps, and is incomplete without one", () => {
-        expect(assessTargetDraft({ boxId: "", target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: false, needsBox: true });
-        expect(assessTargetDraft({ boxId: "box_1", target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: true, needsBox: true });
+        expect(assessTargetDraft({ ...saved, target: "celld-vps" }, saved)).toStrictEqual({
+            changed: true,
+            complete: false,
+            needsAccount: false,
+            needsBox: true,
+        });
+        expect(assessTargetDraft({ ...saved, boxId: "box_1", target: "celld-vps" }, saved)).toStrictEqual({
+            changed: true,
+            complete: true,
+            needsAccount: false,
+            needsBox: true,
+        });
     });
 
-    it("treats the saved value as unchanged, and a different box as a change", () => {
+    it("needs a connected account for cloudflare-workers, and is incomplete without one", () => {
+        expect(assessTargetDraft({ ...saved, target: "cloudflare-workers" }, saved)).toStrictEqual({
+            changed: true,
+            complete: false,
+            needsAccount: true,
+            needsBox: false,
+        });
+        expect(assessTargetDraft({ ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" }, saved).complete).toBe(true);
+    });
+
+    it("treats the saved value as unchanged, and a different box or account as a change", () => {
         expect(assessTargetDraft(saved, saved).changed).toBe(false);
 
-        const onBox = { boxId: "box_1", target: "celld-vps" };
+        const onBox = { ...saved, boxId: "box_1", target: "celld-vps" };
 
         expect(assessTargetDraft(onBox, onBox).changed).toBe(false);
-        expect(assessTargetDraft({ boxId: "box_2", target: "celld-vps" }, onBox).changed).toBe(true);
+        expect(assessTargetDraft({ ...onBox, boxId: "box_2" }, onBox).changed).toBe(true);
+
+        const inAccount = { ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" };
+
+        expect(assessTargetDraft({ ...inAccount, cloudflareAccountId: "cfa_2" }, inAccount).changed).toBe(true);
     });
 
-    it("ignores a stale box once the target is back on Cloudflare", () => {
-        expect(assessTargetDraft({ boxId: "box_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({ changed: false, complete: true, needsBox: false });
+    it("ignores a stale box or account once the target is back on Lunora Cloud", () => {
+        expect(assessTargetDraft({ boxId: "box_1", cloudflareAccountId: "cfa_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({
+            changed: false,
+            complete: true,
+            needsAccount: false,
+            needsBox: false,
+        });
     });
 
     it("never calls an unknown target complete", () => {
-        expect(assessTargetDraft({ boxId: "", target: "aws" }, saved).complete).toBe(false);
+        expect(assessTargetDraft({ ...saved, target: "aws" }, saved).complete).toBe(false);
     });
 });

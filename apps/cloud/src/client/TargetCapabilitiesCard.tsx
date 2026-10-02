@@ -6,13 +6,15 @@ import type { TargetId } from "../provision-contract";
 import { TARGETS } from "../provision-contract";
 import { COLUMN_LABEL } from "./section-styles";
 import { StatusBadge } from "./section-ui";
-import { OWN_SERVER_PROPERTIES, refusedBindings, targetLabel } from "./target-capabilities";
+import { refusedBindings, TARGET_CAPABILITIES_INTRO, TARGET_PROPERTIES, targetLabel } from "./target-capabilities";
 
 /**
- * What a project on its own server cannot have, each with the reason (plan 458
- * W9, `MULTIPLATFORM.md` Phase 3 item 5): the binding types a deploy would
- * refuse, the per-plan runtime limits that do not apply, and point-in-time
- * recovery — rather than tabs that render empty and let the operator guess why.
+ * What a project on its own server or in its own Cloudflare account cannot
+ * have, each with the reason (plan 458 W9, `MULTIPLATFORM.md` Phase 3 item 5):
+ * the binding types a deploy would refuse, and the target's limitations — the
+ * per-plan runtime limits that do not apply, point-in-time recovery, custom
+ * domains, runtime logs — rather than tabs that render empty and let the
+ * operator guess why.
  *
  * Renders nothing for a target that lacks nothing beyond its bindings
  * (`cloudflare-wfp`, whose refusals the deploy error already words and which the
@@ -26,14 +28,15 @@ export const TargetCapabilitiesCard = ({ target }: { target: TargetId }): null |
     }
 
     const bindings = refusedBindings(target);
+    const properties = TARGET_PROPERTIES[target] ?? [];
 
     return (
         <Card>
             <CardHeader>
                 <CardTitle>Not available on {targetLabel(target).toLowerCase()}</CardTitle>
                 <CardDescription>
-                    This project runs on celld on your own box. These are refused or do not apply there; a deploy that needs a refused binding fails before
-                    anything is created.
+                    {TARGET_CAPABILITIES_INTRO[target] ?? targetLabel(target)} These are refused or do not apply there; a deploy that needs a refused binding
+                    fails before anything is created.
                 </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-5">
@@ -61,14 +64,16 @@ export const TargetCapabilitiesCard = ({ target }: { target: TargetId }): null |
                     </dl>
                 </div>
 
-                <div className="grid gap-2">
-                    <span className={`${COLUMN_LABEL} text-muted-foreground`}>Good to know</span>
-                    <ul className="m-0 grid list-disc gap-1 pl-5 text-sm text-muted-foreground">
-                        {OWN_SERVER_PROPERTIES.map((property) => (
-                            <li key={property}>{property}</li>
-                        ))}
-                    </ul>
-                </div>
+                {properties.length > 0 ? (
+                    <div className="grid gap-2">
+                        <span className={`${COLUMN_LABEL} text-muted-foreground`}>Good to know</span>
+                        <ul className="m-0 grid list-disc gap-1 pl-5 text-sm text-muted-foreground">
+                            {properties.map((property) => (
+                                <li key={property}>{property}</li>
+                            ))}
+                        </ul>
+                    </div>
+                ) : null}
             </CardContent>
         </Card>
     );

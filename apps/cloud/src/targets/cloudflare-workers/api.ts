@@ -13,6 +13,9 @@
  * reported by status and Cloudflare's own error text, which never echoes it.
  */
 
+import type { CloudflarePermission } from "../../provision-contract";
+import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
+
 const API_ROOT = "https://api.cloudflare.com/client/v4";
 
 /** A Cloudflare account id: 32 lowercase hex characters. */
@@ -133,49 +136,25 @@ export const readDisplayName = async (access: CloudflareAccountAccess): Promise<
     }
 };
 
-/** One token permission the target uses, with how it is detected. */
-export interface PermissionProbe {
-    /** The permission's name in Cloudflare's token editor. */
-    label: string;
-    /** A read-only GET that answers 2xx only when the token holds the permission group (read or edit). */
-    path: (accountId: string) => string;
-    /** Whether a connection is refused without it. */
-    required: boolean;
-    /** What the target uses it for. */
-    use: string;
-}
-
 /**
- * The permissions the `cloudflare-workers` target needs, least-privilege. Edit
- * on each because the provision box creates the resources; the probes below
- * are read-only, so what is recorded at connect time is "this permission group
- * is granted", not "this permission is Edit" — Cloudflare's API does not
- * expose a token's own policies without the API Tokens Read permission, which
- * the target deliberately does not ask for. A token granted Read where Edit is
- * needed fails its first converge, with Cloudflare's own error.
+ * How each permission in {@link CLOUDFLARE_TOKEN_PERMISSIONS} is detected: a
+ * read-only GET that answers 2xx only when the token holds the permission group
+ * (read or edit). The probes are read-only, so what is recorded at connect time
+ * is "this permission group is granted", not "this permission is Edit" —
+ * Cloudflare's API does not expose a token's own policies without the API
+ * Tokens Read permission, which the target deliberately does not ask for. A
+ * token granted Read where Edit is needed fails its first converge, with
+ * Cloudflare's own error. `analytics` is probed with a GraphQL query instead.
  */
-export const PERMISSION_PROBES = {
-    analytics: {
-        label: "Account Analytics: Read",
-        path: () => "/graphql",
-        required: false,
-        use: "request counts for the usage chart",
-    },
-    d1: { label: "D1: Edit", path: (id) => `/accounts/${id}/d1/database?per_page=1`, required: false, use: "d1 bindings" },
-    kv: { label: "Workers KV Storage: Edit", path: (id) => `/accounts/${id}/storage/kv/namespaces?per_page=1`, required: false, use: "kv bindings" },
-    queues: { label: "Queues: Edit", path: (id) => `/accounts/${id}/queues?per_page=1`, required: false, use: "queue bindings" },
-    r2: { label: "Workers R2 Storage: Edit", path: (id) => `/accounts/${id}/r2/buckets?per_page=1`, required: false, use: "r2 bindings" },
-    workersScripts: {
-        label: "Workers Scripts: Edit",
-        path: (id) => `/accounts/${id}/workers/scripts`,
-        required: true,
-        use: "uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain",
-    },
-} as const satisfies Record<string, PermissionProbe>;
+const PROBE_PATHS: Record<Exclude<CloudflarePermission, "analytics">, (accountId: string) => string> = {
+    d1: (id) => `/accounts/${id}/d1/database?per_page=1`,
+    kv: (id) => `/accounts/${id}/storage/kv/namespaces?per_page=1`,
+    queues: (id) => `/accounts/${id}/queues?per_page=1`,
+    r2: (id) => `/accounts/${id}/r2/buckets?per_page=1`,
+    workersScripts: (id) => `/accounts/${id}/workers/scripts`,
+};
 
-export type CloudflarePermission = keyof typeof PERMISSION_PROBES;
-
-export const CLOUDFLARE_PERMISSIONS = Object.keys(PERMISSION_PROBES) as CloudflarePermission[];
+export const CLOUDFLARE_PERMISSIONS = Object.keys(CLOUDFLARE_TOKEN_PERMISSIONS) as CloudflarePermission[];
 
 /** One script's requests in a window. */
 export interface ScriptRequests {
@@ -263,9 +242,7 @@ export const readScriptRequests = async (access: CloudflareAccountAccess, sinceM
 /** Probe one permission: `true` when its read answers, `false` when Cloudflare refuses the token for it. */
 const probe = async (access: CloudflareAccountAccess, permission: CloudflarePermission): Promise<boolean> => {
     try {
-        await (permission === "analytics"
-            ? readScriptRequests(access, Date.now() - 60_000)
-            : call(access, PERMISSION_PROBES[permission].path(access.accountId)));
+        await (permission === "analytics" ? readScriptRequests(access, Date.now() - 60_000) : call(access, PROBE_PATHS[permission](access.accountId)));
 
         return true;
     } catch {
@@ -296,11 +273,11 @@ export const inspectAccount = async (access: CloudflareAccountAccess): Promise<A
     const token = await verifyToken(access);
     const granted = await Promise.all(CLOUDFLARE_PERMISSIONS.map(async (permission) => [permission, await probe(access, permission)] as const));
     const permissions = granted.filter(([, ok]) => ok).map(([permission]) => permission);
-    const missing = CLOUDFLARE_PERMISSIONS.filter((permission) => PERMISSION_PROBES[permission].required && !permissions.includes(permission));
+    const missing = CLOUDFLARE_PERMISSIONS.filter((permission) => CLOUDFLARE_TOKEN_PERMISSIONS[permission].required && !permissions.includes(permission));
 
     if (missing.length > 0) {
         throw new CloudflareTokenError(
-            `the token cannot reach this account with ${missing.map((permission) => PERMISSION_PROBES[permission].label).join(", ")}; create it with that permission on this account`,
+            `the token cannot reach this account with ${missing.map((permission) => CLOUDFLARE_TOKEN_PERMISSIONS[permission].label).join(", ")}; create it with that permission on this account`,
         );
     }
 

@@ -114,7 +114,7 @@ export const boxesTables = {
         label: v.string(),
         organizationId: v.id("organizations"),
         // The permission groups the token was seen to hold when last verified
-        // (`PERMISSION_PROBES` in `src/targets/cloudflare-workers/api.ts`).
+        // (`CLOUDFLARE_TOKEN_PERMISSIONS` in `src/provision-contract.ts`).
         permissions: v.array(v.string()),
         // When the token stops working, if it was created with an expiry.
         tokenExpiresAt: v.optional(v.number()),

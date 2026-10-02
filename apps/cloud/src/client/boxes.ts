@@ -1,7 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
-import { isBoxTarget, isTargetId } from "../provision-contract";
+import { isAccountTarget, isBoxTarget, isTargetId } from "../provision-contract";
 import { formatBytes } from "./format";
 
 /**
@@ -78,20 +78,31 @@ export const formatMegabytes = (megabytes: number): string => formatBytes(megaby
 /** The deploy-target form's draft against what is saved. */
 export interface TargetDraft {
     boxId: string;
+    cloudflareAccountId: string;
     target: string;
 }
 
 /**
- * What the deploy-target form may do with its draft: whether it needs a box,
- * whether it differs from what is saved, and whether it is complete enough to
- * send (`projects.setTarget` refuses a `celld-vps` target without a box).
+ * What the deploy-target form may do with its draft: whether it needs a box or
+ * a connected Cloudflare account, whether it differs from what is saved, and
+ * whether it is complete enough to send (`projects.setTarget` refuses a
+ * `celld-vps` target without a box and a `cloudflare-workers` one without an account).
  */
-export const assessTargetDraft = (draft: TargetDraft, saved: TargetDraft): { changed: boolean; complete: boolean; needsBox: boolean } => {
-    const needsBox = isTargetId(draft.target) && isBoxTarget(draft.target);
+export const assessTargetDraft = (
+    draft: TargetDraft,
+    saved: TargetDraft,
+): { changed: boolean; complete: boolean; needsAccount: boolean; needsBox: boolean } => {
+    const target = isTargetId(draft.target) ? draft.target : undefined;
+    const needsBox = target !== undefined && isBoxTarget(target);
+    const needsAccount = target !== undefined && isAccountTarget(target);
 
     return {
-        changed: draft.target !== saved.target || (needsBox && draft.boxId !== saved.boxId),
-        complete: isTargetId(draft.target) && (!needsBox || draft.boxId !== ""),
+        changed:
+            draft.target !== saved.target ||
+            (needsBox && draft.boxId !== saved.boxId) ||
+            (needsAccount && draft.cloudflareAccountId !== saved.cloudflareAccountId),
+        complete: target !== undefined && (!needsBox || draft.boxId !== "") && (!needsAccount || draft.cloudflareAccountId !== ""),
+        needsAccount,
         needsBox,
     };
 };
