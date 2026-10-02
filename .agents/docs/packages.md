@@ -78,6 +78,7 @@ Concise roles below — read the package's `src/` and `docs/` for detail. Flags:
 | `@lunora/queue`               | Cloudflare Queues: `defineQueue` → typed `ctx.queues.<name>` producers + a generated `queue()` consumer (or `mode: "pull"`).                                                                                              |
 | `@lunora/dispatch`            | **Internal, not published** (bundled into queue/workflow). Shared dispatch runner calling a Lunora function from a server-initiated context.                                                                              |
 | `@lunora/fingerprint`         | **Zero-dep** deterministic error-grouping (`fingerprintError` → stable 16-char hash); feeds the `getIssues` RPC + Studio Issues panel.                                                                                    |
+| `@lunora/hostd` | **Not published; dir `apps/hostd/`; FSL** (plan 458). `lunora-hostd`, the daemon a customer runs on their own VPS for Lunora Cloud. Today only the wire protocol (`@lunora/hostd/protocol`, zero-dep, contract in `protocol/hostd/`) and a `--version`/`--help` bin. `apps/cloud` depends on it, never the reverse. |
 
 ## Layout
 
