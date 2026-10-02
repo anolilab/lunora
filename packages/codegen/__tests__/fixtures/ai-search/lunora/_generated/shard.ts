@@ -1070,8 +1070,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // and attached only for an `action` so query/mutation ctx never carry them.
             if (isAction) {
 
-            const aiSearchBinding = config.aiSearch?.(env) ?? (env as Record<string, unknown>).AI_SEARCH;
-            const aiSearch: AiSearch = aiSearchBinding ? (aiSearchBinding as AiSearch) : aiSearchStub;
+                const aiSearchBinding = config.aiSearch?.(env) ?? (env as Record<string, unknown>).AI_SEARCH;
+                const aiSearch: AiSearch = aiSearchBinding ? (aiSearchBinding as AiSearch) : aiSearchStub;
                 ctx.aiSearch = aiSearch;
             }
 

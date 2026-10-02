@@ -60,7 +60,7 @@ describe("ai-search fixture", () => {
         const { shard } = generated;
 
         expect(shard).toContain(
-            "const aiSearchBinding = config.aiSearch?.(env) ?? (env as Record<string, unknown>).AI_SEARCH;\n            const aiSearch: AiSearch = aiSearchBinding ? (aiSearchBinding as AiSearch) : aiSearchStub;",
+            "const aiSearchBinding = config.aiSearch?.(env) ?? (env as Record<string, unknown>).AI_SEARCH;\n                const aiSearch: AiSearch = aiSearchBinding ? (aiSearchBinding as AiSearch) : aiSearchStub;",
         );
         expect(shard).toContain("Add an \\`ai_search_namespaces\\` binding (env.AI_SEARCH) to wrangler.jsonc");
         // Annotated, never cast: a method missing from the structural `AiSearch`

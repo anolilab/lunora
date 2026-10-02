@@ -1074,8 +1074,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // and attached only for an `action` so query/mutation ctx never carry them.
             if (isAction) {
 
-            const artifactsBinding = config.artifacts?.(env) ?? (env as Record<string, unknown>).ARTIFACTS;
-            const artifacts: ArtifactsClient = artifactsBinding ? createArtifacts({ binding: artifactsBinding as ArtifactsBindingLike }) : artifactsStub;
+                const artifactsBinding = config.artifacts?.(env) ?? (env as Record<string, unknown>).ARTIFACTS;
+                const artifacts: ArtifactsClient = artifactsBinding ? createArtifacts({ binding: artifactsBinding as ArtifactsBindingLike }) : artifactsStub;
                 ctx.artifacts = artifacts;
             }
 

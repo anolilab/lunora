@@ -1785,7 +1785,7 @@ interface BindingRequirement {
     resource?: string;
     resourceId?: string;
     sqlite?: boolean;
-    type: "ai" | "ai_search" | "ai_search_namespace" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
+    type: "ai" | "ai_search" | "ai_search_namespace" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "service" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
 }
 ```
 
@@ -1875,6 +1875,11 @@ interface ManifestConfigShape extends WranglerConfigShape {
             queue?: string;
         }>;
     };
+    services?: ReadonlyArray<{
+        binding?: string;
+        entrypoint?: string;
+        service?: string;
+    }>;
     stream?: {
         binding?: string;
     };
@@ -2071,6 +2076,15 @@ interface RemoteWranglerShape {
     r2_buckets?: ReadonlyArray<BindingEntry | null | undefined>;
     services?: ReadonlyArray<BindingEntry | null | undefined>;
     vectorize?: ReadonlyArray<BindingEntry | null | undefined>;
+}
+```
+
+### `ServiceDevConfigs` (interface)
+
+```ts
+interface ServiceDevConfigs {
+    cleanup: () => void;
+    configPaths: string[];
 }
 ```
 
@@ -2479,6 +2493,12 @@ const isRemoteEnvEnabled: (value: string | undefined) => boolean;
 
 ```ts
 const materializeRemoteWranglerConfig: (options: MaterializeOptions) => MaterializeResult;
+```
+
+### `materializeServiceDevConfigs` (const)
+
+```ts
+const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>) => ServiceDevConfigs;
 ```
 
 ### `mergeWranglerEnvironment` (const)
