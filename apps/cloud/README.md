@@ -578,7 +578,8 @@ Then sign in at `/login` with:
 | **Email**    | `dev@lunora.local`  |
 | **Password** | `dev-password-1234` |
 
-What it creates — a `dev-cell` fleet cell, the **Acme Dev** organization
+What it creates — a `default` fleet cell (the `LUNORA_CELL` local dev runs as,
+so the seeded project can deploy), the **Acme Dev** organization
 (`/acme-dev`, pro plan) owned by that user, a **Web** project, a live production
 deployment (`acme-dev-web`), an ingest deploy key, and telemetry: 24 log lines at
 mixed levels, two 24-point hourly metric series, six trace spans, and two error
@@ -596,6 +597,14 @@ against a real control plane and is authorized with whatever credentials you hav
 it creates an account with a published password, sends your `LUNORA_ADMIN_TOKEN`
 to the target, force-activates the project's newest deployment, and revokes any
 `dev-seed` key. Set `LUNORA_SEED_ALLOW_REMOTE=1` to override, deliberately.
+
+**A database seeded before the cell rename heals itself.** Those hold one cell
+named `dev-cell`, and every deploy from them was refused (a project deploys only
+from its organization's cell). The seed renames a lone `dev-cell` to `default` in
+the dev server's **local** D1 file (`wrangler d1 execute --local`, loopback
+targets only) and says so; a database with any other mix of cells is refused with
+the exact reseed steps — stop `pnpm run dev`, delete `apps/cloud/.wrangler/state`,
+start it again, rerun the seed. Production cells are never touched.
 
 **Re-running is safe.** Every stage looks for what it would create first, because
 none of the underlying mutations dedupe — `cells:register` inserts blindly, so an

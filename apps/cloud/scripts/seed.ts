@@ -50,17 +50,15 @@ import { fileURLToPath } from "node:url";
 /** Where the dev server is listening. Vite falls back to 5175+ when 5174 is taken. */
 const BASE_URL = process.env["LUNORA_SEED_URL"] ?? "http://localhost:5174";
 
+/** Whether `url` is this machine. */
+const isLoopback = (url: string): boolean => ["127.0.0.1", "::1", "[::1]", "localhost"].includes(new URL(url).hostname);
+
 /** The account the seed signs in as, and prints at the end for the developer to reuse. */
 const DEV_EMAIL = process.env["LUNORA_SEED_EMAIL"] ?? "dev@lunora.local";
 // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a published default for a throwaway local account, overridable via LUNORA_SEED_PASSWORD; it authenticates nothing beyond a developer's own miniflare state.
 const DEV_PASSWORD = process.env["LUNORA_SEED_PASSWORD"] ?? "dev-password-1234"; // gitleaks:allow -- local seed fallback, overridden by LUNORA_SEED_PASSWORD; never a deployed credential
 const DEV_NAME = "Dev User";
 
-// Must equal the `LUNORA_CELL` local dev runs with (`wrangler.jsonc`'s top-level
-// `vars`): a project deploys only from the control plane of its organization's
-// cell (`src/targets/placement.ts`), so an org seeded on any other cell name
-// could never deploy locally.
-const CELL_NAME = "default";
 const ORG_NAME = "Acme Dev";
 const ORG_SLUG = "acme-dev";
 const PROJECT_NAME = "Web";
@@ -225,27 +223,130 @@ const signIn = async (): Promise<string> => {
     return cookie;
 };
 
+/*
+ * Which cell the seed places its organization on.
+ *
+ * Local dev runs as cell `default` (`LUNORA_CELL` in `wrangler.jsonc`), and a
+ * project deploys only from the control plane of its organization's cell
+ * (`src/targets/placement.ts`). Databases seeded before that rule named their
+ * one cell `dev-cell`, so every deploy from them was refused. The seed heals
+ * such a database itself — a lone `dev-cell` is renamed `default` in the LOCAL
+ * D1 file — and refuses, saying how to reseed, for anything it cannot tell is
+ * safe to change. Pure, so `__tests__/seed-cell.test.ts` drives it.
+ */
+
+/** The cell local dev runs as: `LUNORA_CELL` in `wrangler.jsonc`'s top-level `vars`. */
+const DEV_CELL_NAME = "default";
+
+/** What the seed named its cell before cells were matched against `LUNORA_CELL`. */
+const LEGACY_DEV_CELL_NAME = "dev-cell";
+
+/** How to start over, for a local database the seed will not change. */
+const RESEED_HINT = "stop `pnpm run dev`, delete apps/cloud/.wrangler/state, start it again, and rerun `pnpm run seed`";
+
+interface CellRow {
+    _id: string;
+    name: string;
+}
+
+/** What to do about the fleet's cells. */
+type SeedCellPlan = { cell: CellRow; kind: "rename" } | { cell: CellRow; kind: "use" } | { kind: "create" } | { kind: "refuse"; message: string };
+
 /**
- * Ensure the fleet has at least one cell, returning its id.
+ * Decide the seed's cell from the fleet's cells:
+ *
+ * - a `default` cell exists → use it;
+ * - no cell at all → create `default`;
+ * - exactly one cell, the legacy `dev-cell` → rename it to `default` (its org,
+ *   projects and deployments keep pointing at the same row);
+ * - anything else → refuse: there is no single cell a rename would fix.
+ */
+const planSeedCell = (cells: ReadonlyArray<CellRow>): SeedCellPlan => {
+    const current = cells.find((cell) => cell.name === DEV_CELL_NAME);
+
+    if (current !== undefined) {
+        return { cell: current, kind: "use" };
+    }
+
+    if (cells.length === 0) {
+        return { kind: "create" };
+    }
+
+    const only = cells.length === 1 ? cells.at(0) : undefined;
+
+    if (only?.name === LEGACY_DEV_CELL_NAME) {
+        return { cell: only, kind: "rename" };
+    }
+
+    return {
+        kind: "refuse",
+        message: `this local database has the cell(s) ${cells.map((cell) => `"${cell.name}"`).join(", ")} but no "${DEV_CELL_NAME}", which local dev runs as (LUNORA_CELL), so nothing seeded on them can deploy. Reseed with a fresh database: ${RESEED_HINT}`,
+    };
+};
+
+const ROW_ID = /^[\w-]{1,128}$/u;
+
+/**
+ * The SQL that renames the legacy cell, for `wrangler d1 execute --local`.
+ * Guarded twice: the id must look like a row id (it is interpolated), and the
+ * row must still carry the legacy name, so a re-run changes nothing.
+ */
+const renameLegacyCellSql = (cellId: string): string => {
+    if (!ROW_ID.test(cellId)) {
+        throw new Error(`refusing to rename cell ${JSON.stringify(cellId)}: not a row id`);
+    }
+
+    return `UPDATE cells SET name = '${DEV_CELL_NAME}' WHERE _id = '${cellId}' AND name = '${LEGACY_DEV_CELL_NAME}';`;
+};
+
+/** Run SQL against the dev server's LOCAL D1 file — never a remote database (`--local`). */
+const executeLocalSql = async (sql: string): Promise<void> => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+
+    await promisify(execFile)("node", ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "lunora-cloud", "--local", "--command", sql], {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+    });
+};
+
+/**
+ * Ensure the fleet has the `default` cell, returning its id ({@link planSeedCell}).
  *
  * Registration goes through the operator route rather than `ctx.db`, so it
  * exercises the `LUNORA_ADMIN_TOKEN` boundary and the internal-function dispatch
- * that an org placement depends on.
+ * that an org placement depends on. Healing a pre-rename database is the one
+ * write behind the app's back, and only ever on a loopback target: it edits the
+ * dev server's local D1 file, which a remote seed (`LUNORA_SEED_ALLOW_REMOTE`)
+ * does not run against.
  */
 const ensureCell = async (cookie: string): Promise<string> => {
-    const existing = await rpc<{ _id: string; name: string }[]>(cookie, "cells:list");
-    // `.at()` rather than `[0]`, so the empty-fleet case is a type the compiler
-    // makes us handle (this app disables `noUncheckedIndexedAccess`).
-    const found = existing.at(0);
+    const plan = planSeedCell(await rpc<{ _id: string; name: string }[]>(cookie, "cells:list"));
 
-    if (found !== undefined) {
-        console.info(`  cell        ${found.name} (exists)`);
+    if (plan.kind === "use") {
+        console.info(`  cell        ${plan.cell.name} (exists)`);
 
-        return found._id;
+        return plan.cell._id;
+    }
+
+    if (plan.kind === "refuse") {
+        throw new Error(plan.message);
+    }
+
+    if (plan.kind === "rename") {
+        if (!isLoopback(BASE_URL)) {
+            throw new Error(
+                `the seeded cell is still "${LEGACY_DEV_CELL_NAME}", and only a local database is renamed. Reseed with a fresh database: ${RESEED_HINT}`,
+            );
+        }
+
+        await executeLocalSql(renameLegacyCellSql(plan.cell._id));
+        console.info(`  cell        ${LEGACY_DEV_CELL_NAME} → ${DEV_CELL_NAME} (renamed, so this database's projects deploy locally again)`);
+
+        return plan.cell._id;
     }
 
     const response = await fetch(`${BASE_URL}/v1/cells`, {
-        body: JSON.stringify({ cloudflareAccountId: "dev-account", dispatchNamespacePrefix: "lunora-dev", name: CELL_NAME }),
+        body: JSON.stringify({ cloudflareAccountId: "dev-account", dispatchNamespacePrefix: "lunora-dev", name: DEV_CELL_NAME }),
         headers: { authorization: `Bearer ${await readAdminToken()}`, "content-type": "application/json", origin: BASE_URL },
         method: "POST",
     });
@@ -256,7 +357,7 @@ const ensureCell = async (cookie: string): Promise<string> => {
 
     const { cellId }: { cellId: string } = await response.json();
 
-    console.info(`  cell        ${CELL_NAME} (created)`);
+    console.info(`  cell        ${DEV_CELL_NAME} (created)`);
 
     return cellId;
 };
@@ -589,7 +690,7 @@ const seedTelemetry = async (cookie: string, organizationId: string, deploymentI
 const assertLocalTarget = (): void => {
     const { hostname } = new URL(BASE_URL);
 
-    if (["127.0.0.1", "::1", "localhost"].includes(hostname) || process.env["LUNORA_SEED_ALLOW_REMOTE"] === "1") {
+    if (isLoopback(BASE_URL) || process.env["LUNORA_SEED_ALLOW_REMOTE"] === "1") {
         return;
     }
 
@@ -818,13 +919,8 @@ const seedBuildLogs = async (
         `UPDATE builds SET status='successful', successfulAt=${String(now)}, updatedAt=${String(now)} WHERE id='${build._id}';`,
     ].join(" ");
 
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-
     try {
-        await promisify(execFile)("node", ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "lunora-cloud", "--local", "--command", sql], {
-            cwd: fileURLToPath(new URL("..", import.meta.url)),
-        });
+        await executeLocalSql(sql);
         console.info(`  build logs  ${String(lines.length)} lines (build marked successful)`);
     } catch {
         console.info(`  build logs  (skipped — \`wrangler d1 execute --local\` failed)`);
@@ -867,12 +963,19 @@ const main = async (): Promise<void> => {
     console.info(`\ndone — sign in at ${BASE_URL}/login as ${DEV_EMAIL}`);
 };
 
-try {
-    await main();
-} catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+// The CLI half runs only when this file IS the entry point, so the tests can import
+// the pure halves. `import.meta.main` is Node 24+; CI's lint jobs pin 22.15.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+    try {
+        await main();
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
 
-    console.error(`\nseed failed: ${message}`);
-    console.error(`\nis the dev server running on ${BASE_URL}? start it with \`pnpm run dev\`, or point the seed elsewhere with LUNORA_SEED_URL.`);
-    process.exitCode = 1;
+        console.error(`\nseed failed: ${message}`);
+        console.error(`\nis the dev server running on ${BASE_URL}? start it with \`pnpm run dev\`, or point the seed elsewhere with LUNORA_SEED_URL.`);
+        process.exitCode = 1;
+    }
 }
+
+export { DEV_CELL_NAME, LEGACY_DEV_CELL_NAME, planSeedCell, renameLegacyCellSql, RESEED_HINT };
+export type { SeedCellPlan };
