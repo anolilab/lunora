@@ -21,7 +21,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",
-            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run. Deployed Workers apply it by date; a local workerd built before that default (wrangler 4.143's 1.20260926 is one) honours only the explicit flag",
+            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd built before that default (wrangler 4.143's 1.20260926 is one) honours only the explicit flag",
         },
         commitOrderedTables: {
             level: "native",
@@ -96,7 +96,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "native",
-            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup), billed to AI Gateway credits on the same gateway",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits",
         },
         browser: {
             level: "native",

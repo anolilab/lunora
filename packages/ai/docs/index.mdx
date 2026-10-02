@@ -162,17 +162,18 @@ await ctx.ai.run("@cf/meta/m2m100-1.2b", inputs, { rejectIfBusy: true });
 `ctx.ai.websearch(query, options?)` calls the Cloudflare Web Search API (beta)
 over the same `AI` binding, so a response can be grounded in live results. The
 providers are `"ceramic"` (the default), `"exa"` and `"linkup"`, all under Zero
-Data Retention. Searches are billed to AI Gateway credits on the gateway
-inference already routes through (`LUNORA_AI_GATEWAY_ID`), else the account's
-`default` gateway; pass `gatewayId` to pick another, or `byokAlias` to bill a
-provider key stored on the gateway.
+Data Retention. The search goes through the gateway inference already routes
+through (`LUNORA_AI_GATEWAY_ID`), else the account's `default` gateway; pass
+`gatewayId` to pick another. It bills a provider key stored on that gateway
+under the `default` alias (or the one `byokAlias` names) when there is one, and
+AI Gateway credits at list price otherwise.
 
 ```ts
 const { items } = await ctx.ai.websearch("cloudflare durable objects pricing", { limit: 5, provider: "exa" });
 // items: [{ url, title, description?, lastModifiedDate?, imageUrl?, faviconUrl? }, …]
 ```
 
-`limit` defaults to 10 and is capped at 20. Results describe pages; reading a
+`limit` defaults to 10 and accepts at most 10. Results describe pages; reading a
 page is a separate `fetch` of its `url`.
 
 A rejected request throws a `LunoraError` with code `BAD_REQUEST`. Gateway or

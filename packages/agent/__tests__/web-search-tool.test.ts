@@ -44,9 +44,9 @@ describe(webSearchTool, () => {
         expect.assertions(2);
 
         const binding = searchBinding(() => Response.json({ items, metadata: { latencyMs: 1, query: "q", requestId: "r" } }));
-        const output = await webSearchTool({ provider: "linkup" }).execute({ query: "lunora framework" }, toolContext(binding));
+        const output = await webSearchTool({ byokAlias: "team", provider: "linkup" }).execute({ query: "lunora framework" }, toolContext(binding));
 
-        expect(binding.calls).toStrictEqual([{ gatewayId: "default", limit: 5, provider: "linkup", query: "lunora framework" }]);
+        expect(binding.calls).toStrictEqual([{ byokAlias: "team", gatewayId: "default", limit: 5, provider: "linkup", query: "lunora framework" }]);
         expect(output).toStrictEqual(items);
     });
 
