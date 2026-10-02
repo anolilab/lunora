@@ -2,7 +2,7 @@
  * Git build → release (GAPS.md A3): the runner's `release` port.
  *
  * A pushed build is released through the deploy core `POST /v1/deploy` runs
- * ({@link startRelease} in `src/deploy/handler.ts`) — the same validation, the
+ * ({@link startRelease} in `src/deploy/release-core.ts`) — the same validation, the
  * same stored release, the same health gate and automatic revert. Nothing here
  * re-implements a step of it; this module only decides what a CLI caller would
  * have decided on the command line (which project, which kind, which script),
@@ -17,8 +17,8 @@
  * Pure over {@link BuildReleasePorts}, so the routing and the log shape test
  * without a control plane.
  */
-import type { ReleaseCaller, ReleaseFrame, ReleaseRequest, StartedRelease } from "../deploy/handler";
 import { forkPreviewScriptName, previewScriptName } from "../deploy/preview";
+import type { ReleaseCaller, ReleaseFrame, ReleaseRequest, StartedRelease } from "../deploy/release-core";
 import type { BuildExecution, BuildRelease, BuildReleaseSkipped, ClaimedBuild } from "./runner";
 
 /** What the release needs to know about a build beyond its claim. */

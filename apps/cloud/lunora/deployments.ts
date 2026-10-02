@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
+import { DEFAULT_TARGET, isBoxTarget, storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -341,6 +342,8 @@ export const create = mutation
         const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
 
         const { now } = context;
+        // A row predating targets answers NULL, which is the default target.
+        const target = storedTarget(project.target) ?? DEFAULT_TARGET;
         const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
             ...(arguments_.adminTokenCiphertext && arguments_.adminTokenIv
@@ -349,7 +352,7 @@ export const create = mutation
             alias: arguments_.scriptName,
             // The box a `celld-vps` release runs on — what its teardown reaches
             // once the project (and with it the placement) is gone.
-            ...(project.target === "celld-vps" && project.boxId != null ? { boxId: project.boxId } : {}),
+            ...(isBoxTarget(target) && project.boxId != null ? { boxId: project.boxId } : {}),
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,
@@ -369,9 +372,8 @@ export const create = mutation
             status: "queued",
             // Copied from the project, which owns it: the release is converged
             // there, and its teardown and rollback must follow it there even if
-            // the project's target later changes. `?? `: a row predating targets
-            // answers NULL, which is `cloudflare-wfp`.
-            target: project.target ?? "cloudflare-wfp",
+            // the project's target later changes.
+            target,
             updatedAt: now,
             version,
         });

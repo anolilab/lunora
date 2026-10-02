@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/handler";
 import { handleDeployRequest } from "../src/deploy/handler";
 import { runDeployment } from "../src/deploy/orchestrator";
 import type { ReleaseTarget } from "../src/deploy/release";
 import { rollbackRelease } from "../src/deploy/release";
+import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import type { StoredRelease } from "../src/deploy/release-store";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
@@ -41,7 +41,7 @@ const capture = (): { deployed: { bundle: string; spec: TenantDeploymentSpec }[]
             deploy: (spec) => {
                 deployed.push({ bundle: new TextDecoder().decode(spec.bundle), spec });
 
-                return Promise.resolve({ bundleHash: "h", url: `https://${spec.alias}.lunora.app` });
+                return Promise.resolve({ url: `https://${spec.alias}.lunora.app` });
             },
             destroy: () => Promise.resolve(),
         },

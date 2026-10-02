@@ -2,14 +2,15 @@ import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
-import type { DeployBackend } from "../src/deploy/handler";
-import { startRelease } from "../src/deploy/handler";
+import type { DeployBackend } from "../src/deploy/release-core";
+import { startRelease } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingType, TargetId } from "../src/provision-contract";
 import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
+import type { Placement } from "../src/targets/placement";
 import { resolvePlacement } from "../src/targets/placement";
-import { resolveTargetDriver } from "../src/targets/registry";
+import { resolveTargetDriver, targetFleet } from "../src/targets/registry";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
 
@@ -115,19 +116,11 @@ describe("celld-vps agrees with celld's capability matrix", () => {
 });
 
 describe("the registry", () => {
-    it("builds cloudflare-wfp over its own row of the table", () => {
-        const driver = resolveTargetDriver("cloudflare-wfp", {});
-
-        expect(driver.bindingSupport).toBe(BINDING_SUPPORT["cloudflare-wfp"]);
-        expect(driver.unsupportedReasons).toBe(UNSUPPORTED_REASONS["cloudflare-wfp"]);
-    });
-
-    it("builds celld-vps over its own row of the table, without touching an unconfigured env", () => {
-        const driver = resolveTargetDriver("celld-vps", {});
-
-        expect(driver.id).toBe("celld-vps");
-        expect(driver.bindingSupport).toBe(BINDING_SUPPORT["celld-vps"]);
-        expect(driver.unsupportedReasons).toBe(UNSUPPORTED_REASONS["celld-vps"]);
+    it("builds each placement's driver, and each target's fleet, without touching an unconfigured env", () => {
+        expect(resolveTargetDriver({ target: "cloudflare-wfp" }, {}).id).toBe("cloudflare-wfp");
+        expect(resolveTargetDriver({ box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" }, {}).id).toBe("celld-vps");
+        expect(targetFleet("cloudflare-wfp", {}).id).toBe("cloudflare-wfp");
+        expect(targetFleet("celld-vps", {}).id).toBe("celld-vps");
     });
 });
 
@@ -141,13 +134,18 @@ describe("the deploy handler validates against the project's target", () => {
         verifyKey: () => Promise.resolve(null),
     };
 
+    const placements: Record<TargetId, Placement> = {
+        "celld-vps": { box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" },
+        "cloudflare-wfp": { target: "cloudflare-wfp" },
+    };
+
     const startOn = (target: TargetId, bindings: unknown[]) =>
         startRelease(
             { bundle: btoa("export default {}"), kind: "production", manifest: { bindings }, projectId: "proj_1", scriptName: "app" },
             { key: "k", organizationId: "org_1" },
             {
-                backend,
-                driverFor: () => fakeDriver({ bindingSupport: BINDING_SUPPORT[target], id: target, unsupportedReasons: UNSUPPORTED_REASONS[target] }),
+                backend: { ...backend, placement: () => Promise.resolve(placements[target]) },
+                driverFor: () => fakeDriver(),
                 releases: memoryReleaseStore().store,
                 scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
             },
@@ -173,7 +171,7 @@ describe("the deploy handler validates against the project's target", () => {
             { key: "k", organizationId: "org_1" },
             {
                 backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ target: "celld-vps" }, "default")) },
-                driverFor: (placement) => resolveTargetDriver(placement.target, {}),
+                driverFor: (placement) => resolveTargetDriver(placement, {}),
                 releases: memoryReleaseStore().store,
                 scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
             },

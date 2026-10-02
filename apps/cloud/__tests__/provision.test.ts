@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { sha256HexBytes } from "../src/deploy/keys";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { ProvisionJob } from "../src/targets/cloudflare-wfp/box-contract";
 import type { CloudflareWfpPorts } from "../src/targets/cloudflare-wfp/driver";
@@ -54,22 +53,22 @@ const driverFor = (box: ProvisionBox, overrides: Partial<CloudflareWfpPorts> = {
     createCloudflareWfpDriver({ appDomain: "lunora.app", box: () => box, cell: "cell-1", dispatchNamespace: "lunora-production", ...overrides });
 
 describe(createCloudflareWfpDriver, () => {
-    it("posts the deploy job to the project's box, forwards logs, and resolves the result", async () => {
+    it("posts the deploy job to the project's box, logs its lines to Workers Logs only, and resolves the result", async () => {
         // The result line arrives split across two reads, with no trailing newline.
         const { box, calls } = fakeBox([
             '{"type":"log","line":"creating d1"}\n{"type":"log","line":"up',
             'loading"}\n{"type":"res',
             'ult","url":"https://x.workers.dev"}',
         ]);
-        const onLog = vi.fn<(line: string) => void>();
+        const log = vi.fn<(line: string) => void>();
+        const onProgress = vi.fn<(line: string) => void>();
 
-        const result = await driverFor(box, { onLog }).deploy(spec);
+        const result = await driverFor(box, { log }).deploy(spec, { onProgress });
 
-        expect(result).toStrictEqual({
-            bundleHash: await sha256HexBytes(spec.bundle),
-            url: "https://org-project.lunora.app",
-        });
-        expect(onLog.mock.calls).toStrictEqual([["creating d1"], ["uploading"]]);
+        expect(result).toStrictEqual({ url: "https://org-project.lunora.app" });
+        expect(log.mock.calls).toStrictEqual([["creating d1"], ["uploading"]]);
+        // Alchemy's output names the platform's account and resources: never the deploy stream's.
+        expect(onProgress).not.toHaveBeenCalled();
         expect(calls).toHaveLength(1);
         expect(calls[0]?.name).toBe("org-project");
 
@@ -111,7 +110,7 @@ describe(createCloudflareWfpDriver, () => {
     it("sends the destroy job to the project's box", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 
-        await driverFor(box, { dispatchNamespace: "lunora-preview" }).destroy({ alias: "app" });
+        await driverFor(box, { dispatchNamespace: "lunora-preview" }).destroy("app");
 
         expect(calls).toStrictEqual([{ job: { action: "destroy", alias: "app", dispatchNamespace: "lunora-preview" }, name: "app" }]);
     });

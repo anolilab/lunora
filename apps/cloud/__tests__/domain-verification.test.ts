@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 const read = (name: string): string => readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 
 const DOMAINS = read("../lunora/domains.ts");
-const ROUTER = read("../src/deploy/router.ts");
+const ROUTER = read("../src/deploy/routes/domains.ts");
 
 describe("domains.markVerified", () => {
     it("is an internalMutation, so no RPC caller can assert its own verification", () => {

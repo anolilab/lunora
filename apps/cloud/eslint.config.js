@@ -149,7 +149,7 @@ export default createConfig(
             // The target-driver conformance suite registers its `describe` blocks
             // from a shared function (`__tests__/support/target-conformance.ts`),
             // one call per driver — test registration, not setup.
-            "vitest/require-hook": ["warn", { allowedFunctionCalls: ["describeTargetConformance"] }],
+            "vitest/require-hook": ["warn", { allowedFunctionCalls: ["describeTargetConformance", "describeUsageReadbackConformance"] }],
         },
     },
     // The `workerd` vitest project (`__tests__/workerd/`), as in the packages that

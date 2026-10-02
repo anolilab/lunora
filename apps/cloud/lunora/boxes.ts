@@ -9,13 +9,15 @@ import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
+import { DEFAULT_TARGET, isBoxTarget, storedTarget } from "../src/provision-contract";
+import { revokedBoxError } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
-import { boundedString, LIMITS } from "./validators";
+import { boundedString, deployTarget, LIMITS } from "./validators";
 
 /**
  * Customer boxes (plan 458 G12): machines an organization runs `lunora-hostd`
@@ -272,16 +274,16 @@ export const setProjectTarget = mutation
         boxId: v.optional(v.id("boxes")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        target: v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp")),
+        target: deployTarget,
     })
     .mutation(async ({ ctx: context, args: { boxId, organizationId, projectId, target } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
         await assertRowInOrg(context, projectId, organizationId, "project");
 
-        if (target === "celld-vps") {
+        if (isBoxTarget(target)) {
             if (boxId === undefined) {
-                throw new LunoraError("BAD_REQUEST", "a celld-vps project needs a box (boxId)");
+                throw new LunoraError("BAD_REQUEST", `a ${target} project needs a box (boxId)`);
             }
 
             const box = (await context.db.get(boxId)) as BoxRow | null;
@@ -291,14 +293,14 @@ export const setProjectTarget = mutation
             }
 
             if (box.status === "revoked") {
-                throw new LunoraError("CONFLICT", `box "${box.name}" is revoked; enrol the machine again and choose the new box`);
+                throw revokedBoxError(box.name);
             }
         } else if (boxId !== undefined) {
             throw new LunoraError("BAD_REQUEST", `a ${target} project has no box`);
         }
 
         const project = (await context.db.get(projectId)) as { boxId?: null | string; target?: null | string };
-        const currentTarget = project.target ?? "cloudflare-wfp";
+        const currentTarget = storedTarget(project.target) ?? DEFAULT_TARGET;
         const currentBox = project.boxId ?? undefined;
 
         if (currentTarget === target && currentBox === boxId) {
@@ -487,15 +489,16 @@ export const identity = internalQuery
 
 /**
  * Whether box `boxId` may download deployment `deploymentId`'s release (SYSTEM
- * — the box-signed `GET /v1/boxes/releases/:deploymentId`): only a `celld-vps`
+ * — the box-signed `GET /v1/boxes/releases/:deploymentId`): only a box-placed
  * deployment of a project placed on THAT box, in the box's own organization.
  */
 export const ownsDeployment = internalQuery
     .input({ boxId: v.id("boxes"), deploymentId: v.id("deployments") })
     .query(async ({ ctx: context, args: { boxId, deploymentId } }): Promise<boolean> => {
         const deployment = (await context.db.get(deploymentId)) as null | { organizationId: string; projectId: Id<"projects">; target?: null | string };
+        const target = deployment ? storedTarget(deployment.target) : undefined;
 
-        if (deployment?.target !== "celld-vps") {
+        if (deployment === null || target === undefined || !isBoxTarget(target)) {
             return false;
         }
 

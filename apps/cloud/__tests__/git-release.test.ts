@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { BuildReleasePorts, BuildReleaseTarget } from "../src/builds/release";
 import { describeReleaseFrame, FORK_RELEASE_SKIP_REASON, releaseBuild, releaseRoute } from "../src/builds/release";
 import type { BuildExecution } from "../src/builds/runner";
-import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/handler";
-import { startRelease } from "../src/deploy/handler";
+import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
+import { startRelease } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TargetDriver } from "../src/targets/driver";
@@ -34,7 +34,7 @@ const execution: BuildExecution = {
 const pushTarget: BuildReleaseTarget = { branch: "main", organizationId: "org_1", projectId: "prj_1", projectSlug: "web", trigger: "push" };
 
 const okProvisioner: Provisioner = {
-    deploy: (spec) => Promise.resolve({ bundleHash: "h1", url: `https://${spec.alias}.lunora.app` }),
+    deploy: (spec) => Promise.resolve({ url: `https://${spec.alias}.lunora.app` }),
     destroy: () => Promise.resolve(),
 };
 
@@ -77,15 +77,15 @@ const harness = (options: { progress?: string[]; provisioner?: Provisioner; targ
     };
     const deps: DeployHandlerDeps = {
         backend,
-        driverFor: (_placement, driverOptions) => {
+        driverFor: () => {
             const provisioner = options.provisioner ?? okProvisioner;
 
             return fakeDriver({
                 ...provisioner,
                 // A target that streams its converge, as a box does.
-                deploy: (spec) => {
+                deploy: (spec, convergeOptions) => {
                     for (const line of options.progress ?? []) {
-                        driverOptions?.onProgress?.(line);
+                        convergeOptions?.onProgress?.(line);
                     }
 
                     return provisioner.deploy(spec);

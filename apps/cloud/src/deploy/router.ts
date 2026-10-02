@@ -1,57 +1,39 @@
 import { createSignUpInvitation } from "@lunora/auth";
-import { LunoraError } from "@lunora/errors";
 import { RateLimiter } from "@lunora/ratelimit";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
 import { proxyAdminRequest } from "../admin/proxy";
-import { captureServerEvent } from "../analytics/capture";
 import { currentAuth } from "../auth";
 import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from "../backup/tenant-routes";
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
-import { boxSession } from "../boxes/session-client";
 import { BOX_RELEASE_PATH, HOSTD_MANIFEST_PATH } from "../boxes/urls";
-import { dispatchBuilds } from "../builds/control-plane";
-import { createDohResolver, verifyDomain } from "../domains/verify";
 import { createGitHubApp } from "../github/app";
 import type { BuildRecordResult } from "../github/webhook";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
-import type { DeployKind } from "../provision-contract";
-import { decryptSecret, encryptSecret } from "../secrets/crypto";
+import { encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
-import type { StoredPlacement } from "../targets/placement";
-import { resolvePlacement } from "../targets/placement";
-import { resolveTargetDriver, targetOf } from "../targets/registry";
-import { resolveTelemetryConfig } from "../telemetry/ingest-key";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
-import { resolveAdminToken, sealAdminToken } from "./admin-token";
-import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "./handler";
-import { handleDeployRequest } from "./handler";
-import type { ReleaseDeps } from "./release";
-import { rollbackRelease } from "./release";
-import { createReleaseStore } from "./release-store";
+import { resolveAdminToken } from "./admin-token";
+import type { DeployTarget } from "./release-core";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { createDeployRoutes } from "./routes/deploy";
+import { handleDomainAddRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
-import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
-import {
-    handleCellRegisterRoute,
-    handlePreviewAuthRoute,
-    handleTenantCustomDomainRoute,
-    handleTenantPlanRoute,
-    requireAdminToken,
-} from "./routes/tenant-admin";
+import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
+import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
@@ -89,12 +71,6 @@ interface SecretBody {
     organizationId?: string;
     projectId?: string;
     value?: string;
-}
-
-interface EncryptedSecretRow {
-    ciphertext: string;
-    iv: string;
-    name: string;
 }
 
 interface CloudflareBillingBody {
@@ -695,100 +671,6 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
     );
 };
 
-interface DomainBody {
-    hostname?: string;
-    id?: string;
-    organizationId?: string;
-    projectId?: string; // secret-scanner:allow -- domain field name
-    redirectStatusCode?: number;
-    redirectTo?: string;
-}
-
-interface DomainRowLike {
-    hostname: string;
-    projectId: string; // secret-scanner:allow -- domain field name
-    txtToken: string;
-}
-
-/** The cell this control-plane deployment runs in — the only thing `LUNORA_CELL` decides (`src/targets/placement.ts`). */
-const thisCell = (environment: RouterEnv): string => environment.LUNORA_CELL ?? "default";
-
-/** A project's placement, read per project and checked against this control plane's cell. */
-const placementFor = async (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv, organizationId: string, projectId: string) =>
-    resolvePlacement(await context.runQuery<StoredPlacement>(internal.projects.placement, { organizationId, projectId }), thisCell(environment));
-
-/**
- * `POST /v1/domains` — add a hostname to a project under the caller's session
- * (GAPS.md B1). Returns the `_lunora.&lt;host>` TXT record the user must create.
- */
-const handleDomainAddRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = requireContext(environment);
-
-    const body = (await request.json().catch(() => null)) as DomainBody | null;
-
-    if (!body?.hostname || !body.organizationId || !body.projectId) {
-        return jsonError(400, "hostname, organizationId and projectId are required");
-    }
-
-    try {
-        const result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(api.domains.add, {
-            hostname: body.hostname,
-            organizationId: body.organizationId,
-            projectId: body.projectId, // secret-scanner:allow -- domain field name
-            redirectStatusCode: body.redirectStatusCode,
-            redirectTo: body.redirectTo,
-        });
-
-        return Response.json(result);
-    } catch (error) {
-        return rejected(error, "domain add failed");
-    }
-};
-
-/**
- * `POST /v1/domains/verify` — run the DNS checks for a domain (TXT token +
- * pointing at the platform) and record the outcome (GAPS.md B1). Runs under
- * the caller's session; the DNS lookups use DNS-over-HTTPS at the edge.
- */
-const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = requireContext(environment);
-
-    const body = (await request.json().catch(() => null)) as DomainBody | null;
-
-    if (!body?.id || !body.organizationId) {
-        return jsonError(400, "id and organizationId are required");
-    }
-
-    try {
-        const domain = await context.runQuery<DomainRowLike | null>(api.domains.get, { id: body.id, organizationId: body.organizationId });
-
-        if (!domain) {
-            return jsonError(404, "domain not found");
-        }
-
-        // The CNAME targets are the project's target's: a box answers on its own hostname, WfP on the apex.
-        const placement = await placementFor(context, environment, body.organizationId, domain.projectId);
-        const result = await verifyDomain(domain.hostname, {
-            platformTargets: resolveTargetDriver(placement.target, environment, placement.box ? { box: placement.box } : {}).domains.platformTargets(),
-            resolve: createDohResolver(),
-            txtToken: domain.txtToken,
-        });
-
-        await context.runMutation(internal.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
-
-        // A box serves a custom domain once its routing table names it (plan 458 W5).
-        if (result.verified && placement.box && environment.BOX_SESSION) {
-            await boxSession(environment.BOX_SESSION, placement.box.id)
-                .pushRoutes()
-                .catch(() => false);
-        }
-
-        return Response.json(result);
-    } catch (error) {
-        return rejected(error, "domain verification failed");
-    }
-};
-
 /**
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
@@ -825,258 +707,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    /**
-     * Everything re-provisioning a release needs, wired to this request's
-     * control-plane context — shared by the deploy route (its automatic revert)
-     * and both rollback routes. `undefined` when the cell has no `RELEASES`
-     * bucket: without stored releases there is nothing to roll back to, so a
-     * deploy is refused rather than shipped unrecoverable.
-     */
-    const releaseDeps = (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv): ReleaseDeps | undefined => {
-        if (!environment.RELEASES) {
-            return undefined;
-        }
-
-        return {
-            backend: {
-                placement: ({ organizationId, projectId }) => placementFor(context, environment, organizationId, projectId),
-                releaseTarget: async ({ deploymentId, key, organizationId }) => {
-                    const row = await context.runQuery<
-                        StoredAdminToken & {
-                            alias: string;
-                            cronSpecs?: string[];
-                            kind: DeployKind;
-                            liveDeploymentId?: string;
-                            projectId: string;
-                            target?: string;
-                        }
-                    >(internal.deployments.releaseTarget, { deployKey: key, id: deploymentId, organizationId });
-                    // Unsealed here, at the edge, exactly as the studio proxy does.
-                    const adminToken = await resolveAdminToken(row, environment.SECRET_ENCRYPTION_KEY);
-
-                    if (!adminToken) {
-                        throw new LunoraError("CONFLICT", "this deployment has no usable admin token");
-                    }
-
-                    return {
-                        adminToken,
-                        alias: row.alias,
-                        ...(row.cronSpecs === undefined ? {} : { cronSpecs: row.cronSpecs }),
-                        kind: row.kind,
-                        ...(row.liveDeploymentId === undefined ? {} : { liveDeploymentId: row.liveDeploymentId }),
-                        organizationId,
-                        projectId: row.projectId,
-                        target: targetOf(row.target),
-                    };
-                },
-                // Decrypt the project's stored secrets at the edge and hand them to the
-                // deploy spec. No-op when the master key isn't configured.
-                resolveSecrets: async ({ key, kind, organizationId, projectId }) => {
-                    const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, {
-                        deployKey: key,
-                        environment: kind,
-                        organizationId,
-                        projectId,
-                    });
-
-                    // Read the rows FIRST, then decide. Returning `{}` on a missing master
-                    // key meant a control plane whose key was removed, rotated badly, or
-                    // never set in one cell shipped tenant Workers with none of their
-                    // secrets — silently, reported as a successful release, surfacing
-                    // several layers away as the tenant app 500-ing on a missing env var.
-                    // With no secrets configured there is nothing to drop and the deploy
-                    // is genuinely fine, so only the contradiction fails.
-                    if (!environment.SECRET_ENCRYPTION_KEY) {
-                        if (rows.length > 0) {
-                            throw new LunoraError(
-                                "INTERNAL",
-                                `this project has ${String(rows.length)} stored secret(s) but the control plane has no SECRET_ENCRYPTION_KEY to decrypt them — deploying would ship a Worker with none of them`,
-                            );
-                        }
-
-                        return {};
-                    }
-
-                    const entries = await Promise.all(
-                        rows.map(async (row): Promise<[string, string]> => [
-                            row.name,
-                            await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
-                        ]),
-                    );
-
-                    return Object.fromEntries(entries);
-                },
-                rollbackDeployment: ({ deploymentId, key, organizationId }) =>
-                    context.runMutation<{ scriptName: string; version?: number }>(internal.deployments.rollback, {
-                        deployKey: key,
-                        id: deploymentId,
-                        organizationId,
-                    }),
-            },
-            driverFor: (placement, options = {}) =>
-                resolveTargetDriver(placement.target, environment, {
-                    ...(placement.box === undefined ? {} : { box: placement.box }),
-                    onLog: (line) => {
-                        // eslint-disable-next-line no-console -- the driver's converge log is only visible here, in Workers Logs
-                        console.log("[provision]", line);
-                    },
-                    ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
-                }),
-            releases: createReleaseStore(environment.RELEASES),
-            // Provision (once per org) the scoped ingest key + hand the tenant its
-            // OTLP endpoint/token (src/telemetry/ingest-key).
-            resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
-            scheduler,
-        };
-    };
-
-    /**
-     * Everything the deploy core needs, wired to this request's control-plane
-     * context — the ONE wiring both callers share: `POST /v1/deploy`, and a git
-     * build's release (`POST /v1/builds/dispatch`). `undefined` without the
-     * `RELEASES` bucket, for the reason {@link releaseDeps} gives.
-     */
-    const deployDeps = (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv): DeployHandlerDeps | undefined => {
-        const release = releaseDeps(context, environment);
-
-        if (!release) {
-            return undefined;
-        }
-
-        const cell = environment.LUNORA_CELL ?? "default";
-
-        // Fire-and-forget, on the execution context so it outlives the response
-        // rather than being cancelled with it. Keyed on the ORGANIZATION: a
-        // platform event is about a tenant, not about a person.
-        const analytics = (event: string, properties: Record<string, boolean | number | string>): void => {
-            environment.__executionCtx?.waitUntil?.(
-                captureServerEvent(environment, event, { cell, organizationId: String(properties.organizationId ?? "") }, properties),
-            );
-        };
-
-        const backend: DeployBackend = {
-            ...release.backend,
-            // Record the health-checked release live and supersede the previous
-            // live release of its alias (GAPS.md A1).
-            activateDeployment: async ({ deploymentId, key }) => {
-                await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
-            },
-            createDeployment: async ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, scriptName }) => {
-                // Seal the admin token at the edge — the control-plane D1 stores
-                // ciphertext + IV (plaintext only in dev without a master key).
-                const sealed = await sealAdminToken(adminToken, environment.SECRET_ENCRYPTION_KEY);
-
-                return context.runMutation<{ deploymentId: string; previousDeploymentId?: string; version: number }>(api.deployments.create, {
-                    ...sealed,
-                    branch,
-                    ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
-                    deployKey: key,
-                    kind,
-                    organizationId,
-                    projectId,
-                    scriptName,
-                });
-            },
-            updateStatus: async ({ bundleHash, deploymentId, key, status, url: deployedUrl }) => {
-                await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
-            },
-            verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
-        };
-
-        // Probe the project's Worker once the release is on it (GAPS.md A1): any
-        // response below 500 counts as healthy (the app may 404 its root route);
-        // a network error or 5xx fails the release and reverts to the previous one.
-        const healthCheck = async (url: string): Promise<boolean> => {
-            try {
-                const response = await fetch(url, { method: "GET" });
-
-                return response.status < 500;
-            } catch {
-                return false;
-            }
-        };
-
-        return { ...release, analytics, backend, healthCheck };
-    };
-
-    const handleDeployRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const deps = deployDeps(requireContext(environment), environment);
-
-        if (!deps) {
-            return jsonError(500, "the RELEASES bucket is not configured; a deploy without a stored release could never be rolled back");
-        }
-
-        return handleDeployRequest(request, deps);
-    };
-
-    /**
-     * `POST /v1/builds/dispatch` — claim and run queued git builds, releasing
-     * each successful one through the deploy core (GAPS.md A3).
-     *
-     * A route, and not a Lunora cron action, because a release needs this
-     * Worker's bindings — the `RELEASES` bucket, the provision box, the master
-     * key — and an action's `ctx` carries only declared vars. The Worker's own
-     * `scheduled()` calls it once a minute, in-process (`drainBuildQueue` in
-     * `src/server.ts`), which is what hands it the request-scoped Lunora context
-     * every other route here runs on. Admin-token gated like every other
-     * platform-internal route.
-     */
-    const handleBuildDispatchRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const unauthorized = requireAdminToken(request, environment);
-
-        if (unauthorized) {
-            return unauthorized;
-        }
-
-        const context = requireContext(environment);
-        const result = await dispatchBuilds({ context, deploy: deployDeps(context, environment), environment });
-
-        return Response.json(result);
-    };
-
-    /**
-     * Roll a project back to a retained release: re-provision its stored bundle
-     * onto the alias's Worker, then record it live (GAPS.md A1). `key` is the
-     * deploy key, or `undefined` for the studio, whose member session authorizes.
-     */
-    const rollback = async (request: Request, environment: RouterEnv, key: string | undefined): Promise<Response> => {
-        const context = requireContext(environment);
-        const release = releaseDeps(context, environment);
-
-        if (!release) {
-            return jsonError(500, "the RELEASES bucket is not configured");
-        }
-
-        let body: { deploymentId?: string; organizationId?: string };
-
-        try {
-            body = await request.json();
-        } catch {
-            return jsonError(400, "invalid JSON body");
-        }
-
-        if (!body.deploymentId || !body.organizationId) {
-            return jsonError(400, "deploymentId and organizationId are required");
-        }
-
-        try {
-            const result = await rollbackRelease({ deploymentId: body.deploymentId, key, organizationId: body.organizationId }, release);
-
-            return Response.json({ ok: true, ...result });
-        } catch (error) {
-            return rejected(error, "rollback failed");
-        }
-    };
-
-    // POST /v1/deployments/rollback — the CLI's rollback, deploy-key authorized.
-    const handleRollbackRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-        const key = strictBearer(request);
-
-        return key ? rollback(request, environment, key) : jsonError(401, "missing bearer deploy key");
-    };
-
-    // POST /v1/rollback — the studio's rollback, under the caller's member session.
-    const handleSessionRollbackRoute = (request: Request, environment: RouterEnv): Promise<Response> => rollback(request, environment, undefined);
+    const { handleBuildDispatchRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(scheduler);
 
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can

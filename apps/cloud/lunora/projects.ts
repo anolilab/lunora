@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { TargetId } from "../src/provision-contract";
-import { DEFAULT_TARGET, isTargetId } from "../src/provision-contract";
+import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -81,7 +81,7 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         previewProtected: Boolean(row.previewPasswordHash),
         slug: row.slug,
         // A row from before targets, or a value this build does not know, reads as the default.
-        target: isTargetId(row.target) ? row.target : DEFAULT_TARGET,
+        target: storedTarget(row.target) ?? DEFAULT_TARGET,
         ...(row.boxId == null ? {} : { boxId: row.boxId }),
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),

@@ -4,8 +4,9 @@
  * namespace, so tenant cron jobs never fire on their own. The control plane runs
  * an every-minute trigger and fans ticks out to each tenant whose cron is due,
  * POSTing the tenant runtime's `/_lunora/scheduled` endpoint through its target
- * driver's in-network `dispatch`. Only targets whose `capabilities.fanout` is
- * `dispatcher` are fanned out; a `native` target (celld) fires crons itself. This module is the pure core: parse + match standard 5-field cron
+ * fleet's in-network `dispatch`. Only targets whose descriptor says `fanout:
+ * "dispatcher"` are fanned out; a `native` target (celld) fires crons itself.
+ * This module is the pure core: parse + match standard 5-field cron
  * expressions and compute which tenant ticks are due. The I/O (reading live
  * targets, dispatching) is injected so it stays unit-testable.
  */

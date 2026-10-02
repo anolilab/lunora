@@ -3,9 +3,10 @@ import type { ReactElement } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 import type { TargetId } from "../provision-contract";
+import { TARGETS } from "../provision-contract";
 import { COLUMN_LABEL } from "./section-styles";
 import { StatusBadge } from "./section-ui";
-import { OWN_SERVER_PROPERTIES, refusedBindings, targetLabel, targetLimitations } from "./target-capabilities";
+import { OWN_SERVER_PROPERTIES, refusedBindings, targetLabel } from "./target-capabilities";
 
 /**
  * What a project on its own server cannot have, each with the reason (plan 458
@@ -13,16 +14,17 @@ import { OWN_SERVER_PROPERTIES, refusedBindings, targetLabel, targetLimitations 
  * refuse, the per-plan runtime limits that do not apply, and point-in-time
  * recovery — rather than tabs that render empty and let the operator guess why.
  *
- * Renders nothing for a target with nothing to say (`cloudflare-wfp`, whose
- * refusals the deploy error already words and which the rest of the studio
- * describes as-is).
+ * Renders nothing for a target that lacks nothing beyond its bindings
+ * (`cloudflare-wfp`, whose refusals the deploy error already words and which the
+ * rest of the studio describes as-is).
  */
 export const TargetCapabilitiesCard = ({ target }: { target: TargetId }): null | ReactElement => {
-    if (target !== "celld-vps") {
+    const { limitations } = TARGETS[target];
+
+    if (limitations.length === 0) {
         return null;
     }
 
-    const limitations = targetLimitations(target);
     const bindings = refusedBindings(target);
 
     return (

@@ -17,7 +17,6 @@
  */
 
 import type { TargetId } from "../provision-contract";
-import type { DestroyRef } from "../targets/driver";
 
 /** A destroyed or failed deployment whose stored release has not been reclaimed. */
 export interface TeardownTarget {
@@ -42,8 +41,8 @@ export interface TeardownTarget {
 export interface TeardownPorts {
     /** Delete a deployment's stored release. Idempotent. */
     deleteRelease: (id: string) => Promise<void>;
-    /** Destroy the alias's tenant and its resources — the target driver's `destroy`. */
-    destroy: (target: TargetId, reference: DestroyRef) => Promise<void>;
+    /** Destroy the alias's tenant and its resources — through the driver of the placement its rows name. */
+    destroy: (target: TeardownTarget) => Promise<void>;
     /** The destroyed/failed deployments whose release has not been reclaimed yet. */
     listPending: () => Promise<TeardownTarget[]>;
     /** Record that a deployment's stored release (and, for {@link TeardownTarget.destroyWorker}, its tenant) is gone. */
@@ -73,7 +72,7 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
         try {
             if (target.destroyWorker) {
                 // eslint-disable-next-line no-await-in-loop -- sequential teardown paces the target's API work; volumes are small
-                await ports.destroy(target.target, { alias: target.alias, ...(target.boxId === undefined ? {} : { boxId: target.boxId }) });
+                await ports.destroy(target);
 
                 // The alias is only free once its tenant and resources are gone.
                 // Released BEFORE `markTornDown` so a failure here leaves the row

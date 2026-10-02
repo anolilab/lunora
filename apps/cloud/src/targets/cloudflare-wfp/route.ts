@@ -1,8 +1,8 @@
 import readJson from "../../read-json";
 
 /**
- * `cloudflare-wfp` routing, shared by the dispatcher Worker (`src/dispatcher/worker.ts`,
- * the request path) and the driver's `route` (the control plane). Resolves an inbound hostname to the
+ * `cloudflare-wfp` routing for the dispatcher Worker (`src/dispatcher/worker.ts`,
+ * the request path). Resolves an inbound hostname to the
  * dispatch-namespace script that serves it. A project has one Worker, named by
  * its alias and updated in place by every release, and it is reachable at
  * `{alias}.{appDomain}` — so the subdomain label *is* the script name, with no

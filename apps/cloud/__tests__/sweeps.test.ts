@@ -4,9 +4,15 @@ import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { UsageRow } from "../src/targets/driver";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
+import { fakeDriver } from "./support/memory-driver";
 
 describe(teardownPorts, () => {
-    const noop = { deleteRelease: () => Promise.resolve(), destroy: () => Promise.resolve() };
+    const noop = {
+        boxes: { byId: () => Promise.resolve(null), forAlias: () => Promise.resolve(null) },
+        deleteRelease: () => Promise.resolve(),
+        driverFor: () => fakeDriver(),
+        log: () => undefined,
+    };
     const everyTarget = (): boolean => true;
 
     it("destroys the Worker of an alias with no deployment left, once, and skips torn-down rows", async () => {

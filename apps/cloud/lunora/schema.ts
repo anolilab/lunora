@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "@lunora/server";
 
+import { deployTarget } from "./validators";
+
 /**
  * Lunora Cloud control-plane data model. This is the *platform's* own schema,
  * dogfooded on Lunora itself (the platform's metadata store is a Lunora app).
@@ -71,14 +73,6 @@ const usageMeter = v.union(
 );
 
 const cellStatus = v.union(v.literal("active"), v.literal("draining"), v.literal("suspended"));
-
-/**
- * A deploy target (`TARGET_IDS` in `src/provision-contract.ts` — keep the two
- * in step; `__tests__/placement.test.ts` fails the type check when they drift).
- * Spelled out for the same reason as `usageMeter`: codegen reads this file
- * statically.
- */
-const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"));
 
 const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
 

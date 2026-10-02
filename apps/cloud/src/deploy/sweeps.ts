@@ -12,10 +12,12 @@
  */
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import type { TargetId } from "../provision-contract";
+import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
-import type { UsageRow } from "../targets/driver";
-import { storedTarget } from "../targets/registry";
+import type { ProgressLine, TargetDriver, UsageRow } from "../targets/driver";
+import type { BoxLookups, Placement } from "../targets/placement";
+import { placementOfDeployment } from "../targets/placement";
 import type { TeardownPorts, TeardownTarget } from "./teardown";
 
 interface TeardownRow {
@@ -33,8 +35,14 @@ interface TeardownRow {
 /**
  * Ports for {@link runTeardownSweep}: destroyed or failed deployments whose
  * stored release has not been reclaimed, each with the target it was deployed
- * to, and the `teardownAt` stamp. `destroy` and `deleteRelease` are supplied by
- * the caller (the target drivers and the `RELEASES` bucket).
+ * to, and the `teardownAt` stamp. `deleteRelease` and `driverFor` are supplied by
+ * the caller (the `RELEASES` bucket and the target registry).
+ *
+ * `destroy` places each alias off its deployment rows (`placementOfDeployment`)
+ * and destroys it through that placement's driver. An alias whose box is gone
+ * or revoked is beyond reach for good: it is logged and its alias released. One
+ * whose box cannot be resolved at all throws, which keeps the row pending and
+ * the alias claimed.
  *
  * `destroyWorker` is true only when the alias has no deployment left that is not
  * `destroyed` — so the alias's tenant and D1/R2 are reclaimed on project/org
@@ -48,12 +56,27 @@ interface TeardownRow {
  */
 export const teardownPorts = (
     database: ControlPlaneDatabase,
-    ports: Pick<TeardownPorts, "deleteRelease" | "destroy">,
+    ports: Pick<TeardownPorts, "deleteRelease"> & { boxes: BoxLookups; driverFor: (placement: Placement) => TargetDriver; log: ProgressLine },
     now: number,
     canConverge: (target: TargetId) => boolean,
 ): TeardownPorts => {
     return {
-        ...ports,
+        deleteRelease: ports.deleteRelease,
+        destroy: async (target) => {
+            const placed = await placementOfDeployment(target, ports.boxes);
+
+            if ("unplaced" in placed) {
+                if (!placed.settled) {
+                    throw new Error(`alias "${target.alias}" ${placed.unplaced}`);
+                }
+
+                ports.log(`alias "${target.alias}": ${placed.unplaced}, releasing the alias`);
+
+                return;
+            }
+
+            await ports.driverFor(placed.placement).destroy(target.alias, { onProgress: ports.log });
+        },
         listPending: async () => {
             // Drained: teardown has to see every deployment, and a single page left
             // the tail of the fleet permanently un-torn-down — leaking the real

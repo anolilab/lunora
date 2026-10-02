@@ -1,5 +1,6 @@
 import type { TenantDeploymentSpec } from "../provision-contract";
-import type { ConvergeResult, DestroyRef, TargetDriver } from "../targets/driver";
+import type { ProgressLine, TargetDriver } from "../targets/driver";
+import { sha256HexBytes } from "./keys";
 import type { CellScheduler } from "./scheduler";
 
 /**
@@ -23,12 +24,21 @@ export interface DeployProgress {
     url?: string;
 }
 
+/** A release that is serving: where, and which bundle. */
+export interface DeployedRelease {
+    /** SHA-256 of the bundle now serving — hashed here, once, whatever the target. */
+    bundleHash: string;
+    url: string;
+}
+
 export interface RunDeploymentOptions {
-    /** Priority for the cell scheduler (interactive deploy > preview > cleanup). */
     /** The project's target driver — only its converge half is used here. */
     driver: Pick<TargetDriver, "deploy">;
+    /** The target's own progress lines while it converges (a box's job output). */
+    onLine?: ProgressLine;
     /** Reports each phase transition (NDJSON event / status patch). */
     onProgress?: (progress: DeployProgress) => Promise<void> | void;
+    /** Priority for the cell scheduler (interactive deploy > preview > cleanup). */
     priority?: number;
     scheduler: CellScheduler;
 
@@ -41,7 +51,7 @@ export interface RunDeploymentOptions {
      * broken code is live and the previous release must be re-provisioned.
      * Omit to skip verification.
      */
-    verify?: (result: ConvergeResult) => Promise<boolean>;
+    verify?: (url: string) => Promise<boolean>;
 }
 
 /**
@@ -49,7 +59,7 @@ export interface RunDeploymentOptions {
  * for a failed health check. A converge failure leaves the tenant on the
  * previous release (every driver makes the cut-over its last, atomic step).
  */
-export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: ConvergeResult; status: "live" };
+export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: DeployedRelease; status: "live" };
 
 export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDeploymentOptions): Promise<DeployOutcome> => {
     const emit = async (progress: DeployProgress): Promise<void> => {
@@ -60,12 +70,18 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
     await emit({ phase: "provisioning" });
 
     try {
-        const result = await options.scheduler.run(() => options.driver.deploy(spec), { priority: options.priority });
+        const [bundleHash, { url }] = await Promise.all([
+            sha256HexBytes(spec.bundle),
+            options.scheduler.run(() => options.driver.deploy(spec, options.onLine === undefined ? {} : { onProgress: options.onLine }), {
+                priority: options.priority,
+            }),
+        ]);
+        const result: DeployedRelease = { bundleHash, url };
 
         if (options.verify) {
             await emit({ phase: "verifying", url: result.url });
 
-            const healthy = await options.verify(result);
+            const healthy = await options.verify(result.url);
 
             if (!healthy) {
                 await emit({ error: "health check failed", phase: "failed", url: result.url });
@@ -84,15 +100,4 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
 
         return { error: message, provisioned: false, status: "failed" };
     }
-};
-
-/**
- * Tear a project down through the same paced path (preview TTL cleanup,
- * project deletion). Lower default priority than a deploy.
- */
-export const destroyDeployment = async (
-    reference: DestroyRef,
-    options: { driver: Pick<TargetDriver, "destroy">; priority?: number; scheduler: CellScheduler },
-): Promise<void> => {
-    await options.scheduler.run(() => options.driver.destroy(reference), { priority: options.priority ?? -1 });
 };

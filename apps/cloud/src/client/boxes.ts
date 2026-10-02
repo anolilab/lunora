@@ -1,6 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
+import { isBoxTarget, isTargetId } from "../provision-contract";
 import { formatBytes } from "./format";
 
 /**
@@ -86,11 +87,11 @@ export interface TargetDraft {
  * send (`boxes.setProjectTarget` refuses a `celld-vps` target without a box).
  */
 export const assessTargetDraft = (draft: TargetDraft, saved: TargetDraft): { changed: boolean; complete: boolean; needsBox: boolean } => {
-    const needsBox = draft.target === "celld-vps";
+    const needsBox = isTargetId(draft.target) && isBoxTarget(draft.target);
 
     return {
         changed: draft.target !== saved.target || (needsBox && draft.boxId !== saved.boxId),
-        complete: (draft.target === "celld-vps" || draft.target === "cloudflare-wfp") && (!needsBox || draft.boxId !== ""),
+        complete: isTargetId(draft.target) && (!needsBox || draft.boxId !== ""),
         needsBox,
     };
 };

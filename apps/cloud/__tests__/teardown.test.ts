@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { TeardownPorts, TeardownTarget } from "../src/deploy/teardown";
 import { runTeardownSweep } from "../src/deploy/teardown";
-import type { TargetId } from "../src/provision-contract";
-import type { DestroyRef } from "../src/targets/driver";
 
 const target = (id: string, overrides: Partial<TeardownTarget> = {}): TeardownTarget => {
     return { alias: id, destroyWorker: false, id, target: "cloudflare-wfp", ...overrides };
@@ -23,7 +21,7 @@ const ports = (overrides: Partial<TeardownPorts>): TeardownPorts => {
 describe(runTeardownSweep, () => {
     it("deletes each pending row's stored release, never the Worker, when the alias lives on", async () => {
         const deleted: string[] = [];
-        const destroyed: [TargetId, DestroyRef][] = [];
+        const destroyed: TeardownTarget[] = [];
         const marked: string[] = [];
 
         const result = await runTeardownSweep(
@@ -33,8 +31,8 @@ describe(runTeardownSweep, () => {
 
                     return Promise.resolve();
                 },
-                destroy: (driverTarget, reference) => {
-                    destroyed.push([driverTarget, reference]);
+                destroy: (pending) => {
+                    destroyed.push(pending);
 
                     return Promise.resolve();
                 },
@@ -54,13 +52,13 @@ describe(runTeardownSweep, () => {
     });
 
     it("destroys the Worker and releases the alias for the row that carries destroyWorker", async () => {
-        const destroyed: [TargetId, DestroyRef][] = [];
+        const destroyed: TeardownTarget[] = [];
         const released: string[] = [];
 
         const result = await runTeardownSweep(
             ports({
-                destroy: (driverTarget, reference) => {
-                    destroyed.push([driverTarget, reference]);
+                destroy: (pending) => {
+                    destroyed.push(pending);
 
                     return Promise.resolve();
                 },
@@ -73,8 +71,8 @@ describe(runTeardownSweep, () => {
             }),
         );
 
-        // Through the row's own target driver.
-        expect(destroyed).toStrictEqual([["cloudflare-wfp", { alias: "gone" }]]);
+        // The row itself — its target and alias pick the driver.
+        expect(destroyed).toStrictEqual([target("gone", { destroyWorker: true })]);
         expect(released).toStrictEqual(["gone"]);
         expect(result).toStrictEqual({ failed: 0, tornDown: 2 });
     });

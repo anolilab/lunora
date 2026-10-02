@@ -3,22 +3,22 @@
  * in a Workers-for-Platforms dispatch namespace of the cell's Cloudflare
  * account, fronted by the dispatcher Worker (`src/dispatcher/worker.ts`).
  *
- * {@link createCloudflareWfpDriver} is pure over {@link CloudflareWfpPorts}, so
- * the conformance suite and the unit tests drive it with a fake box, a fake
- * dispatch namespace and a fake usage reader. {@link cloudflareWfpDriverFromEnv}
- * is the one place those ports are read off the control plane's Worker env.
+ * Every tenant of a cell shares its one placement, so the driver is built per
+ * env and its fleet the same. {@link createCloudflareWfpDriver} and
+ * {@link createCloudflareWfpFleet} are pure over their ports, so the conformance
+ * suite and the unit tests drive them with a fake box, a fake dispatch namespace
+ * and a fake usage reader; the `*FromEnv` builders are the one place those
+ * ports are read off the control plane's Worker env.
  */
 import { tenantSender } from "../../backup/tenant-transport";
-import { sha256HexBytes } from "../../deploy/keys";
-import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../../provision-contract";
-import type { TargetDriver, UsageRow } from "../driver";
+import { BINDING_SUPPORT } from "../../provision-contract";
+import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
 import type { AnalyticsUsageReader } from "./analytics";
 import { createHttpAnalyticsReader } from "./analytics";
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
 import type { ProvisionBox } from "./provision-box";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "./provision-box";
-import { scriptForPlatformHostname } from "./route";
 
 /** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
 export const TAIL_CONSUMER = "lunora-log-tail";
@@ -30,70 +30,63 @@ export interface CloudflareWfpPorts {
     box: () => ProvisionBox;
     /** This control plane's cell (`LUNORA_CELL`) — forwarded to the box with every deploy. */
     cell: string;
-    /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
-    dispatcher?: DispatchNamespaceLike;
     /** The dispatch namespace every tenant of this environment deploys into (`LUNORA_DISPATCH_NAMESPACE`). */
     dispatchNamespace: string;
-    /** Receives each `log` line the provision box emits, in order. */
-    onLog?: (line: string) => Promise<void> | void;
+
+    /**
+     * Receives each `log` line the provision box emits, in order. Workers Logs
+     * only, never the deploy stream: Alchemy's output names the cell's Cloudflare
+     * account and its resources, which are the platform's, not the tenant's.
+     */
+    log?: ProgressLine;
+}
+
+export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriver => {
+    return {
+        // The provision box's progress goes to Workers Logs (`ports.log`), never to `onProgress`: see `log`.
+        deploy: async (spec) => {
+            await runProvisionJob(
+                ports.box().get(spec.alias),
+                {
+                    action: "deploy",
+                    spec: deployJobSpec(spec, BINDING_SUPPORT["cloudflare-wfp"], {
+                        cell: ports.cell,
+                        dispatchNamespace: ports.dispatchNamespace,
+                        tailConsumer: TAIL_CONSUMER,
+                    }),
+                },
+                ports.log,
+            );
+
+            // The dispatcher's URL, not the box's: tenants are reached through the
+            // dispatcher, so a box-reported `workers.dev` URL is not the public one.
+            return { url: `https://${spec.alias}.${ports.appDomain}` };
+        },
+        destroy: async (alias) => {
+            await runProvisionJob(ports.box().get(alias), { action: "destroy", alias, dispatchNamespace: ports.dispatchNamespace }, ports.log);
+        },
+        domains: { platformTargets: () => [ports.appDomain] },
+        id: "cloudflare-wfp",
+    };
+};
+
+export interface CloudflareWfpFleetPorts {
+    /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
+    dispatcher?: DispatchNamespaceLike;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
     usage?: AnalyticsUsageReader;
 }
 
-export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriver => {
-    const tenantUrl = (alias: string): string => `https://${alias}.${ports.appDomain}`;
-    const { dispatcher } = ports;
+export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
+    const { dispatcher, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
-    const { usage } = ports;
-
-    const bindingSupport = BINDING_SUPPORT["cloudflare-wfp"];
 
     return {
-        bindingSupport,
-        capabilities: { fanout: "dispatcher", metering: "readback" },
-        deploy: async (spec) => {
-            const [bundleHash] = await Promise.all([
-                sha256HexBytes(spec.bundle),
-                runProvisionJob(
-                    ports.box().get(spec.alias),
-                    {
-                        action: "deploy",
-                        spec: deployJobSpec(spec, bindingSupport, {
-                            cell: ports.cell,
-                            dispatchNamespace: ports.dispatchNamespace,
-                            tailConsumer: TAIL_CONSUMER,
-                        }),
-                    },
-                    ports.onLog,
-                ),
-            ]);
-
-            // The dispatcher's URL, not the box's: tenants are reached through the
-            // dispatcher, so a box-reported `workers.dev` URL is not the public one.
-            return { bundleHash, url: tenantUrl(spec.alias) };
-        },
-        destroy: async (reference) => {
-            await runProvisionJob(
-                ports.box().get(reference.alias),
-                { action: "destroy", alias: reference.alias, dispatchNamespace: ports.dispatchNamespace },
-                ports.onLog,
-            );
-        },
         ...(dispatch ? { dispatch } : {}),
-        domains: { platformTargets: () => [ports.appDomain] },
         id: "cloudflare-wfp",
-        logs: { kind: "tail-consumer", service: TAIL_CONSUMER },
         // The dispatch namespace when bound — the call never leaves Cloudflare —
         // else the deployment's public URL (local dev, where namespaces are not emulated).
         reach: (tenant) => (dispatch ? dispatch(tenant) : tenantSender(tenant)),
-        route: async (hostname, lookup) => {
-            const platform = scriptForPlatformHostname(hostname, ports.appDomain);
-            const scriptName = platform === undefined ? await lookup.customDomain(hostname.toLowerCase()) : platform;
-
-            return scriptName !== null && (await lookup.live(scriptName)) ? { resourceRef: scriptName } : null;
-        },
-        tenantUrl,
-        unsupportedReasons: UNSUPPORTED_REASONS["cloudflare-wfp"],
         ...(usage
             ? {
                   usage: async (sinceMs: number): Promise<UsageRow[]> => {
@@ -139,17 +132,26 @@ export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: s
 /** Whether this control-plane deployment can converge and tear down `cloudflare-wfp` tenants. */
 export const cloudflareWfpCanConverge = (environment: CloudflareWfpEnvironment): boolean => environment.CONTAINER_PROVISION_BOX != null;
 
-export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment, options: { onLog?: (line: string) => void } = {}): TargetDriver => {
-    const accountId = environment.CLOUDFLARE_ACCOUNT_ID;
-    const apiToken = environment.CLOUDFLARE_API_TOKEN;
-
-    return createCloudflareWfpDriver({
+/** Build the driver off the Worker env. Lazy: nothing is touched until a member is called. */
+export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment): TargetDriver =>
+    createCloudflareWfpDriver({
         appDomain: environment.LUNORA_APP_DOMAIN ?? "lunora.app",
         box: () => provisionBoxFrom(environment),
         cell: environment.LUNORA_CELL ?? "default",
         dispatchNamespace: dispatchNamespaceOf(environment),
+        log: (line) => {
+            // eslint-disable-next-line no-console -- the provision box's log is the platform's; Workers Logs is its only reader
+            console.log("[provision]", line);
+        },
+    });
+
+/** Build the fleet off the Worker env. */
+export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment): TargetFleet => {
+    const accountId = environment.CLOUDFLARE_ACCOUNT_ID;
+    const apiToken = environment.CLOUDFLARE_API_TOKEN;
+
+    return createCloudflareWfpFleet({
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
-        ...(options.onLog ? { onLog: options.onLog } : {}),
         ...(accountId && apiToken
             ? { usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }) }
             : {}),

@@ -10,88 +10,102 @@
  * wrong host — the one failure this lookup must never have.
  *
  * Adding a target is one driver directory under `src/targets/` and one entry in
- * {@link TARGET_DRIVERS}. Its binding table lands first, in
+ * {@link TARGET_DRIVERS}. Its descriptor and binding table land first, in
  * `src/provision-contract.ts`, so the deploy handler can already refuse what it
  * cannot run.
  */
 import { LunoraError } from "@lunora/server";
 
 import type { TargetId } from "../provision-contract";
-import { DEFAULT_TARGET, isTargetId, TARGET_IDS } from "../provision-contract";
+import { TARGET_IDS, TARGETS } from "../provision-contract";
 import type { CelldVpsEnvironment } from "./celld-vps/driver";
-import { celldVpsCanConverge, celldVpsDriverFromEnv } from "./celld-vps/driver";
+import { celldVpsCanConverge, celldVpsDriverFromEnv, celldVpsFleet } from "./celld-vps/driver";
 import type { CloudflareWfpEnvironment } from "./cloudflare-wfp/driver";
-import { cloudflareWfpCanConverge, cloudflareWfpDriverFromEnv } from "./cloudflare-wfp/driver";
-import type { TargetDriver } from "./driver";
-import type { BoxPlacement } from "./placement";
+import { cloudflareWfpCanConverge, cloudflareWfpDriverFromEnv, cloudflareWfpFleetFromEnv } from "./cloudflare-wfp/driver";
+import type { TargetDriver, TargetFleet } from "./driver";
+import type { Placement } from "./placement";
 
 /** Everything any registered driver reads off the control plane's Worker env. */
 export type TargetEnvironment = CelldVpsEnvironment & CloudflareWfpEnvironment;
 
-export interface TargetDriverOptions {
-    /** The box a `celld-vps` project is placed on (`Placement.box`); a driver built without one resolves a box per alias. */
-    box?: BoxPlacement;
-    /** Receives the driver's converge log lines, for Workers Logs (the provision box's log, for `cloudflare-wfp`). */
-    onLog?: (line: string) => void;
-    /** Receives converge progress meant for the deploy stream itself (`celld-vps`: the box's job progress). */
-    onProgress?: (line: string) => void;
-}
+/** The placement of target `T`. */
+type PlacementOf<T extends TargetId> = Extract<Placement, { target: T }>;
 
-interface TargetDriverEntry {
+interface TargetEntry<T extends TargetId> {
     /** Whether this deployment of the control plane holds what converging and tearing down needs. */
     canConverge: (environment: TargetEnvironment) => boolean;
-    create: (environment: TargetEnvironment, options: TargetDriverOptions) => TargetDriver;
+    driver: (placement: PlacementOf<T>, environment: TargetEnvironment) => TargetDriver;
+    fleet: (environment: TargetEnvironment) => TargetFleet;
 }
 
 /** Every target with a driver. A {@link TargetId} missing here has a binding table and no driver yet. */
-const TARGET_DRIVERS: Readonly<Partial<Record<TargetId, TargetDriverEntry>>> = {
-    "celld-vps": { canConverge: celldVpsCanConverge, create: celldVpsDriverFromEnv },
-    "cloudflare-wfp": { canConverge: cloudflareWfpCanConverge, create: cloudflareWfpDriverFromEnv },
+const TARGET_DRIVERS: { readonly [T in TargetId]?: TargetEntry<T> } = {
+    "celld-vps": {
+        canConverge: celldVpsCanConverge,
+        driver: (placement, environment) => celldVpsDriverFromEnv(placement.box, environment),
+        fleet: () => celldVpsFleet,
+    },
+    "cloudflare-wfp": {
+        canConverge: cloudflareWfpCanConverge,
+        driver: (_placement, environment) => cloudflareWfpDriverFromEnv(environment),
+        fleet: cloudflareWfpFleetFromEnv,
+    },
 };
 
-/**
- * A stored `target` column → its id, or `undefined` for a value no target
- * answers to. Absent (`undefined`, or SQL NULL off a `.global()` row) means the
- * row predates targets, and is `cloudflare-wfp`.
- */
-export const storedTarget = (stored: null | string | undefined): TargetId | undefined => {
-    if (stored == null) {
-        return DEFAULT_TARGET;
-    }
-
-    return isTargetId(stored) ? stored : undefined;
-};
-
-/**
- * Parse a stored `target` column like {@link storedTarget}, refusing a value no target answers to.
- * @throws {LunoraError} `CONFLICT` for an unknown target.
- */
-export const targetOf = (stored: null | string | undefined): TargetId => {
-    const target = storedTarget(stored);
-
-    if (target === undefined) {
-        throw new LunoraError("CONFLICT", `unknown deploy target "${String(stored)}" — known targets: ${TARGET_IDS.join(", ")}`);
-    }
-
-    return target;
-};
-
-/**
- * The driver for `target`, built over `environment`.
- * @throws {LunoraError} `NOT_IMPLEMENTED` when the target has no driver yet.
- */
-export const resolveTargetDriver = (target: TargetId, environment: TargetEnvironment, options: TargetDriverOptions = {}): TargetDriver => {
-    const entry = TARGET_DRIVERS[target];
+/** `target`'s entry, refusing one with no driver here. */
+const entryOf = <T extends TargetId>(target: T): TargetEntry<T> => {
+    const entry: TargetEntry<T> | undefined = TARGET_DRIVERS[target];
 
     if (entry === undefined) {
         throw new LunoraError("NOT_IMPLEMENTED", `deploy target "${target}" has no driver on this control plane yet`);
     }
 
-    return entry.create(environment, options);
+    return entry;
 };
+
+/**
+ * The driver for one placement, built over `environment`.
+ * @throws {LunoraError} `NOT_IMPLEMENTED` when the target has no driver yet.
+ */
+export const resolveTargetDriver = (placement: Placement, environment: TargetEnvironment): TargetDriver => {
+    // One case per target, so each case's placement is that target's own.
+    switch (placement.target) {
+        case "celld-vps": {
+            return entryOf(placement.target).driver(placement, environment);
+        }
+        case "cloudflare-wfp": {
+            return entryOf(placement.target).driver(placement, environment);
+        }
+        default: {
+            const unplaced: never = placement;
+
+            throw new LunoraError("NOT_IMPLEMENTED", `no driver for placement ${JSON.stringify(unplaced)}`);
+        }
+    }
+};
+
+/**
+ * `target`'s fleet-wide surface, built over `environment`.
+ * @throws {LunoraError} `NOT_IMPLEMENTED` when the target has no driver yet.
+ */
+export const targetFleet = (target: TargetId, environment: TargetEnvironment): TargetFleet => entryOf(target).fleet(environment);
 
 /** Whether `target` has a driver here that can converge and tear down — the teardown sweep leaves the rest pending. */
 export const targetCanConverge = (target: TargetId, environment: TargetEnvironment): boolean => TARGET_DRIVERS[target]?.canConverge(environment) ?? false;
 
-/** The targets that have a driver, in id order — what the sweeps iterate. */
+/** The targets that have a driver, in id order. */
 export const registeredTargets = (): TargetId[] => TARGET_IDS.filter((id) => TARGET_DRIVERS[id] !== undefined);
+
+/**
+ * The fleets of every registered target whose descriptor matches — what the
+ * sweeps iterate (`{ fanout: "dispatcher" }` for the cron fan-out and the queue
+ * consumer, `{ metering: "readback" }` for the usage rollback).
+ */
+export const registeredFleets = (environment: TargetEnvironment, where: Partial<Pick<(typeof TARGETS)[TargetId], "fanout" | "metering">> = {}): TargetFleet[] =>
+    registeredTargets()
+        .filter(
+            (id) =>
+                (where.fanout === undefined || TARGETS[id].fanout === where.fanout) &&
+                (where.metering === undefined || TARGETS[id].metering === where.metering),
+        )
+        .map((id) => targetFleet(id, environment));

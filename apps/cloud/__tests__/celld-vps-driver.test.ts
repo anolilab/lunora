@@ -3,15 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
 import { BoxSessionError } from "../src/boxes/session-client";
-import type { DeployBackend } from "../src/deploy/handler";
-import { startRelease } from "../src/deploy/handler";
+import type { DeployBackend } from "../src/deploy/release-core";
+import { startRelease } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { teardownPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
-import { boxForAliasIn, boxUsageIn, celldVpsCanConverge, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
+import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
+import { boxLookupsIn } from "../src/targets/placement";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { memoryStore } from "./support/memory-store";
 
@@ -56,23 +57,14 @@ const recordingSession = (answer: (job: HostdJob) => Promise<Awaited<ReturnType<
 };
 
 const driverWith = (session: BoxSession, overrides: Partial<CelldVpsPorts> = {}) =>
-    createCelldVpsDriver({
-        box: BOX,
-        boxById: () => Promise.resolve({ ...BOX, revoked: false }),
-        boxDomain: "boxes.test",
-        boxForAlias: () => Promise.resolve({ ...BOX, revoked: false }),
-        boxForSlug: () => Promise.resolve(null),
-        controlPlaneOrigin: "https://cloud.test",
-        session: () => session,
-        ...overrides,
-    });
+    createCelldVpsDriver({ box: BOX, boxDomain: "boxes.test", controlPlaneOrigin: "https://cloud.test", session: () => session, ...overrides });
 
 describe("the celld-vps driver", () => {
     it("hands the box a deploy job: the signed release URL, vars with secrets merged in, and native crons", async () => {
         const { jobs, pushes, session } = recordingSession();
         const progress: string[] = [];
 
-        const result = await driverWith(session, { onProgress: (line) => progress.push(line) }).deploy(spec());
+        const result = await driverWith(session).deploy(spec(), { onProgress: (line) => progress.push(line) });
 
         expect(jobs).toStrictEqual([
             {
@@ -107,97 +99,28 @@ describe("the celld-vps driver", () => {
         expect(pushes()).toBe(0);
     });
 
-    it("tears an alias down with its data, on the box it lives on", async () => {
+    it("tears an alias down with its data, on its box", async () => {
         const { jobs, session } = recordingSession();
-        const seen: string[] = [];
 
-        await driverWith(session, {
-            box: undefined,
-            boxForAlias: (alias) => {
-                seen.push(alias);
+        await driverWith(session).destroy("web");
 
-                return Promise.resolve({ ...BOX, revoked: false });
-            },
-        }).destroy({ alias: "web" });
-
-        expect(seen).toStrictEqual(["web"]);
         expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
     });
 
-    it("tears down on the box the deployment row names, without asking the project", async () => {
-        const { jobs, session } = recordingSession();
-        const asked: string[] = [];
+    it("points custom domains at the box, and pushes the box its routes once one verifies", async () => {
+        const { pushes, session } = recordingSession();
+        const driver = driverWith(session);
 
-        await driverWith(session, {
-            box: undefined,
-            boxById: (id) => {
-                asked.push(id);
+        expect(driver.domains.platformTargets()).toStrictEqual(["bslug000001.boxes.test"]);
 
-                return Promise.resolve({ ...BOX, revoked: false });
-            },
-            boxForAlias: () => Promise.reject(new Error("the project is gone")),
-        }).destroy({ alias: "web", boxId: "box_1" });
+        await driver.domains.onVerified?.();
 
-        expect(asked).toStrictEqual(["box_1"]);
-        expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
+        expect(pushes()).toBe(1);
     });
 
-    it("throws, keeping the alias claimed, when no box can be resolved for it", async () => {
-        const { jobs, session } = recordingSession();
-
-        await expect(driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve(null) }).destroy({ alias: "web" })).rejects.toThrow(
-            /no box this control plane can resolve/u,
-        );
-        expect(jobs).toStrictEqual([]);
-    });
-
-    it("leaves an alias on a revoked or deleted box alone, and says so", async () => {
-        const { jobs, session } = recordingSession();
-        const logged: string[] = [];
-        const onLog = (line: string): void => {
-            logged.push(line);
-        };
-
-        await driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve({ ...BOX, revoked: true }), onLog }).destroy({ alias: "web" });
-        await driverWith(session, { box: undefined, boxById: () => Promise.resolve({ ...BOX, revoked: true }), onLog }).destroy({
-            alias: "web",
-            boxId: "box_1",
-        });
-        await driverWith(session, { box: undefined, boxById: () => Promise.resolve(null), onLog }).destroy({ alias: "web", boxId: "box_gone" });
-
-        expect(jobs).toStrictEqual([]);
-        expect(logged).toStrictEqual([
-            'alias "web": box "bslug000001" is revoked; its fleet and data stay on the machine, releasing the alias',
-            'alias "web": box "bslug000001" is revoked; its fleet and data stay on the machine, releasing the alias',
-            'alias "web": box box_gone no longer exists; nothing to stop, releasing the alias',
-        ]);
-    });
-
-    it("routes default hostnames of any box by slug, and custom domains by lookup", async () => {
-        const { session } = recordingSession();
-        const driver = driverWith(session, {
-            box: undefined,
-            boxForSlug: (slug) => Promise.resolve(slug === "bother00000" ? { id: "box_2", revoked: false, slug } : null),
-        });
-        const lookup = {
-            customDomain: (host: string) => Promise.resolve(host === "www.example.com" ? "web" : null),
-            live: (ref: string) => Promise.resolve(ref === "web"),
-        };
-
-        await expect(driver.route("web.bother00000.boxes.test", lookup)).resolves.toStrictEqual({ resourceRef: "web" });
-        await expect(driver.route("web.bnobody0000.boxes.test", lookup)).resolves.toBeNull();
-        await expect(driver.route("a.b.bother00000.boxes.test", lookup)).resolves.toBeNull();
-        await expect(driver.route("www.example.com", lookup)).resolves.toStrictEqual({ resourceRef: "web" });
-    });
-
-    it("needs the project's box to name a tenant URL, and points custom domains at the box", () => {
-        const { session } = recordingSession();
-
-        expect(() => driverWith(session, { box: undefined }).tenantUrl("web", "production")).toThrow("built without one");
-        expect(driverWith(session).domains.platformTargets()).toStrictEqual(["bslug000001.boxes.test"]);
-        expect(driverWith(session).capabilities).toStrictEqual({ fanout: "native", metering: "pushed" });
-        expect(driverWith(session).dispatch).toBeUndefined();
-        expect(driverWith(session).logs).toStrictEqual({ kind: "otlp" });
+    it("reaches every tenant on its public hostname, with no in-network path or readback", () => {
+        expect(celldVpsFleet.dispatch).toBeUndefined();
+        expect(celldVpsFleet.usage).toBeUndefined();
     });
 
     it("converges only where a box session, the D1 and the public origin are all bound", () => {
@@ -244,24 +167,26 @@ describe("celld-vps teardown after the project is gone", () => {
             projects,
         });
 
-    const sweep = async (store: ReturnType<typeof memoryStore>, session: BoxSession) => {
-        const driver = createCelldVpsDriver({
-            boxById: async (id) => {
-                const row = (await store.get(id, "boxes")) as null | { _id: string; slug: string; status: string };
-
-                return row ? { id: row._id, revoked: row.status === "revoked", slug: row.slug } : null;
-            },
-            boxDomain: "boxes.test",
-            boxForAlias: (alias) => boxForAliasIn(store)(alias),
-            boxForSlug: () => Promise.resolve(null),
-            controlPlaneOrigin: "https://cloud.test",
-            session: () => session,
-        });
-
-        return runTeardownSweep(
-            teardownPorts(store, { deleteRelease: () => Promise.resolve(), destroy: (_target, reference) => driver.destroy(reference) }, 1000, () => true),
+    const sweep = async (store: ReturnType<typeof memoryStore>, session: BoxSession, log: string[] = []) =>
+        runTeardownSweep(
+            teardownPorts(
+                store,
+                {
+                    boxes: boxLookupsIn(store),
+                    deleteRelease: () => Promise.resolve(),
+                    driverFor: (placement) =>
+                        createCelldVpsDriver({
+                            box: "box" in placement ? placement.box : BOX,
+                            boxDomain: "boxes.test",
+                            controlPlaneOrigin: "https://cloud.test",
+                            session: () => session,
+                        }),
+                    log: (line) => log.push(line),
+                },
+                1000,
+                () => true,
+            ),
         );
-    };
 
     const claimed = async (store: ReturnType<typeof memoryStore>): Promise<number> => {
         const { page } = await store.findMany("aliasOwnership", { where: { alias: "web" } });
@@ -295,17 +220,60 @@ describe("celld-vps teardown after the project is gone", () => {
         await expect(claimed(store)).resolves.toBe(1);
     });
 
-    it("frees the alias of a fleet on a revoked box, which nothing can reach", async () => {
+    it("frees the alias of a fleet on a revoked box, which nothing can reach, and says so", async () => {
         const store = world({ status: "revoked" });
         const { jobs, session } = recordingSession();
+        const log: string[] = [];
 
-        await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 0, tornDown: 1 });
+        await expect(sweep(store, session, log)).resolves.toStrictEqual({ failed: 0, tornDown: 1 });
         expect(jobs).toStrictEqual([]);
+        expect(log).toStrictEqual(['alias "web": box "bslug000001" is revoked; its fleet and data stay on the machine, releasing the alias']);
         await expect(claimed(store)).resolves.toBe(0);
+    });
+
+    it("frees the alias of a fleet whose box was deleted with its organization", async () => {
+        const store = memoryStore({
+            aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
+            boxes: [],
+            deployments: [
+                {
+                    _id: "dep_1",
+                    alias: "web",
+                    boxId: "box_gone",
+                    createdAt: 1,
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "celld-vps",
+                },
+            ],
+            projects: [],
+        });
+        const { jobs, session } = recordingSession();
+        const log: string[] = [];
+
+        await expect(sweep(store, session, log)).resolves.toStrictEqual({ failed: 0, tornDown: 1 });
+        expect(jobs).toStrictEqual([]);
+        expect(log).toStrictEqual(['alias "web": box box_gone no longer exists; nothing to stop, releasing the alias']);
+        await expect(claimed(store)).resolves.toBe(0);
+    });
+
+    it("keeps the alias claimed when a row that predates deployments.boxId has no box to resolve", async () => {
+        const store = memoryStore({
+            aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
+            boxes: [],
+            deployments: [{ _id: "dep_1", alias: "web", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" }],
+            projects: [],
+        });
+        const { jobs, session } = recordingSession();
+
+        await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 1, tornDown: 0 });
+        expect(jobs).toStrictEqual([]);
+        await expect(claimed(store)).resolves.toBe(1);
     });
 });
 
-describe("celld-vps store reads", () => {
+describe("celld-vps box lookups", () => {
     it("finds an alias's box through its owning project", async () => {
         const store = memoryStore({
             aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
@@ -316,22 +284,8 @@ describe("celld-vps store reads", () => {
             ],
         });
 
-        await expect(boxForAliasIn(store)("web")).resolves.toStrictEqual({ id: "box_1", revoked: true, slug: "bslug000001" });
-        await expect(boxForAliasIn(store)("nobody")).resolves.toBeNull();
-    });
-
-    it("reads box-reported requests per alias by report window, ignoring non-box rows", async () => {
-        const store = memoryStore({
-            deployments: [{ _id: "dep_1", alias: "web", scriptName: "web" }],
-            platformUsage: [
-                { _id: "u1", boxId: "box_1", deploymentId: "dep_1", kind: "requests", quantity: 3, windowStart: 1000 },
-                { _id: "u2", boxId: "box_1", deploymentId: "dep_1", kind: "requests", quantity: 4, windowStart: 2000 },
-                { _id: "u3", boxId: null, deploymentId: "dep_1", kind: "requests", quantity: 100, windowStart: null },
-            ],
-        });
-
-        await expect(boxUsageIn(store)(1000)).resolves.toStrictEqual([{ requests: 4, resourceRef: "web" }]);
-        await expect(boxUsageIn(store)(0)).resolves.toStrictEqual([{ requests: 7, resourceRef: "web" }]);
+        await expect(boxLookupsIn(store).forAlias("web")).resolves.toStrictEqual({ id: "box_1", revoked: true, slug: "bslug000001" });
+        await expect(boxLookupsIn(store).forAlias("nobody")).resolves.toBeNull();
     });
 });
 
@@ -351,7 +305,7 @@ describe("the deploy stream", () => {
             { key: "k", organizationId: "org_1" },
             {
                 backend,
-                driverFor: (placement, options) => driverWith(session, { ...(placement.box ? { box: placement.box } : {}), onProgress: options?.onProgress }),
+                driverFor: (placement) => driverWith(session, "box" in placement ? { box: placement.box } : {}),
                 releases: memoryReleaseStore().store,
                 scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
             },

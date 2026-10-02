@@ -18,7 +18,8 @@ import type { StoredAdminToken } from "../deploy/admin-token";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { RouterEnv } from "../deploy/routes/shared";
 import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
-import { resolveTargetDriver, targetOf } from "../targets/registry";
+import { targetOf } from "../targets/placement";
+import { targetFleet } from "../targets/registry";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
 import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
 
@@ -41,7 +42,7 @@ const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<
         throw new Error("deployment has no usable admin token");
     }
 
-    return resolveTargetDriver(targetOf(target.target), environment).reach({ adminToken, resourceRef: target.resourceRef, url: target.url });
+    return targetFleet(targetOf(target.target), environment).reach({ adminToken, resourceRef: target.resourceRef, url: target.url });
 };
 
 /**

@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import type { TargetId } from "../provision-contract";
-import { isTargetId } from "../provision-contract";
+import { isBoxTarget, isTargetId } from "../provision-contract";
 import type { BoxView } from "./boxes";
 import { assessTargetDraft, assignableBoxes, BOX_STATUS, canManage } from "./boxes";
 import { Field, FormError } from "./section-ui";
@@ -120,7 +120,7 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
         setError(null);
         void (async () => {
             try {
-                await setTarget.mutate({ ...(next === "celld-vps" ? { boxId: draft.boxId as BoxId } : {}), organizationId, projectId, target: next });
+                await setTarget.mutate({ ...(isBoxTarget(next) ? { boxId: draft.boxId as BoxId } : {}), organizationId, projectId, target: next });
             } catch (error_: unknown) {
                 setError(error_ instanceof Error ? error_.message : "could not change the deploy target");
             }
@@ -132,7 +132,7 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
             <CardHeader>
                 <CardTitle>Deploy target</CardTitle>
                 <CardDescription>
-                    Now: {target === "celld-vps" ? `${targetLabel(target)} — ${currentBox}` : targetLabel(target)}. Switching the target does not move data: the
+                    Now: {isBoxTarget(target) ? `${targetLabel(target)} — ${currentBox}` : targetLabel(target)}. Switching the target does not move data: the
                     move is refused while this project still has deployments on its current target, so delete them and wait for teardown first.
                 </CardDescription>
             </CardHeader>

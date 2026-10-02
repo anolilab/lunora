@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeploymentSpec } from "../provision-contract";
+import { TARGETS } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
 import type { ReleaseStore } from "./release-store";
@@ -54,12 +55,12 @@ export interface ReleaseDeps {
     backend: ReleaseBackend;
 
     /**
-     * The driver for a target, built for this request's env
-     * (`resolveTargetDriver` in `src/targets/registry.ts`). Every converge goes
-     * through it; where the tenant lands — a cell's dispatch namespace, a box —
-     * is the driver's configuration, not the release's.
+     * The driver for a placement, built for this request's env
+     * (`resolveTargetDriver` in `src/targets/registry.ts`) when a converge runs.
+     * Every converge goes through it; where the tenant lands — a cell's dispatch
+     * namespace, a box — is the placement's, not the release's.
      */
-    driverFor: (placement: Placement, options?: DriverOptions) => TargetDriver;
+    driverFor: (placement: Placement) => TargetDriver;
     /** Where each deployment's payload is kept for rollback. */
     releases: ReleaseStore;
 
@@ -74,12 +75,6 @@ export interface ReleaseDeps {
     resolveTelemetry?: (input: { key?: string; organizationId: string }) => Promise<DeployTelemetry | undefined>;
     /** Paces converges against the cell's API budget (§2.5). */
     scheduler: CellScheduler;
-}
-
-/** Per-converge options for {@link ReleaseDeps.driverFor}. */
-export interface DriverOptions {
-    /** Lines the driver surfaces to the deploy stream as it converges (`celld-vps`: the box's job progress). */
-    onProgress?: (line: string) => void;
 }
 
 /** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
@@ -105,13 +100,10 @@ export const decodeBundle = (encoded: string): ArrayBuffer | null => {
 };
 
 /**
- * Assemble the {@link TenantDeploymentSpec} for one release.
- *
- * Split out of the NDJSON stream body because it is pure assembly — every
- * telemetry-conditional field lives here, so the streaming half reads as the
- * sequence of steps it is.
+ * Assemble the {@link TenantDeploymentSpec} for one release: pure assembly, with
+ * every telemetry-conditional field in one place.
  */
-export const buildDeploymentSpec = (input: {
+const buildDeploymentSpec = (input: {
     adminToken: string;
     alias: string;
     assets: AssetsUpload | undefined;
@@ -143,7 +135,7 @@ export const buildDeploymentSpec = (input: {
 };
 
 /** Best-effort telemetry: a failure here must never fail a deploy, so the tenant just ships untelemetered. */
-export const resolveTelemetrySafely = async (deps: ReleaseDeps, input: { key?: string; organizationId: string }): Promise<DeployTelemetry | undefined> => {
+const resolveTelemetrySafely = async (deps: ReleaseDeps, input: { key?: string; organizationId: string }): Promise<DeployTelemetry | undefined> => {
     try {
         return await deps.resolveTelemetry?.(input);
     } catch {
@@ -151,19 +143,59 @@ export const resolveTelemetrySafely = async (deps: ReleaseDeps, input: { key?: s
     }
 };
 
+/** One release of a deployment row, as {@link resolveReleaseSpec} assembles its spec. */
+export interface ReleaseSpecInput {
+    adminToken: string;
+    alias: string;
+    assets: AssetsUpload | undefined;
+    bundle: ArrayBuffer;
+    cronSpecs?: string[];
+    deploymentId: string;
+    /** The deploy key every backend call authorizes by; absent for a member session. */
+    key?: string;
+    kind: DeployKind;
+    manifest: DeployManifest;
+    organizationId: string;
+    projectId: string; // secret-scanner:allow -- domain field name
+}
+
+/**
+ * The target-neutral spec for one release — a deploy, its automatic revert, or
+ * a rollback. Secrets and telemetry are resolved NOW, never replayed: the
+ * release store holds no secrets, and every converge should run with the
+ * project's current configuration. `LUNORA_ADMIN_TOKEN` is platform-owned and
+ * always wins over a same-named tenant secret.
+ * @throws when the project's secrets cannot be resolved (a corrupt secret, a missing master key).
+ */
+export const resolveReleaseSpec = async (input: ReleaseSpecInput, deps: ReleaseDeps): Promise<TenantDeploymentSpec> => {
+    const { key, kind, organizationId, projectId } = input;
+    const tenantSecrets = (await deps.backend.resolveSecrets?.({ key, kind, organizationId, projectId })) ?? {}; // secret-scanner:allow -- domain field name
+
+    return buildDeploymentSpec({
+        adminToken: input.adminToken,
+        alias: input.alias,
+        assets: input.assets,
+        bundle: input.bundle,
+        ...(input.cronSpecs ? { cronSpecs: input.cronSpecs } : {}),
+        deploymentId: input.deploymentId,
+        kind,
+        manifest: input.manifest,
+        organizationId,
+        projectId, // secret-scanner:allow -- domain field name
+        telemetry: await resolveTelemetrySafely(deps, { key, organizationId }),
+        tenantSecrets,
+    });
+};
+
 /** Durable Object classes the Worker binds, by class name. */
 const durableObjectClasses = (manifest: DeployManifest): Set<string> =>
     new Set(manifest.bindings.flatMap((requirement) => (requirement.type === "durable_object" && requirement.className ? [requirement.className] : [])));
 
 /**
- * Put a stored release back on the project's stable Worker.
- *
- * Secrets and telemetry are resolved NOW, not replayed from the release: the
- * store never holds secrets, and a rolled-back Worker should run with the
- * project's current configuration exactly as a fresh deploy would. The admin
- * token is the target deployment's own, so its row's sealed token keeps working
- * with the studio proxy.
- * @throws {LunoraError} `CONFLICT` when the release was pruned, or — with `keepClasses` — when it drops a Durable Object class the live release binds.
+ * Put a stored release back on the project's stable Worker, with its spec
+ * resolved by {@link resolveReleaseSpec}. The admin token is the target
+ * deployment's own, so its row's sealed token keeps working with the studio proxy.
+ * @throws {LunoraError} `CONFLICT` when the release was pruned, or — with `keepClasses`, on a target that drops unbound classes — when it drops a Durable Object class the live release binds.
  */
 export const reprovision = async (
     input: { deploymentId: string; key?: string; organizationId: string },
@@ -171,9 +203,8 @@ export const reprovision = async (
     options: {
         /**
          * Refuse a release that stops binding a Durable Object class the live
-         * release binds. Alchemy emits `deleted_classes` for a class a
-         * dispatch-namespace Worker stops binding, so re-provisioning a release
-         * that predates a class would delete that class's data.
+         * release binds, on a target whose converge would delete that class's
+         * data (`TARGETS[target].dropsUnboundClasses`).
          */
         keepClasses?: boolean;
         priority?: number;
@@ -200,7 +231,10 @@ export const reprovision = async (
     }
 
     const live =
-        options.keepClasses && target.liveDeploymentId !== undefined && target.liveDeploymentId !== deploymentId
+        options.keepClasses &&
+        TARGETS[placement.target].dropsUnboundClasses &&
+        target.liveDeploymentId !== undefined &&
+        target.liveDeploymentId !== deploymentId
             ? await deps.releases.get(target.liveDeploymentId)
             : null;
 
@@ -222,24 +256,22 @@ export const reprovision = async (
         throw new LunoraError("INTERNAL", "the stored release bundle is corrupt");
     }
 
-    const tenantSecrets =
-        (await deps.backend.resolveSecrets?.({ key, kind: target.kind, organizationId: target.organizationId, projectId: target.projectId })) ?? {}; // secret-scanner:allow -- domain field name
-    const telemetry = await resolveTelemetrySafely(deps, { key, organizationId: target.organizationId });
-    const spec = buildDeploymentSpec({
-        adminToken: target.adminToken,
-        alias: target.alias,
-        assets: release.assets,
-        bundle,
-        ...(target.cronSpecs ? { cronSpecs: target.cronSpecs } : {}),
-        deploymentId,
-        kind: target.kind,
-        manifest: release.manifest,
-        organizationId: target.organizationId,
-        projectId: target.projectId, // secret-scanner:allow -- domain field name
-        telemetry,
-        tenantSecrets,
-    });
-
+    const spec = await resolveReleaseSpec(
+        {
+            adminToken: target.adminToken,
+            alias: target.alias,
+            assets: release.assets,
+            bundle,
+            ...(target.cronSpecs ? { cronSpecs: target.cronSpecs } : {}),
+            deploymentId,
+            ...(key === undefined ? {} : { key }),
+            kind: target.kind,
+            manifest: release.manifest,
+            organizationId: target.organizationId,
+            projectId: target.projectId, // secret-scanner:allow -- domain field name
+        },
+        deps,
+    );
     const driver = deps.driverFor(placement);
 
     await deps.scheduler.run(() => driver.deploy(spec), { priority: options.priority });

@@ -1,8 +1,8 @@
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
-import { bindingRefusal, CELLD_PITR_NOTE, refusedBindings, TARGET_OPTIONS, targetLabel, targetLimitations } from "../src/client/target-capabilities";
-import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
+import { bindingRefusal, refusedBindings, TARGET_OPTIONS, targetLabel } from "../src/client/target-capabilities";
+import { BINDING_SUPPORT, CELLD_PITR_NOTE, TARGET_IDS, TARGETS, UNSUPPORTED_REASONS } from "../src/provision-contract";
 
 const byName = (a: string, b: string): number => a.localeCompare(b, "en");
 
@@ -49,9 +49,9 @@ describe(refusedBindings, () => {
     });
 });
 
-describe(targetLimitations, () => {
+describe("target limitations", () => {
     it("says a box has no per-plan runtime limits and no point-in-time recovery, citing celld's note", () => {
-        const limitations = targetLimitations("celld-vps");
+        const { limitations } = TARGETS["celld-vps"];
 
         expect(limitations.map((entry) => entry.id)).toStrictEqual(["runtimeLimits", "pitr"]);
         expect(limitations.find((entry) => entry.id === "pitr")?.reason).toBe(CELLD_PITR_NOTE);
@@ -63,14 +63,14 @@ describe(targetLimitations, () => {
     });
 
     it("has nothing to add for Cloudflare", () => {
-        expect(targetLimitations("cloudflare-wfp")).toStrictEqual([]);
+        expect(TARGETS["cloudflare-wfp"].limitations).toStrictEqual([]);
     });
 });
 
 describe(targetLabel, () => {
-    it("names both targets as the selector does", () => {
+    it("names both targets as the selector does, the default first", () => {
         expect(targetLabel("cloudflare-wfp")).toBe("Lunora Cloud (Cloudflare)");
         expect(targetLabel("celld-vps")).toBe("Your own server");
-        expect(TARGET_OPTIONS.map((option) => option.id).toSorted(byName)).toStrictEqual([...TARGET_IDS].toSorted(byName));
+        expect(TARGET_OPTIONS.map((option) => option.id)).toStrictEqual(["cloudflare-wfp", "celld-vps"]);
     });
 });

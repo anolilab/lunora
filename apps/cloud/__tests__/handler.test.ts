@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/deploy/handler";
 import { handleDeployRequest } from "../src/deploy/handler";
+import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/deploy/release-core";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingRequirement, TenantDeploymentSpec } from "../src/provision-contract";
@@ -19,7 +19,7 @@ const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", typ
 const BUNDLE = btoa("export default {}");
 
 const okProvisioner: Provisioner = {
-    deploy: () => Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" }),
+    deploy: () => Promise.resolve({ url: "https://proj.lunora.app" }),
     destroy: () => Promise.resolve(),
 };
 
@@ -108,7 +108,7 @@ describe(handleDeployRequest, () => {
             deploy: (spec) => {
                 uploaded = spec.bundle;
 
-                return Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" });
+                return Promise.resolve({ url: "https://proj.lunora.app" });
             },
             destroy: () => Promise.resolve(),
         };
@@ -268,7 +268,7 @@ const capture = (): { provisioner: Provisioner; specs: TenantDeploymentSpec[] } 
             deploy: (spec: TenantDeploymentSpec) => {
                 specs.push(spec);
 
-                return Promise.resolve({ bundleHash: "h1", url: "https://proj.lunora.app" });
+                return Promise.resolve({ url: "https://proj.lunora.app" });
             },
             destroy: () => Promise.resolve(),
         },

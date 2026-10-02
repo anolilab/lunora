@@ -15,9 +15,9 @@ import { LunoraError } from "@lunora/server";
 
 import { internal } from "../../lunora/_generated/api.js";
 import { buildBox } from "../../lunora/containers";
-import type { DeployHandlerDeps } from "../deploy/handler";
-import { startRelease } from "../deploy/handler";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../deploy/keys";
+import type { DeployHandlerDeps } from "../deploy/release-core";
+import { startRelease } from "../deploy/release-core";
 import type { LunoraActionContext, RouterEnv } from "../deploy/routes/shared";
 import { createGitHubApp } from "../github/app";
 import { executeInContainer } from "./container-exec";
