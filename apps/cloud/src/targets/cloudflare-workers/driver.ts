@@ -30,6 +30,7 @@ import { BINDING_SUPPORT } from "../../provision-contract";
 import { decryptSecret } from "../../secrets/crypto";
 import type { ProgressLine, TargetDriver, TargetFleet } from "../driver";
 import type { AccountHost } from "../placement";
+import { resourceRefOf } from "../placement";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
 import type { PlatformStateStore, ProvisionTarget } from "../provision-box/contract";
@@ -126,10 +127,11 @@ export const createCloudflareWorkersFleet = (ports: CloudflareWorkersFleetPorts)
                 const credentials = await ports.credentials(scope);
                 const rows = await ports.read(credentials, sinceMs);
 
-                // Qualified by the account (`deployments.resourceRef`), so a script in this
-                // account can only ever be attributed to a deployment placed in it.
+                // The scope IS the account's row id — the `placementRef` its deployments
+                // carry — so a script in this account can only ever be attributed to a
+                // deployment placed in it (`resourceRefOf`, as `deployments.create` wrote it).
                 return rows.map((row) => {
-                    return { requests: row.requests, resourceRef: `${scope}/${row.scriptName}` };
+                    return { requests: row.requests, resourceRef: resourceRefOf({ placementRef: scope, target: "cloudflare-workers" }, row.scriptName) };
                 });
             },
             scopes: ports.accounts,

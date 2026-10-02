@@ -5,6 +5,8 @@ import { CloudflareTokenError } from "../src/cloudflare/fetch";
 import { handleCloudflareAccountConnectRoute } from "../src/deploy/routes/cloudflare-accounts";
 import { decryptSecret } from "../src/secrets/crypto";
 import { inspectAccount, readScriptRequests, verifyToken } from "../src/targets/cloudflare-workers/api";
+import { createCloudflareWorkersFleet } from "../src/targets/cloudflare-workers/driver";
+import { resourceRefOf } from "../src/targets/placement";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -159,6 +161,20 @@ const connectArgs = (overrides: Record<string, unknown> = {}) => {
         ...overrides,
     };
 };
+
+describe("the cloudflare-workers usage readback", () => {
+    it("attributes a script by the resourceRef deployments.create wrote for a deployment placed in that account", async () => {
+        const fleet = createCloudflareWorkersFleet({
+            accounts: () => Promise.resolve(["cfa_1"]),
+            credentials: () => Promise.resolve({ accountId: ACCOUNT, apiToken: TOKEN }),
+            read: () => Promise.resolve([{ requests: 3, scriptName: "web" }]),
+        });
+
+        await expect(fleet.usage?.read("cfa_1", 0)).resolves.toStrictEqual([
+            { requests: 3, resourceRef: resourceRefOf({ placementRef: "cfa_1", target: "cloudflare-workers" }, "web") },
+        ]);
+    });
+});
 
 describe("cloudflareAccounts", () => {
     it("lists an org's connections without their ciphertext", async () => {
