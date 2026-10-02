@@ -160,6 +160,9 @@ generated_files:
     # The generated error-code reference itself: a hand edit to the output is drift
     # too, and its generator's only other input (packages/errors) is listed below.
     - "apps/docs/src/content/docs/errors.mdx"
+    # The bring-your-own capability tables, and the contract they are generated from.
+    - "apps/docs/src/content/docs/cloud/your-own-*.mdx"
+    - "apps/cloud/src/provision-contract.ts"
     # Any app that commits a `lunora/_generated` tree — its schema and functions
     # are what codegen reads, so a change here is a change to generated output.
     # Listed because the sweep walks `apps/*` as well as `examples/*`:
