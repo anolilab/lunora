@@ -63,6 +63,7 @@ export interface AssetsUpload {
 export const BINDING_SUPPORT = {
     ai: "bound",
     analytics_engine: "provisioned",
+    artifacts: "unsupported",
     assets: "bound",
     browser: "bound",
     container: "unsupported",
@@ -71,20 +72,35 @@ export const BINDING_SUPPORT = {
     hyperdrive: "unsupported",
     images: "bound",
     kv: "provisioned",
+    media: "unsupported",
     pipeline: "unsupported",
     queue_consumer: "routed",
     queue_producer: "provisioned",
     r2: "provisioned",
+    stream: "unsupported",
     vectorize: "unsupported",
+    vpc_network: "unsupported",
+    vpc_service: "unsupported",
     workflow: "unsupported",
 } as const satisfies Record<BindingRequirement["type"], "bound" | "provisioned" | "routed" | "unsupported">;
 
 /** Why an `unsupported` type is refused — shown verbatim in the deploy error. */
-export const UNSUPPORTED_REASONS: Record<Extract<keyof typeof BINDING_SUPPORT, "container" | "hyperdrive" | "pipeline" | "vectorize" | "workflow">, string> = {
+export const UNSUPPORTED_REASONS: Record<
+    Extract<
+        keyof typeof BINDING_SUPPORT,
+        "artifacts" | "container" | "hyperdrive" | "media" | "pipeline" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow"
+    >,
+    string
+> = {
+    artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
     container: "containers need an image built and pushed per deploy, which Workers for Platforms cannot run",
     hyperdrive: "Hyperdrive points at your own database; bring-your-own origins are not supported on Lunora Cloud yet",
+    media: "the Media Transformations binding is not bound to dispatch-namespace scripts yet",
     pipeline: "a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry",
+    stream: "a Stream binding is not bound to dispatch-namespace scripts yet",
     vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
+    vpc_network: "a VPC network reaches into your own infrastructure; bring-your-own networks are not supported on Lunora Cloud yet",
+    vpc_service: "a VPC service reaches into your own infrastructure; bring-your-own services are not supported on Lunora Cloud yet",
     workflow: "Workflows register per account script, and Workers for Platforms scripts have no such registration yet",
 };
 
