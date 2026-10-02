@@ -130,6 +130,7 @@ export default defineConfig(async ({ mode }) => {
                 },
             }),
             tanstackStart({
+                server: { entry: "./diag-server-entry.ts" },
                 prerender: {
                     crawlLinks: true,
                     enabled: true,
