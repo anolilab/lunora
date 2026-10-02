@@ -1016,7 +1016,7 @@ interface SchemaIndex {
 interface SchemaInfo {
     hasD1GlobalTable: boolean;
     hasHyperdriveGlobalTable: boolean;
-    jurisdiction?: "eu" | "fedramp" | "us";
+    jurisdiction?: SchemaIR["jurisdiction"];
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }

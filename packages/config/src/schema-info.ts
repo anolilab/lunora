@@ -7,6 +7,7 @@
  */
 import { existsSync } from "node:fs";
 
+import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
@@ -43,7 +44,7 @@ interface SchemaInfo {
      * It pins the app's Durable Objects only; KV namespaces and R2 buckets carry
      * their own jurisdiction, set when they are created.
      */
-    jurisdiction?: "eu" | "fedramp" | "us";
+    jurisdiction?: SchemaIR["jurisdiction"];
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 

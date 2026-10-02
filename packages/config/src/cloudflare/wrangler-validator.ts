@@ -25,7 +25,6 @@ import {
     validateGlobalBackendBindings,
     validateHintBinding,
     validateQueues,
-    validateR2Jurisdiction,
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
@@ -33,6 +32,7 @@ import {
     validateWorkflowSettings,
     WORKFLOWS_RULE,
 } from "./validate-bindings";
+import validateJurisdiction from "./validate-jurisdiction";
 import {
     validateAssets,
     validateCache,
@@ -67,10 +67,33 @@ const DO_IO_KEEPALIVE_DATE: string = "2026-10-01";
 
 const DO_IO_KEEPALIVE_FLAG: string = "durable_object_io_tasks_prevent_eviction";
 
+// Only a workerd that ships the 2026-10-01 default knows the opt-out flag
+// (wrangler 4.143's 1.20260926 refuses to boot with it); it is still an explicit decision, so it silences
+// the warning.
 const DO_IO_KEEPALIVE_OPT_OUT_FLAG: string = "durable_object_io_tasks_do_not_prevent_eviction";
 
 // Hoisted to module scope so the literal isn't re-compiled on every call.
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Advisory only: the `>= REQUIRED_COMPATIBILITY_DATE` gate is the hard floor,
+ * and bumping the date flips every other flag dated in between, so the app
+ * owner decides. Either the opt-in or the opt-out flag is an explicit decision
+ * that silences it. Expects a valid ISO `compatibilityDate`.
+ */
+const validateDurableObjectIoKeepAlive = (compatibilityDate: string, compatibilityFlags: ReadonlyArray<string>, warnings: string[]): void => {
+    if (
+        compatibilityDate >= DO_IO_KEEPALIVE_DATE ||
+        compatibilityFlags.includes(DO_IO_KEEPALIVE_FLAG) ||
+        compatibilityFlags.includes(DO_IO_KEEPALIVE_OPT_OUT_FLAG)
+    ) {
+        return;
+    }
+
+    warnings.push(
+        `compatibility_date "${compatibilityDate}" predates "${DO_IO_KEEPALIVE_DATE}", so pending I/O (waitUntil, cross-Durable-Object RPC, service-binding calls, timers) does not keep a Durable Object alive once its last client disconnects — live-query refreshes and durable streams can be cut off mid-flight. Set compatibility_date >= "${DO_IO_KEEPALIVE_DATE}" or add the "${DO_IO_KEEPALIVE_FLAG}" compatibility flag`,
+    );
+};
 
 /**
  * Resolve the env-scoped view for {@link validateWranglerConfig} and fold in
@@ -139,12 +162,13 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateDurableObjectMigrations(wrangler, errors);
 
     const compatibilityDate = wrangler.compatibility_date ?? "";
+    const isIsoDate = ISO_DATE_PATTERN.test(compatibilityDate);
 
     // Lexical `<` only matches numeric comparison for strict `YYYY-MM-DD`; a
     // malformed string like "2026-4-7" sorts before "2026-04-07" and would
     // pass `>= REQUIRED_COMPATIBILITY_DATE` checks by accident. Enforce the
     // shape so the comparison below is meaningful.
-    if (compatibilityDate && !ISO_DATE_PATTERN.test(compatibilityDate)) {
+    if (compatibilityDate && !isIsoDate) {
         errors.push(`compatibility_date must be in YYYY-MM-DD format (got "${compatibilityDate}")`);
     } else if (compatibilityDate < REQUIRED_COMPATIBILITY_DATE) {
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
@@ -154,24 +178,12 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // enforce this when the cache block is actually enabled, so non-cache apps
     // aren't forced to bump. Malformed dates already produced a format error
     // above, so skip the date comparison unless the shape is valid.
-    if (isCacheEnabled(wrangler) && ISO_DATE_PATTERN.test(compatibilityDate) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
+    if (isCacheEnabled(wrangler) && isIsoDate && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
         errors.push(`cache.enabled requires compatibility_date >= "${WORKERS_CACHE_MIN_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 
-    // Advisory only: the date gate above is the hard floor, and bumping the
-    // date flips every other flag dated in between, so the app owner decides.
-    // Either opt-in or opt-out flag is an explicit decision that silences it.
-    const compatibilityFlags = wrangler.compatibility_flags ?? [];
-
-    if (
-        ISO_DATE_PATTERN.test(compatibilityDate) &&
-        compatibilityDate < DO_IO_KEEPALIVE_DATE &&
-        !compatibilityFlags.includes(DO_IO_KEEPALIVE_FLAG) &&
-        !compatibilityFlags.includes(DO_IO_KEEPALIVE_OPT_OUT_FLAG)
-    ) {
-        warnings.push(
-            `compatibility_date "${compatibilityDate}" predates "${DO_IO_KEEPALIVE_DATE}", so pending I/O (waitUntil, cross-Durable-Object RPC, service-binding calls, timers) does not keep a Durable Object alive once its last client disconnects — live-query refreshes and durable streams can be cut off mid-flight. Set compatibility_date >= "${DO_IO_KEEPALIVE_DATE}" or add the "${DO_IO_KEEPALIVE_FLAG}" compatibility flag`,
-        );
+    if (isIsoDate) {
+        validateDurableObjectIoKeepAlive(compatibilityDate, wrangler.compatibility_flags ?? [], warnings);
     }
 
     // `web_socket_auto_reply_to_close` became the default on 2026-04-07, the
@@ -182,7 +194,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // adds no signal. We therefore neither require nor reject the flag here.
 
     validateGlobalBackendBindings(wrangler, schema, errors);
-    validateR2Jurisdiction(wrangler, schema, warnings);
+    validateJurisdiction(wrangler, schema, warnings);
     validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
@@ -197,7 +209,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // bindings are pure shape checks. Config-only flags (logpush/placement/
     // assets) catch typos.
     for (const rule of HINT_BINDING_RULES) {
-        validateHintBinding(wrangler, rule, errors, warnings, schema?.jurisdiction);
+        validateHintBinding(wrangler, rule, errors, warnings);
     }
 
     for (const rule of REQUIRED_FIELD_BINDING_RULES) {
