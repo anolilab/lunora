@@ -126,12 +126,13 @@ One handler speaks one protocol:
 #### Mount the handler
 
 `authorize` is the gate. It runs on every request of an upload: `POST` creates
-it, `PATCH` sends a chunk, `HEAD` asks where to resume, `DELETE` cancels one in
-progress. It allows the request only when it returns exactly `true`; anything
-else, or a throw, answers `403`. A request that declares a size over `maxFileSize`
-is answered `413` before the gate runs. A finished upload cannot be deleted
-through the route at all: removing a stored file is `ctx.storage.delete` in your
-own code.
+it, `PATCH` sends a chunk, `HEAD` asks where to resume, and on TUS `DELETE`
+cancels one in progress. It allows the request only when it returns exactly
+`true`; anything else, or a throw, answers `403`. On TUS and chunked REST a
+request that declares a size over `maxFileSize` is answered `413` before the gate
+runs. A finished upload cannot be deleted through the route at all: TUS refuses
+to terminate one, and the chunked-REST and multipart routes answer `DELETE` with
+`405`. Removing a stored file is `ctx.storage.delete` in your own code.
 
 The gate has two jobs. On `POST` it decides who may start an upload. On every
 other method it must check that the upload in the URL belongs to the caller,

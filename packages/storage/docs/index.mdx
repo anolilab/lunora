@@ -285,16 +285,18 @@ client side, and the request-size limits. This is the reference.
 `fetch` on the route your client uploads to; one handler speaks one protocol, so
 each protocol needs its own route.
 
-| Option        | Meaning                                                                                                                                                                                                                       |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `storage`     | The `@visulima/storage` provider the bytes land in: `createR2UploadStorage(...)` in production, `@visulima/storage/provider/memory` in tests.                                                                                 |
-| `authorize`   | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel). Only `true` allows it; anything else, or a throw, answers `403`. |
-| `protocol`    | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                          |
-| `maxFileSize` | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                       |
-| `public`      | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                    |
+| Option        | Meaning                                                                                                                                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `storage`     | The `@visulima/storage` provider the bytes land in: `createR2UploadStorage(...)` in production, `@visulima/storage/provider/memory` in tests.                                                                                        |
+| `authorize`   | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`. |
+| `protocol`    | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                 |
+| `maxFileSize` | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                              |
+| `public`      | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                           |
 
-A finished upload cannot be deleted through the handler (`DELETE` only cancels
-one in progress).
+A finished upload cannot be deleted through the handler. On TUS, `DELETE` only
+cancels an upload in progress. The chunked-REST and multipart handlers would
+delete any stored file by id, so `DELETE` on them answers `405` before the gate
+runs.
 
 How `maxFileSize` is enforced depends on the protocol. For TUS and chunked REST
 the handler reads the largest size the request declares across `Upload-Length`

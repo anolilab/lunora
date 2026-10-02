@@ -16,9 +16,10 @@
  *
  * The `authorize` callback is the RLS decision: it runs before every request
  * (create, chunk PATCH, resume HEAD, delete) and denies fail-closed — a thrown
- * callback is a deny, never a 500. A request declaring a size over
- * `maxFileSize` is refused (413) before it reaches the gate. A finished upload
- * cannot be deleted through the handler.
+ * callback is a deny, never a 500. For TUS and chunked REST, a request declaring
+ * a size over `maxFileSize` is refused (413) before it reaches the gate. A
+ * finished upload cannot be deleted through the handler: TUS refuses to
+ * terminate one, and the other protocols refuse `DELETE` outright (405).
  */
 import { LunoraError } from "@lunora/errors";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
@@ -166,6 +167,24 @@ const tooLargeResponse = (protocol: UploadProtocol): Response =>
     });
 
 /**
+ * `DELETE` on the chunked-REST and multipart handlers removes any stored file by
+ * id (chunked REST also in batches, via `?ids=`), and neither honors
+ * `disableTerminationForFinishedUploads` — only TUS does. Refused for them here,
+ * so the upload route can only add files; deleting one stays `ctx.storage.delete`.
+ */
+const methodNotAllowedResponse = (protocol: UploadProtocol): Response => {
+    const response = errorResponse(protocol, 405, {
+        code: "METHOD_NOT_ALLOWED",
+        message: "DELETE is not allowed on this upload route",
+        name: "MethodNotAllowedError",
+    });
+
+    response.headers.set("Allow", protocol === "multipart" ? "GET, OPTIONS, POST" : "GET, HEAD, OPTIONS, PATCH, POST, PUT");
+
+    return response;
+};
+
+/**
  * Best-effort declared upload size read off the request, checked against
  * `maxFileSize` before the request reaches the underlying protocol handler.
  *
@@ -276,6 +295,10 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const fetch = async (request: Request): Promise<Response> => {
+        if (protocol !== "tus" && request.method === "DELETE") {
+            return methodNotAllowedResponse(protocol);
+        }
+
         const declaredSize = declaredUploadSize(request, protocol);
 
         if (declaredSize !== undefined && declaredSize > maxFileSize) {
