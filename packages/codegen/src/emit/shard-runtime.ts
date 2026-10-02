@@ -447,7 +447,7 @@ const emitServiceFragments = (services: ReadonlyArray<ServiceBindingIR>, serverS
             assertIdentifier(service.name, `service "${service.name}"`);
             assertIdentifier(service.binding, `service binding "${service.binding}"`);
 
-            return `    { binding: "${service.binding}", name: "${service.name}"${service.rpc ? ", rpc: true" : ""} },`;
+            return `    { binding: "${service.binding}", name: "${service.name}"${service.rpcEntrypoint === undefined ? "" : ", rpc: true"} },`;
         })
         .join("\n");
 

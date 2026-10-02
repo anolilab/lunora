@@ -90,7 +90,7 @@ interface ServiceLiteral {
     dir: string;
     entrypoint?: string;
     /** `false` binds a named `entrypoint` as a plain fetcher, without RPC types (so without importing the service's sources). */
-    rpc?: boolean;
+    rpc?: false;
 }
 
 /** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
@@ -275,33 +275,46 @@ const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map(
     ["target", { unreadable: true }],
 ]);
 
-/** A string-literal member's value, `undefined` when absent, or `false` when present but not a literal. */
+/** A member's initializer: `undefined` when absent, `"unreadable"` when present but not a plain `key: value` assignment. */
+const memberInitializer = (object: ObjectLiteralExpression, name: string): TsNode | "unreadable" | undefined => {
+    const member = object.getProperty(name);
+
+    if (member === undefined) {
+        return undefined;
+    }
+
+    return (TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined) ?? "unreadable";
+};
+
+/**
+ * A string-literal member's value, `undefined` when absent, or `false` when present
+ * but not a literal (not `"unreadable"`, which is itself a valid string value).
+ */
 const stringMember = (object: ObjectLiteralExpression, name: string): string | false | undefined => {
-    const member = object.getProperty(name);
+    const value = memberInitializer(object, name);
 
-    if (member === undefined) {
+    if (value === undefined) {
         return undefined;
     }
 
-    const value = TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined;
-
-    return value !== undefined && (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) ? value.getLiteralValue() : false;
+    return value !== "unreadable" && (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) ? value.getLiteralValue() : false;
 };
 
-/** A boolean-literal member's value, `undefined` when absent, or `"unreadable"` when present but not a literal. */
-const booleanMember = (object: ObjectLiteralExpression, name: string): boolean | "unreadable" | undefined => {
-    const member = object.getProperty(name);
+/**
+ * `rpc` on a service: only `false` means anything (a named entrypoint called with
+ * plain `fetch`), so `undefined` when absent and `"unreadable"` for any other value.
+ */
+const rpcMember = (object: ObjectLiteralExpression): false | "unreadable" | undefined => {
+    const value = memberInitializer(object, "rpc");
 
-    if (member === undefined) {
+    if (value === undefined) {
         return undefined;
     }
 
-    const value = TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined;
-
-    return value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) ? TsNode.isTrueLiteral(value) : "unreadable";
+    return value !== "unreadable" && TsNode.isFalseLiteral(value) ? false : "unreadable";
 };
 
-/** `services: { key: { dir: "…", entrypoint?: "…", rpc?: boolean } }`, all literals, or `unreadable`. */
+/** `services: { key: { dir: "…", entrypoint?: "…", rpc?: false } }`, all literals, or `unreadable`. */
 const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
     const value = unwrapLiteral(wrapped);
 
@@ -329,7 +342,7 @@ const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
 
         const directory = stringMember(initializer, "dir");
         const entrypoint = stringMember(initializer, "entrypoint");
-        const rpc = booleanMember(initializer, "rpc");
+        const rpc = rpcMember(initializer);
 
         if (typeof directory !== "string" || entrypoint === false || rpc === "unreadable") {
             return { services: { unreadable: true } };

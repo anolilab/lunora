@@ -201,7 +201,7 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     }
 
     for (const service of input.services) {
-        const style = service.rpc ? "rpc" : "fetch";
+        const style = service.rpcEntrypoint === undefined ? "fetch" : "rpc";
 
         add({
             detail: service.entrypoint === undefined ? style : `${style} · ${service.entrypoint}`,

@@ -914,7 +914,7 @@ interface ServiceBindingIR {
     main: string;
     name: string;
     publicScopes: ReadonlyArray<string>;
-    rpc: boolean;
+    rpcEntrypoint?: string;
     worker: string;
     wranglerPath: string;
 }
@@ -926,7 +926,7 @@ interface ServiceBindingIR {
 interface ServiceLiteral {
     dir: string;
     entrypoint?: string;
-    rpc?: boolean;
+    rpc?: false;
 }
 ```
 

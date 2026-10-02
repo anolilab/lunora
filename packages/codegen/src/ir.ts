@@ -878,12 +878,13 @@ export interface ServiceBindingIR {
     publicScopes: ReadonlyArray<string>;
 
     /**
-     * The service is typed — and wired — as an RPC stub of its `entrypoint`
-     * class. `false` for a fetch service, including a named entrypoint declared
+     * The `WorkerEntrypoint` class the service is typed — and wired — as an RPC
+     * stub of. Equal to {@link ServiceBindingIR.entrypoint} for an RPC service;
+     * absent for a fetch service, including a named entrypoint declared
      * `rpc: false`, which is called with plain `fetch` and so needs no import of
      * the service's sources.
      */
-    rpc: boolean;
+    rpcEntrypoint?: string;
     /** The Worker's own `name` from its wrangler config — the `services[].service` target. */
     worker: string;
     /** Absolute path of the service's wrangler config. */
