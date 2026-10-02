@@ -330,15 +330,6 @@ export default createConfig(
             "e18e/ban-dependencies": "off",
         },
     },
-    // Server functions: `createServerFn().handler(async () => …)` mandates an async
-    // handler signature even when the body has no await, so require-await is a false
-    // positive at this framework boundary.
-    {
-        files: ["src/server/**/*.{ts,tsx}"],
-        rules: {
-            "@typescript-eslint/require-await": "off",
-        },
-    },
     // Static code-display components: render syntax-highlighted token spans and code
     // lines from a fixed `lines` array that is never reordered or filtered, so the list
     // index is a stable, correct key (there is no other identity to key on).

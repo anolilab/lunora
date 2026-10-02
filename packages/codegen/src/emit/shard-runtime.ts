@@ -1,6 +1,6 @@
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, TopicIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { emitAiFragments, renderThrowingStub } from "./shard-bindings";
@@ -417,6 +417,40 @@ ${specEntries}
 };
 
 /**
+ * The `ctx.services` fragments (plan 457): a `LUNORA_SERVICES` spec list and the
+ * `createServices` build, woven onto the action ctx only — a cross-Worker call
+ * is non-deterministic I/O, the same reason `ctx.browser` is action-only.
+ */
+const emitServiceFragments = (services: ReadonlyArray<ServiceBindingIR>, serverSpecifier: string): { build: string; importLines: string[]; specs: string } => {
+    if (services.length === 0) {
+        return { build: "", importLines: [], specs: "" };
+    }
+
+    const specEntries = services
+        .map((service) => {
+            assertIdentifier(service.name, `service "${service.name}"`);
+            assertIdentifier(service.binding, `service binding "${service.binding}"`);
+
+            return `    { binding: "${service.binding}", name: "${service.name}"${service.entrypoint === undefined ? "" : ", rpc: true"} },`;
+        })
+        .join("\n");
+
+    return {
+        build: `
+            const services = createServices(env, LUNORA_SERVICES);
+`,
+        importLines: [`import type { ServiceBindingSpec } from "${serverSpecifier}";`, `import { createServices } from "${serverSpecifier}";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.services\` (codegen-derived from \`lunora.config\` \`services\`). */
+const LUNORA_SERVICES: ReadonlyArray<ServiceBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
  * The `ctx.agents` producer fragments, mirroring {@link emitQueueFragments}.
  * Every declared agent resolves off the shard DO's `ctx.exports` lazily
  * (via `createAgentContext`), so a missing binding only throws when that agent
@@ -686,6 +720,7 @@ export {
     emitQueueFragments,
     emitQueues,
     emitQueuesMetadataFragments,
+    emitServiceFragments,
     emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflows,

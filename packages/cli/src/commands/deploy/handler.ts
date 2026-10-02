@@ -1,5 +1,7 @@
+import { dirname } from "node:path";
+
 import type { CodegenResult } from "@lunora/codegen";
-import { runCodegen } from "@lunora/codegen";
+import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
 import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver } from "@lunora/config";
 import { describePreservedCrons, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config/cloudflare";
@@ -161,6 +163,12 @@ const provisionBindings = async (
 
         if (reconciled.updated.length > 0) {
             logger.success(`updated bindings: ${reconciled.updated.join(", ")} → ${writtenTo}`);
+        }
+
+        if (reconciled.devConfig !== undefined) {
+            const { added, path, updated } = reconciled.devConfig;
+
+            logger.success(`dev sidecar bindings: ${[...added, ...updated].join(", ")} → ${path}`);
         }
 
         for (const warning of reconciled.warnings) {
@@ -599,6 +607,93 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     return { codegen, reblessSchemaBaseline, target, validation };
 };
 
+/** Why this run deploys no services, or `undefined` when it deploys them. */
+const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
+    if (options.skipServices === true) {
+        return "--skip-services";
+    }
+
+    if (options.preview === true) {
+        return "--preview uploads the app version only";
+    }
+
+    // A temporary account is the app's alone: services deployed with the real
+    // login would land elsewhere, and the bindings could never resolve.
+    if (options.temporary === true) {
+        return "--temporary deploys the app to a throwaway account";
+    }
+
+    return undefined;
+};
+
+/**
+ * Deploy each `lunora.config` service (plan 457) before the app, so the app's
+ * `services[]` bindings never point at a Worker that does not exist yet, or at
+ * an older one missing a method the app now calls. Each one goes through the
+ * target's own deploy command, run from the service's folder (so a custom
+ * `build` runs where the service lives) against the target's projection of the
+ * service's config — celld's driver projects it like the app's. `--env` and
+ * `--dry-run` pass through; a target refusing one says so here. Returns the
+ * error that stops the deploy, if any.
+ */
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
+    const { error, services } = readServiceBindings(cwd);
+
+    if (error !== undefined) {
+        return error;
+    }
+
+    if (services.length === 0) {
+        return undefined;
+    }
+
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+
+    if (skipped !== undefined || toolchain === undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    const manager = detectPackageManager(cwd);
+    // Two keys may bind two entrypoints of one Worker: it deploys once.
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+
+    for (const service of workers) {
+        const directory = dirname(service.wranglerPath);
+        let invocation: ReturnType<typeof planToolchainInvocation>;
+
+        try {
+            invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
+                // Always an explicit config: wrangler left to discover one walks up
+                // from the service folder and can find the app's `wrangler.json`
+                // or a Vite build's `.wrangler/deploy/config.json` first.
+                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+            );
+        } catch (error_: unknown) {
+            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
+        }
+
+        invocation.commit();
+
+        const exec = toolchainExecArgs(manager, invocation.command);
+
+        options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
+
+        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
+
+        if (result.code !== 0) {
+            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
+        }
+    }
+
+    return undefined;
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -659,11 +754,17 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
+    const spawner = options.spawner ?? defaultSpawner;
+    const servicesError = await deployServices(cwd, options, driver, spawner);
+
+    if (servicesError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: servicesError, mintedSecretsFile, validation };
+    }
+
     const descriptor = buildDeploySpawn(cwd, options, driver);
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);
 
-    const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
     // Replay what was captured silently, so `--format json` still shows the
@@ -767,6 +868,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        skipServices: options.skipServices === true,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,

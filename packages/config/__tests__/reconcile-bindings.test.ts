@@ -20,6 +20,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         durableObjects: [SHARD],
         needsD1: false,
         queues: [],
+        services: [],
         signals: [],
         usesAi: false,
         usesAnalytics: false,

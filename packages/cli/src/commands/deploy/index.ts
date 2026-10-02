@@ -74,6 +74,11 @@ const deployCommand: Command = {
             name: "preview",
             type: Boolean,
         },
+        {
+            description: "Deploy only the app, not the lunora.config services it binds (they deploy first by default)",
+            name: "skip-services",
+            type: Boolean,
+        },
         TARGET_OPTION,
         {
             description:
@@ -104,6 +109,7 @@ export type DeployOptions = CreateOptions<{
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    "skip-services": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     temporary: boolean | undefined;

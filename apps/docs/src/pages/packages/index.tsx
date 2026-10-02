@@ -11,9 +11,9 @@ import type { AccentColor, Category, PackageInfo } from "@/data/packages";
 import { categories, packages } from "@/data/packages";
 import { Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
+import type { DownloadStats } from "@/lib/stats";
+import { getStats } from "@/lib/stats";
 import { cn, formatNumber } from "@/lib/utils";
-import type { DownloadStats } from "@/server/stats";
-import { getStats } from "@/server/stats";
 
 const accentText: Record<AccentColor, string> = {
     "crimson-energy": "text-crimson-energy",

@@ -35,7 +35,8 @@ module folder are shown as "outside any module".
 
 Once the app declares a module, codegen writes `_generated/architecture.json`
 (and an inlined `architecture.ts` the generated app passes to the worker). The
-manifest lists every function, HTTP route, table, queue, topic, workflow and cron,
+manifest lists every function, HTTP route, table, queue, topic, workflow, cron and
+service,
 the module each belongs to, and the edges between them:
 
 | Edge        | From → to                | Read from                                                                                                                                                      |
@@ -49,6 +50,7 @@ the module each belongs to, and the edges between them:
 | `subscribe` | topic → subscription     | `defineSubscription(topic, …)`                                                                                                                                 |
 | `start`     | function → workflow      | `ctx.workflows.get("name")`                                                                                                                                    |
 | `trigger`   | cron → function/workflow | `cronJobs()`                                                                                                                                                   |
+| `invoke`    | function → service       | `ctx.services.<name>.<member>`, called or passed on (a destructured `ctx.services` is not seen) — see [Services](/docs/concepts/services)                      |
 
 The Studio's **Functions → Architecture** page renders it: a catalog of modules
 with their descriptions, owned tables and function counts, and a diagram with one

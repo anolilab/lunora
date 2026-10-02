@@ -1,3 +1,33 @@
+## @lunora/cli [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.332...@lunora/cli@1.0.0-alpha.333) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.178
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.246
+* **@lunora/config:** upgraded to 1.0.0-alpha.291
+* **@lunora/seed:** upgraded to 1.0.0-alpha.176
+* **@lunora/testing:** upgraded to 1.0.0-alpha.217
+
+## @lunora/cli [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.331...@lunora/cli@1.0.0-alpha.332) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.177
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.89
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.245
+* **@lunora/config:** upgraded to 1.0.0-alpha.290
+* **@lunora/d1:** upgraded to 1.0.0-alpha.156
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.203
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.169
+* **@lunora/seed:** upgraded to 1.0.0-alpha.175
+* **@lunora/testing:** upgraded to 1.0.0-alpha.216
+
 ## @lunora/cli [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.330...@lunora/cli@1.0.0-alpha.331) (2026-10-01)
 
 ### Features

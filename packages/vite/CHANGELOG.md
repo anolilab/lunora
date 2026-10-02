@@ -1,3 +1,25 @@
+## @lunora/vite [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.288...@lunora/vite@1.0.0-alpha.289) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.246
+* **@lunora/config:** upgraded to 1.0.0-alpha.291
+* **@lunora/studio:** upgraded to 1.0.0-alpha.248
+
+## @lunora/vite [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.287...@lunora/vite@1.0.0-alpha.288) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.245
+* **@lunora/config:** upgraded to 1.0.0-alpha.290
+* **@lunora/studio:** upgraded to 1.0.0-alpha.247
+
 ## @lunora/vite [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.286...@lunora/vite@1.0.0-alpha.287) (2026-10-01)
 
 

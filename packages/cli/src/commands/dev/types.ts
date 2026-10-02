@@ -1,5 +1,5 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
-import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets } from "@lunora/config";
+import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
 import type { materializeRemoteWranglerConfig } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -64,6 +64,8 @@ interface DevCommandOptions {
     probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
+    /** Starts the celld dev session for the celld target; injected in tests. */
+    startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the real studio server. */
@@ -108,6 +110,13 @@ interface DevRemotePlan {
 }
 
 interface DevCommandPlan {
+    /**
+     * `true` when the worker is a celld dev session (a target running its own
+     * dev server) rather than {@link DevCommandPlan.wrangler}'s process: services
+     * registered first, a service edit re-registering it and restarting the app.
+     */
+    celldSession?: true;
+
     /** Which stack the child runs — see {@link DevFlavor}. */
     flavor: DevFlavor;
 
@@ -142,6 +151,7 @@ interface DevCommandPlan {
      * is the Lunora realtime plane.
      */
     sidecar?: SpawnDescriptor & { tag: string };
+
     studioEnabled: boolean;
 
     studioPort: number;

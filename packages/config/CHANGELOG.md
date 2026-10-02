@@ -1,3 +1,25 @@
+## @lunora/config [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.290...@lunora/config@1.0.0-alpha.291) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.246
+* **@lunora/seed:** upgraded to 1.0.0-alpha.176
+* **@lunora/studio:** upgraded to 1.0.0-alpha.248
+
+## @lunora/config [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.289...@lunora/config@1.0.0-alpha.290) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.245
+* **@lunora/seed:** upgraded to 1.0.0-alpha.175
+* **@lunora/studio:** upgraded to 1.0.0-alpha.247
+
 ## @lunora/config [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.288...@lunora/config@1.0.0-alpha.289) (2026-10-01)
 
 

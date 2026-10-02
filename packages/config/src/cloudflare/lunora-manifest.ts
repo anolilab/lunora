@@ -166,4 +166,4 @@ const recordManifestKey = (manifest: Manifest, key: string, value: unknown): voi
 };
 
 export type { Manifest };
-export { formattingFor, readManifest, recordManifestKey };
+export { canonical, formattingFor, readManifest, recordManifestKey };

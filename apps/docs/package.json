@@ -46,6 +46,7 @@
         "@tanstack/react-router-devtools": "catalog:web",
         "@tanstack/react-start": "catalog:web",
         "@tanstack/react-virtual": "catalog:web",
+        "@tanstack/start-static-server-functions": "catalog:web",
         "@types/babel__core": "catalog:web",
         "@types/mdx": "catalog:web",
         "@types/node": "catalog:web",

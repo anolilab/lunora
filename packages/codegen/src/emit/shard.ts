@@ -14,6 +14,7 @@ import type {
     QueueIR,
     RlsMetadataIR,
     SchemaIR,
+    ServiceBindingIR,
     ShapeIR,
     StorageRulesMetadataIR,
     TopicIR,
@@ -50,6 +51,7 @@ import {
     emitPaymentFragments,
     emitQueueFragments,
     emitQueuesMetadataFragments,
+    emitServiceFragments,
     emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
@@ -120,6 +122,8 @@ interface EmitShardOptions {
      * unchanged.
      */
     schemaSnapshot?: SchemaSnapshot;
+    /** Sibling Workers declared in `lunora.config.*` `services` — wires `ctx.services` onto the action ctx (plan 457). */
+    services?: ReadonlyArray<ServiceBindingIR>;
     /** Replication shapes declared via `defineShape` in `lunora/shapes.ts` — wires the `resolveShape` subscription override. */
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
@@ -162,6 +166,7 @@ const emitShard = ({
     shapes = [],
     storageRules,
     studioFeatures,
+    services = [],
     topics = [],
     useUmbrella = false,
     workflows = [],
@@ -205,6 +210,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     const pipelinesFragments = emitPipelinesFragments(hasPipelines);
     const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(plainQueues(queues));
     const { build: topicsBuild, contextField: topicsContextField, importLines: topicImportLines, specs: topicSpecs } = emitTopicFragments(topics, queues);
+    const servicesFragments = emitServiceFragments(services, base.server);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -419,6 +425,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...workflowImportLines,
         ...queueImportLines,
         ...topicImportLines,
+        ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
         ...x402Imports,
@@ -763,8 +770,9 @@ ${schema.tables
         ...(hasR2sql ? ["r2sql"] : []),
         ...(hasPipelines ? ["pipelines"] : []),
         ...(hasX402 ? ["x402"] : []),
+        ...(services.length > 0 ? ["services"] : []),
     ];
-    const actionOnlyBuild = `${aiBuild}${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}`;
+    const actionOnlyBuild = `${aiBuild}${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}${servicesFragments.build}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -823,7 +831,7 @@ const LUNORA_STORAGE_RULES = ${renderJsonData(storageRulesData, "StorageRulesRes
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderJsonData(studioFeaturesData, "StudioFeaturesResult")};
-${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${agentSpecs}
+${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;

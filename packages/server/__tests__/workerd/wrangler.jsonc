@@ -1,0 +1,14 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the
+// test Worker in real workerd. `parser` and `gateway` are the auxiliary Workers
+// declared in `vitest.config.ts` — what `lunora.config` `services` reconciles.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-server-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "services": [
+        { "binding": "SERVICE_PARSER", "service": "parser" },
+        { "binding": "SERVICE_GATEWAY", "service": "gateway", "entrypoint": "Gateway" },
+    ],
+}

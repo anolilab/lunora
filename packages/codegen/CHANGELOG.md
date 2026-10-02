@@ -1,3 +1,30 @@
+## @lunora/codegen [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.245...@lunora/codegen@1.0.0-alpha.246) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.178
+* **@lunora/agent:** upgraded to 1.0.0-alpha.160
+* **@lunora/server:** upgraded to 1.0.0-alpha.167
+
+## @lunora/codegen [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.244...@lunora/codegen@1.0.0-alpha.245) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.177
+* **@lunora/agent:** upgraded to 1.0.0-alpha.159
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/queue:** upgraded to 1.0.0-alpha.84
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.102
+* **@lunora/do:** upgraded to 1.0.0-alpha.186
+* **@lunora/server:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/codegen [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.243...@lunora/codegen@1.0.0-alpha.244) (2026-10-01)
 
 ### Features

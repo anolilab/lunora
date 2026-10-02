@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.47...@lunora/platform@1.0.0-alpha.48) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
 ## @lunora/platform [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.46...@lunora/platform@1.0.0-alpha.47) (2026-10-01)
 
 ### Features

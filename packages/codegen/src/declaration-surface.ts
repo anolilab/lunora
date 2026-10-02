@@ -48,11 +48,24 @@ import readPackageDependencies from "./discover/package-dependencies";
 import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueueDeclarations } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
+import { resolveServiceBindings } from "./discover/service-bindings";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
-import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, TopicIR, WorkflowIR } from "./ir";
+import type {
+    AgentIR,
+    ContainerIR,
+    CronJobIR,
+    EnvIR,
+    IdentityIR,
+    QueueIR,
+    SchemaIR,
+    ServiceBindingIR,
+    StorageRulesMetadataIR,
+    TopicIR,
+    WorkflowIR,
+} from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
@@ -164,6 +177,8 @@ interface DeclarationSurface {
     queues: ReadonlyArray<QueueIR>;
     /** `_generated/server.ts`, rendered. Not written — see the module docblock. */
     serverContent: string;
+    /** Sibling Workers from `lunora.config.*` `services`, empty on a target that rates `services` unsupported. */
+    services: ReadonlyArray<ServiceBindingIR>;
     storageRulesMetadata: StorageRulesMetadataIR;
     topics: ReadonlyArray<TopicIR>;
     /** Either sandbox tool registers the `sandbox:invoke` dispatcher via `emitFunctions`. */
@@ -203,6 +218,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // only within its own kind, but both land in one wrangler `workflows[]`.
     const workflows = discoverWorkflows(project, lunoraDirectory);
     const { queues, topics } = discoverQueueDeclarations(project, lunoraDirectory);
+    const services = resolveServiceBindings(projectRoot);
     const agents = discoverAgents(project, lunoraDirectory);
 
     assertNoWorkflowAgentCollision(workflows, agents);
@@ -283,6 +299,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // that cannot serve the traversal only refuses apps that would use one.
         relationGraph: schemaDeclaresRelationGraph(schema),
         secrets: codeSignals.secrets,
+        services: services.length > 0,
         topics: topics.length > 0,
         // Read off the schema for the same reason `globalTables` is — and it has
         // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`
@@ -301,6 +318,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // `undefined` means the app never declared a vector index, which must not
     // withhold anything; only an explicit `false` is a rejection.
     const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+    // Same for `services`: a target rating them unsupported gets no `ctx.services`.
+    const supportedServices = platformGate.signals.services === false ? [] : services;
 
     const declaredDependencies = readPackageDependencies(projectRoot);
     const dependencies = declaredDependencies ?? new Set<string>();
@@ -372,11 +391,14 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             identity,
             queues,
             schema,
+            generatedDirectory: join(lunoraDirectory, "_generated"),
+            services: supportedServices,
             storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
             topics,
             useUmbrella,
             workflows,
         }),
+        services: supportedServices,
         storageRulesMetadata,
         topics,
         // ANY sandbox tool needs the `sandbox:invoke` dispatcher registered — the

@@ -187,6 +187,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
         },
+        services: {
+            level: "unsupported",
+            note: "No sibling-Worker host: a Node process runs one app, with nothing a service binding could point at. Gate-bearing, so codegen omits ctx.services instead of emitting bindings that resolve to nothing",
+        },
         topics: {
             level: "emulated",
             note: "Each subscription is a createNodeQueueHost queue, so a publish is one durable insert per subscription into _lunora_queue_messages. Inherits the queues row's gap: a subscription handler's message.run dispatches to an endpoint no Node HTTP server serves",

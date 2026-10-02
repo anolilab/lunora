@@ -1,3 +1,22 @@
+## @lunora/server [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.166...@lunora/server@1.0.0-alpha.167) (2026-10-02)
+
+### Performance Improvements
+
+* **docs:** serve content loaders as static json ([#922](https://github.com/anolilab/lunora/issues/922)) ([61c1d93](https://github.com/anolilab/lunora/commit/61c1d932e6cf69231d776ea905fd007980b3a1cc)), closes [#914](https://github.com/anolilab/lunora/issues/914)
+
+## @lunora/server [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.165...@lunora/server@1.0.0-alpha.166) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.102
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+* **@lunora/observability:** upgraded to 1.0.0-alpha.113
+
 ## @lunora/server [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.164...@lunora/server@1.0.0-alpha.165) (2026-10-01)
 
 ### Features
