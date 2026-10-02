@@ -24,7 +24,10 @@ export interface FakeSocket extends SessionSocket {
     sent: string[];
 }
 
-export const fakeSocket = (attachment: SessionAttachment): FakeSocket => {
+/** Called with every frame the control plane sends a socket — where a fake box answers. */
+export type FrameListener = (message: string, socket: FakeSocket) => void;
+
+export const fakeSocket = (attachment: SessionAttachment, onSend?: FrameListener): FakeSocket => {
     const socket: FakeSocket = {
         attachment,
         close: (code, reason) => {
@@ -43,6 +46,7 @@ export const fakeSocket = (attachment: SessionAttachment): FakeSocket => {
             }),
         send: (message) => {
             socket.sent.push(message);
+            onSend?.(message, socket);
         },
         sent: [],
         serializeAttachment: (value) => {
@@ -146,8 +150,14 @@ export const authFrame = async (key: BoxKey, boxId: string, nonce: string): Prom
     JSON.stringify({ signature: await key.sign(challengeSigningPayload(nonce, boxId)), type: "auth" });
 
 /** Run the whole handshake on a fresh socket accepted by `session`. */
-export const handshake = async (session: BoxSessionDO, state: FakeState, key: BoxKey, boxId: string, now = Date.now()): Promise<FakeSocket> => {
-    const socket = fakeSocket(openSession(boxId, now));
+export const handshake = async (
+    session: BoxSessionDO,
+    state: FakeState,
+    key: BoxKey,
+    boxId: string,
+    options: { now?: number; onSend?: FrameListener } = {},
+): Promise<FakeSocket> => {
+    const socket = fakeSocket(openSession(boxId, options.now ?? Date.now()), options.onSend);
 
     state.acceptWebSocket(socket);
     await session.webSocketMessage(socket, helloFrame(boxId));
@@ -202,3 +212,37 @@ export const signedHeaders = async (
 };
 
 export type { MemoryStore } from "./memory-store";
+
+/**
+ * A stand-in for `lunora-hostd` on the far end of an authenticated socket, as a
+ * {@link FrameListener}: it runs each `job` frame the control plane sends
+ * against `fleets` (alias → deployment), streams one progress line, and answers
+ * a `result` — through the session's own `webSocketMessage`, exactly as frames
+ * from a real box arrive.
+ */
+export const fakeHostd =
+    (session: BoxSessionDO, fleets: Map<string, string>): FrameListener =>
+    (message, socket) => {
+        const decoded = decodeCloudMessage(message);
+
+        if (!decoded.ok || decoded.message.type !== "job") {
+            return;
+        }
+
+        const { job, jobId } = decoded.message;
+
+        if (job.kind === "deploy") {
+            fleets.set(job.alias, job.deploymentId);
+        } else if (job.kind === "destroy") {
+            fleets.delete(job.alias);
+        }
+
+        const answer = async (): Promise<void> => {
+            await session.webSocketMessage(socket, JSON.stringify({ jobId, line: `${job.kind}: done`, type: "progress" }));
+            await session.webSocketMessage(socket, JSON.stringify({ jobId, ok: true, type: "result" }));
+        };
+
+        setTimeout(() => {
+            answer().catch(() => undefined);
+        }, 0);
+    };

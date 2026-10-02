@@ -253,6 +253,15 @@ export interface TenantDeploymentSpec {
     bundle: ArrayBuffer;
     /** Wire the target's platform log source for this tenant (`TargetDriver.logs` in `src/targets/driver.ts`). Set when the release resolved telemetry. */
     collectLogs?: boolean;
+
+    /**
+     * The tenant's cron expressions (wrangler `triggers.crons`), for a target
+     * that fires them itself (`celld-vps`, plan 458 D11). A `dispatcher` target
+     * ignores them: the control plane fans its ticks out from `deployments.cronSpecs`.
+     */
+    crons?: string[];
+    /** The deployment this spec releases — the key of its stored release in `RELEASES`, which a box fetches it by (plan 458 D6). */
+    deploymentId: string;
     kind: DeployKind;
     /** Validated against the target's binding table: contains no `unsupported` type. */
     manifest: DeployManifest;

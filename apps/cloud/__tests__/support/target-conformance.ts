@@ -35,6 +35,7 @@ const specFor = (alias: string, version = 1): TenantDeploymentSpec => {
     return {
         alias,
         bundle: new TextEncoder().encode(`export default { version: ${String(version)} }`).buffer,
+        deploymentId: `dep_${alias}_${String(version)}`,
         kind: "production",
         manifest: { bindings: [{ ...SHARD }] },
         secrets: { LUNORA_ADMIN_TOKEN: "admin" },

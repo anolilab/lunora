@@ -654,6 +654,7 @@ interface RecordedRelease {
     assets: AssetsUpload | undefined;
     bundle: ArrayBuffer;
     caller: ReleaseCaller;
+    cronSpecs: string[] | undefined;
     deploymentId: string;
     /** The project's target driver — resolved before the row was recorded, so a missing one refused the release. */
     driver: TargetDriver;
@@ -680,6 +681,8 @@ const releaseSpec = async (release: RecordedRelease, deps: DeployHandlerDeps): P
         alias: release.scriptName,
         assets: release.assets,
         bundle: release.bundle,
+        ...(release.cronSpecs ? { cronSpecs: release.cronSpecs } : {}),
+        deploymentId: release.deploymentId,
         kind,
         manifest: release.manifest,
         organizationId,
@@ -824,11 +827,12 @@ const projectDriver = async (
     projectId: string, // secret-scanner:allow -- domain field name
     caller: ReleaseCaller,
     deps: DeployHandlerDeps,
+    onProgress: (line: string) => void,
 ): Promise<{ driver: TargetDriver } | { error: string; status: 403 | 409 | 501 }> => {
     try {
         const placement = await deps.backend.placement({ key: caller.key, organizationId: caller.organizationId, projectId });
 
-        return { driver: deps.driverFor(placement.target) };
+        return { driver: deps.driverFor(placement, { onProgress }) };
     } catch (error) {
         const message = error instanceof Error ? error.message : "this project cannot be placed";
         const status = isLunoraError(error) ? error.status : 403;
@@ -865,7 +869,12 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
     // table the payload is validated against, a project placed on another cell
     // is refused here, and a target with no driver must refuse before anything
     // is recorded.
-    const placed = await projectDriver(request.projectId, caller, deps);
+    // The driver's progress lines join the release's own stream once it runs
+    // (`{ deploymentId, log }` frames); a target that reports none adds none.
+    let progressSink: ((line: string) => void) | undefined;
+    const placed = await projectDriver(request.projectId, caller, deps, (line) => {
+        progressSink?.(line);
+    });
 
     if ("error" in placed) {
         return placed;
@@ -908,12 +917,31 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
 
     return {
         deploymentId,
-        run: (write) =>
-            runRelease(
-                { adminToken, assets, bundle, caller, deploymentId, driver, encodedBundle, kind, manifest, previousDeploymentId, projectId, scriptName },
+        run: (write) => {
+            progressSink = (line) => {
+                write({ deploymentId, log: line });
+            };
+
+            return runRelease(
+                {
+                    adminToken,
+                    assets,
+                    bundle,
+                    caller,
+                    cronSpecs,
+                    deploymentId,
+                    driver,
+                    encodedBundle,
+                    kind,
+                    manifest,
+                    previousDeploymentId,
+                    projectId,
+                    scriptName,
+                },
                 deps,
                 write,
-            ),
+            );
+        },
     };
 };
 

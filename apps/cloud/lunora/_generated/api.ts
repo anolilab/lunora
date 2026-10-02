@@ -64,7 +64,7 @@ export interface ApiTypes {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; projectId: Id<"projects">; branch?: string; bundleHash?: string; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; expiresAt?: number; url?: string; version?: number }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; projectId: Id<"projects">; branch?: string; bundleHash?: string; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
@@ -211,7 +211,7 @@ export interface InternalApiTypes {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
         ejectTarget: FunctionReference<"query", { deployKey: unknown; deploymentId: Id<"deployments"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         pruneSuperseded: FunctionReference<"mutation", {}, { pruned: number; }>;
-        releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; target?: string }>;
+        releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; target?: string }>;
         rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
     };
     domains: {
@@ -238,7 +238,7 @@ export interface InternalApiTypes {
     };
     projects: {
         byGithubRepo: FunctionReference<"query", { repository: unknown }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
-        placement: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { cellName?: string; target?: string }>;
+        placement: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
         verifyPreviewPassword: FunctionReference<"query", { password: unknown; scriptName: unknown }, { ok: boolean; }>;
     };
     telemetry: {

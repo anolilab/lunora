@@ -10,6 +10,7 @@ import type { ProvisionBox } from "../src/targets/cloudflare-wfp/provision-box";
 const spec: TenantDeploymentSpec = {
     alias: "org-project",
     bundle: new TextEncoder().encode("export default {}").buffer,
+    deploymentId: "dep_1",
     kind: "production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     secrets: { LUNORA_ADMIN_TOKEN: "t" },

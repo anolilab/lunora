@@ -11,6 +11,7 @@ import { currentAuth } from "../auth";
 import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from "../backup/tenant-routes";
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
 import type { UsageMeter as UsageKind } from "../billing/spend";
+import { boxSession } from "../boxes/session-client";
 import { dispatchBuilds } from "../builds/control-plane";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { createGitHubApp } from "../github/app";
@@ -762,14 +763,21 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
         }
 
         // The CNAME targets are the project's target's: a box answers on its own hostname, WfP on the apex.
-        const { target } = await placementFor(context, environment, body.organizationId, domain.projectId);
+        const placement = await placementFor(context, environment, body.organizationId, domain.projectId);
         const result = await verifyDomain(domain.hostname, {
-            platformTargets: resolveTargetDriver(target, environment).domains.platformTargets(),
+            platformTargets: resolveTargetDriver(placement.target, environment, placement.box ? { box: placement.box } : {}).domains.platformTargets(),
             resolve: createDohResolver(),
             txtToken: domain.txtToken,
         });
 
         await context.runMutation(internal.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
+
+        // A box serves a custom domain once its routing table names it (plan 458 W5).
+        if (result.verified && placement.box && environment.BOX_SESSION) {
+            await boxSession(environment.BOX_SESSION, placement.box.id)
+                .pushRoutes()
+                .catch(() => false);
+        }
 
         return Response.json(result);
     } catch (error) {
@@ -830,7 +838,14 @@ export const createDeployRouter = (): HttpRouterLike => {
                 placement: ({ organizationId, projectId }) => placementFor(context, environment, organizationId, projectId),
                 releaseTarget: async ({ deploymentId, key, organizationId }) => {
                     const row = await context.runQuery<
-                        StoredAdminToken & { alias: string; kind: DeployKind; liveDeploymentId?: string; projectId: string; target?: string }
+                        StoredAdminToken & {
+                            alias: string;
+                            cronSpecs?: string[];
+                            kind: DeployKind;
+                            liveDeploymentId?: string;
+                            projectId: string;
+                            target?: string;
+                        }
                     >(internal.deployments.releaseTarget, { deployKey: key, id: deploymentId, organizationId });
                     // Unsealed here, at the edge, exactly as the studio proxy does.
                     const adminToken = await resolveAdminToken(row, environment.SECRET_ENCRYPTION_KEY);
@@ -842,6 +857,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                     return {
                         adminToken,
                         alias: row.alias,
+                        ...(row.cronSpecs === undefined ? {} : { cronSpecs: row.cronSpecs }),
                         kind: row.kind,
                         ...(row.liveDeploymentId === undefined ? {} : { liveDeploymentId: row.liveDeploymentId }),
                         organizationId,
@@ -893,12 +909,14 @@ export const createDeployRouter = (): HttpRouterLike => {
                         organizationId,
                     }),
             },
-            driverFor: (target) =>
-                resolveTargetDriver(target, environment, {
+            driverFor: (placement, options = {}) =>
+                resolveTargetDriver(placement.target, environment, {
+                    ...(placement.box === undefined ? {} : { box: placement.box }),
                     onLog: (line) => {
                         // eslint-disable-next-line no-console -- the driver's converge log is only visible here, in Workers Logs
                         console.log("[provision]", line);
                     },
+                    ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
                 }),
             releases: createReleaseStore(environment.RELEASES),
             // Provision (once per org) the scoped ingest key + hand the tenant its

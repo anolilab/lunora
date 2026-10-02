@@ -24,6 +24,7 @@ interface DeploymentRow {
     bundleHash?: string;
     createdAt: number;
     createdBy: string;
+    cronSpecs?: null | string[];
     expiresAt?: number;
     kind: "dev" | "preview" | "production";
     organizationId: Id<"organizations">;
@@ -504,6 +505,7 @@ export const releaseTarget = internalQuery
             adminTokenCiphertext?: string;
             adminTokenIv?: string;
             alias: string;
+            cronSpecs?: string[];
             kind: DeploymentRow["kind"];
             liveDeploymentId?: Id<"deployments">;
             projectId: Id<"projects">;
@@ -531,6 +533,7 @@ export const releaseTarget = internalQuery
                     ? { adminTokenCiphertext: target.adminTokenCiphertext, adminTokenIv: target.adminTokenIv }
                     : {}),
                 alias: target.alias ?? target.scriptName,
+                ...(target.cronSpecs != null && target.cronSpecs.length > 0 ? { cronSpecs: target.cronSpecs } : {}),
                 kind: target.kind,
                 ...(live ? { liveDeploymentId: live._id } : {}),
                 projectId: target.projectId, // secret-scanner:allow -- domain field name

@@ -199,7 +199,11 @@ describe("boxSessionDO", () => {
         const { key, session, state, store } = await setup();
 
         store.tables["projects"] = [{ _id: "proj_1", activeScriptName: "web", boxId: "box_1", organizationId: "org_1" }];
-        store.tables["deployments"] = [{ _id: "dep_1", alias: "web", projectId: "proj_1", status: "live" }];
+        store.tables["deployments"] = [
+            { _id: "dep_1", alias: "web", projectId: "proj_1", status: "live" },
+            { _id: "dep_2", alias: "web-pr-7", projectId: "proj_1", status: "verifying" },
+            { _id: "dep_3", alias: "web-pr-6", projectId: "proj_1", status: "destroyed" },
+        ];
         store.tables["domains"] = [{ _id: "dom_1", hostname: "www.example.com", projectId: "proj_1", verifiedAt: 1 }];
 
         const socket = await handshake(session, state, key, "box_1");
@@ -207,6 +211,7 @@ describe("boxSessionDO", () => {
         expect(store.tables["boxes"]?.[0]).toMatchObject({ resources: { diskFreeMb: 40_960, memMb: 3891 }, status: "online", versions: { celld: "v0.6.0" } });
         expect(socket.received().at(-1)).toStrictEqual({
             table: [
+                { alias: "web-pr-7", hostname: "web-pr-7.bslug000001.boxes.test" },
                 { alias: "web", hostname: "web.bslug000001.boxes.test" },
                 { alias: "web", hostname: "www.example.com" },
             ],

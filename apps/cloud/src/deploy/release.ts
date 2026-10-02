@@ -22,6 +22,8 @@ export interface ReleaseTarget {
     /** The deployment's tenant admin token, unsealed at the edge — set as the Worker's `LUNORA_ADMIN_TOKEN`. */
     adminToken: string;
     alias: string;
+    /** The deployment's cron expressions (`deployments.cronSpecs`), when it declared any. */
+    cronSpecs?: string[];
     kind: DeployKind;
     /** The deployment currently on the Worker (the live one of this alias), when there is one. */
     liveDeploymentId?: string;
@@ -57,7 +59,7 @@ export interface ReleaseDeps {
      * through it; where the tenant lands — a cell's dispatch namespace, a box —
      * is the driver's configuration, not the release's.
      */
-    driverFor: (target: TargetId) => TargetDriver;
+    driverFor: (placement: Placement, options?: DriverOptions) => TargetDriver;
     /** Where each deployment's payload is kept for rollback. */
     releases: ReleaseStore;
 
@@ -72,6 +74,12 @@ export interface ReleaseDeps {
     resolveTelemetry?: (input: { key?: string; organizationId: string }) => Promise<DeployTelemetry | undefined>;
     /** Paces converges against the cell's API budget (§2.5). */
     scheduler: CellScheduler;
+}
+
+/** Per-converge options for {@link ReleaseDeps.driverFor}. */
+export interface DriverOptions {
+    /** Lines the driver surfaces to the deploy stream as it converges (`celld-vps`: the box's job progress). */
+    onProgress?: (line: string) => void;
 }
 
 /** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
@@ -108,6 +116,8 @@ export const buildDeploymentSpec = (input: {
     alias: string;
     assets: AssetsUpload | undefined;
     bundle: ArrayBuffer;
+    cronSpecs?: string[];
+    deploymentId: string;
     kind: DeployKind;
     manifest: DeployManifest;
     organizationId: string;
@@ -122,6 +132,8 @@ export const buildDeploymentSpec = (input: {
         ...(input.assets ? { assets: input.assets } : {}),
         bundle: input.bundle,
         ...(telemetry ? { collectLogs: true } : {}),
+        ...(input.cronSpecs && input.cronSpecs.length > 0 ? { crons: input.cronSpecs } : {}),
+        deploymentId: input.deploymentId,
         kind: input.kind,
         manifest: input.manifest,
         secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
@@ -218,6 +230,8 @@ export const reprovision = async (
         alias: target.alias,
         assets: release.assets,
         bundle,
+        ...(target.cronSpecs ? { cronSpecs: target.cronSpecs } : {}),
+        deploymentId,
         kind: target.kind,
         manifest: release.manifest,
         organizationId: target.organizationId,
@@ -226,7 +240,7 @@ export const reprovision = async (
         tenantSecrets,
     });
 
-    const driver = deps.driverFor(target.target);
+    const driver = deps.driverFor(placement);
 
     await deps.scheduler.run(() => driver.deploy(spec), { priority: options.priority });
 };

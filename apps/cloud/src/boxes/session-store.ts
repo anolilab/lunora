@@ -65,6 +65,13 @@ export const markOffline = async (database: ControlPlaneStore, boxId: string): P
     await database.patch(boxId, { status: "offline" }, "boxes");
 };
 
+/**
+ * The deployments a box routes: live ones, and those being converged or
+ * health-checked — the health check reaches the tenant through its hostname,
+ * so the route must exist before the release goes live.
+ */
+const ROUTED_STATUSES: ReadonlySet<string> = new Set(["live", "provisioning", "verifying"]);
+
 interface ProjectRow {
     _id: string;
     activeScriptName?: null | string;
@@ -80,13 +87,13 @@ interface DomainRow {
 const projectRoutes = async (database: ControlPlaneStore, project: ProjectRow, defaultHost: (alias: string) => string): Promise<[string, string][]> => {
     const { _id: projectId } = project;
     const [{ page: deployments }, { page: domains }] = await Promise.all([
-        database.findMany("deployments", { where: { projectId, status: "live" } }),
+        database.findMany("deployments", { where: { projectId } }),
         database.findMany("domains", { where: { projectId } }),
     ]);
     const routes: [string, string][] = [];
 
-    for (const { alias } of deployments as { alias?: null | string }[]) {
-        if (alias != null && isAlias(alias) && isHostname(defaultHost(alias))) {
+    for (const { alias, status } of deployments as { alias?: null | string; status: string }[]) {
+        if (alias != null && ROUTED_STATUSES.has(status) && isAlias(alias) && isHostname(defaultHost(alias))) {
             routes.push([defaultHost(alias), alias]);
         }
     }
@@ -108,7 +115,7 @@ const projectRoutes = async (database: ControlPlaneStore, project: ProjectRow, d
 };
 
 /**
- * The full routing table a box serves (`routes` frame): every live alias of the
+ * The full routing table a box serves (`routes` frame): every routed alias of the
  * projects placed on it, at its default hostname `{alias}.{slug}.{boxDomain}`,
  * plus each verified custom domain of those projects, pointed at the project's
  * production alias. Capped at the protocol's table size; hostnames unique.

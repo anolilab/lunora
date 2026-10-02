@@ -108,6 +108,8 @@ export const byGithubRepo = internalQuery
 
 /** Where a project deploys, as stored — the edge turns this into a placement (`src/targets/placement.ts`). */
 interface StoredPlacement {
+    /** The box a `celld-vps` project names, when that box exists. */
+    box?: { id: string; revoked: boolean; slug: string };
     /** The name of the cell the project's organization is placed on; absent when that cell row is gone. */
     cellName?: string;
     /** `projects.target`; absent on projects that predate it. */
@@ -128,7 +130,7 @@ interface StoredPlacement {
 export const placement = internalQuery
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
     .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<StoredPlacement> => {
-        const project = (await context.db.get(projectId)) as (ProjectRow & { target?: string }) | null;
+        const project = (await context.db.get(projectId)) as (ProjectRow & { boxId?: Id<"boxes"> | null; target?: string }) | null;
 
         if (project?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
@@ -136,8 +138,11 @@ export const placement = internalQuery
 
         const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
         const cell = organization ? ((await context.db.get(organization.cellId)) as { name: string } | null) : null;
+        // A box of another organization is no box at all: `setProjectTarget` never writes one, so this only guards drift.
+        const box = project.boxId == null ? null : ((await context.db.get(project.boxId)) as { organizationId: string; slug: string; status: string } | null);
 
         return {
+            ...(box?.organizationId === organizationId ? { box: { id: project.boxId as string, revoked: box.status === "revoked", slug: box.slug } } : {}),
             ...(cell ? { cellName: cell.name } : {}),
             // `!= null`: a `.global()` row answers SQL NULL, not undefined, for an unset column.
             ...(project.target == null ? {} : { target: project.target }),

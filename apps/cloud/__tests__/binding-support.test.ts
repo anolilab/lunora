@@ -8,6 +8,7 @@ import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingType, TargetId } from "../src/provision-contract";
 import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
+import { resolvePlacement } from "../src/targets/placement";
 import { resolveTargetDriver } from "../src/targets/registry";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
@@ -121,8 +122,12 @@ describe("the registry", () => {
         expect(driver.unsupportedReasons).toBe(UNSUPPORTED_REASONS["cloudflare-wfp"]);
     });
 
-    it("refuses a target with a table but no driver yet, rather than falling back", () => {
-        expect(() => resolveTargetDriver("celld-vps", {})).toThrow(/celld-vps.*no driver/u);
+    it("builds celld-vps over its own row of the table, without touching an unconfigured env", () => {
+        const driver = resolveTargetDriver("celld-vps", {});
+
+        expect(driver.id).toBe("celld-vps");
+        expect(driver.bindingSupport).toBe(BINDING_SUPPORT["celld-vps"]);
+        expect(driver.unsupportedReasons).toBe(UNSUPPORTED_REASONS["celld-vps"]);
     });
 });
 
@@ -162,19 +167,19 @@ describe("the deploy handler validates against the project's target", () => {
         });
     });
 
-    it("refuses a project whose target has no driver before recording anything", async () => {
+    it("refuses a celld-vps project that names no box before recording anything", async () => {
         const started = await startRelease(
             { bundle: btoa("export default {}"), kind: "production", projectId: "proj_1", scriptName: "app" },
             { key: "k", organizationId: "org_1" },
             {
-                backend: { ...backend, placement: () => Promise.resolve({ target: "celld-vps" }) },
-                driverFor: (target) => resolveTargetDriver(target, {}),
+                backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ target: "celld-vps" }, "default")) },
+                driverFor: (placement) => resolveTargetDriver(placement.target, {}),
                 releases: memoryReleaseStore().store,
                 scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
             },
         );
 
-        expect(started).toStrictEqual({ error: expect.stringContaining("celld-vps") as string, status: 501 });
+        expect(started).toStrictEqual({ error: expect.stringContaining("names no box") as string, status: 409 });
     });
 
     it("refuses a project placed on another cell before recording anything", async () => {

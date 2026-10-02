@@ -98,6 +98,7 @@ const readLines = async (response: Response): Promise<Record<string, unknown>[]>
 const SPEC: TenantDeploymentSpec = {
     alias: "s",
     bundle: new ArrayBuffer(0),
+    deploymentId: "dep_1",
     kind: "production",
     manifest: { bindings: [] },
     secrets: {},

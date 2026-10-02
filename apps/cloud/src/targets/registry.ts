@@ -18,16 +18,23 @@ import { LunoraError } from "@lunora/server";
 
 import type { TargetId } from "../provision-contract";
 import { DEFAULT_TARGET, isTargetId, TARGET_IDS } from "../provision-contract";
+import type { CelldVpsEnvironment } from "./celld-vps/driver";
+import { celldVpsCanConverge, celldVpsDriverFromEnv } from "./celld-vps/driver";
 import type { CloudflareWfpEnvironment } from "./cloudflare-wfp/driver";
 import { cloudflareWfpCanConverge, cloudflareWfpDriverFromEnv } from "./cloudflare-wfp/driver";
 import type { TargetDriver } from "./driver";
+import type { BoxPlacement } from "./placement";
 
 /** Everything any registered driver reads off the control plane's Worker env. */
-export type TargetEnvironment = CloudflareWfpEnvironment;
+export type TargetEnvironment = CelldVpsEnvironment & CloudflareWfpEnvironment;
 
 export interface TargetDriverOptions {
-    /** Receives the driver's converge progress lines (the provision box's log, for `cloudflare-wfp`). */
+    /** The box a `celld-vps` project is placed on (`Placement.box`); a driver built without one resolves a box per alias. */
+    box?: BoxPlacement;
+    /** Receives the driver's converge log lines, for Workers Logs (the provision box's log, for `cloudflare-wfp`). */
     onLog?: (line: string) => void;
+    /** Receives converge progress meant for the deploy stream itself (`celld-vps`: the box's job progress). */
+    onProgress?: (line: string) => void;
 }
 
 interface TargetDriverEntry {
@@ -38,6 +45,7 @@ interface TargetDriverEntry {
 
 /** Every target with a driver. A {@link TargetId} missing here has a binding table and no driver yet. */
 const TARGET_DRIVERS: Readonly<Partial<Record<TargetId, TargetDriverEntry>>> = {
+    "celld-vps": { canConverge: celldVpsCanConverge, create: celldVpsDriverFromEnv },
     "cloudflare-wfp": { canConverge: cloudflareWfpCanConverge, create: cloudflareWfpDriverFromEnv },
 };
 

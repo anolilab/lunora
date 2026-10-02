@@ -12,6 +12,7 @@ type Provisioner = Pick<TargetDriver, "deploy" | "destroy">;
 const spec: TenantDeploymentSpec = {
     alias: "org__project",
     bundle: new ArrayBuffer(8),
+    deploymentId: "dep_1",
     kind: "production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     secrets: {},

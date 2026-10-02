@@ -30,8 +30,20 @@ describe(resolvePlacement, () => {
         expect(() => resolvePlacement({ target: "cloudflare-wfp" }, "default")).toThrow(expect.objectContaining({ code: "CONFLICT" }));
     });
 
-    it("leaves a target that is not cell-placed to its own driver", () => {
-        expect(resolvePlacement({ cellName: "eu-1", target: "celld-vps" }, "default")).toStrictEqual({ target: "celld-vps" });
+    it("places a celld-vps project on its box, whatever the cell", () => {
+        expect(resolvePlacement({ box: { id: "box_1", revoked: false, slug: "bslug" }, cellName: "eu-1", target: "celld-vps" }, "default")).toStrictEqual({
+            box: { id: "box_1", slug: "bslug" },
+            target: "celld-vps",
+        });
+    });
+
+    it("refuses a celld-vps project with no box, or a revoked one", () => {
+        expect(() => resolvePlacement({ target: "celld-vps" }, "default")).toThrow(
+            expect.objectContaining({ code: "CONFLICT", message: expect.stringContaining("names no box") as string }),
+        );
+        expect(() => resolvePlacement({ box: { id: "box_1", revoked: true, slug: "bslug" }, target: "celld-vps" }, "default")).toThrow(
+            expect.objectContaining({ code: "CONFLICT", message: expect.stringContaining("revoked") as string }),
+        );
     });
 
     it("refuses a target nothing answers to rather than falling back", () => {
