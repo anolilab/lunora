@@ -14,8 +14,15 @@ import { describe, expect, it } from "vitest";
  * constructed, and the Worker could not boot — every route 500ed. The entire
  * unit suite passed throughout, because nothing imported the schema module for
  * its side effect.
+ *
+ * The first import evaluates `@lunora/server` and every table module cold: about
+ * a second alone, but past vitest's default 5 s in a full parallel run, where it
+ * competes with every other file's imports. Nothing lighter defines the schema,
+ * so the timeout is raised for this file instead.
  */
-describe("control-plane schema", () => {
+const COLD_IMPORT_TIMEOUT_MS = 20_000;
+
+describe("control-plane schema", { timeout: COLD_IMPORT_TIMEOUT_MS }, () => {
     it("constructs — every `defineSchema` rule is satisfied", async () => {
         // The import IS the test: `defineSchema` runs its validations at module
         // evaluation, so a violation throws here rather than at first request.
