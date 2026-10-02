@@ -9,7 +9,7 @@
  * the exec contract has nowhere to put it: exec sends `{command,args,cwd,env}`
  * and nothing else, so a 40MB tarball cannot travel through it. The response is
  * NDJSON — one `{"line"}` per output line as it happens, then a final
- * `{"bundle","bundleHash"}` or `{"error"}` — which is also what lets the
+ * `{"bundle","bundleHash","manifest",…}` release or `{"error"}` — which is also what lets the
  * dashboard tail a build live and sidesteps exec's 1MB buffered-response cap.
  * A real build log is bigger than that.
  *
@@ -30,6 +30,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
+import { readRelease } from "./release.mjs";
 import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. `provision.ts` defaults `mainModule` to this. */
@@ -160,7 +161,7 @@ const run = (command, args, options, onLine) =>
  * multi-module tenant would otherwise get a Worker missing half its code, and
  * the first sign would be a runtime import error in production.
  * @param {string} projectDirectory Extracted project root.
- * @returns {Promise<{ bundle: string, bundleHash: string }>} Base64 module and its sha256.
+ * @returns {Promise<{ bundle: string, bundleHash: string, path: string }>} Base64 module, its sha256, and where it is.
  */
 const collectBundle = async (projectDirectory) => {
     const outDirectory = join(projectDirectory, OUT_DIR);
@@ -192,9 +193,10 @@ const collectBundle = async (projectDirectory) => {
     }
 
     const [module] = modules;
-    const bytes = await readFile(join(module.parentPath, module.name));
+    const path = join(module.parentPath, module.name);
+    const bytes = await readFile(path);
 
-    return { bundle: bytes.toString("base64"), bundleHash: createHash("sha256").update(bytes).digest("hex") };
+    return { bundle: bytes.toString("base64"), bundleHash: createHash("sha256").update(bytes).digest("hex"), path };
 };
 
 /**
@@ -235,6 +237,9 @@ const handleBuild = async (request, response) => {
     // see each other's `node_modules`, and a leftover tree is a cross-tenant
     // read on the next build to land on this instance.
     const workspace = await mkdtemp(join(process.env.HOME ?? tmpdir(), "build-"));
+    // Beside the extracted repo, never inside it: a file in the tree is one the
+    // tenant's own build could have planted. Removed with the workspace.
+    const releaseFile = `${workspace}.release.json`;
 
     try {
         emit({ line: "extracting source" });
@@ -289,12 +294,38 @@ const handleBuild = async (request, response) => {
             return;
         }
 
-        emit(await collectBundle(project));
+        const { bundle, bundleHash, path: bundlePath } = await collectBundle(project);
+
+        // The rest of the release — binding manifest, crons, static assets —
+        // derived by the project's own pinned CLI, the same code a CLI deploy
+        // runs, written to a file rather than uploaded. Same `.bin` as the build:
+        // never a registry copy.
+        emit({ line: "collecting the release with lunora cloud deploy --out" });
+
+        const releaseCode = await run(
+            lunora,
+            ["cloud", "deploy", "--bundle", bundlePath, "--out", releaseFile],
+            { cwd: project, label: "`lunora cloud deploy --out`", timeoutMs: EXEC_TIMEOUT_MS },
+            onLine,
+        );
+
+        if (releaseCode !== 0) {
+            emit({
+                error: `lunora cloud deploy --out failed with exit code ${releaseCode}. If the log above shows it asking for a deploy key or URL, the project's Lunora CLI predates \`--out\`: upgrade lunorash or @lunora/cli.`,
+            });
+
+            return;
+        }
+
+        // The bundle travels from the module just hashed, so the hash on the
+        // build row always describes the bytes that deploy.
+        emit({ ...(await readRelease(releaseFile)), bundle, bundleHash });
     } catch (error) {
         emit({ error: clientError(error) });
     } finally {
         response.end();
         await rm(workspace, { force: true, recursive: true }).catch(() => {});
+        await rm(releaseFile, { force: true }).catch(() => {});
     }
 };
 
