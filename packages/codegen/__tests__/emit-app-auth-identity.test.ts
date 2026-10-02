@@ -7,8 +7,8 @@ import { pathToFileURL } from "node:url";
 import { transformSync } from "esbuild";
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { CapabilityKey } from "../src/capabilities";
 import { emitApp } from "../src/emit-app";
+import baseOptions from "./emit-app-options";
 
 /**
  * The identity `.auth({ d1 })` resolves for the generated worker.
@@ -20,29 +20,6 @@ import { emitApp } from "../src/emit-app";
  * lifts the resolver out of the emitted `app.ts`, compiles it, and CALLS it —
  * the assertions are over a real return value, not over the source text.
  */
-
-/** Minimal `EmitAppOptions` with every capability off; these tests only turn auth on. */
-const baseOptions = {
-    capabilities: new Set<CapabilityKey>(),
-    hasAccess: false,
-    hasAuth: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdriveGlobal: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasQueue: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
 
 /** What better-auth's `getSession` answers with, as the emitted resolver consumes it. */
 interface SessionDouble {

@@ -115,6 +115,13 @@ interface AppendRequestLogEntry {
     functionPath: string;
     identity?: Record<string, unknown>;
     outcome: RequestOutcome;
+
+    /**
+     * Cloudflare Ray ID of the request (see `shared/ray-id.ts`). Rides the
+     * Workers Logs / Logpush event only — the durable `__lunora_reqlog__` row
+     * keeps its `trace_id` join key and has no column for it.
+     */
+    rayId?: string;
     redactedArgs?: unknown;
     shardKey?: string;
     subscriptionsReRun?: number;
@@ -500,6 +507,9 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         function: entry.functionPath,
         identity: entry.identity === undefined ? undefined : redactArgs(entry.identity, captureRaw),
         outcome: entry.outcome,
+        // Search Cloudflare Traces / Workers Logs by it to reach the platform's
+        // view of this request. Absent off the edge.
+        rayId: entry.rayId,
         shard: entry.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
         tablesRead: entry.tablesRead ?? [],
@@ -639,6 +649,7 @@ const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}
         // The rendered message carries whatever the handler logged, and this line
         // is what Workers Logs / Logpush keep — redacted like `fields`.
         message: redactArgs(input.message, captureRaw) as string,
+        rayId: input.rayId,
         shard: input.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
         spanId: input.spanId,

@@ -71,8 +71,8 @@ interface EmitServerOptions {
     /**
      * The package-backed capabilities the app uses (post platform gate). Each
      * used row of the `CAPABILITIES` table with a `serverCtxField` lands on the
-     * ctx interfaces its `tier` names; `ai` / `payments` / `x402` gate their
-     * bespoke ActionCtx fields off the same set.
+     * ctx interfaces its `tier` names; `payments` gates its bespoke ActionCtx
+     * field, and `ai` the `env.AI` binding field, off the same set.
      */
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
@@ -137,30 +137,16 @@ const emitServer = ({
     workflows = [],
 }: EmitServerOptions = {}): string => {
     const base = baseSpecifiers(useUmbrella);
-    const hasAi = capabilities.has("ai");
     const hasPayments = capabilities.has("payments");
-    const hasX402 = capabilities.has("x402");
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
         .map((name) => JSON.stringify(name))
         .join(" | ");
-    // When the project uses Workers AI, the generated ActionCtx carries a typed
-    // `ai` helper (from `@lunora/ai`). Inference is an external, non-deterministic
-    // call, so — like `ctx.fetch` — it lives on ActionCtx only, not on the
-    // query/mutation contexts. Gated so non-AI projects neither see the field nor
-    // import `@lunora/ai`.
-    const aiTypeImport = hasAi ? `import type { LunoraAi } from "@lunora/ai";\n` : "";
-    const aiActionField = hasAi ? `\n    readonly ai: LunoraAi;` : "";
-    // Same gating as `ai`: the typed `ctx.payments` facade lives on ActionCtx only
-    // (payment ops are external calls), and `@lunora/payment` is imported only when used.
+    // The typed `ctx.payments` facade lives on ActionCtx only (payment ops are
+    // external calls), and `@lunora/payment` is imported only when used.
     const paymentsTypeImport = hasPayments ? `import type { LunoraPayment } from "@lunora/payment";\n` : "";
     const paymentsActionField = hasPayments ? `\n    readonly payments: LunoraPayment;` : "";
-    // Same gating for the x402 pay rail: it signs and settles USDC over the
-    // network, so the typed `ctx.x402` facade rides ActionCtx only, and
-    // `@lunora/x402/pay` is imported only when a handler actually uses it.
-    const x402TypeImport = hasX402 ? `import type { X402Pay } from "@lunora/x402/pay";\n` : "";
-    const x402ActionField = hasX402 ? `\n    readonly x402: X402Pay;` : "";
 
     // Same gating for containers: container calls are external I/O, so the
     // typed `ctx.containers` record lives on ActionCtx only. One property per
@@ -189,7 +175,7 @@ const emitServer = ({
     // the foundation the `ctx.*` augmentations below reuse — `Env` is the single
     // emitted type for the bindings object.
     const envBindingFields = [
-        ...(hasAi ? [`    /** Workers AI binding (the conventional \`env.AI\`), narrowing \`ctx.ai\`. */\n    readonly AI?: unknown;`] : []),
+        ...(capabilities.has("ai") ? [`    /** Workers AI binding (the conventional \`env.AI\`), narrowing \`ctx.ai\`. */\n    readonly AI?: unknown;`] : []),
         ...containers.map((container) => {
             assertIdentifier(container.bindingName, `container binding "${container.bindingName}"`);
 
@@ -531,7 +517,7 @@ export type {
 } from "${base.serverDataModel}";
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
-${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${servicesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
+${vectorsTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${servicesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
@@ -669,7 +655,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vec
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${actionCapabilityFields}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${flagsContextField}${notifyContextField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${actionCapabilityFields}${paymentsActionField}${containersActionField}${flagsContextField}${notifyContextField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 /**

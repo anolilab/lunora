@@ -110,4 +110,4 @@ const sandboxToolImports = (code: string): Record<SandboxToolName, boolean> => {
 };
 
 export type { SandboxToolName };
-export { extractImportSpecifierList, SANDBOX_TOOLS, sandboxToolImports, TYPE_ONLY_IMPORT_PATTERN };
+export { SANDBOX_TOOLS, sandboxToolImports };

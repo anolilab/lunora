@@ -19,6 +19,7 @@
  * trusted. See {@link beginDispatchTrace}.
  */
 import { buildTraceparent, otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
+import { parseRayId, RAY_ID_HEADER } from "../../../shared/ray-id";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling } from "../../../shared/sampling";
 
@@ -57,6 +58,14 @@ interface UpstreamTraceContext {
 interface DispatchTraceContext {
     /** Upstream span id, when a trusted `traceparent` supplied one. */
     parentSpanId?: string;
+
+    /**
+     * The Cloudflare Ray ID of the inbound request (its `cf-ray` header, colo
+     * suffix dropped), so a Lunora log or span can be looked up in Cloudflare
+     * Traces. Informational only — never an authorization input. Absent off the
+     * edge (`wrangler dev` does not set `cf-ray`) or when the header is malformed.
+     */
+    rayId?: string;
     /** The authoritative sampled verdict for this trace — what goes on the wire AND on the span. */
     sampled: boolean;
     /** This dispatch's span id (always server-minted). */
@@ -167,6 +176,11 @@ const beginDispatchTrace = (
     const traceId = trusted?.traceId ?? otlpRandomHex(16);
 
     const decision = resolveTraceSampling(options.sampling, trusted === undefined ? spanId : traceId);
+    // Read regardless of `trustInbound`: the Ray ID steers nothing (no sampling,
+    // no parenting, no authorization), so there is no trust decision to make —
+    // on the edge Cloudflare stamps `cf-ray` itself, and off it a forged value can
+    // at worst mislabel the forger's own log lines.
+    const rayId = parseRayId(request.headers.get("cf-ray"));
 
     // A trusted upstream that already sampled the trace out keeps it out: the
     // trace is kept or dropped whole, and we are a child of that decision.
@@ -183,6 +197,7 @@ const beginDispatchTrace = (
             traceId,
             ...(trusted?.parentSpanId === undefined ? {} : { parentSpanId: trusted.parentSpanId }),
             ...(trusted?.traceState === undefined ? {} : { traceState: trusted.traceState }),
+            ...(rayId === undefined ? {} : { rayId }),
         },
     };
 };
@@ -199,6 +214,13 @@ const injectTraceContext = (trace: DispatchTraceContext, headers: Record<string,
     if (trace.traceState !== undefined) {
         // eslint-disable-next-line no-param-reassign -- see above.
         headers.tracestate = trace.traceState;
+    }
+
+    // The Ray ID rides the same hop so the shard's logs and spans carry it too.
+    // Already validated by `beginDispatchTrace`; the shard re-parses it anyway.
+    if (trace.rayId !== undefined) {
+        // eslint-disable-next-line no-param-reassign -- see above.
+        headers[RAY_ID_HEADER] = trace.rayId;
     }
 };
 
