@@ -257,7 +257,7 @@ describe("httpRoute output", () => {
             .handler(() => ({ id: 123 }) as unknown as { id: string });
 
         const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
-        const body = (await response.json()) as { error: string };
+        const body = await response.json<{ error: string }>();
 
         expect(response.status).toBe(500);
         expect(body).toMatchObject({ code: "INTERNAL_SERVER_ERROR", error: "Internal error" });
@@ -274,7 +274,7 @@ describe("httpRoute error redaction", () => {
         });
 
         const response = await dispatch(route, "GET", "/api/boom", new Request("https://x/api/boom"));
-        const body = (await response.json()) as { error: string };
+        const body = await response.json<{ error: string }>();
 
         expect(response.status).toBe(500);
         expect(body).toEqual({ code: "INTERNAL_SERVER_ERROR", error: "Internal error" });
