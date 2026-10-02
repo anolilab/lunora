@@ -2,9 +2,9 @@ import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { createDeployPacer } from "../src/deploy/pacing";
 import type { BindingType, TargetId } from "../src/provision-contract";
 import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
 import type { Placement } from "../src/targets/placement";

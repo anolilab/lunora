@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleDeployRequest } from "../src/deploy/handler";
 import { runDeployment } from "../src/deploy/orchestrator";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { ReleaseTarget } from "../src/deploy/release";
 import { rollbackRelease } from "../src/deploy/release";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import type { StoredRelease } from "../src/deploy/release-store";
-import { createDeployPacer } from "../src/deploy/pacing";
 import { ConvergeScheduler } from "../src/deploy/scheduler";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import { resolveTenant } from "../src/targets/cloudflare-wfp/route";

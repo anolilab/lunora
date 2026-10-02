@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { handleDeployRequest } from "../src/deploy/handler";
-import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/deploy/release-core";
 import { createDeployPacer } from "../src/deploy/pacing";
+import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/deploy/release-core";
 import type { BindingRequirement, TenantDeploymentSpec } from "../src/provision-contract";
 import readJson from "../src/read-json";
 import type { TargetDriver } from "../src/targets/driver";

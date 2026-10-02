@@ -16,7 +16,13 @@ const account = (id: string, accountId: string): Placement => {
 
 /** A frozen clock whose sleeps never end: a scheduler out of tokens queues for good, so a test sees exactly what ran. */
 const frozen = (): { now: () => number; sleep: () => Promise<void> } => {
-    return { now: () => 0, sleep: () => new Promise<void>(() => undefined) };
+    return {
+        now: () => 0,
+        sleep: () =>
+            new Promise<void>(() => {
+                // Never resolves.
+            }),
+    };
 };
 
 /** Submit `count` tasks that stay running until released; answers how many started. */
