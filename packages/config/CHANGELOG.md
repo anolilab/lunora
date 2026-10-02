@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.292...@lunora/config@1.0.0-alpha.293) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.248
+* **@lunora/seed:** upgraded to 1.0.0-alpha.178
+* **@lunora/studio:** upgraded to 1.0.0-alpha.250
+
 ## @lunora/config [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.291...@lunora/config@1.0.0-alpha.292) (2026-10-02)
 
 
