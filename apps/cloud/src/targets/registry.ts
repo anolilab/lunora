@@ -71,28 +71,19 @@ const entryOf = <T extends TargetId>(target: T): TargetEntry<T> => {
 };
 
 /**
+ * The driver of a placement of target `T`, from `T`'s own entry. Generic so the
+ * entry's `driver` takes exactly that target's placement: `TARGET_DRIVERS` is
+ * mapped over every {@link TargetId}, so a new target without a matching entry
+ * shape fails to compile here rather than at a switch someone forgot to extend.
+ */
+const driverOf = <T extends TargetId>(placement: PlacementOf<T>, environment: TargetEnvironment): TargetDriver =>
+    entryOf<T>(placement.target).driver(placement, environment);
+
+/**
  * The driver for one placement, built over `environment`.
  * @throws {LunoraError} `NOT_IMPLEMENTED` when the target has no driver yet.
  */
-export const resolveTargetDriver = (placement: Placement, environment: TargetEnvironment): TargetDriver => {
-    // One case per target, so each case's placement is that target's own.
-    switch (placement.target) {
-        case "celld-vps": {
-            return entryOf(placement.target).driver(placement, environment);
-        }
-        case "cloudflare-wfp": {
-            return entryOf(placement.target).driver(placement, environment);
-        }
-        case "cloudflare-workers": {
-            return entryOf(placement.target).driver(placement, environment);
-        }
-        default: {
-            const unplaced: never = placement;
-
-            throw new LunoraError("NOT_IMPLEMENTED", `no driver for placement ${JSON.stringify(unplaced)}`);
-        }
-    }
-};
+export const resolveTargetDriver = (placement: Placement, environment: TargetEnvironment): TargetDriver => driverOf(placement, environment);
 
 /**
  * `target`'s fleet-wide surface, built over `environment`.
