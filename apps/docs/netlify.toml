@@ -34,6 +34,17 @@
 # unchanged, which is the same red-check outcome with a worse verdict.
 #
 # Build command, publish dir, and base directory remain configured in the
-# Netlify UI; this file only pins the ignore step.
+# Netlify UI; this file pins the ignore step and the function's extra files.
 [build]
   ignore = "exit 1"
+
+# `hb.wasm` is read from disk by harfbuzzjs (pulled in by satori for `/api/og`)
+# through a computed path, which Netlify's file tracer cannot follow, so the
+# file was never uploaded and every OG render failed. Patterns resolve against
+# the bundler's base path; both the repository-root and the `apps/docs` form
+# are listed because a pattern that matches nothing is simply ignored.
+[functions]
+  included_files = [
+    "node_modules/.pnpm/harfbuzzjs@*/node_modules/harfbuzzjs/hb.wasm",
+    "../../node_modules/.pnpm/harfbuzzjs@*/node_modules/harfbuzzjs/hb.wasm",
+  ]
