@@ -67,7 +67,7 @@ interface ExportEntry {
 
 interface WranglerShape {
     ai?: { binding?: string };
-    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
+    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileSelfDescribingArray).
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
     browser?: { binding?: string };

@@ -3,7 +3,7 @@ import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
-import { emitAiFragments, renderThrowingStub } from "./shard-bindings";
+import { renderThrowingStub } from "./shard-bindings";
 import { assertIdentifier, GENERATED_HEADER } from "./shared";
 
 /**
@@ -80,8 +80,8 @@ ${classes}`;
 
 /**
  * The `ctx.containers` code fragments woven into the generated ShardDO, or
- * empty strings when the project declares no containers. Mirrors
- * {@link emitAiFragments}: the gating lives here, not as inline ternaries in
+ * empty strings when the project declares no containers. Mirrors the
+ * capability fragment emitters in `shard-bindings.ts`: the gating lives here, not as inline ternaries in
  * `emitShard`. The spec list is emitted as a `LUNORA_CONTAINERS` const
  * and handed to `createContainerContext`, which resolves the `CONTAINER_*`
  * Durable Object bindings off `env` lazily (a missing binding only throws when
