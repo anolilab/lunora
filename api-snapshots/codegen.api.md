@@ -1727,6 +1727,7 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "ai";
         readonly moduleSpecifier: "@lunora/ai";
         readonly requiredPackage: "@lunora/ai";
+        readonly serverCtxField: "\n    readonly ai: import(\"@lunora/ai\").LunoraAi;";
         readonly shardBinding: "bespoke";
         readonly tier: "action";
     },
@@ -1746,7 +1747,7 @@ const CAPABILITY_ROWS: readonly [
                 readonly envName: "AI_SEARCH";
             };
             readonly clientType: "AiSearch";
-            readonly missingMessage: "ctx.aiSearch: no AI Search binding found. Add an \\`ai_search_namespaces\\` binding (env.AI_SEARCH) to wrangler.jsonc, or point \\`defineApp().aiSearch((env) => …)\\` at yours.";
+            readonly missingMessage: "ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.";
             readonly stubMethods: readonly [
                 "chatCompletions",
                 "create",
@@ -1781,7 +1782,7 @@ const CAPABILITY_ROWS: readonly [
                 };
             };
             readonly clientType: "AnalyticsClient";
-            readonly missingMessage: "ctx.analytics: no Analytics Engine binding found. Add an \\`analytics_engine_datasets\\` binding (env.ANALYTICS) to wrangler.jsonc, or pass \\`analytics\\` to createShardDO().";
+            readonly missingMessage: "ctx.analytics: no Analytics Engine binding found. Add an `analytics_engine_datasets` binding (env.ANALYTICS) to wrangler.jsonc, or pass `analytics` to createShardDO().";
             readonly stubMethods: readonly [
                 "track",
                 "writeDataPoint"
@@ -1814,7 +1815,7 @@ const CAPABILITY_ROWS: readonly [
                 };
             };
             readonly clientType: "ArtifactsClient";
-            readonly missingMessage: "ctx.artifacts: no Artifacts binding found. Add an \\`artifacts\\` binding ({ binding: \\\"ARTIFACTS\\\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).";
+            readonly missingMessage: "ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).";
             readonly stubMethods: readonly [
                 "authenticatedRemote",
                 "create",
@@ -1843,7 +1844,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
         readonly shardBinding: {
             readonly clientType: "Browser";
-            readonly missingMessage: "ctx.browser: provide a \\`browser\\` config thunk, e.g. \\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\` with \\`import { launch } from '@cloudflare/playwright'\\`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
+            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
             readonly stubMethods: readonly [
                 "cancelCrawl",
                 "connect",
@@ -1883,7 +1884,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import(\"@lunora/hyperdrive\").SqlClient;";
         readonly shardBinding: {
             readonly clientType: "SqlClient";
-            readonly missingMessage: "ctx.sql: provide a \\`sql\\` config thunk that builds a SqlClient from your driver, e.g. \\`sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))\\`.";
+            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.";
             readonly stubMethods: readonly [
                 "query"
             ];
@@ -1911,7 +1912,7 @@ const CAPABILITY_ROWS: readonly [
                 };
             };
             readonly clientType: "Images";
-            readonly missingMessage: "ctx.images: no Images binding found. Add an \\`images\\` binding (env.IMAGES) to wrangler.jsonc, or pass \\`images\\` to createShardDO().";
+            readonly missingMessage: "ctx.images: no Images binding found. Add an `images` binding (env.IMAGES) to wrangler.jsonc, or pass `images` to createShardDO().";
             readonly stubMethods: readonly [
                 "info",
                 "transform"
@@ -1946,7 +1947,7 @@ const CAPABILITY_ROWS: readonly [
                 ];
             };
             readonly clientType: "Kv";
-            readonly missingMessage: "ctx.kv: no KV binding found. Add a \\`kv_namespaces\\` binding (env.KV) to wrangler.jsonc, or pass \\`kv\\` to createShardDO().";
+            readonly missingMessage: "ctx.kv: no KV binding found. Add a `kv_namespaces` binding (env.KV) to wrangler.jsonc, or pass `kv` to createShardDO().";
             readonly stubMethods: readonly [
                 "delete",
                 "get",
@@ -1988,6 +1989,9 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "x402";
         readonly moduleSpecifier: "@lunora/x402/pay";
         readonly requiredPackage: "@lunora/x402";
+        readonly serverCtxField: "\n    readonly x402: import(\"@lunora/x402/pay\").X402Pay;";
+        readonly shardBinding: "bespoke";
+        readonly tier: "action";
     },
     {
         readonly contextProperty: "pipelines";
@@ -2005,7 +2009,7 @@ const CAPABILITY_ROWS: readonly [
                 };
             };
             readonly clientType: "PipelineClient";
-            readonly missingMessage: "ctx.pipelines: no Pipelines binding found. Add a \\`pipelines\\` binding (env.PIPELINES) to wrangler.jsonc, or pass \\`pipelines\\` to createShardDO().";
+            readonly missingMessage: "ctx.pipelines: no Pipelines binding found. Add a `pipelines` binding (env.PIPELINES) to wrangler.jsonc, or pass `pipelines` to createShardDO().";
             readonly stubMethods: readonly [
                 "send"
             ];
@@ -2037,11 +2041,6 @@ const CAPABILITY_ROWS: readonly [
         readonly moduleSpecifier: "@lunora/storage";
     },
     {
-        readonly appMethod: {
-            readonly configKey: "vectors";
-            readonly doc: "Wire the Vectorize index map backing `ctx.vectors`.";
-            readonly method: "vectors";
-        };
         readonly contextProperty: "vectors";
         readonly key: "vectors";
         readonly moduleSpecifier: "@lunora/bindings/vectors";

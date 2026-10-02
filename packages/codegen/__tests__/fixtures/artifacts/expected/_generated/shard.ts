@@ -126,25 +126,25 @@ const storageStub = {
 
 const artifactsStub: ArtifactsClient = {
     authenticatedRemote: () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     create: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     delete: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     import: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     info: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     list: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
     withRepo: async () => {
-        throw new Error("ctx.artifacts: no Artifacts binding found. Add an \`artifacts\` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
+        throw new Error("ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: \"ARTIFACTS\", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).");
     },
 };
 

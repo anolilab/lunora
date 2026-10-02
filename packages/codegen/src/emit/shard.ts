@@ -48,7 +48,6 @@ import {
     emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
-    emitX402Fragments,
 } from "./shard-runtime";
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
@@ -189,11 +188,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         imports: paymentsImports,
         stub: paymentStub,
     } = emitPaymentFragments(capabilities.has("payments"));
-    // `ctx.x402` is ActionCtx-only and money-spending, so — like `ctx.sql` /
-    // `ctx.browser` / `ctx.images` — it is built AND attached only inside the
-    // `if (isAction)` block below (it exposes no `contextField`: a query/mutation
-    // ctx never carries the property at runtime, not just in types).
-    const { build: x402Build, configField: x402ConfigField, imports: x402Imports, stub: x402Stub } = emitX402Fragments(capabilities.has("x402"));
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `LUNORA_ADVISORIES`
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
@@ -375,7 +369,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
-        ...x402Imports,
         ``,
         `import schema from "../schema.js";`,
         // Local-first sync registries are pulled in alongside the function table
@@ -700,8 +693,7 @@ ${schema.tables
     // The relocated notify build — emitted after `log`/`metrics` are in scope.
     const notifyBuild = notifyFragments.build;
 
-    // The ActionCtx-ONLY helpers (`tier: "action"` capabilities, then the bespoke
-    // x402 rail and services): external, non-deterministic I/O the typed
+    // The ActionCtx-ONLY helpers (`tier: "action"` capabilities, then services): external, non-deterministic I/O the typed
     // `ActionCtx` exposes but `QueryCtx`/`MutationCtx` do not. We enforce that at
     // the VALUE level too — the binds run AND the props are attached only when the
     // executing function is an `action`, so a query/mutation handler never even
@@ -709,8 +701,8 @@ ${schema.tables
     // runtime match). Each helper's ctx field is named after its local, so one
     // list drives both the attach here and the strip from a composed query's view
     // of an action ctx.
-    const actionOnlyFields = [...capabilityWiring.actionFields, ...(capabilities.has("x402") ? ["x402"] : []), ...(services.length > 0 ? ["services"] : [])];
-    const actionOnlyBuild = `${capabilityWiring.actionBuild}${x402Build}${servicesFragments.build}`;
+    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : [])];
+    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -784,9 +776,9 @@ export interface ShardDOConfig {
     /** \`unknown\` because \`@lunora/scheduler\`'s \`Scheduler\` is not assignable to \`SchedulerLike\`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** \`origin\` is the origin the current \`/rpc\` request reached the worker on — the fallback base for signed object URLs when no \`publicBaseUrl\` is configured. \`undefined\` off the synchronous dispatch path. */
-    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${capabilityWiring.configFields}${flagsFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
+    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${capabilityWiring.configFields}${flagsFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
 }
-${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}${x402Stub}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}
 ${DISPATCH_RUN_SOURCE}
 
 /**
