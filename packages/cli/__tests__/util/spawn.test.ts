@@ -174,4 +174,33 @@ describe("defaultSpawner", () => {
         expect((error as LunoraErrorLike).code).toBe("LOCAL_DEPENDENCY_MISSING");
         expect(exitCodeForError(error)).toBe(EXIT_CODE.MISSING_DEPENDENCY);
     });
+
+    // `lunora dev --tunnel` reads cloudflared's URL from stderr while the child
+    // keeps running, and stops it with an AbortSignal when dev exits.
+    it("hands stderr over line by line, split chunks rejoined, and resolves when the signal stops the child", async () => {
+        expect.assertions(3);
+
+        const controller = new AbortController();
+        const lines: string[] = [];
+        const result = await defaultSpawner({
+            args: [
+                "-e",
+                String.raw`process.stderr.write("first li"); setTimeout(() => process.stderr.write("ne\nsecond\n"), 50); setInterval(() => {}, 1000);`,
+            ],
+            command: process.execPath,
+            onStderrLine: (line) => {
+                lines.push(line);
+
+                if (lines.length === 2) {
+                    controller.abort();
+                }
+            },
+            signal: controller.signal,
+        });
+
+        expect(lines).toStrictEqual(["first line", "second"]);
+        expect(controller.signal.aborted).toBe(true);
+        // Killed by SIGTERM: a signal exit, reported as a failure code rather than a rejection.
+        expect(result.code).toBe(1);
+    });
 });

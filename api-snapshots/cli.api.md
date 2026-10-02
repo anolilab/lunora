@@ -186,6 +186,7 @@ interface DeployedIdentity {
 
 ```ts
 interface DevCommandOptions {
+    allowMail?: ReadonlyArray<string>;
     apiSpec?: ApiSpec;
     codegen?: boolean;
     cwd?: string;
@@ -211,6 +212,8 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    tunnel?: boolean;
+    tunnelSpawner?: Spawner;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
@@ -591,6 +594,8 @@ interface SpawnDescriptor {
     cwd?: string;
     env?: Readonly<Record<string, string>>;
     input?: string;
+    onStderrLine?: (line: string) => void;
+    signal?: AbortSignal;
     stdoutToStderr?: boolean;
 }
 ```
@@ -688,7 +693,7 @@ const createLogger: () => Logger;
 ### `createRecordingSpawner` (const)
 
 ```ts
-const createRecordingSpawner: (exitCode?: number) => {
+const createRecordingSpawner: (exitCode?: number, respond?: (descriptor: SpawnDescriptor) => Promise<SpawnResult> | SpawnResult) => {
     calls: RecordedSpawn[];
     spawner: Spawner;
 };

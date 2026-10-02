@@ -6,7 +6,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
-import type { SpawnDescriptor } from "../../util/spawn";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import type { startStudioServer } from "../../util/studio-server";
 import type { DevFlavor } from "./lifecycle";
 
@@ -21,6 +21,8 @@ interface WorkerProcess {
 type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
 
 interface DevCommandOptions {
+    /** `--allow-mail` values for `--tunnel`, passed to cloudflared as `--allowed-mail`; empty/absent opens a public tunnel. */
+    allowMail?: ReadonlyArray<string>;
     /** Which API spec(s) the codegen watcher emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     /** Disable the codegen watch loop. */
@@ -81,6 +83,11 @@ interface DevCommandOptions {
     studio?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
+
+    /** Share the worker's origin through a Cloudflare quick tunnel (`--tunnel`). */
+    tunnel?: boolean;
+    /** Injection seam for tests — the spawner `--tunnel` runs `cloudflared` through (defaults to the real one). */
+    tunnelSpawner?: Spawner;
 
     /**
      * Injection seam for tests — defaults to parking until SIGINT.

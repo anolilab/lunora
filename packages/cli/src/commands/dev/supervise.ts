@@ -13,6 +13,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import type { Logger } from "../../util/logger";
 import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
+import type { DevTunnelHandle } from "./tunnel";
 import type { WorkerProcess, WorkerSpawner } from "./types";
 
 /** Grace period after the first SIGINT before we force-kill the worker. */
@@ -135,6 +136,8 @@ interface Teardown {
     /** Disposer for the materialized service dev configs (idempotent, never throws). */
     serviceConfigCleanup?: () => void;
     studio?: StudioServerHandle;
+    /** The `--tunnel` cloudflared child, stopped before anything it forwards to. */
+    tunnel?: DevTunnelHandle;
 }
 
 /**
@@ -184,6 +187,9 @@ const teardown = async (handles: Teardown): Promise<void> => {
     // through it. `AbortController.abort()` on an already-aborted controller is a
     // no-op.
     handles.readyProbe?.abort();
+
+    // First, so the public URL stops answering before the servers behind it go.
+    await handles.tunnel?.close();
 
     // Awaited: `close()` stops the watch loop immediately but resolves only once
     // a regeneration already in flight is done, and that run may have spawned

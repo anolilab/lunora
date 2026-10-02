@@ -538,6 +538,16 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--target", options.target);
     }
 
+    // The daemon owns the tunnel's cloudflared child, so both halves must reach it;
+    // an unforwarded `--allow-mail` would turn a protected tunnel into a public one.
+    if (options.tunnel === true) {
+        args.push("--tunnel");
+
+        for (const entry of options.allowMail ?? []) {
+            args.push("--allow-mail", entry);
+        }
+    }
+
     if (remote) {
         args.push("--remote");
     }
