@@ -13,6 +13,7 @@ import { BINDING_SUPPORT as BINDING_SUPPORT_BY_TARGET, tenantResourceName } from
  */
 
 const ALIAS = "acme";
+const ACCOUNT = "a".repeat(32);
 
 /** The box provisions for `cloudflare-wfp` only; its table is the contract this mapping honours. */
 const BINDING_SUPPORT = BINDING_SUPPORT_BY_TARGET["cloudflare-wfp"];
@@ -29,11 +30,10 @@ const deployJob = (bindings: BindingRequirement[], overrides: Partial<DeployJob[
         spec: {
             alias: ALIAS,
             bundle: Buffer.from("export default {}").toString("base64"),
-            cell: "cell-1",
-            dispatchNamespace: "lunora-production",
             manifest: { bindings: bindings.map((requirement) => withName(requirement)) },
             secrets: {},
             tags: ["org:o1", "project:p1", "env:production"],
+            target: { cell: "cell-1", dispatchNamespace: "lunora-production", kind: "dispatch-namespace" },
             ...overrides,
         },
     };
@@ -305,7 +305,7 @@ describe("provision plan: refusals", () => {
         expect.assertions(4);
 
         refuse(deployJob([], { alias: "Acme Corp" }), /alias/u);
-        refuse(deployJob([], { dispatchNamespace: "lunora production" }), /dispatch namespace/u);
+        refuse(deployJob([], { target: { cell: "cell-1", dispatchNamespace: "lunora production", kind: "dispatch-namespace" } }), /dispatch namespace/u);
     });
 
     it("refuses a job without a bundle", () => {
@@ -326,13 +326,77 @@ describe("provision plan: destroy", () => {
     it("removes the Worker, then the project stack — destroy is only sent for a project that is gone", () => {
         expect.assertions(1);
 
-        expect(plan({ action: "destroy", alias: ALIAS, dispatchNamespace: "lunora-production" })).toStrictEqual({
+        expect(
+            plan({ action: "destroy", alias: ALIAS, target: { cell: "cell-1", dispatchNamespace: "lunora-production", kind: "dispatch-namespace" } }),
+        ).toStrictEqual({
             stage: "lunora-production",
+            state: "cell",
             steps: [
                 { kind: "worker", op: "destroy", stackName: "lunora-worker-acme" },
                 { kind: "project", op: "destroy", stackName: "lunora-project-acme" },
             ],
+            target: { kind: "dispatch-namespace", namespace: "lunora-production" },
         });
+    });
+
+    it("destroys an account target's stacks on the account's stage, with the platform's state", () => {
+        expect.assertions(1);
+
+        expect(plan({ action: "destroy", alias: ALIAS, target: { accountId: ACCOUNT, apiToken: "tok", kind: "account" } })).toMatchObject({
+            stage: `account-${ACCOUNT}`,
+            state: "platform",
+            target: { accountId: ACCOUNT, kind: "account" },
+        });
+    });
+});
+
+describe("provision plan: a customer's own account (cloudflare-workers)", () => {
+    const accountJob = (bindings: BindingRequirement[], overrides: Partial<DeployJob["spec"]> = {}): DeployJob =>
+        deployJob(bindings, { target: { accountId: ACCOUNT, apiToken: "tok", kind: "account" }, ...overrides });
+
+    it("plans a plain Worker on the account's stage: no namespace, its own crons, the platform's state", () => {
+        expect.assertions(4);
+
+        const result = plan(accountJob([], { crons: ["*/5 * * * *", "0 3 * * 1"] }));
+
+        expect(result.stage).toBe(`account-${ACCOUNT}`);
+        expect(result.state).toBe("platform");
+        expect(result.worker).not.toHaveProperty("namespace");
+        expect(result.worker?.crons).toStrictEqual(["*/5 * * * *", "0 3 * * 1"]);
+    });
+
+    it("never writes the token into the plan", () => {
+        expect.assertions(1);
+
+        expect(JSON.stringify(plan(accountJob([], { secrets: {} })))).not.toContain('"tok"');
+    });
+
+    it("attaches a consumed queue to the Worker itself, never to the control plane", () => {
+        expect.assertions(2);
+
+        const { project, worker } = plan(
+            accountJob([
+                { binding: "JOBS", resource: "jobs", type: "queue_producer" },
+                { binding: "jobs", resource: "jobs", type: "queue_consumer" },
+            ]),
+        );
+
+        expect(project?.consumers).toStrictEqual([]);
+        expect(worker?.consumers).toStrictEqual([{ id: "queue-acme--jobs-consumer", queueId: "queue-acme--jobs" }]);
+    });
+
+    it("refuses a malformed account id, a missing token, and a hostile cron", () => {
+        expect.assertions(6);
+
+        refuse(accountJob([], { target: { accountId: "acme", apiToken: "tok", kind: "account" } }), /account id/u);
+        refuse(accountJob([], { target: { accountId: ACCOUNT, apiToken: "", kind: "account" } }), /no token/u);
+        refuse(accountJob([], { crons: ["* * * * *; rm -rf /"] }), /cron expression/u);
+    });
+
+    it("refuses crons for a dispatch-namespace Worker, which cannot carry them", () => {
+        expect.assertions(2);
+
+        refuse(deployJob([], { crons: ["* * * * *"] }), /cannot carry cron triggers/u);
     });
 });
 

@@ -5,8 +5,9 @@
  * `ProvisionEvent`s: `log` lines as Alchemy runs, then exactly one `result` or
  * `error`. `GET /__lunora/health` is the readiness probe.
  *
- * This box holds the cell's Cloudflare API token, so it only ever runs trusted
- * code: `program.mjs` (reviewed, static) through the pinned Alchemy CLI. The
+ * This box holds the cell's Cloudflare API token — and, for the length of a
+ * `cloudflare-workers` job, a customer's — so it only ever runs trusted code:
+ * `program.mjs` (reviewed, static) through the pinned Alchemy CLI. The
  * tenant's bundle and assets are written to disk as data and uploaded, never
  * imported or executed; tenant strings reach Alchemy only through the JSON plan.
  */
@@ -29,6 +30,45 @@ const MAX_BODY_BYTES = 256 * 1024 * 1024;
 const MAX_LOG_LINE_CHARS = 8000;
 /** Per stack. A first deploy into a cell also bootstraps the state store. */
 const STEP_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * The Cloudflare credentials and state store one job's Alchemy child runs with.
+ *
+ * A `dispatch-namespace` job converges in the cell's own account with the box's
+ * own credentials, and Alchemy keeps its state in that account's state store.
+ * An `account` job converges in a customer's account with the token the job
+ * carries — but its state stays in the PLATFORM's store, reached over HTTP
+ * (`LUNORA_STATE_STORE_URL` + `LUNORA_STATE_STORE_TOKEN`, the cell's
+ * `alchemy-state-store`): a customer must never hold the record of what was
+ * converged for them (MULTIPLATFORM.md §5.3). A box without that store refuses
+ * account jobs rather than keep their state in the customer's account.
+ * @param {import("./plan.mjs").ProvisionJob} job The planned job.
+ * @param {import("./plan.mjs").Plan} plan Its plan.
+ * @returns {Record<string, string>} The env entries the child needs for them.
+ */
+const credentialsFor = (job, plan) => {
+    if (plan.target.kind !== "account") {
+        return { CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? "", CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN ?? "" };
+    }
+
+    const stateUrl = process.env.LUNORA_STATE_STORE_URL ?? "";
+    const stateToken = process.env.LUNORA_STATE_STORE_TOKEN ?? "";
+
+    if (stateUrl === "" || stateToken === "") {
+        throw new PlanError(
+            "this provision box has no platform state store (LUNORA_STATE_STORE_URL, LUNORA_STATE_STORE_TOKEN), so it cannot converge into a customer's account",
+        );
+    }
+
+    const target = job.action === "deploy" ? job.spec.target : job.target;
+
+    return {
+        CLOUDFLARE_ACCOUNT_ID: plan.target.accountId,
+        CLOUDFLARE_API_TOKEN: /** @type {{ apiToken: string }} */ (target).apiToken,
+        LUNORA_STATE_STORE_TOKEN: stateToken,
+        LUNORA_STATE_STORE_URL: stateUrl,
+    };
+};
 
 /** One job at a time: the control plane serializes per project, this enforces it per instance. */
 let busy = false;
@@ -150,14 +190,21 @@ const writeInputs = async (workspace, job) => {
 /**
  * One job: plan → write inputs → run each stack step → result.
  * @param {unknown} job The parsed request body.
- * @param {(event: import("../../src/targets/cloudflare-wfp/box-contract").ProvisionEvent) => void} emit Writes one NDJSON line.
+ * @param {(event: import("../../src/targets/provision-box/contract").ProvisionEvent) => void} emit Writes one NDJSON line.
  * @returns {Promise<void>} Resolves once the terminal event is emitted.
  */
 const provision = async (job, emit) => {
     const plan = planJob(/** @type {import("./plan.mjs").ProvisionJob} */ (job), { controlPlaneScript: process.env.LUNORA_CONTROL_PLANE_SCRIPT });
     const deploy = /** @type {import("./plan.mjs").ProvisionJob} */ (job).action === "deploy";
     const secrets = deploy ? /** @type {import("./plan.mjs").ProvisionJob & { action: "deploy" }} */ (job).spec.secrets : {};
-    const scrub = scrubber([...Object.values(secrets), process.env.CLOUDFLARE_API_TOKEN ?? ""]);
+    const credentials = credentialsFor(/** @type {import("./plan.mjs").ProvisionJob} */ (job), plan);
+    // Every credential this job holds, the box's own included, is scrubbed from what leaves it.
+    const scrub = scrubber([
+        ...Object.values(secrets),
+        process.env.CLOUDFLARE_API_TOKEN ?? "",
+        credentials.CLOUDFLARE_API_TOKEN ?? "",
+        credentials.LUNORA_STATE_STORE_TOKEN ?? "",
+    ]);
     const workspace = await mkdtemp(join(tmpdir(), "provision-"));
 
     try {
@@ -177,8 +224,7 @@ const provision = async (job, emit) => {
             const env = {
                 ALCHEMY_TELEMETRY_DISABLED: "1",
                 CI: "true",
-                CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? "",
-                CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN ?? "",
+                ...credentials,
                 DO_NOT_TRACK: "1",
                 // Alchemy keeps credentials caches and logs under HOME; the
                 // workspace is removed after the job, so nothing outlives it.
@@ -205,7 +251,8 @@ const provision = async (job, emit) => {
             }
         }
 
-        // A dispatch-namespace Worker has no URL of its own; the dispatcher routes to it.
+        // No URL: a dispatch-namespace Worker has none of its own (the dispatcher
+        // routes to it), and an account Worker's is the control plane's to compute.
         emit({ type: "result" });
     } finally {
         await rm(workspace, { force: true, recursive: true }).catch(() => {});
@@ -240,7 +287,7 @@ const handleProvision = async (request, response) => {
 
     response.writeHead(200, { "content-type": "application/x-ndjson" });
 
-    /** @param {import("../../src/targets/cloudflare-wfp/box-contract").ProvisionEvent} event The event to send. */
+    /** @param {import("../../src/targets/provision-box/contract").ProvisionEvent} event The event to send. */
     const emit = (event) => {
         response.write(`${JSON.stringify(event)}\n`);
     };

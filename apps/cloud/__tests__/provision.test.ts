@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { TenantDeploymentSpec } from "../src/provision-contract";
-import type { ProvisionJob } from "../src/targets/cloudflare-wfp/box-contract";
 import type { CloudflareWfpPorts } from "../src/targets/cloudflare-wfp/driver";
 import { createCloudflareWfpDriver } from "../src/targets/cloudflare-wfp/driver";
-import type { ProvisionBox } from "../src/targets/cloudflare-wfp/provision-box";
+import type { AccountCredentials } from "../src/targets/cloudflare-workers/driver";
+import { createCloudflareWorkersDriver } from "../src/targets/cloudflare-workers/driver";
+import type { ProvisionBox } from "../src/targets/provision-box/client";
+import type { ProvisionJob } from "../src/targets/provision-box/contract";
 
 const spec: TenantDeploymentSpec = {
     alias: "org-project",
@@ -77,7 +79,9 @@ describe(createCloudflareWfpDriver, () => {
         expect(job?.action).toBe("deploy");
         expect(job?.action === "deploy" && atob(job.spec.bundle)).toBe("export default {}");
         // The Cloudflare half the neutral spec does not carry comes from the driver's own configuration.
-        expect(job).toMatchObject({ spec: { alias: "org-project", cell: "cell-1", dispatchNamespace: "lunora-production" } });
+        expect(job).toMatchObject({
+            spec: { alias: "org-project", target: { cell: "cell-1", dispatchNamespace: "lunora-production", kind: "dispatch-namespace" } },
+        });
         expect(job?.action === "deploy" && job.spec.tailConsumers).toBeUndefined();
     });
 
@@ -112,6 +116,57 @@ describe(createCloudflareWfpDriver, () => {
 
         await driverFor(box, { dispatchNamespace: "lunora-preview" }).destroy("app");
 
-        expect(calls).toStrictEqual([{ job: { action: "destroy", alias: "app", dispatchNamespace: "lunora-preview" }, name: "app" }]);
+        expect(calls).toStrictEqual([
+            {
+                job: { action: "destroy", alias: "app", target: { cell: "cell-1", dispatchNamespace: "lunora-preview", kind: "dispatch-namespace" } },
+                name: "app",
+            },
+        ]);
+    });
+
+    it("leaves the release's crons off a dispatch-namespace Worker — the control plane fans them out", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+
+        await driverFor(box).deploy({ ...spec, crons: ["*/5 * * * *"] });
+
+        expect(calls[0]?.job.action === "deploy" && calls[0].job.spec.crons).toBeUndefined();
+    });
+});
+
+describe(createCloudflareWorkersDriver, () => {
+    const ACCOUNT = "a".repeat(32);
+    const account = { accountId: ACCOUNT, id: "cfa_1", workersSubdomain: "acme" };
+    const credentials = vi.fn<AccountCredentials>(() => Promise.resolve({ accountId: ACCOUNT, apiToken: "customer-token" }));
+
+    it("converges a plain Worker into the customer's account, with its crons and no log tail, at its workers.dev URL", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+        const driver = createCloudflareWorkersDriver({ account, box: () => box, credentials });
+
+        await expect(driver.deploy({ ...spec, collectLogs: true, crons: ["*/5 * * * *"] })).resolves.toStrictEqual({
+            url: "https://org-project.acme.workers.dev",
+        });
+
+        expect(credentials).toHaveBeenCalledWith("cfa_1");
+        expect(calls[0]?.job).toMatchObject({
+            spec: { crons: ["*/5 * * * *"], target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account" } },
+        });
+        expect(calls[0]?.job.action === "deploy" && calls[0].job.spec.tailConsumers).toBeUndefined();
+        expect(driver.domains.platformTargets()).toStrictEqual(["acme.workers.dev"]);
+    });
+
+    it("destroys in the account, and refuses a token that drifted to another account", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+
+        await createCloudflareWorkersDriver({ account, box: () => box, credentials }).destroy("app");
+
+        expect(calls[0]?.job).toStrictEqual({ action: "destroy", alias: "app", target: { accountId: ACCOUNT, apiToken: "customer-token", kind: "account" } });
+
+        const drifted = createCloudflareWorkersDriver({
+            account,
+            box: () => box,
+            credentials: () => Promise.resolve({ accountId: "b".repeat(32), apiToken: "other" }),
+        });
+
+        await expect(drifted.deploy(spec)).rejects.toMatchObject({ code: "CONFLICT" });
     });
 });

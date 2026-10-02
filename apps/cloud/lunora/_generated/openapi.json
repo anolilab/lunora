@@ -1263,93 +1263,6 @@
         "x-lunora-function-kind": "mutation"
       }
     },
-    "/_lunora/rpc#boxes:setProjectTarget": {
-      "post": {
-        "description": "Invoke the `mutation` `boxes:setProjectTarget` over the Lunora RPC envelope (POST /_lunora/rpc).",
-        "operationId": "boxes:setProjectTarget",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
-                    "properties": {
-                      "boxId": {
-                        "description": "Id<\"boxes\">",
-                        "type": "string",
-                        "x-lunora-table": "boxes"
-                      },
-                      "organizationId": {
-                        "description": "Id<\"organizations\">",
-                        "type": "string",
-                        "x-lunora-table": "organizations"
-                      },
-                      "projectId": {
-                        "description": "Id<\"projects\">",
-                        "type": "string",
-                        "x-lunora-table": "projects"
-                      },
-                      "target": {
-                        "anyOf": [
-                          {
-                            "const": "celld-vps",
-                            "type": "string"
-                          },
-                          {
-                            "const": "cloudflare-wfp",
-                            "type": "string"
-                          }
-                        ]
-                      }
-                    },
-                    "required": [
-                      "organizationId",
-                      "projectId",
-                      "target"
-                    ],
-                    "type": "object"
-                  },
-                  "functionPath": {
-                    "const": "boxes:setProjectTarget",
-                    "type": "string"
-                  },
-                  "shardKey": {
-                    "description": "Optional shard key; omitted routes to the default shard.",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "functionPath"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
-                }
-              }
-            },
-            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
-          },
-          "default": {
-            "$ref": "#/components/responses/LunoraError"
-          }
-        },
-        "summary": "mutation: boxes:setProjectTarget",
-        "tags": [
-          "boxes"
-        ],
-        "x-lunora-function-kind": "mutation"
-      }
-    },
     "/_lunora/rpc#builds:listByProject": {
       "post": {
         "description": "Invoke the `query` `builds:listByProject` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -6052,6 +5965,102 @@
           }
         },
         "summary": "mutation: projects:setPreviewProtection",
+        "tags": [
+          "projects"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#projects:setTarget": {
+      "post": {
+        "description": "Invoke the `mutation` `projects:setTarget` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "projects:setTarget",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "boxId": {
+                        "description": "Id<\"boxes\">",
+                        "type": "string",
+                        "x-lunora-table": "boxes"
+                      },
+                      "cloudflareAccountId": {
+                        "description": "Id<\"cloudflareAccounts\">",
+                        "type": "string",
+                        "x-lunora-table": "cloudflareAccounts"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "projectId": {
+                        "description": "Id<\"projects\">",
+                        "type": "string",
+                        "x-lunora-table": "projects"
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "const": "celld-vps",
+                            "type": "string"
+                          },
+                          {
+                            "const": "cloudflare-wfp",
+                            "type": "string"
+                          },
+                          {
+                            "const": "cloudflare-workers",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "projectId",
+                      "target"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "projects:setTarget",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: projects:setTarget",
         "tags": [
           "projects"
         ],

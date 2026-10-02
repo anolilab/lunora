@@ -116,7 +116,6 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "boxes:rename": lunora_boxes_3.rename as unknown as RegisteredLunoraFunction,
     "boxes:revoke": lunora_boxes_3.revoke as unknown as RegisteredLunoraFunction,
     "boxes:setDesiredRelease": lunora_boxes_3.setDesiredRelease as unknown as RegisteredLunoraFunction,
-    "boxes:setProjectTarget": lunora_boxes_3.setProjectTarget as unknown as RegisteredLunoraFunction,
     "builds:appendLog": lunora_builds_4.appendLog as unknown as RegisteredLunoraFunction,
     "builds:claimNext": lunora_builds_4.claimNext as unknown as RegisteredLunoraFunction,
     "builds:complete": lunora_builds_4.complete as unknown as RegisteredLunoraFunction,
@@ -215,6 +214,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "projects:remove": lunora_projects_23.remove as unknown as RegisteredLunoraFunction,
     "projects:rename": lunora_projects_23.rename as unknown as RegisteredLunoraFunction,
     "projects:setPreviewProtection": lunora_projects_23.setPreviewProtection as unknown as RegisteredLunoraFunction,
+    "projects:setTarget": lunora_projects_23.setTarget as unknown as RegisteredLunoraFunction,
     "projects:updateBuildSettings": lunora_projects_23.updateBuildSettings as unknown as RegisteredLunoraFunction,
     "projects:verifyPreviewPassword": lunora_projects_23.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
     "rollouts:abortRollout": lunora_rollouts_24.abortRollout as unknown as RegisteredLunoraFunction,
@@ -403,21 +403,6 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["buildId"] !== "string") return DEFER;
 return { "buildId": source["buildId"] };
-});
-installCompiledValidatorMap(lunora_cells_5.register.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["cloudflareAccountId"] !== "string") return DEFER;
-if (typeof source["dispatchNamespacePrefix"] !== "string") return DEFER;
-let __has1 = false;
-let __val1;
-if (source["jurisdiction"] !== undefined) {
-if (typeof source["jurisdiction"] !== "string") return DEFER;
-__val1 = source["jurisdiction"];
-__has1 = true;
-}
-if (typeof source["name"] !== "string") return DEFER;
-return { "cloudflareAccountId": source["cloudflareAccountId"], "dispatchNamespacePrefix": source["dispatchNamespacePrefix"], ...(__has1 ? { "jurisdiction": __val1 } : {}), "name": source["name"] };
 });
 installCompiledValidatorMap(lunora_cloudflare_accounts_6.disconnect.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -942,7 +927,6 @@ export interface Caller {
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         revoke: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ ipv4?: string; ipv6?: string; slug: string; }>;
         setDesiredRelease: (args: { boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
-        setProjectTarget: (args: { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }) => Promise<void>;
     };
     builds: {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
@@ -958,7 +942,7 @@ export interface Caller {
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
-        register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
+        register: (args: { cloudflareAccountId: string; config?: Record<string, string>; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<Id<"cells">>;
     };
     cloudflare_accounts: {
         connect: (args: { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }) => Promise<Id<"cloudflareAccounts">>;
@@ -995,7 +979,7 @@ export interface Caller {
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; projectId: Id<"projects">; branch?: string; bundleHash?: string; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         releaseTarget: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; target?: string }>;
@@ -1076,11 +1060,12 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp"; watchPaths?: string[] }[]>;
-        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
+        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ account?: { accountId: string; id: string; workersSubdomain: string; }; box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
+        setTarget: (args: { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<void>;
         updateBuildSettings: (args: { id: Id<"projects">; organizationId: Id<"organizations">; rootDirectory: unknown; watchPaths: Array<unknown> }) => Promise<{ rootDirectory: string; watchPaths: string[]; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };
@@ -1109,7 +1094,7 @@ export interface Caller {
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; organizationId: Id<"organizations">; restoreConflicts?: number; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; projectId: Id<"projects">; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1207,7 +1192,6 @@ export const createCaller = (context: CallerCtx): Caller => ({
         rename: (args) => callRegistered(context, "boxes:rename", args),
         revoke: (args) => callRegistered(context, "boxes:revoke", args),
         setDesiredRelease: (args) => callRegistered(context, "boxes:setDesiredRelease", args),
-        setProjectTarget: (args) => callRegistered(context, "boxes:setProjectTarget", args),
     },
     builds: {
         appendLog: (args) => callRegistered(context, "builds:appendLog", args),
@@ -1346,6 +1330,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         remove: (args) => callRegistered(context, "projects:remove", args),
         rename: (args) => callRegistered(context, "projects:rename", args),
         setPreviewProtection: (args) => callRegistered(context, "projects:setPreviewProtection", args),
+        setTarget: (args) => callRegistered(context, "projects:setTarget", args),
         updateBuildSettings: (args) => callRegistered(context, "projects:updateBuildSettings", args),
         verifyPreviewPassword: (args) => callRegistered(context, "projects:verifyPreviewPassword", args),
     },

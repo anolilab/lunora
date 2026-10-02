@@ -9,15 +9,13 @@ import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
-import { DEFAULT_TARGET, isBoxTarget, storedTarget } from "../src/provision-contract";
-import { revokedBoxError } from "../src/targets/placement";
+import { isBoxTarget, storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
-import { deployTarget } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -258,74 +256,6 @@ export const revoke = internalMutation
         }
 
         return { slug: row.slug, ...present("ipv4", row.ipv4), ...present("ipv6", row.ipv6) };
-    });
-
-/**
- * Point a project at a deploy target (owner/admin) — the one writer of
- * `projects.target` and `projects.boxId`. A `celld-vps` project names a box of
- * the same organization that is not revoked; any other target clears the box.
- *
- * Refused while the project still has a deployment the teardown sweep has not
- * reclaimed: its tenant (and its data) lives on the CURRENT target, and the
- * sweep would send that teardown — keyed by alias — to the new one.
- */
-export const setProjectTarget = mutation
-    .use(rateLimit("sensitive"))
-    .input({
-        boxId: v.optional(v.id("boxes")),
-        organizationId: v.id("organizations"),
-        projectId: v.id("projects"),
-        target: deployTarget,
-    })
-    .mutation(async ({ ctx: context, args: { boxId, organizationId, projectId, target } }): Promise<void> => {
-        const member = await assertMember(context, organizationId, ["owner", "admin"]);
-
-        await assertRowInOrg(context, projectId, organizationId, "project");
-
-        if (isBoxTarget(target)) {
-            if (boxId === undefined) {
-                throw new LunoraError("BAD_REQUEST", `a ${target} project needs a box (boxId)`);
-            }
-
-            const box = (await context.db.get(boxId)) as BoxRow | null;
-
-            if (box?.organizationId !== organizationId) {
-                throw new LunoraError("NOT_FOUND", "box not found in this organization");
-            }
-
-            if (box.status === "revoked") {
-                throw revokedBoxError(box.name);
-            }
-        } else if (boxId !== undefined) {
-            throw new LunoraError("BAD_REQUEST", `a ${target} project has no box`);
-        }
-
-        const project = (await context.db.get(projectId)) as { boxId?: null | string; target?: null | string };
-        const currentTarget = storedTarget(project.target) ?? DEFAULT_TARGET;
-        const currentBox = project.boxId ?? undefined;
-
-        if (currentTarget === target && currentBox === boxId) {
-            return;
-        }
-
-        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId } });
-        const pending = (deployments as { status: string; teardownAt?: null | number }[]).filter((row) => row.status !== "destroyed" || row.teardownAt == null);
-
-        if (pending.length > 0) {
-            throw new LunoraError(
-                "CONFLICT",
-                `this project still has ${String(pending.length)} deployment(s) on ${currentTarget}; delete the project's deployments and wait for teardown before moving it`,
-            );
-        }
-
-        await context.db.patch(projectId, { boxId: boxId ?? null, target });
-        await context.db.insert("auditLog", {
-            action: "project.target.set",
-            actorUserId: member.userId,
-            createdAt: context.now,
-            organizationId,
-            target: boxId === undefined ? target : `${target}:${boxId}`,
-        });
     });
 
 /** Refuse an enrolment whose key, addresses or versions are malformed — before the token is touched. */

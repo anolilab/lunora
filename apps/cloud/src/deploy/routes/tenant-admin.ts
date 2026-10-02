@@ -15,6 +15,8 @@
  * what makes a sixth route's omission obvious.
  */
 import { api, internal } from "../../../lunora/_generated/api.js";
+import type { TargetId } from "../../provision-contract";
+import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
 import { jsonError, requireContext, strictBearer } from "./shared";
@@ -139,11 +141,24 @@ export const handleTenantCustomDomainRoute = async (request: Request, environmen
     return Response.json(result ?? {});
 };
 
+/** The targets whose capacity a cell is (`placedOn: "cell"`) — the only ones a cell may be registered for. */
+const CELL_TARGETS: ReadonlyArray<TargetId> = TARGET_IDS.filter((id) => TARGETS[id].placedOn === "cell");
+
+/** A cell's `config`: string values only, as the column stores them. */
+const isCellConfig = (value: unknown): value is Record<string, string> =>
+    typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((entry) => typeof entry === "string");
+
 /**
  * `POST /v1/cells` — register a fleet cell (platform-operator action, §2.5).
  * Bearer-gated with `LUNORA_ADMIN_TOKEN` (the platform trust boundary): cell
  * bring-up IaC holds the token. The delegated mutation is `internal`, so this
  * route is the only path in — a tenant can't inject cells over public RPC.
+ *
+ * `target` (default `cloudflare-wfp`) must be a target whose projects are
+ * placed in a cell; `config` holds that target's own settings (MULTIPLATFORM.md
+ * §5.2). There is no `credentialsRef`: the cell's credentials are its control
+ * plane's Worker secrets, and the only per-tenant credential — a connected
+ * Cloudflare account's token — belongs to the organization, not to a cell.
  */
 export const handleCellRegisterRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -158,7 +173,7 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
         return unauthorized;
     }
 
-    let body: { cloudflareAccountId?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown };
+    let body: { cloudflareAccountId?: unknown; config?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown; target?: unknown };
 
     try {
         body = await request.json();
@@ -166,7 +181,7 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
         return jsonError(400, "invalid JSON body");
     }
 
-    const { cloudflareAccountId, dispatchNamespacePrefix, jurisdiction, name } = body;
+    const { cloudflareAccountId, config, dispatchNamespacePrefix, jurisdiction, name, target } = body;
 
     if (typeof cloudflareAccountId !== "string" || typeof dispatchNamespacePrefix !== "string" || typeof name !== "string") {
         return jsonError(400, "cloudflareAccountId, dispatchNamespacePrefix, and name are required");
@@ -176,11 +191,21 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
         return jsonError(400, "jurisdiction must be a string when provided");
     }
 
+    if (target !== undefined && !(isTargetId(target) && CELL_TARGETS.includes(target))) {
+        return jsonError(400, `target must be one of the targets placed in a cell: ${CELL_TARGETS.join(", ")}`);
+    }
+
+    if (config !== undefined && !isCellConfig(config)) {
+        return jsonError(400, "config must be an object of string values when provided");
+    }
+
     const cellId = await context.runMutation<string>(internal.cells.register, {
         cloudflareAccountId,
+        ...(config === undefined ? {} : { config }),
         dispatchNamespacePrefix,
         ...(jurisdiction === undefined ? {} : { jurisdiction }),
         name,
+        ...(target === undefined ? {} : { target }),
     });
 
     return Response.json({ cellId }, { status: 201 });

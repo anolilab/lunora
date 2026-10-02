@@ -13,12 +13,12 @@
 import { tenantSender } from "../../backup/tenant-transport";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
+import type { ProvisionBox } from "../provision-box/client";
+import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
 import type { AnalyticsUsageReader } from "./analytics";
 import { createHttpAnalyticsReader } from "./analytics";
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
-import type { ProvisionBox } from "./provision-box";
-import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "./provision-box";
 
 /** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
 export const TAIL_CONSUMER = "lunora-log-tail";
@@ -49,10 +49,11 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
                 ports.box().get(spec.alias),
                 {
                     action: "deploy",
+                    // Crons stay off the Worker: WfP drops `triggers.crons` for namespaced Workers, so the control plane fans them out.
                     spec: deployJobSpec(spec, BINDING_SUPPORT["cloudflare-wfp"], {
-                        cell: ports.cell,
-                        dispatchNamespace: ports.dispatchNamespace,
+                        nativeCrons: false,
                         tailConsumer: TAIL_CONSUMER,
+                        target: { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace, kind: "dispatch-namespace" },
                     }),
                 },
                 ports.log,
@@ -63,7 +64,11 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
             return { url: `https://${spec.alias}.${ports.appDomain}` };
         },
         destroy: async (alias) => {
-            await runProvisionJob(ports.box().get(alias), { action: "destroy", alias, dispatchNamespace: ports.dispatchNamespace }, ports.log);
+            await runProvisionJob(
+                ports.box().get(alias),
+                { action: "destroy", alias, target: { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace, kind: "dispatch-namespace" } },
+                ports.log,
+            );
         },
         domains: { platformTargets: () => [ports.appDomain] },
         id: "cloudflare-wfp",

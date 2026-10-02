@@ -10,10 +10,20 @@
  * Resource names are NOT derived here: the control plane computes them with the
  * contract's `tenantResourceName` and sends each one as `resourceName` on the
  * binding, so the naming scheme has exactly one implementation.
+ *
+ * Two targets (`ProvisionTarget` in the contract). A `dispatch-namespace` job
+ * (`cloudflare-wfp`) lands in the cell's own account: a Worker in the namespace
+ * (the stage), queue consumers attached to the control plane. An `account` job
+ * (`cloudflare-workers`) lands in a customer's account: a plain Worker on its
+ * `workers.dev` subdomain with its own cron triggers, consuming its own queues,
+ * on stage `account-<id>`. The token never enters the plan — the server hands
+ * it to the Alchemy child as process env, and the plan names only the account
+ * id — and the STATE still lives in the platform's account (`state:
+ * "platform"`), never the customer's.
  */
 
 /**
- * @typedef {import("../../src/targets/cloudflare-wfp/box-contract").ProvisionJob} ContractJob
+ * @typedef {import("../../src/targets/provision-box/contract").ProvisionJob} ContractJob
  * @typedef {import("../../src/provision-contract").BindingRequirement & { resourceName?: string }} JobBinding
  * @typedef {Extract<ContractJob, { action: "deploy" }>["spec"]} ContractSpec
  * @typedef {Omit<ContractSpec, "manifest"> & { manifest: Omit<ContractSpec["manifest"], "bindings"> & { bindings: JobBinding[] } }} JobSpec
@@ -24,9 +34,11 @@
  * @typedef {{ consumers: QueueConsumer[], resources: ProjectResource[], stackName: string }} ProjectStack
  * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" } | { binding: string, dataset: string, kind: "analytics_engine" }} WorkerBinding
  * @typedef {{ htmlHandling?: string, notFoundHandling?: string, runWorkerFirst?: boolean | string[] }} AssetsConfig
- * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, namespace: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
+ * @typedef {{ id: string, queueId: string }} WorkerConsumer
+ * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, consumers: WorkerConsumer[], crons: string[], namespace?: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
  * @typedef {{ kind: "project" | "worker", op: "deploy" | "destroy", stackName: string }} Step
- * @typedef {{ project?: ProjectStack, stage: string, steps: Step[], worker?: WorkerStack }} Plan
+ * @typedef {{ accountId: string, kind: "account" } | { kind: "dispatch-namespace", namespace: string }} PlanTarget
+ * @typedef {{ project?: ProjectStack, stage: string, state: "cell" | "platform", steps: Step[], target: PlanTarget, worker?: WorkerStack }} Plan
  */
 
 /** Platform default, used when the manifest does not declare its own. */
@@ -45,6 +57,12 @@ const BINDING_NAME = /^[A-Za-z_]\w{0,63}$/u;
 const CLASS_NAME = /^[A-Za-z_$][\w$]{0,127}$/u;
 // What `tenantResourceName` emits (Analytics Engine swaps `-` for `_`).
 const RESOURCE_NAME = /^[a-z0-9][\w-]{0,62}$/u;
+// A Cloudflare account id.
+const ACCOUNT_ID = /^[\da-f]{32}$/u;
+// One cron expression: five or six fields of the characters cron syntax uses.
+const CRON = /^[\d*/,?#A-Za-z-]+(?: [\d*/,?#A-Za-z-]+){4,5}$/u;
+/** The control plane's own cap on a release's crons (`startRelease`); Cloudflare's per-account limit is enforced by Cloudflare. */
+const MAX_CRONS = 50;
 
 /**
  * Assert a tenant- or control-plane-supplied value matches its grammar.
@@ -59,6 +77,34 @@ const expect = (value, pattern, what) => {
     }
 
     return value;
+};
+
+/**
+ * Validate where a job lands. The token is only checked to be present: it is
+ * the server's to hand to the Alchemy child, and never part of the plan.
+ * @param {unknown} target The job's untrusted `ProvisionTarget`.
+ * @returns {{ stage: string, state: "cell" | "platform", target: PlanTarget }} The stage, whose state store holds it, and the target as the program reads it.
+ */
+const planTarget = (target) => {
+    const candidate = /** @type {{ accountId?: unknown, apiToken?: unknown, dispatchNamespace?: unknown, kind?: unknown } | null | undefined} */ (target);
+
+    if (candidate?.kind === "dispatch-namespace") {
+        const namespace = expect(candidate.dispatchNamespace, LABEL, "dispatch namespace");
+
+        return { stage: namespace, state: "cell", target: { kind: "dispatch-namespace", namespace } };
+    }
+
+    if (candidate?.kind === "account") {
+        const accountId = expect(candidate.accountId, ACCOUNT_ID, "account id");
+
+        if (typeof candidate.apiToken !== "string" || candidate.apiToken === "") {
+            throw new PlanError(`the job carries no token for account ${accountId}`);
+        }
+
+        return { stage: `account-${accountId}`, state: "platform", target: { accountId, kind: "account" } };
+    }
+
+    throw new PlanError(`unknown target ${JSON.stringify(candidate?.kind)}`);
 };
 
 /**
@@ -111,7 +157,7 @@ const resourceName = (requirement) => {
  * What one binding contributes to the Worker, creating its project resource on the way.
  * @param {JobBinding} requirement The manifest entry (never a `queue_consumer`).
  * @param {string} binding Its validated `env` name.
- * @param {{ assets: JobSpec["assets"], consumed: Set<string | undefined>, controlPlaneScript: string | undefined, project: ProjectStack, provision: (requirement: JobBinding, kind: ProjectResourceKind) => string }} context The deploy being planned.
+ * @param {{ assets: JobSpec["assets"], consumed: Set<string | undefined>, consumers: WorkerConsumer[], controlPlaneScript: string | undefined, project: ProjectStack, provision: (requirement: JobBinding, kind: ProjectResourceKind) => string, target: PlanTarget }} context The deploy being planned.
  * @returns {WorkerBinding | undefined} The Worker's `env` entry, if the binding has one of its own.
  */
 const planBinding = (requirement, binding, context) => {
@@ -154,19 +200,26 @@ const planBinding = (requirement, binding, context) => {
             const id = context.provision(requirement, "queue");
 
             if (requirement.resource !== undefined && context.consumed.has(requirement.resource)) {
-                context.project.consumers.push({
-                    id: `${id}-consumer`,
-                    queueId: id,
-                    scriptName: expect(context.controlPlaneScript, LABEL, "LUNORA_CONTROL_PLANE_SCRIPT"),
-                });
+                if (context.target.kind === "account") {
+                    // A plain Worker consumes its own queue; attached once the Worker exists, in its stack.
+                    context.consumers.push({ id: `${id}-consumer`, queueId: id });
+                } else {
+                    // A dispatch-namespace Worker cannot consume: the control plane drains the queue for it.
+                    context.project.consumers.push({
+                        id: `${id}-consumer`,
+                        queueId: id,
+                        scriptName: expect(context.controlPlaneScript, LABEL, "LUNORA_CONTROL_PLANE_SCRIPT"),
+                    });
+                }
             }
 
             return { binding, id, kind: "ref", resource: "queue" };
         }
         case "workflow": {
             // Alchemy registers a Workflow with the account-level `putWorkflow`
-            // (Workflows/Workflow.ts), which has no dispatch-namespace variant.
-            throw new PlanError(`workflow binding ${binding}: Workflows cannot be registered for a Workers for Platforms script yet`);
+            // (Workflows/Workflow.ts), which has no dispatch-namespace variant, and
+            // only for an Effect-native Workflow — not a prebuilt bundle's class.
+            throw new PlanError(`workflow binding ${binding}: Workflows cannot be registered for a prebuilt Worker yet`);
         }
         default: {
             throw new PlanError(`binding ${binding} has type ${JSON.stringify(requirement.type)}, which Lunora Cloud does not provision`);
@@ -175,11 +228,34 @@ const planBinding = (requirement, binding, context) => {
 };
 
 /**
+ * The Worker's own cron triggers — only a plain Worker in an account carries them.
+ * @param {unknown} crons The job's untrusted `crons`.
+ * @param {PlanTarget} target Where the job lands.
+ * @returns {string[]} The validated expressions.
+ */
+const planCrons = (crons, target) => {
+    if (crons === undefined) {
+        return [];
+    }
+
+    if (!Array.isArray(crons) || crons.length > MAX_CRONS) {
+        throw new PlanError(`crons must be a list of at most ${MAX_CRONS} expressions`);
+    }
+
+    if (crons.length > 0 && target.kind !== "account") {
+        throw new PlanError("a dispatch-namespace Worker cannot carry cron triggers; the control plane fans them out");
+    }
+
+    return crons.map((cron) => expect(cron, CRON, "cron expression"));
+};
+
+/**
  * @param {JobSpec} spec The deploy job's spec.
  * @param {string | undefined} controlPlaneScript The Worker that consumes routed queues.
+ * @param {PlanTarget} target Where the job lands.
  * @returns {{ project: ProjectStack, worker: WorkerStack }} Both stacks' declarations.
  */
-const planDeploy = (spec, controlPlaneScript) => {
+const planDeploy = (spec, controlPlaneScript, target) => {
     const alias = expect(spec.alias, LABEL, "alias");
 
     if (typeof spec.bundle !== "string" || spec.bundle === "") {
@@ -235,14 +311,18 @@ const planDeploy = (spec, controlPlaneScript) => {
         return id;
     };
 
+    /** @type {WorkerConsumer[]} */
+    const consumers = [];
     const context = {
         assets: spec.assets,
         consumed: new Set(spec.manifest.bindings.flatMap((requirement) => (requirement.type === "queue_consumer" ? [requirement.resource] : []))),
+        consumers,
         controlPlaneScript,
         project,
         provision,
+        target,
     };
-    // Queue consumers are routed: the control plane consumes the producer queue.
+    // A queue consumer entry binds nothing: its queue is attached as the producer's consumer above.
     const bindings = spec.manifest.bindings.flatMap((requirement) =>
         requirement.type === "queue_consumer" ? [] : (planBinding(requirement, claim(requirement.binding), context) ?? []),
     );
@@ -286,7 +366,9 @@ const planDeploy = (spec, controlPlaneScript) => {
                 date: spec.manifest.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
                 flags: [...(spec.manifest.compatibilityFlags ?? DEFAULT_COMPATIBILITY_FLAGS)],
             },
-            namespace: expect(spec.dispatchNamespace, LABEL, "dispatch namespace"),
+            consumers,
+            crons: planCrons(spec.crons, target),
+            ...(target.kind === "dispatch-namespace" ? { namespace: target.namespace } : {}),
             secretNames,
             stackName: workerStackName(alias),
             tags: [...spec.tags],
@@ -312,7 +394,7 @@ const planJob = (job, options) => {
         const alias = expect(job.alias, LABEL, "alias");
 
         return {
-            stage: expect(job.dispatchNamespace, LABEL, "dispatch namespace"),
+            ...planTarget(job.target),
             steps: [
                 { kind: "worker", op: "destroy", stackName: workerStackName(alias) },
                 { kind: "project", op: "destroy", stackName: projectStackName(alias) },
@@ -324,11 +406,12 @@ const planJob = (job, options) => {
         throw new PlanError(`unknown action ${JSON.stringify(/** @type {{ action: unknown }} */ (job).action)}`);
     }
 
-    const { project, worker } = planDeploy(job.spec, options.controlPlaneScript);
+    const placed = planTarget(job.spec?.target);
+    const { project, worker } = planDeploy(job.spec, options.controlPlaneScript, placed.target);
 
     return {
+        ...placed,
         project,
-        stage: worker.namespace,
         steps: [
             { kind: "project", op: "deploy", stackName: project.stackName },
             { kind: "worker", op: "deploy", stackName: worker.stackName },

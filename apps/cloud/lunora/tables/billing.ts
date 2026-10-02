@@ -36,6 +36,10 @@ export const billingTables = {
         // the customer has root on the box, so its counts are not billing
         // evidence. `src/billing/usage.ts` `isBillableUsage` is the one test.
         boxId: v.optional(v.id("boxes")),
+        // Set on rows read back from a customer's own Cloudflare account
+        // (`cloudflare-workers`): displayed, NEVER billed — Cloudflare bills those
+        // requests to the customer, and Lunora Cloud charges for the control plane.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
         kind: usageMeter,

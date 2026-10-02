@@ -305,6 +305,9 @@ describe("box usage is never billed (plan 458 D12)", () => {
         expect(isBillableUsage({})).toBe(true);
         expect(isBillableUsage({ boxId: null })).toBe(true);
         expect(isBillableUsage({ boxId: "box_1" })).toBe(false);
+        // A connected Cloudflare account's requests are on the customer's own Cloudflare bill.
+        expect(isBillableUsage({ cloudflareAccountId: null })).toBe(true);
+        expect(isBillableUsage({ cloudflareAccountId: "cfa_1" })).toBe(false);
     });
 
     /** A ctx whose `platformUsage` reads answer `rows` as one finished page, whatever the filter. */

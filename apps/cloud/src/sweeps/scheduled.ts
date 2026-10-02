@@ -36,7 +36,7 @@ import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
 import type { TargetFleet } from "../targets/driver";
-import { boxLookupsIn } from "../targets/placement";
+import { accountLookupIn, boxLookupsIn } from "../targets/placement";
 import { registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
@@ -107,6 +107,7 @@ const sweepTeardown = async (env: ControlPlaneEnv): Promise<void> => {
         teardownPorts(
             database,
             {
+                accounts: accountLookupIn(database),
                 boxes: boxLookupsIn(database),
                 deleteRelease: createReleaseStore(env.RELEASES).delete,
                 driverFor: (placement) => resolveTargetDriver(placement, env),

@@ -8,17 +8,23 @@
  * `LUNORA_SECRETS`, bound as `Redacted` so they upload as `secret_text` and
  * never render in a plan). `LUNORA_PROVISION_STACK` picks the stack.
  *
- * State lives in Alchemy's Cloudflare state store (`state()`): a Worker in the
- * cell's own account, bootstrapped on first use (`--yes`), so an ephemeral
- * container needs nothing but the account id and API token.
+ * State lives in Alchemy's Cloudflare state store: a Worker in the cell's own
+ * account. A `dispatch-namespace` plan (the cell's account) reaches it through
+ * `state()`, bootstrapped on first use (`--yes`), so an ephemeral container
+ * needs nothing but the account id and API token. An `account` plan converges
+ * in a customer's account with the customer's token, so `state()` would find
+ * (or bootstrap) a store in THEIR account; its state goes to the cell's store
+ * over HTTP instead (`LUNORA_STATE_STORE_URL` / `LUNORA_STATE_STORE_TOKEN`,
+ * `plan.state === "platform"`) — convergence state is platform state.
  */
 /* eslint-disable import/no-unresolved -- alchemy and effect are installed in the image from this directory's own lockfile, not in the pnpm workspace ESLint resolves against; the module is type-checked against them separately (see README). */
 import { readFileSync } from "node:fs";
 
 import { Stack } from "alchemy";
 import { AnalyticsEngine, D1, Images, KV, providers, Queues, R2, state, Workers } from "alchemy/Cloudflare";
+import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
 import { State } from "alchemy/State/State";
-import { Effect, Option, Redacted } from "effect";
+import { Effect, Layer, Option, Redacted } from "effect";
 /* eslint-enable import/no-unresolved */
 
 /** @typedef {import("./plan.mjs").Plan & { assetsDirectory: string, workerMain: string }} ProgramPlan */
@@ -227,7 +233,7 @@ const workerStack = (worker, projectStackName) =>
             env[name] = Redacted.make(/** @type {string} */ (secrets[name]));
         }
 
-        yield* Workers.Worker("Worker", {
+        const deployed = yield* Workers.Worker("Worker", {
             // The prebuilt module, uploaded byte-for-byte (`bundle: false`) rather
             // than through `script`, so a multi-megabyte bundle never lands in the
             // state store as a prop.
@@ -236,9 +242,16 @@ const workerStack = (worker, projectStackName) =>
             env,
             main: plan.workerMain,
             name: worker.workerName,
-            namespace: worker.namespace,
             tags: worker.tags,
             tailConsumers: worker.tailConsumers,
+            ...(worker.namespace === undefined
+                ? {
+                      // A plain Worker in a customer's account: its own cron triggers, served on
+                      // the account's workers.dev subdomain, with no per-version preview URLs.
+                      crons: worker.crons,
+                      workersDev: { enabled: true, previewsEnabled: false },
+                  }
+                : { namespace: worker.namespace }),
             ...(worker.assets === undefined
                 ? {}
                 : {
@@ -248,6 +261,13 @@ const workerStack = (worker, projectStackName) =>
                       },
                   }),
         });
+
+        // A plain Worker consumes its own queues, attached once it exists.
+        for (const consumer of worker.consumers) {
+            const queue = yield* Queues.Queue.ref(consumer.queueId, { stack: projectStackName, stage: plan.stage });
+
+            yield* Queues.Consumer(consumer.id, { queueId: queue.queueId, scriptName: deployed.workerName });
+        }
     });
 
 /**
@@ -274,4 +294,22 @@ const body = () => {
     throw new Error(`the plan has no ${kind} declaration`);
 };
 
-export default Stack(step.stackName, { providers: providers(), state: state() }, body());
+/**
+ * Where this plan's Alchemy state lives: the cell's store either way — found
+ * through the cell's own credentials, or over HTTP when the job's credentials
+ * are a customer's.
+ * @returns {import("effect").Layer.Layer<State>} The state layer.
+ */
+const stateStore = () =>
+    plan.state === "platform"
+        ? Layer.effect(
+              State,
+              makeHttpStateStore({
+                  authToken: /** @type {string} */ (process.env.LUNORA_STATE_STORE_TOKEN),
+                  id: "lunora-platform",
+                  url: /** @type {string} */ (process.env.LUNORA_STATE_STORE_URL),
+              }),
+          )
+        : state();
+
+export default Stack(step.stackName, { providers: providers(), state: stateStore() }, body());

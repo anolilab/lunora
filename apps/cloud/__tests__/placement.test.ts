@@ -50,6 +50,20 @@ describe(resolvePlacement, () => {
         expect(() => resolvePlacement({ cellName: "default", target: "aws-lambda" }, "default")).toThrow(/unknown deploy target "aws-lambda"/u);
     });
 
+    it("places a cloudflare-workers project in its connected account, converged by its organization's cell", () => {
+        const account = { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" };
+
+        expect(resolvePlacement({ account, cellName: "default", target: "cloudflare-workers" }, "default")).toStrictEqual({
+            account,
+            target: "cloudflare-workers",
+        });
+        // The account's state lives in the organization's cell, so another cell may not converge it.
+        expect(() => resolvePlacement({ account, cellName: "eu-1", target: "cloudflare-workers" }, "default")).toThrow(
+            expect.objectContaining({ code: "CONFLICT" }),
+        );
+        expect(() => resolvePlacement({ cellName: "default", target: "cloudflare-workers" }, "default")).toThrow(/names no connected Cloudflare account/u);
+    });
+
     it("keeps the schema's target union and TARGET_IDS in step", () => {
         expectTypeOf<NonNullable<Doc<"projects">["target"]>>().toEqualTypeOf<TargetId>();
         expectTypeOf<NonNullable<Doc<"deployments">["target"]>>().toEqualTypeOf<TargetId>();
@@ -79,6 +93,25 @@ describe("projects.placement", () => {
         const { ctx } = makeCtx(tables());
 
         await expect(placement.handler(ctx, { organizationId: "org_1", projectId: "proj_1" } as never)).resolves.toStrictEqual({ cellName: "eu-1" });
+    });
+
+    it("reads the connected account of a cloudflare-workers project, never its token, and ignores another organization's", async () => {
+        const account = { _id: "cfa_1", accountId: "a".repeat(32), ciphertext: "sealed", iv: "iv", organizationId: "org_1", workersSubdomain: "acme" };
+        const project = { _id: "proj_1", cloudflareAccountId: "cfa_1", organizationId: "org_1", slug: "web", target: "cloudflare-workers" };
+        const own = makeCtx({ ...tables(), cloudflareAccounts: [account], projects: [project] });
+
+        await expect(placement.handler(own.ctx, { organizationId: "org_1", projectId: "proj_1" } as never)).resolves.toStrictEqual({
+            account: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" },
+            cellName: "eu-1",
+            target: "cloudflare-workers",
+        });
+
+        const foreign = makeCtx({ ...tables(), cloudflareAccounts: [{ ...account, organizationId: "org_2" }], projects: [project] });
+
+        await expect(placement.handler(foreign.ctx, { organizationId: "org_1", projectId: "proj_1" } as never)).resolves.toStrictEqual({
+            cellName: "eu-1",
+            target: "cloudflare-workers",
+        });
     });
 
     it("refuses a project of another organization", async () => {
@@ -114,6 +147,12 @@ describe("deployments.create", () => {
         const inserted = (await insertedDeployment({ boxId: "box_1", target: "cloudflare-wfp" })) as { document: Record<string, unknown> } | undefined;
 
         expect(inserted?.document).not.toHaveProperty("boxId");
+    });
+
+    it("records the account a cloudflare-workers release runs in, and qualifies its resource handle by it", async () => {
+        await expect(insertedDeployment({ cloudflareAccountId: "cfa_1", target: "cloudflare-workers" })).resolves.toMatchObject({
+            document: { cloudflareAccountId: "cfa_1", resourceRef: "cfa_1/web", scriptName: "web", target: "cloudflare-workers" },
+        });
     });
 
     it("records cloudflare-wfp for a project that predates targets", async () => {

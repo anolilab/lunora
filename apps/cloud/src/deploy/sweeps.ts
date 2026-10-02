@@ -16,7 +16,7 @@ import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { ProgressLine, TargetDriver, UsageRow } from "../targets/driver";
-import type { BoxLookups, Placement } from "../targets/placement";
+import type { AccountLookup, BoxLookups, Placement } from "../targets/placement";
 import { placementOfDeployment } from "../targets/placement";
 import type { TeardownPorts, TeardownTarget } from "./teardown";
 
@@ -24,6 +24,7 @@ interface TeardownRow {
     _id: string;
     alias?: string;
     boxId?: null | string;
+    cloudflareAccountId?: null | string;
     createdAt?: number;
     kind: string;
     scriptName: string;
@@ -56,14 +57,19 @@ interface TeardownRow {
  */
 export const teardownPorts = (
     database: ControlPlaneDatabase,
-    ports: Pick<TeardownPorts, "deleteRelease"> & { boxes: BoxLookups; driverFor: (placement: Placement) => TargetDriver; log: ProgressLine },
+    ports: Pick<TeardownPorts, "deleteRelease"> & {
+        accounts: AccountLookup;
+        boxes: BoxLookups;
+        driverFor: (placement: Placement) => TargetDriver;
+        log: ProgressLine;
+    },
     now: number,
     canConverge: (target: TargetId) => boolean,
 ): TeardownPorts => {
     return {
         deleteRelease: ports.deleteRelease,
         destroy: async (target) => {
-            const placed = await placementOfDeployment(target, ports.boxes);
+            const placed = await placementOfDeployment(target, ports.boxes, ports.accounts);
 
             if ("unplaced" in placed) {
                 if (!placed.settled) {
@@ -99,19 +105,27 @@ export const teardownPorts = (
                 }
             }
 
-            // The box each alias was last converged on: its newest row that names
-            // one. A project that moved boxes leaves older rows naming the old one.
-            const boxes = new Map<string, { at: number; boxId: string }>();
+            // The box (or connected account) each alias was last converged on: its
+            // newest row that names one. A project that moved leaves older rows
+            // naming the old one.
+            const newestNaming = (column: "boxId" | "cloudflareAccountId"): Map<string, string> => {
+                const newest = new Map<string, { at: number; value: string }>();
 
-            for (const row of rows) {
-                const alias = row.alias ?? row.scriptName;
-                const at = row.createdAt ?? 0;
-                const known = boxes.get(alias);
+                for (const row of rows) {
+                    const alias = row.alias ?? row.scriptName;
+                    const at = row.createdAt ?? 0;
+                    const known = newest.get(alias);
+                    const value = row[column];
 
-                if (row.boxId != null && (known === undefined || at >= known.at)) {
-                    boxes.set(alias, { at, boxId: row.boxId });
+                    if (value != null && (known === undefined || at >= known.at)) {
+                        newest.set(alias, { at, value });
+                    }
                 }
-            }
+
+                return new Map([...newest].map(([alias, { value }]) => [alias, value]));
+            };
+            const boxes = newestNaming("boxId");
+            const accounts = newestNaming("cloudflareAccountId");
 
             const elected = new Set<string>();
 
@@ -126,9 +140,17 @@ export const teardownPorts = (
                             elected.add(alias);
                         }
 
-                        const boxId = boxes.get(alias)?.boxId;
+                        const boxId = boxes.get(alias);
+                        const cloudflareAccountId = accounts.get(alias);
 
-                        return { alias, ...(boxId === undefined ? {} : { boxId }), destroyWorker, id: row._id, target: storedTarget(row.target) };
+                        return {
+                            alias,
+                            ...(boxId === undefined ? {} : { boxId }),
+                            ...(cloudflareAccountId === undefined ? {} : { cloudflareAccountId }),
+                            destroyWorker,
+                            id: row._id,
+                            target: storedTarget(row.target),
+                        };
                     })
                     // A row whose target is unknown, or cannot converge here, waits.
                     .filter((target): target is TeardownTarget => target.target !== undefined && canConverge(target.target))
@@ -153,6 +175,7 @@ export const teardownPorts = (
 
 interface AttributionRow {
     _id: string;
+    cloudflareAccountId?: null | string;
     organizationId: string;
     resourceRef?: string;
     scriptName: string;
@@ -229,7 +252,11 @@ export const usageRollbackPorts = async (
         const resourceRef = row.resourceRef ?? row.scriptName;
 
         if (!byResource.has(resourceRef) || row.status === "live") {
-            byResource.set(resourceRef, { deploymentId: row._id, organizationId: row.organizationId });
+            byResource.set(resourceRef, {
+                ...(row.cloudflareAccountId == null ? {} : { cloudflareAccountId: row.cloudflareAccountId }),
+                deploymentId: row._id,
+                organizationId: row.organizationId,
+            });
         }
     }
 
@@ -239,6 +266,9 @@ export const usageRollbackPorts = async (
         read,
         record: async ({ attribution, quantity }) => {
             await database.insert("platformUsage", {
+                // A tenant in the customer's own account: its requests are on the
+                // customer's Cloudflare bill, so the row is shown and never billed.
+                ...(attribution.cloudflareAccountId === undefined ? {} : { cloudflareAccountId: attribution.cloudflareAccountId }),
                 createdAt: options.now,
                 deploymentId: attribution.deploymentId,
                 kind: "requests",

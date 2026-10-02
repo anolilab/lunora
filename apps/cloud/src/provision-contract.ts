@@ -9,9 +9,9 @@
  *   refuses what the platform cannot provide, and hands a target-neutral
  *   {@link TenantDeploymentSpec} to the project's target driver
  *   (`src/targets/driver.ts`).
- * - each **driver** turns the spec into its own wire format — for
- *   `cloudflare-wfp`, a job for the Alchemy provision box
- *   (`src/targets/cloudflare-wfp/box-contract.ts`).
+ * - each **driver** turns the spec into its own wire format — for the two
+ *   Cloudflare targets, a job for the Alchemy provision box
+ *   (`src/targets/provision-box/contract.ts`).
  *
  * The manifest is `@lunora/config`'s own binding manifest — the same document
  * `lunora build --emit-bindings` writes — so the cloud never re-derives what an
@@ -78,7 +78,7 @@ export type BindingSupportTable = Readonly<Record<BindingType, BindingSupport>>;
  * descriptor ({@link TARGETS}), a binding table below and, once it can
  * converge, a driver in `src/targets/registry.ts`.
  */
-export const TARGET_IDS = ["cloudflare-wfp", "celld-vps"] as const;
+export const TARGET_IDS = ["cloudflare-wfp", "cloudflare-workers", "celld-vps"] as const;
 
 export type TargetId = (typeof TARGET_IDS)[number];
 
@@ -102,7 +102,7 @@ export const storedTarget = (stored: null | string | undefined): TargetId | unde
 
 /** A capability a target lacks as a whole (not a binding), with the reason the studio shows. */
 export interface TargetLimitation {
-    id: "pitr" | "runtimeLimits";
+    id: "customDomains" | "logs" | "pitr" | "runtimeLimits";
     label: string;
     reason: string;
 }
@@ -149,8 +149,11 @@ export interface TargetDescriptor {
      * Where a project of this target is placed. `cell` — in its organization's
      * cell (one Cloudflare account, one dispatch namespace, one control plane).
      * `box` — on a machine its organization enrolled (`projects.boxId`).
+     * `account` — in a Cloudflare account its organization connected
+     * (`projects.cloudflareAccountId`), converged by its organization's cell,
+     * whose provision box holds the convergence state.
      */
-    placedOn: "box" | "cell";
+    placedOn: "account" | "box" | "cell";
 }
 
 /** Every target's descriptor — the one place "does this target need a box", its name and its limits are decided. */
@@ -182,16 +185,51 @@ export const TARGETS = {
         metering: "readback",
         placedOn: "cell",
     },
+    "cloudflare-workers": {
+        description:
+            "Runs as a plain Worker in a Cloudflare account your organization connected. Its data stays in that account, and Cloudflare bills you for it directly.",
+        // Alchemy emits `deleted_classes` for a class any Worker it manages stops binding.
+        dropsUnboundClasses: true,
+        // A plain Worker carries its own `triggers.crons` and is its own queue consumer.
+        fanout: "native",
+        label: "Your Cloudflare account",
+        limitations: [
+            {
+                id: "runtimeLimits",
+                label: "Per-plan runtime limits",
+                reason: "The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of a Worker in your account. Your account's own Workers limits apply instead.",
+            },
+            {
+                id: "customDomains",
+                label: "Custom domains",
+                reason: "Your Worker answers on your account's workers.dev subdomain. Attaching your own zone's hostnames to it from Lunora Cloud is not wired yet; add a Custom Domain to the Worker in your Cloudflare dashboard meanwhile.",
+            },
+            {
+                id: "logs",
+                label: "Runtime logs",
+                reason: "Lunora Cloud's tail consumer runs in its own account and cannot be attached to a Worker in yours, so runtime logs stay in your account's Workers Logs.",
+            },
+        ],
+        // Request counts are read back from the account's GraphQL Analytics API, and shown, never billed.
+        metering: "readback",
+        placedOn: "account",
+    },
 } as const satisfies Record<TargetId, TargetDescriptor>;
 
 /** The targets whose projects are placed on a box. */
 export type BoxTargetId = { [T in TargetId]: (typeof TARGETS)[T]["placedOn"] extends "box" ? T : never }[TargetId];
 
+/** The targets whose projects are placed in a Cloudflare account their organization connected. */
+export type AccountTargetId = { [T in TargetId]: (typeof TARGETS)[T]["placedOn"] extends "account" ? T : never }[TargetId];
+
 /** The targets whose projects are placed in their organization's cell. */
-export type CellTargetId = Exclude<TargetId, BoxTargetId>;
+export type CellTargetId = Exclude<TargetId, AccountTargetId | BoxTargetId>;
 
 /** Whether a project of `target` is placed on a box, and so must name one. */
 export const isBoxTarget = (target: TargetId): target is BoxTargetId => TARGETS[target].placedOn === "box";
+
+/** Whether a project of `target` is placed in a connected Cloudflare account, and so must name one. */
+export const isAccountTarget = (target: TargetId): target is AccountTargetId => TARGETS[target].placedOn === "account";
 
 export type DeployKind = "dev" | "preview" | "production";
 
@@ -258,6 +296,38 @@ export const BINDING_SUPPORT = {
         vpc_service: "unsupported",
         workflow: "unsupported",
     },
+
+    /**
+     * A plain Worker in the customer's own account (MULTIPLATFORM.md Phase 3):
+     * the same provision box and Alchemy program as `cloudflare-wfp`, minus the
+     * dispatch namespace — so queue consumers are the Worker's own, not routed.
+     * Everything else is held to what that program creates or binds today;
+     * a type a plain Worker could take but the program does not wire is refused
+     * with that reason, never bound half-way.
+     */
+    "cloudflare-workers": {
+        ai: "bound",
+        analytics_engine: "provisioned",
+        artifacts: "unsupported",
+        assets: "bound",
+        browser: "bound",
+        container: "unsupported",
+        d1: "provisioned",
+        durable_object: "bound",
+        hyperdrive: "unsupported",
+        images: "bound",
+        kv: "provisioned",
+        media: "unsupported",
+        pipeline: "unsupported",
+        queue_consumer: "bound",
+        queue_producer: "provisioned",
+        r2: "provisioned",
+        stream: "unsupported",
+        vectorize: "unsupported",
+        vpc_network: "unsupported",
+        vpc_service: "unsupported",
+        workflow: "unsupported",
+    },
 } as const satisfies Record<TargetId, BindingSupportTable>;
 
 /** The binding types one target refuses. */
@@ -296,6 +366,19 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
         vpc_network: "a VPC network reaches into your own infrastructure; bring-your-own networks are not supported on Lunora Cloud yet",
         vpc_service: "a VPC service reaches into your own infrastructure; bring-your-own services are not supported on Lunora Cloud yet",
         workflow: "Workflows register per account script, and Workers for Platforms scripts have no such registration yet",
+    },
+    "cloudflare-workers": {
+        artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
+        container: "a container needs its image built and pushed to your account's registry on every deploy, which the provision box does not do yet",
+        hyperdrive:
+            "a Hyperdrive config needs your database's connection string, which the binding manifest does not carry; connect to it from an action instead",
+        media: "the provision box does not bind Media Transformations yet",
+        pipeline: "a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry",
+        stream: "the provision box does not bind Stream yet",
+        vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
+        vpc_network: "the provision box does not bind a VPC network yet",
+        vpc_service: "the provision box does not bind a VPC service yet",
+        workflow: "a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet",
     },
 };
 

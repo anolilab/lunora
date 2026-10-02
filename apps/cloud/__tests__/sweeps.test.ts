@@ -8,6 +8,7 @@ import { fakeDriver } from "./support/memory-driver";
 
 describe(teardownPorts, () => {
     const noop = {
+        accounts: () => Promise.resolve(null),
         boxes: { byId: () => Promise.resolve(null), forAlias: () => Promise.resolve(null) },
         deleteRelease: () => Promise.resolve(),
         driverFor: () => fakeDriver(),
@@ -113,6 +114,71 @@ describe(teardownPorts, () => {
         ]);
     });
 
+    it("tears a cloudflare-workers alias down in the account its newest deployment names", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                {
+                    _id: "byo",
+                    alias: "web",
+                    cloudflareAccountId: "cfa_1",
+                    createdAt: 1,
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "cloudflare-workers",
+                },
+            ],
+        });
+        const destroyed: unknown[] = [];
+        const account = { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" };
+        const ports = teardownPorts(
+            database,
+            {
+                ...noop,
+                accounts: (id) => Promise.resolve(id === "cfa_1" ? account : null),
+                driverFor: (placement) =>
+                    fakeDriver({
+                        destroy: (alias) => {
+                            destroyed.push({ alias, placement });
+
+                            return Promise.resolve();
+                        },
+                    }),
+            },
+            1000,
+            everyTarget,
+        );
+        const [pending] = await ports.listPending();
+
+        expect(pending).toStrictEqual({ alias: "web", cloudflareAccountId: "cfa_1", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+
+        await ports.destroy(pending);
+
+        expect(destroyed).toStrictEqual([{ alias: "web", placement: { account, target: "cloudflare-workers" } }]);
+    });
+
+    it("releases a cloudflare-workers alias whose account is gone — its Worker and data stay in the customer's account", async () => {
+        const log: string[] = [];
+        const ports = teardownPorts(
+            fakeControlPlaneDb({ deployments: [] }),
+            {
+                ...noop,
+                driverFor: () => {
+                    throw new Error("nothing to reach");
+                },
+                log: (line) => log.push(line),
+            },
+            1000,
+            everyTarget,
+        );
+
+        await ports.destroy({ alias: "web", cloudflareAccountId: "cfa_gone", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+
+        expect(log).toStrictEqual([
+            'alias "web": its Cloudflare account is no longer connected; the Worker and its data stay in that account, releasing the alias',
+        ]);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
@@ -200,6 +266,36 @@ describe(usageRollbackPorts, () => {
             periodStart: 777,
             quantity: 12,
         });
+    });
+
+    it("records a cloudflare-workers tenant's requests against its account, which keeps them off the bill", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
+        const database = fakeControlPlaneDb(
+            {
+                deployments: [
+                    {
+                        _id: "dep_byo",
+                        cloudflareAccountId: "cfa_1",
+                        organizationId: "org_a",
+                        resourceRef: "cfa_1/web",
+                        scriptName: "web",
+                        status: "live",
+                        target: "cloudflare-workers",
+                    },
+                ],
+                usageCheckpoints: [],
+            },
+            { insert },
+        );
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "cfa_1", target: "cloudflare-workers" });
+        const attribution = ports.resolveResource("cfa_1/web");
+
+        // A same-named script in another account is never this tenant's.
+        expect(ports.resolveResource("cfa_2/web")).toBeUndefined();
+
+        await ports.record({ attribution: attribution as NonNullable<typeof attribution>, quantity: 5 });
+
+        expect(insert).toHaveBeenCalledWith("platformUsage", expect.objectContaining({ cloudflareAccountId: "cfa_1", deploymentId: "dep_byo", quantity: 5 }));
     });
 
     it("seeds a cloudflare-wfp cell's first checkpoint from its old cells.usageReadAtMs", async () => {

@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/no-hardcoded-ip -- the subject under test is which IP addresses a box may publish; every literal is a fixture */
 import { describe, expect, it } from "vitest";
 
-import { createEnrolment, enrol, get, list, rename, revoke, setProjectTarget } from "../lunora/boxes";
+import { createEnrolment, enrol, get, list, rename, revoke } from "../lunora/boxes";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { fromBase64Url, isBoxPublicKey, toBase64Url, verifyBoxSignature } from "../src/boxes/encoding";
 import { isEnrolmentTokenShape, mintBoxSlug } from "../src/boxes/enrolment";
@@ -276,66 +276,5 @@ describe("boxes reads and writes are org-scoped", () => {
         await revoke.handler(ctx, { id: "box_1" as never, organizationId: "org_1" as never });
 
         expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
-    });
-});
-
-describe("boxes.setProjectTarget", () => {
-    const project = (overrides: Row = {}): Row => {
-        return { _id: "proj_1", name: "web", organizationId: "org_1", slug: "web", ...overrides };
-    };
-
-    const call = (tables: Record<string, Row[]>, args: Record<string, unknown>) => {
-        const fake = makeCtx({ members: [owner("org_1")], projects: [project()], ...tables }, { now: NOW });
-
-        return {
-            ops: fake.ops,
-            run: () => setProjectTarget.handler(fake.ctx, { organizationId: "org_1" as never, projectId: "proj_1" as never, ...args } as never),
-        };
-    };
-
-    it("places a project on a box of its own org", async () => {
-        const { ops, run } = call({ boxes: [box()], deployments: [] }, { boxId: "box_1", target: "celld-vps" });
-
-        await run();
-
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: "box_1", target: "celld-vps" } });
-    });
-
-    it("requires a box for celld-vps and refuses one for cloudflare-wfp", async () => {
-        await expect(call({ boxes: [box()] }, { target: "celld-vps" }).run()).rejects.toThrow("needs a box");
-        await expect(call({ boxes: [box()] }, { boxId: "box_1", target: "cloudflare-wfp" }).run()).rejects.toThrow("has no box");
-    });
-
-    it("refuses another org's box and a revoked box", async () => {
-        await expect(call({ boxes: [box({ organizationId: "org_2" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
-            code: "NOT_FOUND",
-        });
-        await expect(call({ boxes: [box({ status: "revoked" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
-            code: "CONFLICT",
-        });
-    });
-
-    it("refuses to move a project whose deployments are not torn down yet", async () => {
-        const { ops, run } = call(
-            { boxes: [box()], deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: null }] },
-            { boxId: "box_1", target: "celld-vps" },
-        );
-
-        await expect(run()).rejects.toMatchObject({ code: "CONFLICT" });
-        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
-    });
-
-    it("moves a project back to cloudflare-wfp and clears its box", async () => {
-        const { ops, run } = call(
-            {
-                deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: NOW }],
-                projects: [project({ boxId: "box_1", target: "celld-vps" })],
-            },
-            { target: "cloudflare-wfp" },
-        );
-
-        await run();
-
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: null, target: "cloudflare-wfp" } });
     });
 });

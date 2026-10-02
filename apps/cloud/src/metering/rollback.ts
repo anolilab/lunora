@@ -21,6 +21,8 @@ export const BOOTSTRAP_WINDOW_MS = 60 * 60 * 1000;
 
 /** Which org (and deployment) a resource's request counts belong to. */
 export interface UsageAttribution {
+    /** The connected account a `cloudflare-workers` tenant runs in — its usage is recorded, never billed. */
+    cloudflareAccountId?: string;
     deploymentId?: string;
     organizationId: string;
 }

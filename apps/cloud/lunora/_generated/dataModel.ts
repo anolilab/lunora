@@ -32,7 +32,7 @@ export interface Doc_cells {
     jurisdiction?: string;
     name: string;
     status: "active" | "draining" | "suspended";
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     usageReadAtMs?: number;
 }
 
@@ -75,7 +75,7 @@ export interface Doc_projects {
     previewPasswordSalt?: string;
     rootDirectory?: string;
     slug: string;
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     boxId?: Id<"boxes">;
     cloudflareAccountId?: Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
@@ -145,7 +145,7 @@ export interface Doc_deployments {
     resourceRef?: string;
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     updatedAt: number;
     url?: string;
     version?: number;
@@ -524,6 +524,7 @@ export interface Doc_platformUsage {
     _id: Id<"platformUsage">;
     _creationTime: number;
     boxId?: Id<"boxes">;
+    cloudflareAccountId?: Id<"cloudflareAccounts">;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths";
@@ -538,7 +539,7 @@ export interface Doc_usageCheckpoints {
     _creationTime: number;
     readAtMs: number;
     scopeKey: string;
-    target: "celld-vps" | "cloudflare-wfp";
+    target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     updatedAt: number;
 }
 
@@ -860,7 +861,7 @@ export interface Insert_cells {
     jurisdiction?: string;
     name: string;
     status: "active" | "draining" | "suspended";
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     usageReadAtMs?: number;
 }
 
@@ -903,7 +904,7 @@ export interface Insert_projects {
     previewPasswordSalt?: string;
     rootDirectory?: string;
     slug: string;
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     boxId?: Id<"boxes">;
     cloudflareAccountId?: Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
@@ -973,7 +974,7 @@ export interface Insert_deployments {
     resourceRef?: string;
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
-    target?: "celld-vps" | "cloudflare-wfp";
+    target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     updatedAt: number;
     url?: string;
     version?: number;
@@ -1352,6 +1353,7 @@ export interface Insert_platformUsage {
     _id?: Id<"platformUsage">;
     _creationTime?: number;
     boxId?: Id<"boxes">;
+    cloudflareAccountId?: Id<"cloudflareAccounts">;
     createdAt: number;
     deploymentId?: Id<"deployments">;
     kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths";
@@ -1366,7 +1368,7 @@ export interface Insert_usageCheckpoints {
     _creationTime?: number;
     readAtMs: number;
     scopeKey: string;
-    target: "celld-vps" | "cloudflare-wfp";
+    target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     updatedAt: number;
 }
 

@@ -86,7 +86,7 @@ const BoxPicker = ({
 
 /**
  * Project settings → Deploy target (plan 458 W9): Lunora Cloud's Cloudflare
- * target, or one of the org's own boxes, through `boxes.setProjectTarget`.
+ * target, or one of the org's own boxes, through `projects.setTarget`.
  *
  * Owner/admin only, like the mutation. The copy is explicit that a switch moves
  * no data: the server refuses it while the project still has deployments on its
@@ -98,7 +98,7 @@ const BoxPicker = ({
 export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: ProjectTargetCardProps): ReactElement => {
     const boxes = useQuery(api.boxes.list, { organizationId });
     const manage = canManage(useMyRole(organizationId));
-    const setTarget = useMutation(api.boxes.setProjectTarget);
+    const setTarget = useMutation(api.projects.setTarget);
     const saved = { boxId: boxId ?? "", target };
 
     // Plain strings: Base UI's Select is generic over its value, and a branded id

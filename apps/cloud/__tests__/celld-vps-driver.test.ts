@@ -167,6 +167,7 @@ describe("celld-vps teardown after the project is gone", () => {
             teardownPorts(
                 store,
                 {
+                    accounts: () => Promise.resolve(null),
                     boxes: boxLookupsIn(store),
                     deleteRelease: () => Promise.resolve(),
                     driverFor: (placement) =>

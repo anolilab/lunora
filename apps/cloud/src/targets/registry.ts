@@ -22,11 +22,13 @@ import type { CelldVpsEnvironment } from "./celld-vps/driver";
 import { celldVpsCanConverge, celldVpsDriverFromEnv, celldVpsFleet } from "./celld-vps/driver";
 import type { CloudflareWfpEnvironment } from "./cloudflare-wfp/driver";
 import { cloudflareWfpCanConverge, cloudflareWfpDriverFromEnv, cloudflareWfpFleetFromEnv } from "./cloudflare-wfp/driver";
+import type { CloudflareWorkersEnvironment } from "./cloudflare-workers/driver";
+import { cloudflareWorkersCanConverge, cloudflareWorkersDriverFromEnv, cloudflareWorkersFleetFromEnv } from "./cloudflare-workers/driver";
 import type { TargetDriver, TargetFleet } from "./driver";
 import type { Placement } from "./placement";
 
 /** Everything any registered driver reads off the control plane's Worker env. */
-export type TargetEnvironment = CelldVpsEnvironment & CloudflareWfpEnvironment;
+export type TargetEnvironment = CelldVpsEnvironment & CloudflareWfpEnvironment & CloudflareWorkersEnvironment;
 
 /** The placement of target `T`. */
 type PlacementOf<T extends TargetId> = Extract<Placement, { target: T }>;
@@ -49,6 +51,11 @@ const TARGET_DRIVERS: { readonly [T in TargetId]?: TargetEntry<T> } = {
         canConverge: cloudflareWfpCanConverge,
         driver: (_placement, environment) => cloudflareWfpDriverFromEnv(environment),
         fleet: cloudflareWfpFleetFromEnv,
+    },
+    "cloudflare-workers": {
+        canConverge: cloudflareWorkersCanConverge,
+        driver: (placement, environment) => cloudflareWorkersDriverFromEnv(placement.account, environment),
+        fleet: cloudflareWorkersFleetFromEnv,
     },
 };
 
@@ -74,6 +81,9 @@ export const resolveTargetDriver = (placement: Placement, environment: TargetEnv
             return entryOf(placement.target).driver(placement, environment);
         }
         case "cloudflare-wfp": {
+            return entryOf(placement.target).driver(placement, environment);
+        }
+        case "cloudflare-workers": {
             return entryOf(placement.target).driver(placement, environment);
         }
         default: {

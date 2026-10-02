@@ -240,6 +240,32 @@ describe("pOST /v1/cells", () => {
         await expect(response.json()).resolves.toStrictEqual({ cellId: "cell_1" });
         expect(runMutation).toHaveBeenCalledTimes(1);
     });
+
+    it("registers a cell for a target placed in cells, with its config", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue("cell_1");
+        const response = await router.fetch(
+            cellPost({ ...validBody, config: { region: "weur" }, target: "cloudflare-wfp" }, "admin-secret"),
+            env(makeCtx({ runMutation })),
+        );
+
+        expect(response.status).toBe(201);
+        expect(runMutation.mock.calls[0]?.[1]).toMatchObject({ config: { region: "weur" }, target: "cloudflare-wfp" });
+    });
+
+    it.each([
+        ["an unknown target", { target: "aws-lambda" }],
+        ["a target placed on a box", { target: "celld-vps" }],
+        ["a target placed in a customer's account", { target: "cloudflare-workers" }],
+        ["a config with a non-string value", { config: { region: 1 } }],
+    ])("400s %s", async (_label, extra) => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue("cell_1");
+        const response = await router.fetch(cellPost({ ...validBody, ...extra }, "admin-secret"), env(makeCtx({ runMutation })));
+
+        expect(response.status).toBe(400);
+        expect(runMutation).not.toHaveBeenCalled();
+    });
 });
 
 /** POST to the build-queue drain the Worker's `scheduled()` calls in-process. */

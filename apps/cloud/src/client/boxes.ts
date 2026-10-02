@@ -54,7 +54,7 @@ export const roleOf = (members: ReadonlyArray<{ role: MemberRole; userId: string
 /** Whether a role may manage boxes and deploy targets. An unknown role may not: the controls stay disabled until it is known. */
 export const canManage = (role: MemberRole | undefined): boolean => role !== undefined && MANAGER_ROLES.has(role);
 
-/** The boxes a project may be placed on: every box of the org that is not revoked (`boxes.setProjectTarget` refuses the rest). */
+/** The boxes a project may be placed on: every box of the org that is not revoked (`projects.setTarget` refuses the rest). */
 export const assignableBoxes = (boxes: ReadonlyArray<BoxView> | undefined): BoxView[] => (boxes ?? []).filter((box) => box.status !== "revoked");
 
 const QUOTA_REFUSAL = /\bboxes quota reached\b/u;
@@ -84,7 +84,7 @@ export interface TargetDraft {
 /**
  * What the deploy-target form may do with its draft: whether it needs a box,
  * whether it differs from what is saved, and whether it is complete enough to
- * send (`boxes.setProjectTarget` refuses a `celld-vps` target without a box).
+ * send (`projects.setTarget` refuses a `celld-vps` target without a box).
  */
 export const assessTargetDraft = (draft: TargetDraft, saved: TargetDraft): { changed: boolean; complete: boolean; needsBox: boolean } => {
     const needsBox = isTargetId(draft.target) && isBoxTarget(draft.target);
