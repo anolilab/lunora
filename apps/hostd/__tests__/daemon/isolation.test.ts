@@ -364,13 +364,14 @@ describe(decideIsolation, () => {
     const failed = { ok: false, reason: "no" } as const;
 
     it.each<[string, IsolationChecks, boolean, string, boolean]>([
-        ["every check passes", { cgroup: ok, egress: ok, user: ok }, false, "enforced", true],
-        ["every check passes on a single-trust box", { cgroup: ok, egress: ok, user: ok }, true, "enforced", true],
-        ["the egress table is missing", { cgroup: ok, egress: failed, user: ok }, false, "refused", false],
-        ["the egress table is missing on a single-trust box", { cgroup: ok, egress: failed, user: ok }, true, "single-trust", true],
-        ["the uid drop fails", { cgroup: ok, egress: failed, user: failed }, false, "refused", false],
-        ["no cgroup delegation", { cgroup: failed, egress: ok, user: ok }, false, "refused", false],
-        ["nothing works on a single-trust box", { cgroup: failed, egress: failed, user: failed }, true, "single-trust", true],
+        ["every check passes", { cgroup: ok, edge: ok, egress: ok, user: ok }, false, "enforced", true],
+        ["every check passes on a single-trust box", { cgroup: ok, edge: ok, egress: ok, user: ok }, true, "enforced", true],
+        ["the egress table is missing", { cgroup: ok, edge: ok, egress: failed, user: ok }, false, "refused", false],
+        ["the egress table is missing on a single-trust box", { cgroup: ok, edge: ok, egress: failed, user: ok }, true, "single-trust", true],
+        ["the uid drop fails", { cgroup: ok, edge: ok, egress: failed, user: failed }, false, "refused", false],
+        ["Caddy cannot run as its own user", { cgroup: ok, edge: failed, egress: ok, user: ok }, false, "refused", false],
+        ["no cgroup delegation", { cgroup: failed, edge: ok, egress: ok, user: ok }, false, "refused", false],
+        ["nothing works on a single-trust box", { cgroup: failed, edge: failed, egress: failed, user: failed }, true, "single-trust", true],
     ])("%s", (_name, checks, singleTrust, expected, startsFleets) => {
         expect.assertions(1);
 
@@ -380,9 +381,12 @@ describe(decideIsolation, () => {
     it("names each failed check in order, and caps what hello carries", () => {
         expect.assertions(3);
 
-        const report = decideIsolation({ cgroup: { ok: false, reason: "c" }, egress: { ok: true }, user: { ok: false, reason: "u" } }, false);
+        const report = decideIsolation(
+            { cgroup: { ok: false, reason: "c" }, edge: { ok: false, reason: "e" }, egress: { ok: true }, user: { ok: false, reason: "u" } },
+            false,
+        );
 
-        expect(report.problems).toStrictEqual(["fleet user: u", "memory limits: c"]);
+        expect(report.problems).toStrictEqual(["fleet user: u", "edge user: e", "memory limits: c"]);
 
         const crowded = helloIsolation({ problems: Array.from({ length: 12 }, () => "x".repeat(2000)), startsFleets: false, status: "refused" });
 
@@ -396,6 +400,12 @@ describe(setUpIsolation, () => {
     const uid = process.getuid?.() ?? 1000;
     const gid = process.getgid?.() ?? 1000;
     const service = "/system.slice/lunora-hostd.service";
+    // Both accounts are this test's own uid: an unprivileged test cannot hand a directory to anyone else.
+    const PASSWD = [
+        `lunora-fleet:x:${String(uid)}:${String(gid)}::/nonexistent:/usr/sbin/nologin`,
+        `lunora-edge:x:${String(uid)}:${String(gid)}::/nonexistent:/usr/sbin/nologin`,
+        "",
+    ].join("\n");
 
     const configFor = (singleTrust: boolean) =>
         parseHostdConfig({
@@ -418,6 +428,7 @@ describe(setUpIsolation, () => {
 
         return {
             cgroupRoot: join(root, "cgroup"),
+            daemon: { gid, uid },
             firewall: {
                 apply: async (script) => {
                     scripts.push(script);
@@ -431,7 +442,7 @@ describe(setUpIsolation, () => {
             probe: async () => probed,
             readText: (path) => {
                 const files: Record<string, string> = {
-                    "/etc/passwd": `lunora-fleet:x:${String(uid)}:${String(gid)}::/nonexistent:/usr/sbin/nologin\n`,
+                    "/etc/passwd": PASSWD,
                     "/proc/self/cgroup": `0::${service}\n`,
                     "/proc/self/status": status(uid + 1, UNIT_CAPABILITIES, UNIT_CAPABILITIES, 1),
                 };
@@ -465,7 +476,7 @@ describe(setUpIsolation, () => {
 
         expect(isolation.report).toStrictEqual({ problems: [], startsFleets: true, status: "enforced" });
         expect(isolation.fleet).toStrictEqual({ gid, prefix: dropCapabilitiesPrefix("/usr/bin/setpriv"), uid });
-        expect(isolation.caddy).toStrictEqual({ prefix: dropCapabilitiesPrefix("/usr/bin/setpriv", ["net_bind_service"]) });
+        expect(isolation.caddy).toStrictEqual({ gid, prefix: dropCapabilitiesPrefix("/usr/bin/setpriv", ["net_bind_service"]), uid });
         expect(box.scripts[0]).toContain(`meta skuid != ${String(uid)} return`);
         expect(isolation.cgroups?.base).toBe(join(root, "cgroup", service));
         // The fleet group may pass through the data directory, never list it.
@@ -480,6 +491,7 @@ describe(setUpIsolation, () => {
         expect(isolation.report).toMatchObject({ startsFleets: false, status: "refused" });
         expect(isolation.report.problems).toStrictEqual([
             "fleet user: a process started as lunora-fleet kept capabilities or may gain new ones",
+            "edge user: a process started as lunora-edge kept capabilities or may gain new ones",
             "egress policy: not applied: fleets do not run as their own user",
         ]);
     });
@@ -521,6 +533,80 @@ describe(setUpIsolation, () => {
 
         expect(isolation.fleet.prefix).toStrictEqual(dropCapabilitiesPrefix("/usr/bin/setpriv"));
         expect(isolation.caddy.prefix).toStrictEqual(dropCapabilitiesPrefix("/usr/bin/setpriv"));
+    });
+
+    it("runs Caddy as the edge user with port binding alone, in directories laid out so neither can write the other's", async () => {
+        expect.assertions(6);
+
+        const isolation = await setUpIsolation(
+            configFor(false),
+            silentLogger,
+            // Caddy keeps net_bind_service: allowed. A fleet keeps nothing.
+            system({
+                probe: async (launch) =>
+                    launch.prefix.includes("--ambient-caps=-all,+net_bind_service")
+                        ? status(uid, "0000000000000400", "0000000000000400", 1)
+                        : status(uid, "0000000000000000", "0000000000000000", 1),
+            }),
+        );
+        const mode = (path: string): number => statSync(join(root, "data", path)).mode % 0o1_0000;
+
+        isolation.stop();
+
+        expect(isolation.report.status).toBe("enforced");
+        expect(isolation.caddy).toMatchObject({ gid, uid });
+        // Others may pass through the data directory (Caddy must), list nothing.
+        expect(mode(".")).toBe(0o711);
+        expect(mode("caddy")).toBe(0o2750);
+        expect(mode("caddy/state")).toBe(0o700);
+        expect(mode("caddy/log")).toBe(0o2750);
+    });
+
+    it("refuses when Caddy, started as the edge user, keeps more than port binding", async () => {
+        expect.assertions(2);
+
+        const isolation = await setUpIsolation(
+            configFor(false),
+            silentLogger,
+            system({
+                probe: async (launch) =>
+                    launch.prefix.includes("--ambient-caps=-all,+net_bind_service")
+                        ? status(uid, "0000000000001400", "0000000000001400", 1)
+                        : status(uid, "0000000000000000", "0000000000000000", 1),
+            }),
+        );
+
+        isolation.stop();
+
+        expect(isolation.report).toMatchObject({ startsFleets: false, status: "refused" });
+        expect(isolation.report.problems).toStrictEqual(["edge user: a process started as lunora-edge kept capabilities or may gain new ones"]);
+    });
+
+    it("reports a missing edge user and runs Caddy as the daemon's user", async () => {
+        expect.assertions(2);
+
+        const isolation = await setUpIsolation(
+            configFor(true),
+            silentLogger,
+            system({
+                readText: (path) => {
+                    const files: Record<string, string> = {
+                        "/etc/passwd": `lunora-fleet:x:${String(uid)}:${String(gid)}::/nonexistent:/usr/sbin/nologin\n`,
+                        "/proc/self/cgroup": `0::${service}\n`,
+                        "/proc/self/status": status(uid + 1, UNIT_CAPABILITIES, UNIT_CAPABILITIES, 1),
+                    };
+
+                    return files[path];
+                },
+            }),
+        );
+
+        isolation.stop();
+
+        expect(isolation.report.problems).toStrictEqual([
+            "edge user: no local user lunora-edge (install.sh creates it), so Caddy runs as the user that can read the box key",
+        ]);
+        expect(isolation.caddy).toStrictEqual({ prefix: dropCapabilitiesPrefix("/usr/bin/setpriv", ["net_bind_service"]) });
     });
 
     it("refuses when setpriv is missing, since children would inherit the daemon's capabilities", async () => {

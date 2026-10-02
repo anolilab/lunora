@@ -48,9 +48,10 @@ release manifest's signature does not verify".
 
 `install.sh` ([`install/install.sh`](./install/install.sh)) installs any missing
 `curl`, `jq`, `openssl`, `nftables`, `util-linux` (`setpriv`) and `gzip`; creates
-the users `lunora-hostd` and `lunora-fleet` (system users, no shell, no home);
+the users `lunora-hostd`, `lunora-fleet` and `lunora-edge` (system users, no
+shell, no home);
 creates `/etc/lunora-hostd` (`lunora-hostd`, 0700), `/var/lib/lunora-hostd`
-(`lunora-hostd:lunora-fleet`, 0710) and `/opt/lunora-hostd`; downloads and
+(`lunora-hostd:lunora-fleet`, 0711) and `/opt/lunora-hostd`; downloads and
 verifies the release (below), and has `lunora-hostd install-release` install it
 into `/opt/lunora-hostd/<releaseId>/` and point `/opt/lunora-hostd/current` at
 it; writes `/etc/systemd/system/lunora-hostd.service`; runs `lunora-hostd enrol`
@@ -80,7 +81,7 @@ is given.
 
 **Uninstall:** `sudo bash install.sh --uninstall` stops and removes the unit,
 the nftables table, `/opt/lunora-hostd`, `/var/lib/lunora-hostd`,
-`/etc/lunora-hostd` and both users. It never touches the bucket: each fleet's
+`/etc/lunora-hostd` and the three users. It never touches the bucket: each fleet's
 data stays under `fleets/<alias>/`, and `celld` can run it directly. Revoke the
 box in the studio as well.
 
@@ -168,18 +169,20 @@ credentials never leave the box. Every command takes `--config <path>`
 
 ### Files
 
-| Path                                    | Holds                                                                                   | Mode |
-| --------------------------------------- | --------------------------------------------------------------------------------------- | ---- |
-| `/etc/lunora-hostd/`                    | the directory below, `lunora-hostd`'s alone                                             | 0700 |
-| `/etc/lunora-hostd/config.json`         | control-plane origin, box id and hostname, bucket name/endpoint/region, ports, paths    | 0640 |
-| `/etc/lunora-hostd/box.key`             | the box's Ed25519 private key (PKCS#8 PEM)                                              | 0600 |
-| `/etc/lunora-hostd/bucket.env`          | the bucket credentials (`AWS_*`); refused when anyone but the owner can read it         | 0600 |
-| `/var/lib/lunora-hostd/state.json`      | each fleet's ports, state and last deployment                                           | 0600 |
-| `/var/lib/lunora-hostd/releases/<id>/`  | a downloaded release: `worker.js`, `assets/`, `wrangler.json` (holds the app's secrets) | 0600 |
-| `/var/lib/lunora-hostd/fleets/<alias>/` | a celld node's working directory, `HOME` and `TMPDIR`; owned by `lunora-fleet`          | 0700 |
-| `/var/lib/lunora-hostd/caddy/`          | Caddy's config (`caddy.json`), certificates, and the JSON `access.log` hostd tails      |      |
-| `/opt/lunora-hostd/<releaseId>/`        | one release: `lunora-hostd`, `celld`, `caddy` and its `manifest.json`                   | 0755 |
-| `/opt/lunora-hostd/current`             | a link to the release that runs; the unit and every child start from it                 |      |
+| Path                                    | Holds                                                                                            | Mode |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ | ---- |
+| `/etc/lunora-hostd/`                    | the directory below, `lunora-hostd`'s alone                                                      | 0700 |
+| `/etc/lunora-hostd/config.json`         | control-plane origin, box id and hostname, bucket name/endpoint/region, ports, paths             | 0640 |
+| `/etc/lunora-hostd/box.key`             | the box's Ed25519 private key (PKCS#8 PEM)                                                       | 0600 |
+| `/etc/lunora-hostd/bucket.env`          | the bucket credentials (`AWS_*`); refused when anyone but the owner can read it                  | 0600 |
+| `/var/lib/lunora-hostd/state.json`      | each fleet's ports, state and last deployment                                                    | 0600 |
+| `/var/lib/lunora-hostd/releases/<id>/`  | a downloaded release: `worker.js`, `assets/`, `wrangler.json` (holds the app's secrets)          | 0600 |
+| `/var/lib/lunora-hostd/fleets/<alias>/` | a celld node's working directory, `HOME` and `TMPDIR`; owned by `lunora-fleet`                   | 0700 |
+| `/var/lib/lunora-hostd/caddy/`          | `caddy.json`, the config Caddy boots from: hostd writes it, Caddy reads it (`lunora-edge` group) | 2750 |
+| `/var/lib/lunora-hostd/caddy/state/`    | Caddy's `HOME`: its autosaved config and certificates; `lunora-edge`'s alone                     | 0700 |
+| `/var/lib/lunora-hostd/caddy/log/`      | the JSON `access.log` (0640) Caddy writes as `lunora-edge` and hostd tails (its group)           | 2750 |
+| `/opt/lunora-hostd/<releaseId>/`        | one release: `lunora-hostd`, `celld`, `caddy` and its `manifest.json`                            | 0755 |
+| `/opt/lunora-hostd/current`             | a link to the release that runs; the unit and every child start from it                          |      |
 
 ### What runs, and how
 
@@ -218,14 +221,22 @@ between that code — should it escape celld's isolate — and the box's key, th
 celld operator API and the rest of the machine (plan 458 W8, after Noite's
 tenant sandbox):
 
-- **Users.** `lunora-hostd` runs the daemon and Caddy and owns `/etc/lunora-hostd`
+- **Users.** `lunora-hostd` runs the daemon and owns `/etc/lunora-hostd`
   (0700: the box key and the bucket credentials, 0600 each). Every celld
   process — each node, `celld deploy`, `celld diagnose` — runs as
-  `lunora-fleet`. Neither user has a shell.
+  `lunora-fleet`. Caddy, which parses untrusted HTTP, runs as `lunora-edge`:
+  it reads its config and writes its certificates and access log in
+  directories laid out for it (above), and reaches nothing of hostd's — not
+  the key, the bucket credentials, `state.json`, a release or a fleet's
+  files. hostd never writes into a directory Caddy can write, and opens the
+  access log without following links. No user has a shell. (The data
+  directory is 0711 so `lunora-edge` can pass through it; nothing in it is
+  open to other users.)
 - **Capabilities.** The unit grants the daemon exactly `CAP_NET_BIND_SERVICE`
   (Caddy on 80/443), `CAP_NET_ADMIN` (the nftables table), `CAP_SETUID` and
-  `CAP_SETGID` (starting fleets as `lunora-fleet`), `CAP_KILL` (stopping them)
-  and `CAP_CHOWN` (handing them their directories), as ambient capabilities —
+  `CAP_SETGID` (starting fleets as `lunora-fleet` and Caddy as `lunora-edge`),
+  `CAP_KILL` (stopping them) and `CAP_CHOWN` (handing them their
+  directories), as ambient capabilities —
   which every program the daemon starts would inherit, across the uid change
   too. So every child is started through `setpriv`, which empties the
   inheritable and ambient sets and sets `no_new_privs` before executing it:
@@ -248,9 +259,11 @@ tenant sandbox):
   `fleet-<alias>/` with `memory.max` (the box's memory less 512 MiB, at least
   256 MiB, or `fleetMemoryMaxMb` in the config) and no swap.
 
-**The self-check.** At start hostd checks all three: a process started as
-`lunora-fleet` really has that uid, no capabilities and `no_new_privs`; the
-nftables table is loaded; the delegated cgroup takes the memory controller.
+**The self-check.** At start hostd checks all four: a process started as
+`lunora-fleet` really has that uid, no capabilities and `no_new_privs`; one
+started as `lunora-edge` likewise, keeping `net_bind_service` at most (and
+Caddy's directories are laid out for it); the nftables table is loaded; the
+delegated cgroup takes the memory controller.
 All pass: `enforced`. One fails on a box enrolled with `--single-trust`:
 `single-trust`, and fleets start with whatever does work. One fails otherwise:
 `refused` — no fleet starts and a `deploy` fails with `ISOLATION_FAILED`. Each
@@ -296,8 +309,6 @@ time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
 - **Memory only.** No CPU, pids or I/O limit per fleet yet, and a fleet's first
   milliseconds (between spawn and the move into its cgroup) are charged to
   `hostd/`.
-- **Caddy runs as `lunora-hostd`.** It parses untrusted HTTP with the same uid
-  that can read the box key.
 - **No `esbuild` on the box, by design.** A stored release is already bundled,
   and `celldConfigFromRelease` deploys it with `no_bundle: true`, so neither
   `celld deploy` nor the node calls esbuild — checked against celld v0.6.0 with

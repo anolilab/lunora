@@ -2,7 +2,7 @@
  * Following Caddy's access log (plan 458 W6): the lines appended since the
  * last read, across Caddy's own rotation.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, readSync } from "node:fs";
 
 /** Bytes of access log read per poll; the rest is read on the next one. */
 const MAX_READ_BYTES = 4 * 1024 * 1024;
@@ -26,7 +26,7 @@ class LogTailer {
         this.path = path;
 
         try {
-            const stats = statSync(path);
+            const stats = lstatSync(path);
 
             this.inode = stats.ino;
             this.offset = stats.size;
@@ -40,7 +40,7 @@ class LogTailer {
         let stats: { ino: number; size: number };
 
         try {
-            stats = statSync(this.path);
+            stats = lstatSync(this.path);
         } catch {
             return [];
         }
@@ -61,7 +61,8 @@ class LogTailer {
         }
 
         const buffer = Buffer.alloc(length);
-        const descriptor = openSync(this.path, "r");
+        // Never through a link: the log's directory belongs to Caddy's user, which could plant one.
+        const descriptor = openSync(this.path, constants.O_RDONLY + constants.O_NOFOLLOW);
 
         try {
             readSync(descriptor, buffer, 0, length, this.offset);

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { DIRECT_LAUNCH, launchCommand, launchIdentity } from "./capabilities";
 import type { HostdConfig } from "./config";
 import { binaryPaths, fleetBucketUrl } from "./config";
+import { edgePaths } from "./edge";
 import { ensureFleetDirectory } from "./fleet-directories";
 import { CHILD_PATH, fleetEnvironment } from "./fleet-environment";
 import type { Isolation } from "./isolation";
@@ -259,18 +260,21 @@ class Supervisor {
     /** Start Caddy on `configPath` (its JSON config, admin API included). */
     public startCaddy(configPath: string): void {
         const { config } = this.options;
-        const home = join(config.dataDir, "caddy");
+        const { log, state } = edgePaths(config.dataDir);
 
-        mkdirSync(home, { mode: 0o750, recursive: true });
+        // Laid out for the edge user by the isolation setup; created here as the daemon's own otherwise.
+        mkdirSync(state, { mode: 0o700, recursive: true });
+        mkdirSync(log, { mode: 0o750, recursive: true });
 
         const command = launchCommand(this.isolation.caddy, binaryPaths(config).caddy, ["run", "--config", configPath]);
 
         this.caddy ??= new SupervisedProcess({
             args: command.args,
             command: command.command,
-            cwd: home,
-            // Certificates and Caddy's own state stay under the data directory.
-            env: { HOME: home, PATH: CHILD_PATH, XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data") },
+            cwd: state,
+            // Certificates and Caddy's own state stay in its own directory.
+            env: { HOME: state, PATH: CHILD_PATH, XDG_CONFIG_HOME: join(state, "config"), XDG_DATA_HOME: join(state, "data") },
+            ...launchIdentity(this.isolation.caddy),
             logger: this.options.logger,
             name: "caddy",
             ...(this.options.spawn === undefined ? {} : { spawn: this.options.spawn }),

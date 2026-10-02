@@ -280,26 +280,43 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
         expect(internalPort).toBeGreaterThan(0);
     });
 
-    it.runIf(ISOLATED)("runs the fleet as lunora-fleet without capabilities in its own memory cgroup, and Caddy with only port binding", async () => {
-        expect.assertions(6);
+    it.runIf(ISOLATED)(
+        "runs the fleet as lunora-fleet without capabilities in its own memory cgroup, and Caddy as lunora-edge with only port binding",
+        async () => {
+            expect.assertions(8);
 
-        const fleetUid = execFileSync(tool("id"), ["-u", "lunora-fleet"], { encoding: "utf8" }).trim();
-        const [node] = execFileSync(tool("pgrep"), ["-u", fleetUid, "-f", "celld"], { encoding: "utf8" }).trim().split("\n");
-        const [caddy] = execFileSync(tool("pgrep"), ["-x", "caddy"], { encoding: "utf8" }).trim().split("\n");
-        const status = (pid: string | undefined): string => readFileSync(`/proc/${pid ?? "self"}/status`, "utf8");
-        const field = (text: string, name: string): string => new RegExp(String.raw`^${name}:\s*(\S+)`, "mu").exec(text)?.[1] ?? "";
-        const cgroup = readFileSync(`/proc/${node ?? "self"}/cgroup`, "utf8").trim();
+            const fleetUid = execFileSync(tool("id"), ["-u", "lunora-fleet"], { encoding: "utf8" }).trim();
+            const [node] = execFileSync(tool("pgrep"), ["-u", fleetUid, "-f", "celld"], { encoding: "utf8" }).trim().split("\n");
+            const [caddy] = execFileSync(tool("pgrep"), ["-x", "caddy"], { encoding: "utf8" }).trim().split("\n");
+            const status = (pid: string | undefined): string => readFileSync(`/proc/${pid ?? "self"}/status`, "utf8");
+            const field = (text: string, name: string): string => new RegExp(String.raw`^${name}:\s*(\S+)`, "mu").exec(text)?.[1] ?? "";
+            const cgroup = readFileSync(`/proc/${node ?? "self"}/cgroup`, "utf8").trim();
 
-        expect(field(status(node), "Uid")).toBe(fleetUid);
-        expect([field(status(node), "CapEff"), field(status(node), "NoNewPrivs")]).toStrictEqual(["0000000000000000", "1"]);
-        expect(cgroup).toMatch(new RegExp(String.raw`/lunora-hostd\.service/fleet-${ALIAS}$`, "u"));
-        expect(Number(readFileSync(`/sys/fs/cgroup${cgroup.slice(3)}/memory.max`, "utf8"))).toBeGreaterThan(0);
-        // CAP_NET_BIND_SERVICE is bit 10.
-        expect(field(status(caddy), "CapEff")).toBe("0000000000000400");
-        expect(existsSync("/etc/lunora-hostd/box.key") && execFileSync(tool("stat"), ["-c", "%U %a", "/etc/lunora-hostd"], { encoding: "utf8" }).trim()).toBe(
-            "lunora-hostd 700",
-        );
-    });
+            expect(field(status(node), "Uid")).toBe(fleetUid);
+            expect([field(status(node), "CapEff"), field(status(node), "NoNewPrivs")]).toStrictEqual(["0000000000000000", "1"]);
+            expect(cgroup).toMatch(new RegExp(String.raw`/lunora-hostd\.service/fleet-${ALIAS}$`, "u"));
+            expect(Number(readFileSync(`/sys/fs/cgroup${cgroup.slice(3)}/memory.max`, "utf8"))).toBeGreaterThan(0);
+            // CAP_NET_BIND_SERVICE is bit 10.
+            expect(field(status(caddy), "CapEff")).toBe("0000000000000400");
+            expect(field(status(caddy), "Uid")).toBe(execFileSync(tool("id"), ["-u", "lunora-edge"], { encoding: "utf8" }).trim());
+
+            // Caddy's user reaches none of the daemon's secrets or state.
+            const readsAsEdge = await Promise.all(
+                ["/etc/lunora-hostd/box.key", "/etc/lunora-hostd/bucket.env", `${box.dataDir}/state.json`].map(async (path) => {
+                    const attempt = await run(tool("setpriv"), ["--reuid=lunora-edge", "--regid=lunora-edge", "--clear-groups", "--", tool("cat"), path], {
+                        PATH: SYSTEM_PATH,
+                    });
+
+                    return attempt.code === 0;
+                }),
+            );
+
+            expect(readsAsEdge).toStrictEqual([false, false, false]);
+            expect(
+                existsSync("/etc/lunora-hostd/box.key") && execFileSync(tool("stat"), ["-c", "%U %a", "/etc/lunora-hostd"], { encoding: "utf8" }).trim(),
+            ).toBe("lunora-hostd 700");
+        },
+    );
 
     it("destroys the fleet and deletes exactly its prefix with deleteData", async () => {
         expect.assertions(3);

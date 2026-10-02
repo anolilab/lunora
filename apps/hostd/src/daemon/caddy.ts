@@ -19,11 +19,11 @@
  */
 import type { Server } from "node:http";
 import { createServer } from "node:http";
-import { join } from "node:path";
 
 import type { RouteEntry } from "../wire/types";
 import type { CaddyConfig } from "./config";
 import { writeFileAtomic } from "./config";
+import { edgePaths } from "./edge";
 import type { Logger } from "./log";
 import { CELLD_HEALTH_PATH } from "./supervisor";
 
@@ -154,7 +154,8 @@ const buildCaddyConfig = (input: CaddyBuildInput): Json => {
                 lunora_access: {
                     encoder: { format: "json" },
                     include: [`http.log.access.${ACCESS_LOGGER}`],
-                    writer: { filename: input.accessLogPath, output: "file", roll_keep: 2, roll_size_mb: 20 },
+                    // 0640: Caddy runs as its own user, and hostd reads the log through the directory's group.
+                    writer: { filename: input.accessLogPath, mode: "0640", output: "file", roll_keep: 2, roll_size_mb: 20 },
                 },
             },
         },
@@ -194,8 +195,10 @@ class CaddyController {
 
     public constructor(options: CaddyControllerOptions) {
         this.options = options;
-        this.configPath = join(options.dataDir, "caddy", "caddy.json");
-        this.accessLogPath = join(options.dataDir, "caddy", "access.log");
+        const paths = edgePaths(options.dataDir);
+
+        this.configPath = paths.config;
+        this.accessLogPath = paths.accessLog;
     }
 
     /** Build the config for `routes` and `ports`. */

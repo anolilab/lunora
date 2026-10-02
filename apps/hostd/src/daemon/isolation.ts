@@ -12,11 +12,14 @@
  * (key, bucket credentials) is `lunora-hostd`'s, mode 0700;
  * - **an egress policy** (`nftables.ts`): no loopback, private, link-local,
  * metadata or CGNAT address, except DNS and the bucket endpoint;
- * - **a memory limit** per fleet (`cgroups.ts`).
+ * - **a memory limit** per fleet (`cgroups.ts`);
+ * - **Caddy as its own user** (`lunora-edge`, `edge.ts`): it parses untrusted
+ * HTTP, so it never runs as the user that can read the key.
  *
- * Each of the three is checked at start: the fleet user exists and a process
- * started as it really has its uid and no capabilities; the nftables table is
- * loaded; the delegated cgroup takes the memory controller. All three pass:
+ * Each is checked at start: the fleet user exists and a process started as it
+ * really has its uid and no capabilities; the edge user likewise, keeping
+ * port binding at most; the nftables table is loaded; the delegated cgroup
+ * takes the memory controller. All pass:
  * `enforced`. One fails and the box was enrolled with `--single-trust`:
  * `single-trust`, fleets start with whatever does work. One fails otherwise:
  * `refused`, and no fleet starts — a `deploy` fails with `ISOLATION_FAILED`.
@@ -30,11 +33,12 @@ import { HOSTD_PROTOCOL_LIMITS } from "../wire/constants";
 import type { BoxIsolation, IsolationStatus } from "../wire/types";
 import type { Account } from "./accounts";
 import { lookupAccount } from "./accounts";
-import type { ChildLaunch } from "./capabilities";
-import { dropCapabilitiesPrefix, hasCapability, parseProcessStatus } from "./capabilities";
+import type { CapabilityName, ChildLaunch } from "./capabilities";
+import { CAPABILITY, dropCapabilitiesPrefix, hasCapability, parseProcessStatus } from "./capabilities";
 import { CgroupManager, fleetMemoryMax } from "./cgroups";
 import { describeFailure, runChild } from "./child";
 import type { HostdConfig } from "./config";
+import { prepareEdgeDirectories } from "./edge";
 import { prepareDataDirectory } from "./fleet-directories";
 import { CHILD_PATH } from "./fleet-environment";
 import { truncateUtf8 } from "./job-error";
@@ -45,10 +49,12 @@ import { EgressFirewall } from "./nftables";
 /** One check's outcome. */
 type CheckResult = { ok: false; reason: string } | { ok: true };
 
-/** The three checks, by what they protect. */
+/** The checks, by what they protect. */
 interface IsolationChecks {
     /** Per-fleet memory limits through the delegated cgroup. */
     cgroup: CheckResult;
+    /** Caddy runs as its own user, with at most port binding, away from the box key. */
+    edge: CheckResult;
     /** The egress table for the fleet user. */
     egress: CheckResult;
     /** Fleets run as their own user, without capabilities. */
@@ -67,6 +73,7 @@ interface IsolationReport {
 /** Each check, in the order its problem is reported, with the name it is reported under. */
 const CHECKS: ReadonlyArray<readonly [keyof IsolationChecks, string]> = [
     ["user", "fleet user"],
+    ["edge", "edge user"],
     ["egress", "egress policy"],
     ["cgroup", "memory limits"],
 ];
@@ -103,6 +110,8 @@ const helloIsolation = (report: IsolationReport): BoxIsolation => {
 interface IsolationSystem {
     /** Where cgroup v2 is mounted; the real `/sys/fs/cgroup` when absent. */
     cgroupRoot?: string;
+    /** The daemon's own uid and gid, which keep Caddy's config and read its log. */
+    daemon: { gid: number; uid: number };
     firewall?: FirewallSystem;
     pid: number;
     /** Start `cat /proc/self/status` exactly as a fleet would be started; resolves with what it printed. */
@@ -138,6 +147,7 @@ const SETPRIV_CANDIDATES = ["/usr/bin/setpriv", "/bin/setpriv"] as const;
 /** The machine the daemon runs on. */
 const realIsolationSystem = (): IsolationSystem => {
     return {
+        daemon: { gid: process.getgid?.() ?? 0, uid: process.getuid?.() ?? 0 },
         pid: process.pid,
         probe: probeLaunch,
         readText: readTextOrUndefined,
@@ -150,7 +160,7 @@ const realIsolationSystem = (): IsolationSystem => {
 interface Isolation {
     /** The fleet user, when fleets run as one. */
     account?: Account;
-    /** How Caddy is started: without the capabilities it does not need. */
+    /** How Caddy is started: as the edge user, without the capabilities it does not need. */
     caddy: ChildLaunch;
     cgroups?: CgroupManager;
     /** How every celld process is started. */
@@ -166,8 +176,16 @@ const failure = (reason: string): CheckResult => {
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** Whether a process started under `launch` runs as `account` with no capabilities. */
-const checkFleetUser = async (system: IsolationSystem, launch: ChildLaunch, account: Account): Promise<CheckResult> => {
+/**
+ * Whether a process started under `launch` runs as `account`, with
+ * `no_new_privs` and no capability but those in `allowed`.
+ */
+const checkRunsAs = async (
+    system: IsolationSystem,
+    launch: ChildLaunch,
+    account: Account,
+    allowed: ReadonlyArray<CapabilityName> = [],
+): Promise<CheckResult> => {
     const { user } = account;
     let output: string;
 
@@ -183,7 +201,20 @@ const checkFleetUser = async (system: IsolationSystem, launch: ChildLaunch, acco
         return failure(`a process started as ${user} did not run with uid ${String(account.uid)}`);
     }
 
-    if (privileges.effective !== 0n || privileges.ambient !== 0n || !privileges.noNewPrivs) {
+    // The set without the allowed capabilities it holds.
+    const beyond = (set: bigint): bigint => {
+        let rest = set;
+
+        for (const name of allowed) {
+            if (hasCapability(rest, name)) {
+                rest -= 2n ** BigInt(CAPABILITY[name]);
+            }
+        }
+
+        return rest;
+    };
+
+    if (beyond(privileges.effective) !== 0n || beyond(privileges.ambient) !== 0n || !privileges.noNewPrivs) {
         return failure(`a process started as ${user} kept capabilities or may gain new ones`);
     }
 
@@ -223,7 +254,7 @@ const setUpFleetUser = async (
         return { check: failure("setpriv (util-linux) is not installed, so children would inherit the daemon's capabilities") };
     }
 
-    const check = await checkFleetUser(system, { gid: account.gid, prefix, uid: account.uid }, account);
+    const check = await checkRunsAs(system, { gid: account.gid, prefix, uid: account.uid }, account);
 
     if (!check.ok) {
         return { check };
@@ -233,6 +264,41 @@ const setUpFleetUser = async (
         prepareDataDirectory(config.dataDir, account);
     } catch (error) {
         return { check: failure(`cannot hand ${config.dataDir} to group ${config.fleetUser}: ${errorText(error)}`) };
+    }
+
+    return { account, check };
+};
+
+/**
+ * The edge-user check: Caddy starts as its own user, keeping port binding at
+ * most, and its directories are laid out for it; the account when it passed.
+ */
+const setUpEdgeUser = async (
+    config: HostdConfig,
+    system: IsolationSystem,
+    ambient: bigint,
+    prefix: ReadonlyArray<string>,
+): Promise<{ account?: Account; check: CheckResult }> => {
+    const account = lookupAccount(config.edgeUser, system.readText("/etc/passwd") ?? "");
+
+    if (account === undefined) {
+        return { check: failure(`no local user ${config.edgeUser} (install.sh creates it), so Caddy runs as the user that can read the box key`) };
+    }
+
+    if (ambient !== 0n && system.setpriv === undefined) {
+        return { check: failure("setpriv (util-linux) is not installed, so Caddy would inherit the daemon's capabilities") };
+    }
+
+    const check = await checkRunsAs(system, { gid: account.gid, prefix, uid: account.uid }, account, ["net_bind_service"]);
+
+    if (!check.ok) {
+        return { check };
+    }
+
+    try {
+        prepareEdgeDirectories(config.dataDir, account, system.daemon);
+    } catch (error) {
+        return { check: failure(`cannot hand Caddy's directories to ${config.edgeUser}: ${errorText(error)}`) };
     }
 
     return { account, check };
@@ -303,16 +369,17 @@ const setUpIsolation = async (config: HostdConfig, logger: Logger, system: Isola
     const ambient = parseProcessStatus(system.readText("/proc/self/status") ?? "")?.ambient ?? 0n;
     const prefixes = childPrefixes(system, ambient);
     const user = await setUpFleetUser(config, system, ambient, prefixes.fleet);
+    const edge = await setUpEdgeUser(config, system, ambient, prefixes.caddy);
     const egress = await setUpEgress(config, logger, system, user.account);
     const memory = setUpCgroups(config, system);
-    const report = decideIsolation({ cgroup: memory.check, egress: egress.check, user: user.check }, config.singleTrust);
+    const report = decideIsolation({ cgroup: memory.check, edge: edge.check, egress: egress.check, user: user.check }, config.singleTrust);
     const { account } = user;
 
     logReport(report, logger);
 
     return {
         ...(account === undefined ? {} : { account }),
-        caddy: { prefix: prefixes.caddy },
+        caddy: edge.account === undefined ? { prefix: prefixes.caddy } : { gid: edge.account.gid, prefix: prefixes.caddy, uid: edge.account.uid },
         ...(memory.cgroups === undefined ? {} : { cgroups: memory.cgroups }),
         fleet: account === undefined ? { prefix: prefixes.fleet } : { gid: account.gid, prefix: prefixes.fleet, uid: account.uid },
         report,

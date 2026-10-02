@@ -37,6 +37,7 @@ DATA_DIR="/var/lib/lunora-hostd"
 UNIT_PATH="/etc/systemd/system/lunora-hostd.service"
 HOSTD_USER="lunora-hostd"
 FLEET_USER="lunora-fleet"
+EDGE_USER="lunora-edge"
 NFT_TABLE="lunora_hostd"
 OS_RELEASE="/etc/os-release"
 # A "2 GB" server reports a little under 2048 MiB.
@@ -195,7 +196,7 @@ uninstall() {
 
     rm -rf -- "${INSTALL_DIR}" "${DATA_DIR}" "${CONFIG_DIR}"
 
-    for user in "${HOSTD_USER}" "${FLEET_USER}"; do
+    for user in "${HOSTD_USER}" "${FLEET_USER}" "${EDGE_USER}"; do
         if id -u "${user}" > /dev/null 2>&1; then
             userdel "${user}"
         fi
@@ -288,16 +289,20 @@ create_users() {
         useradd --system --user-group --home-dir "${DATA_DIR}" --no-create-home --shell /usr/sbin/nologin "${HOSTD_USER}"
     fi
 
-    if ! id -u "${FLEET_USER}" > /dev/null 2>&1; then
-        useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin "${FLEET_USER}"
-    fi
+    # Fleets, and Caddy (which parses untrusted HTTP), each as a user that cannot read the box key.
+    for user in "${FLEET_USER}" "${EDGE_USER}"; do
+        if ! id -u "${user}" > /dev/null 2>&1; then
+            useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin "${user}"
+        fi
+    done
 }
 
 create_directories() {
     # The key and the bucket credentials: lunora-hostd's alone.
     install -d -o "${HOSTD_USER}" -g "${HOSTD_USER}" -m 0700 "${CONFIG_DIR}"
-    # The fleet group may pass through (to its working directory), never list.
-    install -d -o "${HOSTD_USER}" -g "${FLEET_USER}" -m 0710 "${DATA_DIR}"
+    # The fleet group may pass through (to its working directory), and Caddy's user (to
+    # its own directories), never list. Nothing below is open to other users.
+    install -d -o "${HOSTD_USER}" -g "${FLEET_USER}" -m 0711 "${DATA_DIR}"
     # Releases: lunora-hostd writes them (upgrade), everyone may execute them.
     install -d -o "${HOSTD_USER}" -g "${HOSTD_USER}" -m 0755 "${INSTALL_DIR}"
 }
@@ -574,7 +579,7 @@ Delegate=yes
 # through setpriv, which drops the inherited set; Caddy keeps net_bind_service):
 #   NET_BIND_SERVICE  Caddy on ports 80 and 443
 #   NET_ADMIN         the fleets' nftables egress table
-#   SETUID, SETGID    start fleets as lunora-fleet
+#   SETUID, SETGID    start fleets as lunora-fleet, Caddy as lunora-edge
 #   KILL              stop fleets, which run as another user
 #   CHOWN             hand fleet directories to lunora-fleet
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN

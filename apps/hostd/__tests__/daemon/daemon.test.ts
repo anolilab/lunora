@@ -88,6 +88,7 @@ describe("the daemon", () => {
             isolation: {
                 problems: [
                     "fleet user: no local user lunora-fleet (install.sh creates it)",
+                    "edge user: no local user lunora-edge (install.sh creates it), so Caddy runs as the user that can read the box key",
                     "egress policy: not applied: fleets do not run as their own user",
                     expect.stringMatching(/^memory limits: not running as a systemd service/u),
                 ],
@@ -211,7 +212,7 @@ describe("the daemon", () => {
         expect(loadState(box.config.dataDir).fleets["my-app"]).toMatchObject({ deploymentId: "dep_1", publicPort: first, state: "running" });
     });
 
-    it("starts Caddy on its own config, under the data directory", async () => {
+    it("starts Caddy on its own config, with its state in a directory of its own", async () => {
         expect.assertions(3);
 
         await expect.poll(() => caddyInvocations(box.records).filter((run) => run.argv[0] === "run")).toHaveLength(1);
@@ -219,7 +220,7 @@ describe("the daemon", () => {
         const caddy = caddyInvocations(box.records).find((run) => run.argv[0] === "run");
 
         expect(caddy?.argv).toStrictEqual(["run", "--config", join(box.config.dataDir, "caddy", "caddy.json")]);
-        expect(caddy?.env["XDG_DATA_HOME"]).toBe(join(box.config.dataDir, "caddy", "data"));
+        expect(caddy?.env["XDG_DATA_HOME"]).toBe(join(box.config.dataDir, "caddy", "state", "data"));
     });
 
     it("refuses a release URL on another origin without signing anything", async () => {
