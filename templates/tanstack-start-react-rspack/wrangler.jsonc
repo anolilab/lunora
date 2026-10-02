@@ -5,7 +5,7 @@
     // `src/worker.ts` in its place — the same app with the TanStack Start SSR
     // handler folded in, which only exists after `rsbuild build`.
     "main": "src/lunora.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // The client bundle `rsbuild build` writes, served ahead of the Worker.
     "assets": { "directory": "./dist/client" },

@@ -25,6 +25,7 @@ import {
     validateGlobalBackendBindings,
     validateHintBinding,
     validateQueues,
+    validateR2Jurisdiction,
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
@@ -53,6 +54,20 @@ import { mergeWranglerEnvironment } from "./wrangler-environment";
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
 const REQUIRED_FLAG: string = "web_socket_auto_reply_to_close";
+
+/**
+ * From this `compatibility_date`, pending I/O (`waitUntil` promises, RPC and
+ * `fetch` to other Durable Objects, service-binding calls, timers,
+ * `ctx.container.monitor()`) keeps a Durable Object from idle eviction for up
+ * to 15 minutes per operation. Below it, the post-write refresh drain and
+ * durable-stream producers that ride `waitUntil` can be cut off once the last
+ * client disconnects.
+ */
+const DO_IO_KEEPALIVE_DATE: string = "2026-10-01";
+
+const DO_IO_KEEPALIVE_FLAG: string = "durable_object_io_tasks_prevent_eviction";
+
+const DO_IO_KEEPALIVE_OPT_OUT_FLAG: string = "durable_object_io_tasks_do_not_prevent_eviction";
 
 // Hoisted to module scope so the literal isn't re-compiled on every call.
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -143,6 +158,22 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
         errors.push(`cache.enabled requires compatibility_date >= "${WORKERS_CACHE_MIN_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 
+    // Advisory only: the date gate above is the hard floor, and bumping the
+    // date flips every other flag dated in between, so the app owner decides.
+    // Either opt-in or opt-out flag is an explicit decision that silences it.
+    const compatibilityFlags = wrangler.compatibility_flags ?? [];
+
+    if (
+        ISO_DATE_PATTERN.test(compatibilityDate) &&
+        compatibilityDate < DO_IO_KEEPALIVE_DATE &&
+        !compatibilityFlags.includes(DO_IO_KEEPALIVE_FLAG) &&
+        !compatibilityFlags.includes(DO_IO_KEEPALIVE_OPT_OUT_FLAG)
+    ) {
+        warnings.push(
+            `compatibility_date "${compatibilityDate}" predates "${DO_IO_KEEPALIVE_DATE}", so pending I/O (waitUntil, cross-Durable-Object RPC, service-binding calls, timers) does not keep a Durable Object alive once its last client disconnects — live-query refreshes and durable streams can be cut off mid-flight. Set compatibility_date >= "${DO_IO_KEEPALIVE_DATE}" or add the "${DO_IO_KEEPALIVE_FLAG}" compatibility flag`,
+        );
+    }
+
     // `web_socket_auto_reply_to_close` became the default on 2026-04-07, the
     // same date REQUIRED_COMPATIBILITY_DATE enforces — so requiring it
     // explicitly is redundant and workerd now warns when it's set. Any
@@ -151,6 +182,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // adds no signal. We therefore neither require nor reject the flag here.
 
     validateGlobalBackendBindings(wrangler, schema, errors);
+    validateR2Jurisdiction(wrangler, schema, warnings);
     validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
@@ -165,7 +197,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     // bindings are pure shape checks. Config-only flags (logpush/placement/
     // assets) catch typos.
     for (const rule of HINT_BINDING_RULES) {
-        validateHintBinding(wrangler, rule, errors, warnings);
+        validateHintBinding(wrangler, rule, errors, warnings, schema?.jurisdiction);
     }
 
     for (const rule of REQUIRED_FIELD_BINDING_RULES) {

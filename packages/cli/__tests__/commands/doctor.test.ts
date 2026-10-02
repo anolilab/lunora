@@ -48,7 +48,7 @@ const makeLogger = (): { lines: string[]; logger: Logger } => {
  */
 const CLEAN_WRANGLER = JSON.stringify(
     {
-        compatibility_date: "2026-04-07",
+        compatibility_date: "2026-10-01",
         d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
         migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],

@@ -17,7 +17,7 @@
     // `lunora/server.ts` (`.build()`) that Nitro mounts in prod.
     "name": "{{name}}-lunora-dev",
     "main": "lunora/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "dev": { "port": 8788 },
     "vars": { "LUNORA_ALLOWED_ORIGINS": "http://localhost:3000" },

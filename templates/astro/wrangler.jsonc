@@ -12,7 +12,7 @@
     // Combined with the redirect's `no_bundle: true` that uploads the raw,
     // untranspiled TypeScript source as the worker — a 1.4 KiB "successful" deploy.
     "main": "src/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // Workers deploy with custom bindings doesn't auto-generate the assets
     // config, so the static `dist/` (client island JS, etc.) must be bound
