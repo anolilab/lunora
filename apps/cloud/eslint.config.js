@@ -65,6 +65,8 @@ export default createConfig(
                         "DecompressionStream",
                         // Baseline in workerd; tenant backups gzip snapshots with it.
                         "CompressionStream",
+                        // Baseline in workerd; a box session streams a job's progress through one.
+                        "TransformStream",
                         // Browser globals used by the hosted studio (src/client, src/routes).
                         "localStorage",
                         "sessionStorage",

@@ -33,6 +33,7 @@
         "@lunora/do": "workspace:*",
         "@lunora/errors": "workspace:*",
         "@lunora/fingerprint": "workspace:*",
+        "@lunora/hostd": "workspace:*",
         "@lunora/mail": "workspace:*",
         "@lunora/payment": "workspace:*",
         "@lunora/ratelimit": "workspace:*",

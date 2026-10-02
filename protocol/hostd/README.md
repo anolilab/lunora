@@ -226,6 +226,10 @@ closes. Shape frozen across versions (§3). Codes in use:
 | `AUTH_FAILED`          | the `auth` signature does not verify                       |
 | `BOX_REVOKED`          | the box's key has been revoked                             |
 | `BAD_MESSAGE`          | the box sent a frame the control plane rejected            |
+| `RATE_LIMITED`         | the box sent frames faster than its per-socket budget      |
+| `TIMEOUT`              | the box sent nothing for 90 seconds                        |
+| `SUPERSEDED`           | a newer session of the same box authenticated              |
+| `UNAVAILABLE`          | the control plane cannot accept boxes right now            |
 
 A box MUST treat an unknown code as a refusal too.
 

@@ -20,8 +20,15 @@
 export type RouteAuth =
     // Bearer `LUNORA_ADMIN_TOKEN` — the platform/dispatcher trust boundary.
     | "adminToken"
+    // A box's Ed25519 key (plan 458 D4/D6): the request is signed per the hostd
+    // protocol (`requestSigningPayload`), or — for the session upgrade — the
+    // socket answers a single-use challenge before anything else is accepted.
+    | "boxKey"
     // Bearer org deploy key — CI/deploy callers with no user session.
     | "deployKey"
+    // A one-time box enrolment token (plan 458 D4): minted by an org owner,
+    // valid 15 minutes, consumed by the request it authorizes.
+    | "enrolmentToken"
     // Deliberately unauthenticated — MUST set `reason`.
     | "public"
     // better-auth member session (the delegated function `assertMember`s).
@@ -51,7 +58,16 @@ export interface RegisteredRoute<Handler> {
     spec: RouteSpec;
 }
 
-const VALID_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", "deployKey", "public", "session", "tailSecret", "webhookHmac"]);
+const VALID_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>([
+    "adminToken",
+    "boxKey",
+    "deployKey",
+    "enrolmentToken",
+    "public",
+    "session",
+    "tailSecret",
+    "webhookHmac",
+]);
 
 /**
  * Fail construction unless every route is classified. Throws on: a missing or

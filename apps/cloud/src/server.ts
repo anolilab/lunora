@@ -1,5 +1,5 @@
 import { createAuthAdmin, handleAuthRequest } from "@lunora/auth";
-import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
+import type { D1CtxDbOptions, D1DatabaseLike } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
 import type { PaymentsFromContextOptions } from "@lunora/payment";
 import { createCreemAdapter } from "@lunora/payment/creem";
@@ -26,6 +26,7 @@ import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
+import { buildExec, controlPlaneDatabase } from "./d1-store";
 import { resolveAdminToken } from "./deploy/admin-token";
 import type { ReleaseBucket } from "./deploy/release-store";
 import { createReleaseStore } from "./deploy/release-store";
@@ -56,26 +57,6 @@ import { runUptimeSweep } from "./uptime/sweep";
  * provisions and tracks tenant deployments. Its own `.global()` tables
  * (`cells`, `organizations`) live in the control-plane D1 bound as `DB`.
  */
-
-/** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec`. */
-const buildExec = (database: D1DatabaseLike): D1Exec => {
-    return {
-        all: async (sql, parameters) => {
-            const result = await database
-                .prepare(sql)
-                .bind(...parameters)
-                .all<Record<string, unknown>>();
-
-            return result.results;
-        },
-        run: async (sql, parameters) => {
-            await database
-                .prepare(sql)
-                .bind(...parameters)
-                .run();
-        },
-    };
-};
 
 /** Let the studio's global data browser list/page the `.global()` (D1) tables. */
 const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
@@ -174,6 +155,13 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
  * a tenant rather than here.
  */
 export * from "../lunora/_generated/containers";
+
+/**
+ * One per customer box (plan 458 G11): the end of the WebSocket `lunora-hostd`
+ * dials out to, and the control plane's only way to reach the box. Bound as
+ * `BOX_SESSION`, named by box id; `GET /v1/boxes/connect` forwards the upgrade.
+ */
+export { BoxSessionDO } from "./boxes/session-do";
 
 /**
  * Deferred-dispatch DO for `@lunora/scheduler`. The control plane's own crons
@@ -332,10 +320,7 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
         return [];
     }
 
-    const database: ControlPlaneDatabase = createD1CtxDb({
-        exec: buildExec(env.DB as D1DatabaseLike),
-        schema: schema as unknown as D1CtxDbOptions["schema"],
-    });
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const { page } = await database.findMany("deployments", { where: { status: "live" } });
 
     return page as LiveDeploymentRow[];
@@ -369,10 +354,6 @@ const readCronTargets = async (env: Env, live: ReadonlyArray<LiveDeploymentRow>)
 
     return targets;
 };
-
-/** The control-plane D1 as the structural {@link ControlPlaneDatabase} the sweeps use. */
-const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
-    createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
 /**
  * Reclaim what the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1): each

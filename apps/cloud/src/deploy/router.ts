@@ -37,6 +37,7 @@ import { rollbackRelease } from "./release";
 import { createReleaseStore } from "./release-store";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
+import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxRevokeRoute } from "./routes/boxes";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
@@ -1121,7 +1122,17 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    const routes: RegisteredRoute<RouteHandler>[] = [...toolRoutes, { handler: handleMcpRoute, method: "POST", path: "/v1/mcp", spec: { auth: "deployKey" } }];
+    const routes: RegisteredRoute<RouteHandler>[] = [
+        ...toolRoutes,
+        { handler: handleMcpRoute, method: "POST", path: "/v1/mcp", spec: { auth: "deployKey" } },
+        // Customer boxes (plan 458): never MCP tools — a box is a machine, not an agent's caller.
+        // enrolmentToken — the one-time token is the credential; the mutation consumes it.
+        { handler: handleBoxEnrolRoute, method: "POST", path: "/v1/boxes/enrol", spec: { auth: "enrolmentToken" } },
+        // boxKey — the BoxSessionDO admits the socket only after a signed challenge.
+        { handler: handleBoxConnectRoute, method: "GET", path: "/v1/boxes/connect", spec: { auth: "boxKey" } },
+        // session — the revoke mutation asserts owner/admin of the box's org.
+        { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
+    ];
 
     // Boot scanner: throws here (at construction) if a route is unclassified.
     assertRoutesClassified(routes);

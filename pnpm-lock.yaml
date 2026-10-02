@@ -1267,6 +1267,9 @@ importers:
       '@lunora/fingerprint':
         specifier: workspace:*
         version: link:../../packages/fingerprint
+      '@lunora/hostd':
+        specifier: workspace:*
+        version: link:../hostd
       '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
