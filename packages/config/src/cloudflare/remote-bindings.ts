@@ -59,6 +59,9 @@ const REMOTE_ELIGIBLE_KEYS = {
     // its "may incur usage charges" warning under `LUNORA_REMOTE`.
     ai_search: { label: "AI Search", shape: "array" },
     ai_search_namespaces: { label: "AI Search namespace", shape: "array" },
+    // Analytics SQL is likewise remote-only in plain `wrangler dev` (never a local
+    // simulator, wrangler >= 4.145.0); tagging it only silences the usage warning.
+    analytics: { label: "Analytics SQL", shape: "object" },
     d1_databases: { label: "D1", shape: "array" },
     kv_namespaces: { label: "KV", shape: "array" },
     queues: { label: "Queue", shape: "producers" },
@@ -100,6 +103,7 @@ interface RemoteWranglerShape {
     ai?: BindingEntry | null;
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    analytics?: BindingEntry | null;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -149,8 +153,8 @@ const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): R
         return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
     }
 
-    // Single-object section (`ai`): one binding, edit path is the section key itself.
-    const entry = parsed.ai;
+    // Single-object section (`ai`, `analytics`): one binding, edit path is the section key itself.
+    const entry = parsed[section] as BindingEntry | null | undefined;
 
     return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
 };

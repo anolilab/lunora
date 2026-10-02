@@ -84,6 +84,7 @@ describe("wranglerToAlchemy", () => {
             ...BASE,
             ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
             ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
+            analytics: { binding: "ANALYTICS_SQL" },
             assets: { directory: "./public" },
             flagship: [{ app_id: "app-abc", binding: "FLAGS" }],
             queues: { consumers: [{ queue: "jobs" }], producers: [{ binding: "JOBS", queue: "jobs" }] },
@@ -97,6 +98,7 @@ describe("wranglerToAlchemy", () => {
         expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "ai_search",
             "ai_search_namespaces",
+            "analytics",
             "assets",
             "flagship",
             "queues.consumers",

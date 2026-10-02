@@ -25,6 +25,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesAi: false,
         usesAiSearch: false,
         usesAnalytics: false,
+        usesAnalyticsSql: false,
         usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
@@ -688,6 +689,33 @@ describe("reconcileWranglerBindings", () => {
         const second = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
 
         expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the ANALYTICS_SQL binding when ctx.analyticsSql is inferred, idempotently", () => {
+        expect.assertions(4);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(first.added).toContain("ANALYTICS_SQL (Analytics SQL)");
+        // No `remote: true`: wrangler proxies the Analytics SQL binding remotely in plain dev already.
+        expect(readConfig().analytics).toStrictEqual({ binding: "ANALYTICS_SQL" });
+        // The write-only Analytics Engine dataset is a different binding and is untouched.
+        expect(readConfig().analytics_engine_datasets).toBeUndefined();
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("leaves a hand-written analytics binding under another name alone", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "analytics": { "binding": "METRICS" },\n}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(result.added).not.toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect(readConfig().analytics).toStrictEqual({ binding: "METRICS" });
     });
 
     it("leaves a hand-written ai_search_namespaces entry alone instead of adding AI_SEARCH beside it", () => {

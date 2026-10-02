@@ -74,6 +74,7 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 //   pipelines   → pipelines                 → hint (un-mintable remote pipeline name)
 //   artifacts   → artifacts                 → hint (the namespace's jurisdiction is fixed at creation, so never auto-written)
 //   aiSearch    → ai_search_namespaces      → self-describing (namespace "default" always exists; wrangler creates a missing one)
+//   analyticsSql → analytics                → self-describing (binding name only; wrangler >= 4.145.0)
 
 /**
  * Config's flag for each of codegen's capabilities it reports. The detection
@@ -86,6 +87,7 @@ const CODEGEN_CAPABILITY_FLAGS = {
     ai: "usesAi",
     aiSearch: "usesAiSearch",
     analytics: "usesAnalytics",
+    analyticsSql: "usesAnalyticsSql",
     artifacts: "usesArtifacts",
     browser: "usesBrowser",
     hyperdrive: "usesHyperdrive",
@@ -270,6 +272,8 @@ interface InferredBindings {
     usesAiSearch: boolean;
     /** `@lunora/bindings/analytics` is imported or `ctx.analytics` read → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
+    /** `ctx.analyticsSql` is used → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
+    usesAnalyticsSql: boolean;
 
     /**
      * `ctx.artifacts` is read or `@lunora/bindings/artifacts` value-imported.
@@ -629,6 +633,10 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         [
             capabilities.usesAiSearch,
             'ai_search_namespaces (ctx.aiSearch used) — self-describing { binding: AI_SEARCH, namespace: "default" }; remote-only, so `lunora dev` reaches the deployed AI Search service',
+        ],
+        [
+            capabilities.usesAnalyticsSql,
+            "analytics (ctx.analyticsSql used) — self-describing { binding: ANALYTICS_SQL }; needs wrangler >= 4.145.0, and is remote-only, so `lunora dev` queries the account's live analytics",
         ],
         // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface

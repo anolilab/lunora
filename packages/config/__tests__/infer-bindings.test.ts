@@ -1187,6 +1187,37 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.some((signal) => signal.startsWith("ai_search_namespaces (ctx.aiSearch used)"))).toBe(true);
     });
 
+    it("infers Analytics SQL from a ctx.analyticsSql access", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/usage.ts", `export const handler = (ctx) => ctx.analyticsSql.query("SELECT 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(true);
+        // The read surface does not imply the write-only Analytics Engine dataset.
+        expect(result.usesAnalytics).toBe(false);
+        expect(result.signals.some((signal) => signal.startsWith("analytics (ctx.analyticsSql used)"))).toBe(true);
+    });
+
+    it("does not infer Analytics SQL from a type-only import or from the Analytics Engine write subpath", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AnalyticsSql } from "@lunora/bindings/analytics-sql";\nimport { createAnalytics } from "@lunora/bindings/analytics";\nexport const label = (sql: AnalyticsSql) => [sql, createAnalytics];`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(false);
+        expect(result.usesAnalytics).toBe(true);
+    });
+
     it("does not infer AI Search from a type-only import or an unrelated `aiSearch` name", async () => {
         expect.assertions(1);
 

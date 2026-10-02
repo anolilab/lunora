@@ -227,12 +227,19 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
- * Add a self-describing single-`{ binding }` binding (`ai`, `browser`, `images`)
- * if absent. These share one shape — the binding name is the whole config, with
- * no remote id to mint — so each is written safely like `DB`, and one helper
- * covers all three. Idempotent on `parsed[key].binding`. Pure.
+ * Add a self-describing single-`{ binding }` binding (`ai`, `analytics`,
+ * `browser`, `images`) if absent. These share one shape — the binding name is
+ * the whole config, with no remote id to mint — so each is written safely like
+ * `DB`, and one helper covers all of them. Idempotent on `parsed[key].binding`.
+ * Pure.
  */
-const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" | "browser" | "images", binding: string, label: string): ReconcileStep => {
+const reconcileSelfDescribing = (
+    text: string,
+    parsed: WranglerShape,
+    key: "ai" | "analytics" | "browser" | "images",
+    binding: string,
+    label: string,
+): ReconcileStep => {
     const current = parsed[key]?.binding;
 
     if (typeof current === "string" && current.length > 0) {
@@ -857,7 +864,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
-    // ai_search_namespaces vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
+    // ai_search_namespaces vs analytics vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
     // observability vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
@@ -878,6 +885,12 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
                     { binding: "AI_SEARCH", namespace: "default" },
                     "AI_SEARCH (AI Search namespace)",
                 ),
+        },
+        // No `remote: true`: wrangler rates the Analytics SQL binding as never
+        // having a local simulator and proxies it remotely in plain dev, like `ai`.
+        {
+            enabled: inferred.usesAnalyticsSql,
+            run: (text) => reconcileSelfDescribing(text, parsed, "analytics", "ANALYTICS_SQL", "ANALYTICS_SQL (Analytics SQL)"),
         },
         { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
         { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
