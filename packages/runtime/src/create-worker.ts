@@ -890,10 +890,11 @@ interface WorkerOptions {
      * `Response` for one of the exact paths it derives and `undefined` otherwise.
      *
      * Unlike {@link WorkerOptions.authHandler} it is the LAST matcher, consulted
-     * only for a `GET`/`HEAD` that every other route missed: no explicit route,
-     * no reserved endpoint, and either no {@link WorkerOptions.httpRouter} or a
+     * only for a request every other route missed: no explicit route, no
+     * reserved endpoint, and either no {@link WorkerOptions.httpRouter} or a
      * router answer of 404. So an app that already serves these paths itself keeps
-     * serving them, and the documents never shadow an app route.
+     * serving them, and the documents never shadow an app route. Which methods it
+     * answers is the handler's call (`@lunora/auth`'s answers `GET`/`HEAD` only).
      */
     authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
 
@@ -5498,20 +5499,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return authResponse;
     };
 
-    /**
-     * The fallback for the OAuth discovery documents
-     * ({@link WorkerOptions.authDiscoveryHandler}). Read-only documents, so only a
-     * `GET`/`HEAD` is offered to it; `undefined` when it is not configured or does
-     * not own the path.
-     */
-    const dispatchAuthDiscovery = async (request: Request): Promise<Response | undefined> => {
-        if (!options.authDiscoveryHandler || (request.method !== "GET" && request.method !== "HEAD")) {
-            return undefined;
-        }
-
-        return await options.authDiscoveryHandler(request);
-    };
-
     // Opt-in public REST surface (plan 167). A REST call is routed THROUGH the
     // procedure via the exact same steps as `handleRpc` — identity resolution,
     // the `authorizeRpcEnvelope` gate, then `dispatchSingleShard` (or the
@@ -5801,7 +5788,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Only a 404 — the router's own, or none at all — leaves room for the auth
         // discovery documents, so an app route at the same path always wins.
-        const discoveryResponse = await dispatchAuthDiscovery(request);
+        const discoveryResponse = await options.authDiscoveryHandler?.(request);
 
         if (discoveryResponse) {
             await httpRouteResponse?.body?.cancel();

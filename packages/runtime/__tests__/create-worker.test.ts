@@ -3260,16 +3260,4 @@ describe("createWorker — auth discovery fallback (plan 461 B)", () => {
         expect(res.status).toBe(404);
         await expect(res.text()).resolves.toBe("app 404 page");
     });
-
-    it("never offers a non-GET/HEAD request to the handler", async () => {
-        expect.assertions(2);
-
-        const authDiscoveryHandler = discoveryHandler();
-        const worker = createWorker({ authDiscoveryHandler, shardDO: shard.namespace });
-
-        const res = await worker.fetch(new Request(`https://app.example${PRM_PATH}`, { body: "{}", method: "POST" }), {}, fakeContext);
-
-        expect(res.status).toBe(404);
-        expect(authDiscoveryHandler).not.toHaveBeenCalled();
-    });
 });
