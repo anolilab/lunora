@@ -37,6 +37,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
 import assertRequiredPackages from "./assert-required-packages";
+import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
 import { discoverContainers } from "./discover/containers";
 import discoverCrons from "./discover/crons";
@@ -370,25 +371,15 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         queues,
         serverContent: emitServer({
             agents,
+            capabilities: usedCapabilities(featureUsage),
             containers,
             env,
-            hasAccessFacade: featureUsage.access,
-            hasAi: featureUsage.ai,
-            hasAnalytics: featureUsage.analytics,
-            hasBrowser: featureUsage.browser,
             // The gate's verdict, not the raw declaration: a `.vectorize()` column
             // declares the feature without importing anything, so `featureUsage`
             // never sees it. The emitter AND's it with `schema.vectorIndexes`.
             hasVectors: vectorStoreSupported,
             hasFlags,
-            hasHyperdrive: featureUsage.hyperdrive,
-            hasImages: featureUsage.images,
-            hasKv: featureUsage.kv,
             hasNotify,
-            hasPayments: featureUsage.payments,
-            hasPipelines: featureUsage.pipelines,
-            hasR2sql: featureUsage.r2sql,
-            hasX402: featureUsage.x402,
             identity,
             queues,
             schema,

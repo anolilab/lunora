@@ -157,6 +157,31 @@ const { text } = await generateText({
 await ctx.ai.run("@cf/meta/m2m100-1.2b", inputs, { rejectIfBusy: true });
 ```
 
+## Web search
+
+`ctx.ai.websearch(query, options?)` calls the Cloudflare Web Search API (beta)
+over the same `AI` binding, so a response can be grounded in live results. The
+providers are `"ceramic"` (the default), `"exa"` and `"linkup"`, all under Zero
+Data Retention. The search goes through the gateway inference already routes
+through (`LUNORA_AI_GATEWAY_ID`), else the account's `default` gateway; pass
+`gatewayId` to pick another. It bills a provider key stored on that gateway
+under the `default` alias (or the one `byokAlias` names) when there is one, and
+AI Gateway credits at list price otherwise.
+
+```ts
+const { items } = await ctx.ai.websearch("cloudflare durable objects pricing", { limit: 5, provider: "exa" });
+// items: [{ url, title, description?, lastModifiedDate?, imageUrl?, faviconUrl? }, …]
+```
+
+`limit` defaults to 10 and accepts at most 10. Results describe pages; reading a
+page is a separate `fetch` of its `url`.
+
+A rejected request throws a `LunoraError` with code `BAD_REQUEST`. Gateway or
+credential problems keep their own codes (`UNAUTHORIZED`, `FORBIDDEN`,
+`NOT_FOUND`), a throttled search is `RATE_LIMITED`, and a provider or gateway
+failure `SERVICE_UNAVAILABLE`. An unreadable response is `INTERNAL`.
+For agents, `webSearchTool()` from `@lunora/agent` wraps this as a tool.
+
 ## RAG — `defineRag` (`@lunora/ai/rag`)
 
 `defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a
@@ -635,8 +660,10 @@ mode there is a cross-tenant leak, not a missing result.
 
 `rag.index()` takes one document's text, which leaves the whole crawl — list the
 objects, fetch each, extract text, index it, notice the ones that were deleted —
-as something every app writes for itself. This is the one axis on which
-Cloudflare's managed AutoRAG pipeline is genuinely more convenient.
+as something every app writes for itself. `defineRagSource` is that loop. If you
+would rather not run it at all, [AI Search](#managed-rag-ai-search) ingests an
+R2 bucket or a website on its own schedule, at the cost of the controls on this
+page.
 
 ```ts
 import { defineRagSource } from "@lunora/ai/rag";
@@ -690,6 +717,145 @@ users who need it is the wrong trade. Plain-text types (`text/plain`,
 `text/markdown`, `text/csv`, `application/json`) need no extractor; anything
 else without one is **skipped**, never indexed as raw bytes — a PDF's binary or
 an HTML file's markup embeds to something that matches nothing.
+
+## Managed RAG: AI Search
+
+[Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) (formerly
+AutoRAG) runs the whole pipeline on Cloudflare's side: ingestion from an R2
+bucket, a website or uploaded files, chunking, embedding, a hybrid vector and
+BM25 index, reranking and a query cache. An action reaches it as
+`ctx.aiSearch`: the raw `ai_search_namespaces` binding, passed through
+unwrapped, so every method is Cloudflare's own `AiSearchNamespace`. It is typed
+as `@lunora/bindings/ai-search`'s `AiSearch`, a structural mirror of that class,
+so it type-checks without `@cloudflare/workers-types` in your tsconfig.
+
+```ts
+// lunora/search.ts
+import { action } from "./_generated/server";
+import { v } from "@lunora/values";
+
+export const askDocs = action.input({ question: v.string() }).action(async ({ args, ctx }) => {
+    const { chunks } = await ctx.aiSearch.get("docs").search({
+        ai_search_options: { retrieval: { max_num_results: 5 } },
+        query: args.question,
+    });
+
+    return chunks.map((chunk) => ({ key: chunk.item.key, score: chunk.score, text: chunk.text }));
+});
+```
+
+Reading `ctx.aiSearch` is the whole setup. `lunora dev` and `lunora deploy` add
+`{ "binding": "AI_SEARCH", "namespace": "default" }` to `wrangler.jsonc` the
+first time a `lunora/` source reads it, and leave any `ai_search_namespaces`
+entry you wrote alone. If `AI_SEARCH` is already the name of another binding (an
+`ai_search` instance, a KV namespace, a var), nothing is written and the
+reconcile warning says which; add your own entry under another name. `default`
+exists on every account and already holds the instances you created before AI
+Search went GA. To bind another namespace, keep your own entry and point the app
+at it with `defineApp().aiSearch((env) => env.MY_NAMESPACE)`. The instances themselves
+(source, embedding model, index method, OCR) are configured in the dashboard,
+with `wrangler`, or through `ctx.aiSearch.create(...)`.
+
+It is **action-only**. Every call is billed network I/O over a corpus that
+re-indexes underneath you, so a query or mutation running it would re-bill on
+every subscription re-run and return a different answer each time. There is no
+local simulator either: plain `lunora dev` proxies the binding to the deployed
+service (wrangler warns that it may incur charges), so you need to be logged in
+with `wrangler login`. On the `celld` and `node` targets the capability matrix
+rates it unsupported, and codegen omits `ctx.aiSearch` with a
+`platform_unsupported_feature` diagnostic.
+
+### AI Search or `defineRag`?
+
+| Choose AI Search when…                                                | Choose `defineRag` when…                                                               |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| the corpus is an R2 bucket or a website you want indexed with no code | the corpus is your app's own rows, indexed as they are written                         |
+| you need OCR for scanned PDFs or the multimodal embedding models      | you need your own chunker, embedder, lexical or graph leg, reranker or query transform |
+| one tenant per instance is fine, or the corpus is shared              | retrieval must be filtered by row-level security across many tenants in one index      |
+| Cloudflare is the only target                                         | the app also runs on `celld` or `node`                                                 |
+
+Two limits decide the tenancy row. An instance has at most **5 custom metadata
+fields**, and a filterable string is indexed only to its first **64 bytes**, so
+a metadata filter on a tenant id longer than that stops filtering correctly
+without an error. That is a cross-tenant leak, not a missing result. For
+per-tenant isolation, give each tenant its own instance:
+
+```ts
+import { internalAction } from "./_generated/server";
+import { v } from "@lunora/values";
+
+export const provisionTenant = internalAction.input({ tenantId: v.string() }).action(async ({ args, ctx }) => {
+    // Built-in storage: omit `type` and `source`, then upload into it.
+    const instance = await ctx.aiSearch.create({ id: `tenant-${args.tenantId}` });
+
+    await instance.items.upload("welcome.md", "# Welcome\n…");
+});
+```
+
+Two more things to know before you put it on a hot path:
+
+- **Billing.** AI Search is usage-billed from **2026-11-01**: past the monthly
+  free allowance, semantic queries cost $0.75 and full-text queries $0.10 per
+  1,000, and ingestion $0.75 per million tokens. Workers AI embedding and
+  reranking calls are folded into that bill. `ctx.ai` usage counters do not see
+  these calls.
+- **Text only over the binding.** A message's `content` is a string. Image and
+  file content parts, one of the GA headlines, are accepted only by the REST API
+  and the public endpoint, not by `ctx.aiSearch`.
+
+### Streaming an answer
+
+`chatCompletions` retrieves and generates in one call, and with `stream: true`
+it resolves to a `ReadableStream` of server-sent events. An HTTP route can hand
+that stream straight back. `ctx.aiSearch` is not on the HTTP action context, so
+read the binding off the route's `env`:
+
+```ts
+// lunora/http.ts
+import type { AiSearch } from "@lunora/bindings/ai-search";
+import { httpRouter } from "lunorash/server";
+
+export const app = httpRouter();
+
+app.post("/ask", async (c) => {
+    const { question } = await c.req.json<{ question: string }>();
+    const search = c.env.AI_SEARCH as AiSearch;
+    const stream = await search.get("docs").chatCompletions({ messages: [{ content: question, role: "user" }], stream: true });
+
+    return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+});
+```
+
+Across several instances, call `chatCompletions` (or `search`) on the namespace
+itself with `ai_search_options: { instance_ids: ["docs", "blog"] }` (1 to 10
+ids). Each returned chunk then carries its `instance_id`.
+
+### Feeding agent memory
+
+Agent memory consumes `defineRag`'s `RetrieveResult`. AI Search returns its own
+`chunks`, so map them across by hand. There is no adapter to keep in sync:
+
+```ts
+import type { RetrieveResult } from "@lunora/ai/rag";
+import type { AiSearchInstance } from "@lunora/bindings/ai-search";
+
+const toRetrieveResult = (chunks: Awaited<ReturnType<AiSearchInstance["search"]>>["chunks"]): RetrieveResult => ({
+    chunks: chunks.map((chunk, index) => ({
+        chunkIndex: index,
+        id: chunk.id,
+        importance: 1,
+        metadata: chunk.item.metadata,
+        score: chunk.score,
+        sourceId: chunk.item.key,
+        text: chunk.text,
+    })),
+    context: chunks.map((chunk) => `[source:${chunk.item.key}]\n${chunk.text}`).join("\n\n"),
+    sources: [...new Set(chunks.map((chunk) => chunk.item.key))].map((id) => ({ id })),
+});
+```
+
+`AiSearchInstance` is what `ctx.aiSearch.get(name)` returns, exported next to
+`AiSearch`. Both are types only; the subpath ships no runtime code.
 
 ## Tagging gateway calls for cost attribution
 

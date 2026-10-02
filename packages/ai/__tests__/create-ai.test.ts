@@ -373,6 +373,107 @@ describe("createAi", () => {
         });
     });
 
+    describe("websearch (Web Search API)", () => {
+        const searchBody = {
+            items: [{ description: "A framework", title: "Lunora", url: "https://lunora.sh" }],
+            metadata: { latencyMs: 12, query: "lunora", requestId: "req-1" },
+        };
+
+        const searchBinding = (
+            response: Response = Response.json(searchBody),
+        ): AiBindingLike & { searchCalls: Parameters<NonNullable<AiBindingLike["websearch"]>>[0][] } => {
+            const searchCalls: Parameters<NonNullable<AiBindingLike["websearch"]>>[0][] = [];
+
+            return {
+                run: async () => undefined,
+                searchCalls,
+                websearch: async (input) => {
+                    searchCalls.push(input);
+
+                    return response;
+                },
+            };
+        };
+
+        it("forwards the query and options and returns the parsed results", async () => {
+            expect.assertions(2);
+
+            const binding = searchBinding();
+            const result = await createAi({ binding }).websearch("lunora", { byokAlias: "mine", gatewayId: "g", limit: 3, provider: "exa" });
+
+            expect(binding.searchCalls).toStrictEqual([{ byokAlias: "mine", gatewayId: "g", limit: 3, provider: "exa", query: "lunora" }]);
+            expect(result).toStrictEqual(searchBody);
+        });
+
+        it("bills the gateway inference routes through, else the account's default gateway", async () => {
+            expect.assertions(2);
+
+            const configured = searchBinding();
+            const unconfigured = searchBinding();
+
+            await createAi({ binding: configured, env: gatewayEnv() }).websearch("lunora");
+            await createAi({ binding: unconfigured }).websearch("lunora");
+
+            expect(configured.searchCalls).toStrictEqual([{ gatewayId: "my-gateway", query: "lunora" }]);
+            expect(unconfigured.searchCalls).toStrictEqual([{ gatewayId: "default", query: "lunora" }]);
+        });
+
+        it("maps HTTP failures onto LunoraError codes", async () => {
+            expect.assertions(7);
+
+            const codeFor = async (status: number): Promise<string | undefined> => {
+                const error: unknown = await createAi({ binding: searchBinding(new Response("nope", { status })) })
+                    .websearch("lunora")
+                    .catch((error_: unknown) => error_);
+
+                return isLunoraError(error) ? error.code : undefined;
+            };
+
+            await expect(codeFor(400)).resolves.toBe("BAD_REQUEST");
+            await expect(codeFor(401)).resolves.toBe("UNAUTHORIZED");
+            await expect(codeFor(403)).resolves.toBe("FORBIDDEN");
+            await expect(codeFor(404)).resolves.toBe("NOT_FOUND");
+            await expect(codeFor(408)).resolves.toBe("SERVICE_UNAVAILABLE");
+            await expect(codeFor(429)).resolves.toBe("RATE_LIMITED");
+            await expect(codeFor(502)).resolves.toBe("SERVICE_UNAVAILABLE");
+        });
+
+        it("caps the upstream error body it puts in the message", async () => {
+            expect.assertions(1);
+
+            const error: unknown = await createAi({ binding: searchBinding(new Response("x".repeat(5000), { status: 502 })) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect((error as Error).message.length).toBeLessThan(400);
+        });
+
+        it.each([
+            ["a body without an items array", () => Response.json({ result: searchBody })],
+            ["a body that is not JSON", () => new Response("<html>oops</html>")],
+        ])("refuses %s as INTERNAL", async (_label, response) => {
+            expect.assertions(1);
+
+            const error: unknown = await createAi({ binding: searchBinding(response()) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error) && error.code === "INTERNAL").toBe(true);
+        });
+
+        it("throws a directed error without a binding, or with one that predates websearch()", async () => {
+            expect.assertions(2);
+
+            await expect(createAi({}).websearch("lunora")).rejects.toThrow(/ai\.websearch needs the `AI` binding/);
+
+            const error: unknown = await createAi({ binding: fakeBinding() })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error) && error.code === "NOT_IMPLEMENTED").toBe(true);
+        });
+    });
+
     describe("provider construction from a binding", () => {
         it("builds the Workers AI provider from env.AI when no provider is given", () => {
             expect.assertions(2);

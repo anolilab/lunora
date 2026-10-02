@@ -15,7 +15,9 @@ import emittedJsonData from "./emitted-json-data";
 const ALL_OFF: FeatureUsage = {
     access: false,
     ai: false,
+    aiSearch: false,
     analytics: false,
+    artifacts: false,
     browser: false,
     container: false,
     flags: false,
@@ -257,6 +259,23 @@ describe("gatePlatformFeatures", () => {
         expect(result.usage.ai).toBe(true);
         expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["vectors"]);
+    });
+
+    // AI Search is a Cloudflare-only managed service with no host contract
+    // behind it: celld and node rate it unsupported, so `ctx.aiSearch` must be
+    // withheld there with a diagnostic rather than emitted as a runtime throw.
+    it.each([
+        ["cloudflare", true, []],
+        ["celld", false, ["platform_unsupported_feature"]],
+        ["node", false, ["platform_unsupported_feature"]],
+    ])("gates ctx.aiSearch against the %s matrix", async (target, kept, diagnostics) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures({ ...ALL_OFF, aiSearch: true }, target);
+
+        expect(result.usage.aiSearch).toBe(kept);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(diagnostics);
     });
 });
 

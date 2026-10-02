@@ -56,6 +56,14 @@
             "types": "./dist/plugins-enterprise-client.d.ts",
             "import": "./dist/plugins-enterprise-client.mjs"
         },
+        "./cimd/node": {
+            "types": "./dist/cimd-node.d.ts",
+            "import": "./dist/cimd-node.mjs"
+        },
+        "./cimd/workers": {
+            "types": "./dist/cimd-workers.d.ts",
+            "import": "./dist/cimd-workers.mjs"
+        },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
@@ -113,6 +121,7 @@
     },
     "dependencies": {
         "@better-auth/api-key": "catalog:auth",
+        "@better-auth/cimd": "catalog:auth",
         "@better-auth/mcp": "catalog:auth",
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
@@ -129,6 +138,8 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/config": "1.0.0-alpha.293",
+        "@lunora/runtime": "1.0.0-alpha.170",
         "@lunora/server": "1.0.0-alpha.169",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",

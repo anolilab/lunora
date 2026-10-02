@@ -7,6 +7,7 @@
  */
 import { existsSync } from "node:fs";
 
+import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
@@ -37,6 +38,13 @@ interface SchemaInfo {
     hasD1GlobalTable: boolean;
     /** Whether the schema declares a `.global({ backend: "hyperdrive" })` table — needs the app's `.hyperdriveGlobal(...)` chain instead. Required, not optional: the only producer always knows the answer, and `?` made every consumer read a two-valued fact as three-valued. */
     hasHyperdriveGlobalTable: boolean;
+
+    /**
+     * Data-residency jurisdiction declared via `defineSchema(...).jurisdiction("…")`.
+     * It pins the app's Durable Objects only; KV namespaces and R2 buckets carry
+     * their own jurisdiction, set when they are created.
+     */
+    jurisdiction?: SchemaIR["jurisdiction"];
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 
@@ -81,6 +89,7 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
             info: {
                 hasD1GlobalTable: schema.tables.some((table) => isD1GlobalTable(table)),
                 hasHyperdriveGlobalTable: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
+                ...(schema.jurisdiction === undefined ? {} : { jurisdiction: schema.jurisdiction }),
                 vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
                 vectorMetadata: schema.vectorIndexes.flatMap((index) =>
                     (index.metadata ?? []).map((property) => {

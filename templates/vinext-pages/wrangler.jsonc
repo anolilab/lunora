@@ -12,7 +12,7 @@
     // so the one deployed Worker carries both planes.
     "name": "{{name}}",
     "main": "virtual:lunora/worker",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // vinext serves the client bundle through the ASSETS binding.
     "assets": {

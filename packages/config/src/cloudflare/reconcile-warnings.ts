@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import artifactsBindingHint from "../artifacts-hint";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type { InferredBindings } from "../infer-bindings";
 import { packageNamesFromBindings } from "../infer-bindings";
@@ -24,6 +25,9 @@ import type { WranglerShape } from "./wrangler-shape";
 /** The one Pipelines binding name codegen resolves — `emitPipelinesFragments`'s `env.PIPELINES` fallback, which has no `defineApp` override. */
 const PIPELINES_BINDING = "PIPELINES";
 
+/** The Artifacts binding name codegen falls back to — `config.artifacts?.(env) ?? env.ARTIFACTS`. */
+const ARTIFACTS_BINDING = "ARTIFACTS";
+
 const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
     // warning keys on the *binding name* (an app can wire several Flagship apps),
@@ -41,6 +45,16 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
     // the Hyperdrive client by the app, so any name the app chose is correct.
     const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
 
+    // No entry at all gets the full setup hint. Entries without one named ARTIFACTS
+    // are usually a valid `.artifacts()` override, which this file can't see, so
+    // they get a softer reminder that the override must point at one of them —
+    // without it the generated ShardDO reads `env.ARTIFACTS` and `ctx.artifacts`
+    // throws.
+    const artifactsEntries = inferred.usesArtifacts ? (parsed?.artifacts ?? []) : [];
+    const artifactsOtherNames = artifactsEntries.some((entry) => entry.binding === ARTIFACTS_BINDING)
+        ? []
+        : artifactsEntries.flatMap((entry) => (entry.binding === undefined ? [] : [entry.binding]));
+
     const rules: ReadonlyArray<[boolean, string]> = [
         [
             inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
@@ -53,6 +67,11 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
         [
             pipelinesBindingMissing,
             `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
+        ],
+        [inferred.usesArtifacts && artifactsEntries.length === 0, artifactsBindingHint(inferred.jurisdiction)],
+        [
+            artifactsOtherNames.length > 0,
+            `ctx.artifacts is used and ${artifactsOtherNames.map((name) => `"${name}"`).join(", ")} ${artifactsOtherNames.length === 1 ? "is" : "are"} bound, but none is named "${ARTIFACTS_BINDING}"; make sure \`.artifacts()\` on defineApp points ctx.artifacts at it — otherwise it reads env.${ARTIFACTS_BINDING} and throws.`,
         ],
         [
             flagshipBindingMissing,

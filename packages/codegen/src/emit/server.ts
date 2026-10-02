@@ -3,7 +3,7 @@ import { isAbsolute, relative, sep } from "node:path";
 import { LunoraError } from "@lunora/errors";
 
 import type { CapabilityKey, CapabilityTier } from "../capabilities";
-import { SERVER_CTX_FIELDS } from "../capabilities";
+import { CAPABILITIES } from "../capabilities";
 import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { plainQueues } from "../ir";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, unwrapOptional } from "./shared";
@@ -67,6 +67,14 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 interface EmitServerOptions {
     /** Agents declared via `defineAgent` exports — wires the typed `ctx.agents` producers onto Mutation/Action contexts. */
     agents?: ReadonlyArray<AgentIR>;
+
+    /**
+     * The package-backed capabilities the app uses (post platform gate). Each
+     * used row of the `CAPABILITIES` table with a `serverCtxField` lands on the
+     * ctx interfaces its `tier` names; `ai` / `payments` / `x402` gate their
+     * bespoke ActionCtx fields off the same set.
+     */
+    capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
 
     /**
@@ -80,38 +88,12 @@ interface EmitServerOptions {
     /** Absolute `_generated/` directory, so an RPC service's entry module is imported by a path relative to it. Required with `services`. */
     generatedDirectory?: string;
 
-    /**
-     * A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access
-     * facade (`@lunora/cloudflare-access/context`) onto every ctx. Distinct from
-     * `emitApp`'s `hasAccess` (which gates the worker's `.access()` resolveIdentity
-     * method); this one gates the per-request `ctx.access` read surface.
-     */
-    hasAccessFacade?: boolean;
-    hasAi?: boolean;
-    /** A `lunora/` source uses `@lunora/bindings/analytics` / `ctx.analytics` — wires the write helper onto every ctx. */
-    hasAnalytics?: boolean;
-    /** A `lunora/` source uses `@lunora/browser` / `ctx.browser` — wires `ctx.browser` onto ActionCtx only. */
-    hasBrowser?: boolean;
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
-    /** A `lunora/` source uses `@lunora/hyperdrive` / `ctx.sql` — wires `ctx.sql` onto ActionCtx only. */
-    hasHyperdrive?: boolean;
-    /** A `lunora/` source uses `@lunora/bindings/images` / `ctx.images` — wires `ctx.images` onto ActionCtx only. */
-    hasImages?: boolean;
-    /** A `lunora/` source uses `@lunora/bindings/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
-    hasKv?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
     hasNotify?: boolean;
-    hasPayments?: boolean;
-    /** A `lunora/` source uses `@lunora/bindings/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
-    hasPipelines?: boolean;
-    /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
-    hasR2sql?: boolean;
     /** The target platform supports a vector store. `false` withholds `ctx.vectors` even when the schema declares an index. */
     hasVectors?: boolean;
-
-    /** A `lunora/` source uses `@lunora/x402/pay` / `ctx.x402` — wires the agent-wallet pay rail onto ActionCtx only. */
-    hasX402?: boolean;
 
     /**
      * The single `defineIdentity(...)` claim contract declared in
@@ -135,25 +117,15 @@ interface EmitServerOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
+/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitServer = ({
     agents = [],
+    capabilities = new Set(),
     containers = [],
     env,
-    hasAccessFacade = false,
-    hasAi = false,
-    hasAnalytics = false,
-    hasBrowser = false,
     hasVectors = true,
     hasFlags = false,
-    hasHyperdrive = false,
-    hasImages = false,
-    hasKv = false,
     hasNotify = false,
-    hasPayments = false,
-    hasPipelines = false,
-    hasR2sql = false,
-    hasX402 = false,
     identity,
     queues = [],
     schema,
@@ -165,6 +137,9 @@ const emitServer = ({
     workflows = [],
 }: EmitServerOptions = {}): string => {
     const base = baseSpecifiers(useUmbrella);
+    const hasAi = capabilities.has("ai");
+    const hasPayments = capabilities.has("payments");
+    const hasX402 = capabilities.has("x402");
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
@@ -255,47 +230,17 @@ export type Env = CloudflareBindings;`;
     // deterministic query/mutation contexts), while write-only / side-effect-free
     // helpers (\`kv\`, \`analytics\`) ride every ctx.
     //
-    // The uniform Cloudflare-binding capabilities source their exact ctx-interface
-    // fragment (and determinism tier — EVERY ctx for `ctx.kv`/`ctx.analytics`,
-    // ActionCtx-only for `ctx.sql`/`ctx.browser`/`ctx.images`/`ctx.pipelines`/
-    // `ctx.r2sql`) from the single CAPABILITIES table, so the strings live in one
-    // place. `ctx.access` (a synchronous facade type) and `ctx.flags` (an
-    // umbrella-aware specifier) are the two exceptions kept bespoke below.
-    // `key: CapabilityKey` (not `string`) so a mistyped capability id is a compile
-    // error, not a silent `?? ""` drop of the ctx field. The `?? ""` remains only
-    // for the legitimate case of a key with no `serverCtxField` in the map.
-
-    /**
-     * The ctx-interface fragment for a capability, checked against the determinism
-     * tier the table declares for it.
-     *
-     * `tier` was written seven times and read zero: which interface a fragment
-     * landed in was decided purely by which of the three templates below its
-     * placeholder appeared in, and nothing compared that against the table. A
-     * capability declared `tier: "action"` could be spliced onto `QueryCtx` — and
-     * the table exists precisely to stop four parallel lists drifting. `usedAt`
-     * is the tier the binding is about to be used at, so a mismatch is a build
-     * failure rather than a silently wrong `_generated/server.ts`.
-     */
-    const serverCapabilityField = (key: CapabilityKey, enabled: boolean, usedAt: CapabilityTier): string => {
-        const facet = SERVER_CTX_FIELDS.get(key);
-
-        if (facet !== undefined && facet.tier !== usedAt) {
-            throw new LunoraError(
-                "INTERNAL",
-                `@lunora/codegen: capability "${key}" declares tier "${facet.tier}" in SERVER_CTX_FIELDS but is emitted onto the "${usedAt}" context — update whichever is wrong.`,
-            );
-        }
-
-        return enabled ? (facet?.field ?? "") : "";
-    };
-    const kvContextField = serverCapabilityField("kv", hasKv, "every");
-    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics, "every");
-    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive, "action");
-    const browserActionField = serverCapabilityField("browser", hasBrowser, "action");
-    const imagesActionField = serverCapabilityField("images", hasImages, "action");
-    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines, "action");
-    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql, "action");
+    // The table-driven capabilities: every used CAPABILITIES row with a
+    // `serverCtxField`, in table order. The row's `tier` is the single statement
+    // of which interfaces the field rides — `"every"` fields land on all three ctx
+    // interfaces, `"action"` fields on ActionCtx only — so a fragment cannot be
+    // spliced onto a tier the table does not declare for it.
+    const capabilityFields = (tiers: ReadonlyArray<CapabilityTier>): string =>
+        CAPABILITIES.map((capability) =>
+            capability.serverCtxField !== undefined && tiers.includes(capability.tier) && capabilities.has(capability.key) ? capability.serverCtxField : "",
+        ).join("");
+    const everyCapabilityFields = capabilityFields(["every"]);
+    const actionCapabilityFields = capabilityFields(["every", "action"]);
     // `ctx.vectors` — narrowed to the schema's declared vector indexes, so a
     // typo'd index name is a compile error rather than a runtime "unknown
     // index" throw from the binding facade. The base surface stays `string`
@@ -315,14 +260,6 @@ export type Env = CloudflareBindings;`;
     // The narrowed surface needs the base generics and the emitted union in scope.
     const vectorsTypeImport = hasVectorIndexes
         ? `import type { VectorSearch, VectorSearchReader } from "${base.server}";\nimport type { VectorIndexName } from "./dataModel.js";\n`
-        : "";
-    // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
-    // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
-    // the per-request identity, like `ctx.auth`; no I/O — verification happened
-    // once at the edge in `resolveIdentity`). Gated on a `lunora/` source reading
-    // `ctx.access`; the opt-in `accessContext()` middleware is the alternative.
-    const accessContextField = hasAccessFacade
-        ? `\n    /** Verified Cloudflare Access identity — a synchronous facade over the resolved claims (email / groups / hasGroup / claims). Anonymous when no Access token is present. */\n    readonly access: import("@lunora/cloudflare-access/context").AccessFacade;`
         : "";
     // `ctx.flags` — OpenFeature feature flags. Typed on EVERY ctx: a flag read is
     // an external lookup like `ctx.kv`, sanctioned in deterministic read paths and
@@ -720,19 +657,19 @@ type TypedAsId = <T extends string>(tableName: AsIdTable<T>, id: string) => IdOf
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseReader, "asId" | "query" | "get"> & DatabaseReaderFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsReaderContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${vectorsReaderContextField}${everyCapabilityFields}${flagsContextField}${notifyContextField}${envContextField}${authContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
+    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${everyCapabilityFields}${flagsContextField}${notifyContextField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${actionCapabilityFields}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${flagsContextField}${notifyContextField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 /**

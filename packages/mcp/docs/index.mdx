@@ -346,6 +346,10 @@ that plugin; the resource server is the handler:
 import { createAuth } from "@lunora/auth";
 import { jwt, mcp } from "@lunora/auth/plugins";
 
+// The canonical protected-resource id (RFC 8707 / RFC 9728). Issued tokens are
+// audience-bound to it. HTTPS, no query or fragment.
+export const mcpResource = "https://app.example.workers.dev/mcp";
+
 export const auth = createAuth({
     database: env.DB,
     secret: env.AUTH_SECRET,
@@ -354,9 +358,10 @@ export const auth = createAuth({
         mcp({
             consentPage: "/consent",
             loginPage: "/login",
-            // The canonical protected-resource id (RFC 8707 / RFC 9728). Issued
-            // tokens are audience-bound to it. HTTPS, no query or fragment.
-            resource: "https://app.example.workers.dev/mcp",
+            resource: mcpResource,
+            // Declare the scopes the MCP route checks. Left out, `mcp()` falls back
+            // to the OIDC defaults and no client can be granted `lunora:read`.
+            scopes: ["lunora:read", "lunora:write"],
         }),
     ],
 });
@@ -367,10 +372,14 @@ export const auth = createAuth({
 import { requireMcpAuth } from "@lunora/auth/plugins";
 import { createAuthedMcpFetchHandler, mcpTokenScopes } from "@lunora/mcp";
 
-import { auth } from "./auth";
+import { auth, mcpResource } from "./auth";
 
 export const handleMcp = createAuthedMcpFetchHandler({
-    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
+    // The same `resource` as `mcp()`: tokens are audience-bound to it. Lunora's
+    // `requireMcpAuth` requires it and throws at startup when it is missing or not
+    // an absolute URL. (better-auth's own version silently falls back to the auth
+    // `baseURL`, an audience no `mcp()` token carries, and refuses every request.)
+    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: mcpResource }),
     server: (claims) => ({
         // Writes need a scope a read-only token does not carry.
         allowWrites: mcpTokenScopes(claims).has("lunora:write"),
@@ -383,6 +392,48 @@ export const handleMcp = createAuthedMcpFetchHandler({
 An unauthenticated request never reaches the MCP server at all — it gets a 401
 carrying the `WWW-Authenticate` challenge that starts the client's authorization
 flow, and no `LunoraClient` holding the admin bearer is ever constructed for it.
+
+### The discovery documents
+
+The challenge sends the client to
+`https://app.example.workers.dev/.well-known/oauth-protected-resource/mcp`, and
+from there to the authorization server's metadata at
+`/.well-known/oauth-authorization-server/api/auth`. better-auth serves both,
+outside the `/api/auth/*` base path, and a Lunora worker built with `.auth(...)`
+serves them for you: it derives exactly those two paths from the auth options
+(the `resource` of `mcp()`, the issuer's base path) and answers them only when
+an `mcp()` or `oauthProvider()` plugin is configured. Use `mcp` from
+`@lunora/auth/plugins` rather than `@better-auth/mcp`: Lunora's records its
+`resource`, which is how the worker knows the first path. Without that record,
+the worker falls back to the provider's only resource, and `createAuth` throws
+`AUTH_MCP_RESOURCE_AMBIGUOUS` when there are several to choose from.
+
+The documents are the worker's **last** matcher, reached only by a `GET`/`HEAD`
+that the explicit routes and your `httpRouter` left unanswered (a 404). An app
+that already routes either path itself keeps serving its own answer. Nothing
+else under `/.well-known/` (`security.txt`, app links) is touched.
+
+A worker you compose by hand, outside the generated app builder, routes them
+itself. `mcpDiscoveryPaths(resource)` derives both paths from the resource URL
+(pass the auth `basePath` as a second argument if you changed it):
+
+```ts
+import { mcpDiscoveryPaths } from "@lunora/auth/plugins";
+
+import { auth, mcpResource } from "./auth";
+
+const discoveryPaths = new Set(mcpDiscoveryPaths(mcpResource));
+
+export const handleRequest = async (request: Request): Promise<Response> => {
+    const { pathname } = new URL(request.url);
+
+    if (discoveryPaths.has(pathname) && (request.method === "GET" || request.method === "HEAD")) {
+        return await auth.handler(request);
+    }
+
+    return await handleMcp(request);
+};
+```
 
 ### Scoping tools to the token
 
@@ -398,17 +449,113 @@ a read-write one: for the former the write tools are omitted from `tools/list`
 throwing, so a scope check denies instead of surfacing a 500 a client might
 retry.
 
+### Step-up for writes
+
+Hiding the side-effecting tools suits a client that can never get the write
+scope (a `client_credentials` agent). An interactive client can instead
+re-authorize for more scope when it needs it, if the server tells it which.
+Set `stepUp`, and a read-only token still sees the write tools
+(`lunora_run_mutation`, `lunora_run_action`) and the agent tools (`agent_<name>`
+or its `toolName`, and `lunora_agent_status`: starting a durable run is a side
+effect too). A `tools/call` to one is answered with HTTP 403 and an RFC 6750
+challenge, `WWW-Authenticate: Bearer error="insufficient_scope",
+scope="lunora:write", resource_metadata="…"`, which the client's auth layer
+turns into a new authorization for that scope:
+
+```ts
+import { createInsufficientScopeError, requireMcpAuth } from "@lunora/auth/plugins";
+import { createAuthedMcpFetchHandler } from "@lunora/mcp";
+
+import { auth, mcpResource } from "./auth";
+
+export const handleMcp = createAuthedMcpFetchHandler({
+    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: mcpResource }),
+    // The scope gate decides writes now, so the server always offers them.
+    server: { allowWrites: true, token: env.LUNORA_ADMIN_TOKEN, url: env.LUNORA_URL },
+    stepUp: {
+        // better-auth only turns an error this factory created into the challenge.
+        challenge: createInsufficientScopeError,
+        scope: "lunora:write",
+    },
+});
+```
+
+`stepUp` needs both fields; an empty `scope` or a missing `challenge` throws at
+construction, because a scope with no way to raise its challenge would let
+every write through. The handler reads the JSON-RPC message through the same
+bounded parse the transport uses before it decides, so a body too large or not
+JSON is refused, and a batch carrying a side-effecting call is challenged like a
+single one. Without `stepUp`, nothing changes: tools follow `allowWrites` and
+`allowAgents` alone.
+
 <Callout type="info">
     `protect` is a lambda rather than an `auth` instance because `@lunora/mcp` does not depend on better-auth — and the same seam takes either better-auth entry
     point. Use `requireMcpAuth(auth, handler, opts)` when the resource server shares a deployment with the authorization server, or
     `createMcpProtectedRequestHandler(verifyOptions, handler)` when it does not (a separate resource server holds verification config, not an auth instance).
 </Callout>
 
+### Letting MCP clients register themselves (CIMD)
+
+`mcp()` registers no clients on its own: dynamic client registration is **off**
+unless you enable it. MCP 2026-07-28 pins Client ID Metadata Documents instead.
+The client's `client_id` is an HTTPS URL, and the authorization server fetches
+the client's metadata from it. That is how Claude, ChatGPT and other MCP hosts
+connect to a server they have never seen. Add the `cimd()` plugin next to
+`mcp()`:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import workersCimdFetch from "@lunora/auth/cimd/workers";
+import { cimd, jwt, mcp } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    database: env.DB,
+    secret: env.AUTH_SECRET,
+    plugins: [
+        jwt(),
+        mcp({ consentPage: "/consent", loginPage: "/login", resource: mcpResource, scopes: ["lunora:read", "lunora:write"] }),
+        cimd({
+            fetchClientMetadataResource: workersCimdFetch(),
+            // MCP's profile: `client_name` and `redirect_uris` become mandatory.
+            metadataProfile: "mcp-2026-07-28",
+            // Recommended in production: only fetch metadata from hosts you trust.
+            isMetadataDocumentUrlAllowed: (url) => ["https://claude.ai", "https://chatgpt.com"].includes(new URL(url).origin),
+            // The allowlist gates only the client_id fetch. Bind jwks_uri to that
+            // origin too, or a document can point the key fetch at any public host.
+            originBoundFields: ["post_logout_redirect_uris", "client_uri", "jwks_uri"],
+        }),
+    ],
+});
+```
+
+The authorization-server metadata then advertises
+`client_id_metadata_document_supported: true`, and a client that presents a URL
+`client_id` is created from its document on first use.
+
+That fetch goes to a URL the client chose, so the transport must keep it on the
+public internet. On Workers, `workersCimdFetch()` relies on the
+`global_fetch_strictly_public` compatibility flag, which stops `fetch` from
+reaching private and special-use addresses. Add it to `wrangler.jsonc`:
+
+```jsonc
+{
+    "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+}
+```
+
+`workersCimdFetch()` throws at startup when the flag is missing, and
+`lunora doctor` reports it (`cimd-fetch-not-strictly-public`). The transport
+also refuses anything but an `https:` `GET`/`HEAD` and never follows a redirect.
+On Node, pass the default export of `@lunora/auth/cimd/node` instead
+(`import fetchClientMetadataResource from "@lunora/auth/cimd/node"`); it pins the
+connection to the address it resolved.
+
 <Callout type="warn">
-    Dynamic client registration is **off** unless you turn it on. better-auth's `mcp()` plugin expects you to compose it with `@better-auth/cimd` for the Client
-    ID Metadata Document flow that MCP 2026-07-28 pins, or to enable the OAuth provider's registration options explicitly. `@lunora/auth` does not re-export
-    `cimd`: its transport contract requires resolve-once DNS validation and connection pinning, which Cloudflare Workers cannot provide — so on Workers,
-    register MCP clients explicitly instead.
+    The flag is a weaker guarantee than cimd asks for: a Worker cannot pin the connection to the address it resolved, so a host that rebinds its DNS still
+    reaches _some_ public address. That is the same trade Cloudflare's own `workers-oauth-provider` makes. An `isMetadataDocumentUrlAllowed` origin allowlist
+    narrows it to hosts you trust, but does not close it, and it only covers the `client_id` fetch: oauth-provider fetches a document's `jwks_uri` through the
+    same transport without asking it. Add `jwks_uri` to `originBoundFields`, as above, so the key fetch stays on the allowlisted origin. Metadata is cached per
+    isolate, so each new isolate fetches a client's document again on its first authorization.
 </Callout>
 
 ## Connecting an MCP client

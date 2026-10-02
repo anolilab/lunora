@@ -685,14 +685,18 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
     services: ServiceBindingIR[] | undefined;
     signals: string[];
     usesAi: boolean;
+    usesAiSearch: boolean;
     usesAnalytics: boolean;
+    usesArtifacts: boolean;
     usesAuth: boolean;
     usesBrowser: boolean;
+    usesCimdWorkers: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
@@ -1016,6 +1020,7 @@ interface SchemaIndex {
 interface SchemaInfo {
     hasD1GlobalTable: boolean;
     hasHyperdriveGlobalTable: boolean;
+    jurisdiction?: SchemaIR["jurisdiction"];
     vectorIndexNames?: ReadonlyArray<string>;
     vectorMetadata?: ReadonlyArray<VectorMetadataDeclaration>;
 }
@@ -1780,7 +1785,7 @@ interface BindingRequirement {
     resource?: string;
     resourceId?: string;
     sqlite?: boolean;
-    type: "ai" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "service" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
+    type: "ai" | "ai_search" | "ai_search_namespace" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "service" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
 }
 ```
 
@@ -1801,6 +1806,12 @@ interface ExportGap {
 }
 ```
 
+### `GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG` (const)
+
+```ts
+const GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
+```
+
 ### `ManifestConfigShape` (interface)
 
 ```ts
@@ -1808,6 +1819,14 @@ interface ManifestConfigShape extends WranglerConfigShape {
     ai?: {
         binding?: string;
     };
+    ai_search?: ReadonlyArray<{
+        binding?: string;
+        instance_name?: string;
+    }>;
+    ai_search_namespaces?: ReadonlyArray<{
+        binding?: string;
+        namespace?: string;
+    }>;
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;
@@ -1913,6 +1932,14 @@ const REMOTE_ELIGIBLE_KEYS: {
     readonly ai: {
         readonly label: "AI";
         readonly shape: "object";
+    };
+    readonly ai_search: {
+        readonly label: "AI Search";
+        readonly shape: "array";
+    };
+    readonly ai_search_namespaces: {
+        readonly label: "AI Search namespace";
+        readonly shape: "array";
     };
     readonly d1_databases: {
         readonly label: "D1";
@@ -2039,6 +2066,8 @@ interface RemoteEnableInputs {
 ```ts
 interface RemoteWranglerShape {
     ai?: BindingEntry | null;
+    ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
+    ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: {
@@ -2111,6 +2140,16 @@ interface WranglerConfig {
     ai?: {
         binding?: unknown;
     } | null;
+    ai_search?: ReadonlyArray<{
+        binding?: string;
+        instance_name?: string;
+        remote?: boolean;
+    } | null | undefined>;
+    ai_search_namespaces?: ReadonlyArray<{
+        binding?: string;
+        namespace?: string;
+        remote?: boolean;
+    } | null | undefined>;
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;
@@ -2225,6 +2264,7 @@ interface WranglerConfig {
     r2_buckets?: ReadonlyArray<{
         binding?: string;
         bucket_name?: string;
+        jurisdiction?: string;
     } | null | undefined>;
     secrets?: {
         required?: unknown;

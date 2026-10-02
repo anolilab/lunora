@@ -2,7 +2,7 @@
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "lunora-example-payment-demo",
     "main": "src/server/index.ts",
-    "compatibility_date": "2026-04-07",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         // Payment state rides the app's ShardDO via `ctx.db` — there is NO separate

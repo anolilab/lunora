@@ -204,7 +204,9 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     // eslint-disable-next-line unicorn/no-null -- null is the classification "credential-based"; undefined would be indistinguishable from an unclassified key, which is what this map exists to prevent
     access: null,
     ai: "ai",
+    aiSearch: "aiSearch",
     analytics: "analytics",
+    artifacts: "artifacts",
     browser: "browser",
     container: "containers",
     // eslint-disable-next-line unicorn/no-null -- see `access`

@@ -21,7 +21,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",
-            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming",
+            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd built before that default (wrangler 4.143's 1.20260926 is one) honours only the explicit flag",
         },
         commitOrderedTables: {
             level: "native",
@@ -96,7 +96,11 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "native",
-            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits",
+        },
+        aiSearch: {
+            level: "native",
+            note: "AI Search (formerly AutoRAG) through the `ai_search_namespaces` binding (conventionally `AI_SEARCH` on namespace `default`), passed through as-is: `ctx.aiSearch.get(name)` reaches any instance in the namespace, alongside `create` / `delete` / `list` and multi-instance `search` / `chatCompletions`. ActionCtx only. Remote-only even in dev: there is no local simulator, and miniflare proxies the binding to the service. Text-only over the binding — image and file content parts need the REST API. Usage-billed from 2026-11-01",
         },
         browser: {
             level: "native",
@@ -117,6 +121,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "@cloudflare/sandbox (Sandbox SDK 1.0): Files, DirectoryBackup and S3Mount drive the sandbox-shim helper in the image through the native ctx.container.exec(), and the backup and mount gateways are WorkerEntrypoints the container reaches through interceptOutboundHttp. The image must ship /usr/local/bin/sandbox-shim, copied from Cloudflare's shim-only cloudflare/sandbox image",
         },
         analytics: { level: "native", note: "Analytics Engine" },
+        artifacts: {
+            level: "native",
+            note: "Cloudflare Artifacts binding (open beta, Workers Paid): repo create/import/fork/list/delete, repo-scoped Git tokens, and reads of commits, trees, blobs and files. It has no write method; writes are a `git push` from a Git client with a minted token. No local simulator, so `lunora dev` reaches the remote service. Namespace jurisdiction is `eu` or `us`, fixed when the namespace is created; a `fedramp` schema using it is a codegen error",
+        },
         edgeRequestMetadata: {
             level: "native",
             note: 'request.cf — the edge stamps placement (colo, country) and, where an mTLS-enabled hostname is configured, the verified client certificate under tlsClientAuth. Unforgeable because it is not a header: trustInboundTraceContext: "mtls" and the OTLP placement resource detector both read it directly',

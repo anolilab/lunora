@@ -147,6 +147,71 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("YYYY-MM-DD"))).toBe(true);
         });
 
+        describe("the Durable Object pending-I/O keep-alive", () => {
+            const base: WranglerConfig = {
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            };
+            const isKeepAliveWarning = (line: string): boolean => line.includes("durable_object_io_tasks_prevent_eviction");
+
+            it("warns, without failing, when compatibility_date predates 2026-10-01", () => {
+                expect.assertions(2);
+
+                const report = validateWranglerConfig({ ...base, compatibility_date: "2026-09-30" });
+
+                expect(report.valid).toBe(true);
+                expect(report.warnings.filter((line) => isKeepAliveWarning(line))).toHaveLength(1);
+            });
+
+            it("does not warn from 2026-10-01 on", () => {
+                expect.assertions(1);
+
+                const report = validateWranglerConfig({ ...base, compatibility_date: "2026-10-01" });
+
+                expect(report.warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+            });
+
+            it.each(["durable_object_io_tasks_prevent_eviction", "durable_object_io_tasks_do_not_prevent_eviction"])(
+                "does not warn when %s is set explicitly",
+                (flag) => {
+                    expect.assertions(1);
+
+                    const report = validateWranglerConfig({ ...base, compatibility_date: REQUIRED_COMPATIBILITY_DATE, compatibility_flags: [flag] });
+
+                    expect(report.warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+                },
+            );
+
+            it("reads compatibility_flags from the env block it validates", () => {
+                expect.assertions(2);
+
+                const wrangler: WranglerConfig = {
+                    ...base,
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    env: { production: { ...base, compatibility_flags: ["durable_object_io_tasks_prevent_eviction"] } },
+                };
+
+                expect(validateWranglerConfig(wrangler, undefined, "production").warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+                expect(validateWranglerConfig(wrangler).warnings.some((line) => isKeepAliveWarning(line))).toBe(true);
+            });
+        });
+
+        it("runs the jurisdiction checks for a schema pinned to one", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(
+                {
+                    compatibility_date: "2026-10-01",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "uploads" }],
+                },
+                { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, jurisdiction: "eu" },
+            );
+
+            expect(report.warnings).toStrictEqual([expect.stringContaining('r2_buckets[0] ("UPLOADS") names no jurisdiction')]);
+        });
+
         it("does not throw and reports a tail_consumers entry that is null", () => {
             expect.assertions(2);
 
@@ -2492,7 +2557,7 @@ export const schema = defineSchema({
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
-                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_date: "2026-10-01",
                 containers: [{ class_name: "TranscoderContainer", image: "./containers/transcoder/Dockerfile", max_instances: 2 }],
                 durable_objects: {
                     bindings: [
@@ -2662,7 +2727,7 @@ export const schema = defineSchema({
     describe("workflows", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
-                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_date: "2026-10-01",
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
                 migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }],
@@ -2937,6 +3002,15 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API" }] })).errors.join(" ")).toContain('non-empty "service_id"');
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS", namespace: "default" }] })).valid).toBe(true);
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+        });
+
+        it("accepts well-formed AI Search bindings and rejects ones missing their namespace or instance", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog", remote: true }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH" }] })).errors.join(" ")).toContain('non-empty "instance_name"');
         });
 
         it("requires exactly one of tunnel_id / network_id on a vpc_networks entry", () => {
@@ -3305,7 +3379,7 @@ export const schema = defineSchema({
 
             const report = validateWranglerConfig(
                 {
-                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    compatibility_date: "2026-10-01",
                     compatibility_flags: ["nodejs_compat"],
                     d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-example-team-chat" }],
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },

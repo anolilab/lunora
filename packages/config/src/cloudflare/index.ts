@@ -20,6 +20,7 @@ export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";
+export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-flags";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";

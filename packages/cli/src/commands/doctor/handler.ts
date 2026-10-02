@@ -14,6 +14,7 @@ import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
+import checkCimdFetchFlag from "./cimd-checks";
 import type { DoctorOptions } from "./index";
 import checkServices from "./service-checks";
 
@@ -35,6 +36,7 @@ const DOCTOR_CODES = [
     "ai-binding-missing",
     "ai-gateway-default",
     "ai-gateway-token-unused",
+    "cimd-fetch-not-strictly-public",
     "cli-shadowed",
     "cpu-limit-missing",
     "d1-placeholder-id",
@@ -738,6 +740,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };
 

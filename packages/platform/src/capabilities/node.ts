@@ -148,7 +148,11 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run` and their `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
+        },
+        aiSearch: {
+            level: "unsupported",
+            note: "No AI Search-equivalent binding implemented, so codegen omits `ctx.aiSearch`. A REST-backed emulation (account id + API token over fetch) was considered and not built: the REST and binding APIs differ, and nobody on this target has asked for it",
         },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
@@ -166,6 +170,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec, spawn or terminal to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        artifacts: {
+            level: "unsupported",
+            note: "No Artifacts-equivalent binding implemented: a host would need a Git server with repo-scoped tokens, which no host contract carries",
+        },
         edgeRequestMetadata: {
             level: "unsupported",
             note: 'Nothing injects per-request platform metadata here — a Node request carries only what the caller wrote. Two telemetry surfaces degrade silently as a result: trustInboundTraceContext: "mtls" can never be satisfied, so it collapses to never-trust and every inbound traceparent is dropped (the runtime warns once when that actually happens, since no codegen gate can see a createWorker option), and the OTLP resource detector finds no placement attributes, so spans ship without them',

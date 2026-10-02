@@ -13,7 +13,7 @@
     // exists after `vite build`). Deploy still uses the top-level `wrangler.jsonc`.
     "name": "{{name}}-lunora-dev",
     "main": "lunora/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "dev": { "port": 8787 },
     "durable_objects": {

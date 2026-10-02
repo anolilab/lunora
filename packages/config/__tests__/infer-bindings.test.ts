@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { discoverSandboxUsage } from "@lunora/codegen";
+import { discoverFeatureUsage, discoverSandboxUsage } from "@lunora/codegen";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -632,6 +632,26 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.join(" ")).toMatch(signalRe);
     });
 
+    // The CIMD transport has no binding, so no signal either: the flag it needs is
+    // `lunora doctor`'s to check, against the wrangler config inference never reads.
+    it.each([
+        ["a static import", `import workersCimdFetch from "@lunora/auth/cimd/workers";\nexport const transport = workersCimdFetch;`],
+        ["a dynamic import()", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default();`],
+        // Unparseable mid-edit file: inference falls back to the regex sweep.
+        ["a dynamic import() in a file the lexer rejects", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default(;`],
+    ] as const)("infers usesCimdWorkers from %s without emitting a signal", async (_label, code) => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/auth.ts", code);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesCimdWorkers).toBe(true);
+        expect(result.signals.join(" ")).not.toContain("cimd");
+    });
+
     it("leaves every Cloudflare-coverage flag false for a project importing none of them", async () => {
         expect.assertions(6);
 
@@ -843,6 +863,172 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.some((signal) => signal.includes("wrangler pipelines create"))).toBe(true);
     });
 
+    it("does not infer a ctx-access capability from a mention inside a comment or a string", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notes.ts",
+            `// TODO: move this to ctx.pipelines.send(...)\n// ctx.aiSearch.get("docs") once the index exists\nexport const label = "see ctx.r2sql.query() for reports";`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(false);
+        expect(result.usesR2sql).toBe(false);
+        // A comment must not auto-write `ai_search_namespaces` into wrangler.jsonc.
+        expect(result.usesAiSearch).toBe(false);
+    });
+
+    it("infers a ctx-access capability from a destructured read off ctx", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/ingest.ts", `export const handler = async (ctx) => {\n    const { pipelines } = ctx;\n    await pipelines.send([]);\n};`);
+        write("lunora/reports.ts", `export const report = async ({ ctx: { r2sql } }) => r2sql.query("select 1");`);
+        write(
+            "lunora/search.ts",
+            `export const ask = async ({ ctx }) => {\n    const { aiSearch } = ctx;\n    return aiSearch.get("docs").search({ query: "q" });\n};`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(true);
+        expect(result.usesR2sql).toBe(true);
+        expect(result.usesAiSearch).toBe(true);
+    });
+
+    it("ignores a capability import whose every specifier is type-only", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { Kv } from "@lunora/bindings/kv";\nimport { type AnalyticsClient, type AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";\nexport type T = [Kv, AnalyticsClient, AnalyticsEngineDatasetLike];`,
+        );
+        write("lunora/images.ts", `import { createImages, type Images } from "@lunora/bindings/images";\nexport const make = (): Images => createImages();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesKv).toBe(false);
+        expect(result.usesAnalytics).toBe(false);
+        // One value specifier beside a type one is a real import.
+        expect(result.usesImages).toBe(true);
+    });
+
+    describe("agreement with codegen's discoverFeatureUsage on ctx-access and type-only signals", () => {
+        /**
+         * Feed the SAME `lunora/` source through codegen's feature probe and
+         * config's inference and assert they agree — the drift guard for the
+         * ctx-access capabilities and type-only imports.
+         */
+        type Flags = { aiSearch: boolean; pipelines: boolean; r2sql: boolean };
+
+        const agree = async (source: string): Promise<{ codegen: Flags; config: Flags }> => {
+            write("wrangler.jsonc", WRANGLER);
+            write("src/server/index.ts", ENTRY_SHARD_ONLY);
+            write("lunora/handler.ts", source);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const usage = discoverFeatureUsage(project, join(root, "lunora"));
+            const inferred = await inferLunoraBindings({ projectRoot: root });
+
+            return {
+                codegen: { aiSearch: usage.aiSearch, pipelines: usage.pipelines, r2sql: usage.r2sql },
+                config: { aiSearch: inferred.usesAiSearch, pipelines: inferred.usesPipelines, r2sql: inferred.usesR2sql },
+            };
+        };
+
+        it("agree: comment and string mentions imply nothing", async () => {
+            expect.assertions(1);
+
+            const result = await agree(`// ctx.pipelines\n// ctx.aiSearch\nexport const s = "ctx.r2sql";`);
+
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: false, pipelines: false, r2sql: false },
+                config: { aiSearch: false, pipelines: false, r2sql: false },
+            });
+        });
+
+        it("agree: destructured and renamed ctx reads", async () => {
+            expect.assertions(1);
+
+            const result = await agree(
+                `export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.r2sql;\nexport const c = (ctx) => {\n    const { aiSearch } = ctx;\n    return aiSearch;\n};`,
+            );
+
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: true, pipelines: true, r2sql: true },
+                config: { aiSearch: true, pipelines: true, r2sql: true },
+            });
+        });
+
+        it("agree: a type-only import of the capability's subpath", async () => {
+            expect.assertions(1);
+
+            const result = await agree(`import type { PipelineClient } from "@lunora/bindings/pipelines";\nexport type P = PipelineClient;`);
+
+            expect(result).toStrictEqual({
+                codegen: { aiSearch: false, pipelines: false, r2sql: false },
+                config: { aiSearch: false, pipelines: false, r2sql: false },
+            });
+        });
+    });
+
+    it("infers artifacts from a ctx.artifacts read as a hint, never naming a jurisdiction for an unpinned schema", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+        write("lunora/repos.ts", `export const handler = (ctx) => ctx.artifacts.list();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBeUndefined();
+        expect(result.signals.some((signal) => signal.startsWith('hint: ctx.artifacts is used; add an "artifacts" binding'))).toBe(true);
+    });
+
+    it("tells a jurisdiction-pinned app to create the Artifacts namespace in that jurisdiction first", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("eu");\n'));
+        write(
+            "lunora/repos.ts",
+            `import type { ArtifactsClient } from "@lunora/bindings/artifacts";\nimport { createArtifacts } from "@lunora/bindings/artifacts";\nexport const make = (env) => createArtifacts({ binding: env.ARTIFACTS });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+        const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBe("eu");
+        expect(hint).toContain('"jurisdiction": "eu"');
+    });
+
+    it("does not infer artifacts from a type-only import of its event payload", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("fedramp");\n'));
+        write(
+            "lunora/consumer.ts",
+            `import type { ArtifactsEvent } from "@lunora/bindings/artifacts";\nexport const isPush = (event: ArtifactsEvent) => event.type === "cf.artifacts.repo.pushed";`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(false);
+        expect(result.signals.some((signal) => signal.includes("ctx.artifacts"))).toBe(false);
+    });
+
     it("does not flip pipelines for an analytics-only project (no ctx.pipelines read)", async () => {
         expect.assertions(2);
 
@@ -902,6 +1088,36 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesR2sql).toBe(true);
         expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
+    });
+
+    it("infers AI Search from a ctx.aiSearch access, the only signal an app gives", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // `@lunora/bindings/ai-search` is types only — an app reads the generated
+        // `ctx.aiSearch` and never imports it at runtime.
+        write("lunora/search.ts", `export const handler = (ctx) => ctx.aiSearch.get("docs").search({ query: "q" });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(true);
+        expect(result.signals.some((signal) => signal.startsWith("ai_search_namespaces (ctx.aiSearch used)"))).toBe(true);
+    });
+
+    it("does not infer AI Search from a type-only import or an unrelated `aiSearch` name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AiSearch } from "@lunora/bindings/ai-search";\nexport const aiSearchLabel = (search: AiSearch) => String(search);`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(false);
     });
 
     it("does not infer mail for a project that does not import @lunora/mail", async () => {

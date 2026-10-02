@@ -489,7 +489,7 @@ const callTool = async (
     }
 };
 
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
+export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS, WRITE_TOOL_NAMES };
 
 export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { ROW_READ_TOOL_DEFINITIONS } from "./row-read-tools";

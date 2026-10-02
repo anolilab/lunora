@@ -71,6 +71,12 @@ interface WranglerConfig {
     // Workers AI binding (`env.AI`). Self-describing { binding }; parsed from
     // untrusted JSONC, so it may be `null`.
     ai?: { binding?: unknown } | null;
+    // AI Search single-instance bindings (`{ binding, instance_name }`). The
+    // instance must already exist at deploy time; only the shape is checked.
+    ai_search?: ReadonlyArray<{ binding?: string; instance_name?: string; remote?: boolean } | null | undefined>;
+    // AI Search namespace bindings (`{ binding, namespace }`) — what `ctx.aiSearch`
+    // reads. Wrangler creates a missing namespace on deploy.
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
@@ -189,7 +195,9 @@ interface WranglerConfig {
     // consumer can name the real bucket in a diagnostic instead of the binding
     // alias. Entries stay nullable: the shared array validator reports a
     // non-object entry itself, so narrowing here would only move the failure.
-    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
+    // `jurisdiction` addresses a bucket created inside a data-residency
+    // jurisdiction (`wrangler r2 bucket create --jurisdiction`).
+    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string; jurisdiction?: string } | null | undefined>;
     // The secret names the Worker requires (`wrangler dev` loads only these from
     // `.dev.vars`; `wrangler deploy` fails while one is unset). Untrusted JSONC,
     // so `validateSecretsRequired` checks it is a list of names.

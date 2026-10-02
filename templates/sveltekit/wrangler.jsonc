@@ -13,7 +13,7 @@
     // `main`), so the one deployed Worker carries both planes.
     "name": "{{name}}",
     "main": ".svelte-kit/cloudflare/_worker.js",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     // `nodejs_als` is required by @sveltejs/adapter-cloudflare (SvelteKit's
     // server runtime uses AsyncLocalStorage, e.g. getRequestEvent()).
     "compatibility_flags": ["nodejs_compat", "nodejs_als"],

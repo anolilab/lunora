@@ -1,0 +1,110 @@
+import type { AiWebSearchItem, AiWebSearchProvider } from "@lunora/ai";
+import { LunoraError } from "@lunora/errors";
+import { jsonSchema } from "ai";
+
+import resolveAgentAi from "./agent-ai";
+import type { AgentToolDefinition } from "./types";
+
+/**
+ * Config for {@link webSearchTool}.
+ * @experimental
+ */
+interface WebSearchToolOptions {
+    /** Alias of a provider key stored on the gateway to bill instead of the `default` alias. */
+    byokAlias?: string;
+
+    /** Overrides the description shown to the model. */
+    description?: string;
+
+    /**
+     * The AI Gateway that brokers and bills the search. Defaults to
+     * `LUNORA_AI_GATEWAY_ID`, else the account's `default` gateway.
+     */
+    gatewayId?: string;
+    /** Maximum results per search, 1–10. Defaults to 5: every result is prompt the next turn pays for. */
+    limit?: number;
+    /** Defaults to the Web Search API's own default (`"ceramic"`). */
+    provider?: AiWebSearchProvider;
+}
+
+/**
+ * What the model passes.
+ * @experimental
+ */
+interface WebSearchToolInput {
+    query: string;
+}
+
+const DEFAULT_LIMIT = 5;
+
+const DEFAULT_DESCRIPTION =
+    "Search the web for current information. Returns up to a handful of results, each with a url, a title and (when the provider has one) a description. Use it for facts that may have changed after your training data, then cite the urls you relied on.";
+
+const WEB_SEARCH_TOOL_SCHEMA = jsonSchema<WebSearchToolInput>({
+    properties: { query: { description: "The search query, 1–1024 characters.", maxLength: 1024, minLength: 1, type: "string" } },
+    required: ["query"],
+    type: "object",
+});
+
+/**
+ * Codes a retry cannot fix and the model can route around: a rejected query,
+ * a runtime without `websearch()`, an unreadable response. Returned to the
+ * model as the tool's result rather than thrown, since a throw out of
+ * `execute` is retried by the durable step to exhaustion and fails the run.
+ * The deployment's own misconfiguration (401 / 403 / 404 on the gateway) is
+ * deliberately not here: failing the run is how the developer finds out.
+ */
+const DETERMINISTIC_CODES = new Set(["BAD_REQUEST", "INTERNAL", "NOT_IMPLEMENTED"]);
+
+/**
+ * A batteries-included agent tool over the Cloudflare Web Search API (beta,
+ * `ctx.ai.websearch`), so an agent can ground an answer in live results.
+ * A search bills a provider key stored on the gateway (`byokAlias`, else the
+ * `default` alias) when there is one, otherwise AI Gateway credits; every
+ * provider runs under Zero Data Retention.
+ *
+ * It calls the `AI` binding straight from the tool's durable step: a search
+ * is a read, so the at-least-once step retry repeats nothing but a query, and
+ * there is no dispatcher action to register.
+ *
+ * ```ts
+ * import { defineAgent, webSearchTool } from "@lunora/agent";
+ *
+ * export const researcher = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { search: webSearchTool({ provider: "exa" }) },
+ * });
+ * ```
+ * @experimental
+ */
+const webSearchTool = (options: WebSearchToolOptions = {}): AgentToolDefinition<WebSearchToolInput, AiWebSearchItem[] | string> => {
+    const { description = DEFAULT_DESCRIPTION, limit = DEFAULT_LIMIT, ...search } = options;
+
+    return {
+        description,
+        execute: async (input, context) => {
+            const ai = resolveAgentAi(context.env);
+
+            if (!ai) {
+                return "Web search is unavailable: this Worker has no `AI` binding. Answer from what you already know, and say that you could not search.";
+            }
+
+            try {
+                const result = await ai.websearch(input.query, { ...search, limit });
+
+                return result.items;
+            } catch (error) {
+                if (error instanceof LunoraError && DETERMINISTIC_CODES.has(error.code)) {
+                    return `Web search failed: ${error.message}`;
+                }
+
+                throw error;
+            }
+        },
+        inputSchema: WEB_SEARCH_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+    };
+};
+
+export type { WebSearchToolInput, WebSearchToolOptions };
+export { webSearchTool };
