@@ -52,6 +52,7 @@ const readLines = async (response: Response): Promise<Record<string, unknown>[]>
 const backendWith = (overrides: Partial<DeployBackend>): DeployBackend => {
     return {
         createDeployment: () => Promise.resolve({ deploymentId: "dep_1" }),
+        placement: () => Promise.resolve({ target: "cloudflare-wfp" }),
         releaseTarget: () => Promise.reject(new Error("no release target in this test")),
         rollbackDeployment: () => Promise.reject(new Error("no rollback in this test")),
         updateStatus: () => Promise.resolve(),

@@ -1,5 +1,7 @@
+import { isLunoraError } from "@lunora/errors";
+
 import type { AssetFile, AssetsUpload, BindingRequirement, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
-import { ALIAS_PATTERN, DEFAULT_TARGET, tenantResourceName } from "../provision-contract";
+import { ALIAS_PATTERN, tenantResourceName } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
@@ -814,6 +816,28 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
 };
 
 /**
+ * The project's target driver, or why the release is refused: a project placed
+ * on another cell (409), a target with no driver yet (501), a project the caller
+ * cannot see (403).
+ */
+const projectDriver = async (
+    projectId: string, // secret-scanner:allow -- domain field name
+    caller: ReleaseCaller,
+    deps: DeployHandlerDeps,
+): Promise<{ driver: TargetDriver } | { error: string; status: 403 | 409 | 501 }> => {
+    try {
+        const placement = await deps.backend.placement({ key: caller.key, organizationId: caller.organizationId, projectId });
+
+        return { driver: deps.driverFor(placement.target) };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "this project cannot be placed";
+        const status = isLunoraError(error) ? error.status : 403;
+
+        return { error: message, status: status === 409 || status === 501 ? status : 403 };
+    }
+};
+
+/**
  * The deploy core, transport-agnostic: validate a release, record its
  * deployment, and hand back the run. `POST /v1/deploy` calls it with the
  * presented deploy key and streams the run as NDJSON; a git build
@@ -837,16 +861,17 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
         return { error: "bundle is not valid base64", status: 400 };
     }
 
-    // The driver first: its binding table is what the payload is validated
-    // against, and a target with no driver must refuse before anything is recorded.
-    let driver: TargetDriver;
+    // Placement and driver first: the project's target decides which binding
+    // table the payload is validated against, a project placed on another cell
+    // is refused here, and a target with no driver must refuse before anything
+    // is recorded.
+    const placed = await projectDriver(request.projectId, caller, deps);
 
-    try {
-        driver = deps.driverFor(DEFAULT_TARGET);
-    } catch (error) {
-        return { error: error instanceof Error ? error.message : "no driver for this project's target", status: 501 };
+    if ("error" in placed) {
+        return placed;
     }
 
+    const { driver } = placed;
     const payload = parsePayload(request, request.scriptName, driver);
 
     if ("error" in payload) {

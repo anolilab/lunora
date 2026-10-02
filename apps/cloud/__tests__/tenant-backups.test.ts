@@ -375,7 +375,7 @@ describe("tenant backup routes", () => {
             method: "POST",
         });
 
-    const target = { adminToken: TOKEN, alias: "acme", deploymentId: "dep_a", scriptName: "acme", url: "https://acme.lunora.app" };
+    const target = { adminToken: TOKEN, alias: "acme", deploymentId: "dep_a", resourceRef: "acme", scriptName: "acme", url: "https://acme.lunora.app" };
 
     it("takes the pre-restore backup before importing, and settles both rows", async () => {
         const { bucket, objects } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_ROW) });

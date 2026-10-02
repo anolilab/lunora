@@ -19,10 +19,11 @@ import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
 import type { DeployKind } from "../provision-contract";
-import { DEFAULT_TARGET } from "../provision-contract";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
-import { resolveTargetDriver } from "../targets/registry";
+import type { StoredPlacement } from "../targets/placement";
+import { resolvePlacement } from "../targets/placement";
+import { resolveTargetDriver, targetOf } from "../targets/registry";
 import { resolveTelemetryConfig } from "../telemetry/ingest-key";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
@@ -698,8 +699,16 @@ interface DomainBody {
 
 interface DomainRowLike {
     hostname: string;
+    projectId: string; // secret-scanner:allow -- domain field name
     txtToken: string;
 }
+
+/** The cell this control-plane deployment runs in — the only thing `LUNORA_CELL` decides (`src/targets/placement.ts`). */
+const thisCell = (environment: RouterEnv): string => environment.LUNORA_CELL ?? "default";
+
+/** A project's placement, read per project and checked against this control plane's cell. */
+const placementFor = async (context: NonNullable<RouterEnv["__lunoraCtx"]>, environment: RouterEnv, organizationId: string, projectId: string) =>
+    resolvePlacement(await context.runQuery<StoredPlacement>(internal.projects.placement, { organizationId, projectId }), thisCell(environment));
 
 /**
  * `POST /v1/domains` — add a hostname to a project under the caller's session
@@ -750,8 +759,10 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
             return jsonError(404, "domain not found");
         }
 
+        // The CNAME targets are the project's target's: a box answers on its own hostname, WfP on the apex.
+        const { target } = await placementFor(context, environment, body.organizationId, domain.projectId);
         const result = await verifyDomain(domain.hostname, {
-            platformTargets: resolveTargetDriver(DEFAULT_TARGET, environment).domains.platformTargets(),
+            platformTargets: resolveTargetDriver(target, environment).domains.platformTargets(),
             resolve: createDohResolver(),
             txtToken: domain.txtToken,
         });
@@ -814,11 +825,11 @@ export const createDeployRouter = (): HttpRouterLike => {
 
         return {
             backend: {
+                placement: ({ organizationId, projectId }) => placementFor(context, environment, organizationId, projectId),
                 releaseTarget: async ({ deploymentId, key, organizationId }) => {
-                    const row = await context.runQuery<StoredAdminToken & { alias: string; kind: DeployKind; liveDeploymentId?: string; projectId: string }>(
-                        internal.deployments.releaseTarget,
-                        { deployKey: key, id: deploymentId, organizationId },
-                    );
+                    const row = await context.runQuery<
+                        StoredAdminToken & { alias: string; kind: DeployKind; liveDeploymentId?: string; projectId: string; target?: string }
+                    >(internal.deployments.releaseTarget, { deployKey: key, id: deploymentId, organizationId });
                     // Unsealed here, at the edge, exactly as the studio proxy does.
                     const adminToken = await resolveAdminToken(row, environment.SECRET_ENCRYPTION_KEY);
 
@@ -833,6 +844,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                         ...(row.liveDeploymentId === undefined ? {} : { liveDeploymentId: row.liveDeploymentId }),
                         organizationId,
                         projectId: row.projectId,
+                        target: targetOf(row.target),
                     };
                 },
                 // Decrypt the project's stored secrets at the edge and hand them to the

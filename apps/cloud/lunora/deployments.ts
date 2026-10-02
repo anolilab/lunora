@@ -30,6 +30,7 @@ interface DeploymentRow {
     projectId: Id<"projects">;
     scriptName: string;
     status: DeploymentStatus;
+    target?: string;
     updatedAt: number;
     url?: string;
     version?: number;
@@ -313,8 +314,9 @@ export const create = mutation
 
         // Integrity: the project must belong to the same org (no cross-org linkage).
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
+        const project = page.find((row) => row._id === arguments_.projectId);
 
-        if (!page.some((project) => project._id === arguments_.projectId)) {
+        if (!project) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
@@ -355,9 +357,17 @@ export const create = mutation
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
+            // Every target names its tenant by the alias today; a driver whose
+            // handle differs would report its own here.
+            resourceRef: arguments_.scriptName,
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: arguments_.scriptName,
             status: "queued",
+            // Copied from the project, which owns it: the release is converged
+            // there, and its teardown and rollback must follow it there even if
+            // the project's target later changes. `?? `: a row predating targets
+            // answers NULL, which is `cloudflare-wfp`.
+            target: project.target ?? "cloudflare-wfp",
             updatedAt: now,
             version,
         });
@@ -497,6 +507,7 @@ export const releaseTarget = internalQuery
             kind: DeploymentRow["kind"];
             liveDeploymentId?: Id<"deployments">;
             projectId: Id<"projects">;
+            target?: string;
         }> => {
             const target = (await context.db.get(id)) as DeploymentRow | null;
 
@@ -523,6 +534,7 @@ export const releaseTarget = internalQuery
                 kind: target.kind,
                 ...(live ? { liveDeploymentId: live._id } : {}),
                 projectId: target.projectId, // secret-scanner:allow -- domain field name
+                ...(target.target == null ? {} : { target: target.target }),
             };
         },
     );

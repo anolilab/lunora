@@ -49,8 +49,10 @@ interface DeploymentRow {
     alias?: string;
     createdAt: number;
     kind: string;
+    resourceRef?: string;
     scriptName: string;
     status: string;
+    target?: string;
     url?: string;
 }
 
@@ -61,7 +63,11 @@ interface TenantTarget {
     adminTokenIv?: string;
     alias: string;
     deploymentId: Id<"deployments">;
+    /** The deployment's handle on its target (the script name on rows that predate it). */
+    resourceRef: string;
     scriptName: string;
+    /** The deployment's target; absent on rows that predate it (`cloudflare-wfp`). */
+    target?: string;
     url: string;
 }
 
@@ -120,7 +126,9 @@ const productionTarget = async (context: QueryContext, projectId: Id<"projects">
         ...(live.adminTokenCiphertext && live.adminTokenIv ? { adminTokenCiphertext: live.adminTokenCiphertext, adminTokenIv: live.adminTokenIv } : {}),
         alias: live.alias,
         deploymentId: live._id,
+        resourceRef: live.resourceRef ?? live.scriptName,
         scriptName: live.scriptName,
+        ...(live.target == null ? {} : { target: live.target }),
         url: live.url,
     };
 };

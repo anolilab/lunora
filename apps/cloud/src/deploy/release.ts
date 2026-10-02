@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/server";
 
 import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeploymentSpec } from "../provision-contract";
-import { DEFAULT_TARGET } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
+import type { Placement } from "../targets/placement";
 import type { ReleaseStore } from "./release-store";
 import type { CellScheduler } from "./scheduler";
 
@@ -27,10 +27,19 @@ export interface ReleaseTarget {
     liveDeploymentId?: string;
     organizationId: string;
     projectId: string;
+    /** The target the release was converged on (`deployments.target`). */
+    target: TargetId;
 }
 
 /** The control-plane operations a re-provision needs. `key` is the deploy key; absent means the caller's member session authorizes. */
 export interface ReleaseBackend {
+    /**
+     * Where the project deploys: its target, after checking that this control
+     * plane may converge it (`resolvePlacement`, `src/targets/placement.ts`).
+     * Throws — `CONFLICT` for a project placed elsewhere — rather than answer
+     * a placement this deployment cannot honour.
+     */
+    placement: (input: { key?: string; organizationId: string; projectId: string }) => Promise<Placement>; // secret-scanner:allow -- domain field name
     /** Resolve a live or superseded deployment of `organizationId` the caller may re-provision. Throws otherwise. */
     releaseTarget: (input: { deploymentId: string; key?: string; organizationId: string }) => Promise<ReleaseTarget>;
     /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
@@ -166,6 +175,18 @@ export const reprovision = async (
         throw new LunoraError("CONFLICT", "this release's bundle is no longer retained; deploy it again instead of rolling back");
     }
 
+    // After `releaseTarget`, which authorized the caller for this organization.
+    // The release goes back where it was converged, and only if the project
+    // still deploys there from this control plane's cell.
+    const placement = await deps.backend.placement({ key, organizationId: target.organizationId, projectId: target.projectId }); // secret-scanner:allow -- domain field name
+
+    if (placement.target !== target.target) {
+        throw new LunoraError(
+            "CONFLICT",
+            `this release was deployed to ${target.target}, but the project now deploys to ${placement.target}; deploy it again instead of rolling back`,
+        );
+    }
+
     const live =
         options.keepClasses && target.liveDeploymentId !== undefined && target.liveDeploymentId !== deploymentId
             ? await deps.releases.get(target.liveDeploymentId)
@@ -205,7 +226,7 @@ export const reprovision = async (
         tenantSecrets,
     });
 
-    const driver = deps.driverFor(DEFAULT_TARGET);
+    const driver = deps.driverFor(target.target);
 
     await deps.scheduler.run(() => driver.deploy(spec), { priority: options.priority });
 };

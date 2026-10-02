@@ -18,13 +18,12 @@ import type { StoredAdminToken } from "../deploy/admin-token";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { RouterEnv } from "../deploy/routes/shared";
 import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
-import { DEFAULT_TARGET } from "../provision-contract";
-import { resolveTargetDriver } from "../targets/registry";
+import { resolveTargetDriver, targetOf } from "../targets/registry";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
 import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
 
 /** The deployment a begin* mutation resolved, admin token still sealed. */
-type TenantTarget = StoredAdminToken & { alias: string; scriptName: string; url: string };
+type TenantTarget = StoredAdminToken & { alias: string; resourceRef: string; scriptName: string; target?: string; url: string };
 
 type Context = ReturnType<typeof requireContext>;
 
@@ -42,7 +41,7 @@ const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<
         throw new Error("deployment has no usable admin token");
     }
 
-    return resolveTargetDriver(DEFAULT_TARGET, environment).reach({ adminToken, resourceRef: target.scriptName, url: target.url });
+    return resolveTargetDriver(targetOf(target.target), environment).reach({ adminToken, resourceRef: target.resourceRef, url: target.url });
 };
 
 /**

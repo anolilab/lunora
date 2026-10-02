@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
@@ -128,6 +129,7 @@ describe("the registry", () => {
 describe("the deploy handler validates against the project's target", () => {
     const backend: DeployBackend = {
         createDeployment: () => Promise.reject(new Error("a refused release records nothing")),
+        placement: () => Promise.resolve({ target: "cloudflare-wfp" }),
         releaseTarget: () => Promise.reject(new Error("unused")),
         rollbackDeployment: () => Promise.reject(new Error("unused")),
         updateStatus: () => Promise.resolve(),
@@ -165,13 +167,28 @@ describe("the deploy handler validates against the project's target", () => {
             { bundle: btoa("export default {}"), kind: "production", projectId: "proj_1", scriptName: "app" },
             { key: "k", organizationId: "org_1" },
             {
-                backend,
-                driverFor: (target) => resolveTargetDriver(target === "cloudflare-wfp" ? "celld-vps" : target, {}),
+                backend: { ...backend, placement: () => Promise.resolve({ target: "celld-vps" }) },
+                driverFor: (target) => resolveTargetDriver(target, {}),
                 releases: memoryReleaseStore().store,
                 scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
             },
         );
 
         expect(started).toStrictEqual({ error: expect.stringContaining("celld-vps") as string, status: 501 });
+    });
+
+    it("refuses a project placed on another cell before recording anything", async () => {
+        const started = await startRelease(
+            { bundle: btoa("export default {}"), kind: "production", projectId: "proj_1", scriptName: "app" },
+            { key: "k", organizationId: "org_1" },
+            {
+                backend: { ...backend, placement: () => Promise.reject(new LunoraError("CONFLICT", 'placed on cell "eu-1"')) },
+                driverFor: () => fakeDriver(),
+                releases: memoryReleaseStore().store,
+                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+            },
+        );
+
+        expect(started).toStrictEqual({ error: 'placed on cell "eu-1"', status: 409 });
     });
 });

@@ -106,6 +106,44 @@ export const byGithubRepo = internalQuery
         return project ? { organizationId: project.organizationId, projectId: project._id, slug: project.slug } : null; // secret-scanner:allow -- domain field name
     });
 
+/** Where a project deploys, as stored — the edge turns this into a placement (`src/targets/placement.ts`). */
+interface StoredPlacement {
+    /** The name of the cell the project's organization is placed on; absent when that cell row is gone. */
+    cellName?: string;
+    /** `projects.target`; absent on projects that predate it. */
+    target?: string;
+}
+
+/**
+ * Read a project's placement: its target and its organization's cell. The deploy
+ * path asks this BEFORE validating a release, because the target's binding table
+ * is what the release is validated against, and the cell decides whether this
+ * control plane may converge it at all.
+ *
+ * `internal`, reached only from the deploy edge, which holds the verified
+ * organization (from the deploy key or the member session) and passes it here.
+ * The project must belong to that organization; nothing more is disclosed than
+ * a target id and a cell name.
+ */
+export const placement = internalQuery
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<StoredPlacement> => {
+        const project = (await context.db.get(projectId)) as (ProjectRow & { target?: string }) | null;
+
+        if (project?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "project not found in this organization");
+        }
+
+        const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
+        const cell = organization ? ((await context.db.get(organization.cellId)) as { name: string } | null) : null;
+
+        return {
+            ...(cell ? { cellName: cell.name } : {}),
+            // `!= null`: a `.global()` row answers SQL NULL, not undefined, for an unset column.
+            ...(project.target == null ? {} : { target: project.target }),
+        };
+    });
+
 /**
  * Create a project in an organization. Per-org slug uniqueness is enforced by
  * the composite `by_org_slug` unique index; the org's live entitlements cap

@@ -65,6 +65,7 @@ const harness = (options: { provisioner?: Provisioner; target?: BuildReleaseTarg
 
             return Promise.resolve({ deploymentId: "dep_1" });
         },
+        placement: () => Promise.resolve({ target: "cloudflare-wfp" }),
         releaseTarget: () => Promise.reject(new Error("no release target in this test")),
         rollbackDeployment: () => Promise.reject(new Error("no rollback in this test")),
         updateStatus: ({ status }) => {

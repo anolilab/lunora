@@ -17,7 +17,14 @@ import { defineSchema, defineTable, v } from "@lunora/server";
 const plan = v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"));
 
 /**
- * Every billable Cloudflare dimension the platform meters into `platformUsage`.
+ * Every billable dimension the platform meters into `platformUsage`.
+ *
+ * Honest about its origin: these are Cloudflare's billing dimensions, because
+ * `cloudflare-wfp` is the target whose costs the platform pays and rebills.
+ * `requests` is the one every target produces (the usage rollback writes it
+ * through each driver's readback); the rest are what a WfP tenant consumes on
+ * the platform's account. A target billed some other way (plan 458: per box)
+ * adds its own meter rather than reinterpreting these.
  *
  * This list is spelled out here rather than imported because codegen reads this
  * file statically — a computed union would emit nothing. The pairing with
@@ -65,6 +72,14 @@ const usageMeter = v.union(
 
 const cellStatus = v.union(v.literal("active"), v.literal("draining"), v.literal("suspended"));
 
+/**
+ * A deploy target (`TARGET_IDS` in `src/provision-contract.ts` — keep the two
+ * in step; `__tests__/placement.test.ts` fails the type check when they drift).
+ * Spelled out for the same reason as `usageMeter`: codegen reads this file
+ * statically.
+ */
+const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"));
+
 const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
 
 const deploymentKind = v.union(v.literal("production"), v.literal("preview"), v.literal("dev"));
@@ -84,16 +99,25 @@ const deployKeyType = v.union(v.literal("production"), v.literal("dev"), v.liter
 
 export default defineSchema({
     cells: defineTable({
-        // The Cloudflare account this cell runs in. Each cell isolates per-account
-        // limits + blast radius (§2.5).
+        // `cloudflare-wfp` encoding: the Cloudflare account this cell runs in.
+        // Each cell isolates per-account limits + blast radius (§2.5). Kept as a
+        // column for the rows that predate `config`; a new target's fields go in
+        // `config`, never in a new column here (MULTIPLATFORM.md §5.2).
         cloudflareAccountId: v.string(),
+        // Target-specific settings for this cell (region, credentials ref, …) —
+        // the one place a non-WfP target keeps what it needs. String values only.
+        config: v.optional(v.record(v.string(), v.string())),
         createdAt: v.number(),
-        // Dispatch-namespace base; per env we derive `${prefix}-production`, etc.
+        // `cloudflare-wfp` encoding: the dispatch-namespace base; per env we
+        // derive `${prefix}-production`, etc.
         dispatchNamespacePrefix: v.string(),
         // "eu" | "fedramp" | undefined — DO/R2 jurisdiction for this cell (§2.4).
         jurisdiction: v.optional(v.string()),
         name: v.string(),
         status: cellStatus,
+        // The target this cell's capacity serves; absent → `cloudflare-wfp`,
+        // which every cell registered before targets is.
+        target: v.optional(deployTarget),
         // Metering readback checkpoint (§4): the epoch-ms boundary this cell has
         // folded Analytics-Engine request counts into `platformUsage` through.
         // The rollback reads AE for `timestamp > usageReadAtMs`, so repeated runs
@@ -176,6 +200,10 @@ export default defineSchema({
         // rebuild (absent = everything under rootDirectory). See src/builds/paths.ts.
         rootDirectory: v.optional(v.string()),
         slug: v.string(),
+        // Where this project deploys (`src/targets/registry.ts`). A property of
+        // the project, never of a deploy request. Absent → `cloudflare-wfp`,
+        // in the org's cell — which is what every project before targets did.
+        target: v.optional(deployTarget),
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
@@ -216,12 +244,22 @@ export default defineSchema({
         kind: deploymentKind,
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        // Dispatch-namespace script this deployment was provisioned onto — the
-        // alias. One script per alias, not per release: a Durable Object
-        // namespace belongs to the script defining its class, so a script per
-        // release would start every release on an empty database (GAPS.md A1).
+        // The deployment's handle on its target — what the driver addresses it
+        // by (the dispatch script on `cloudflare-wfp`). Absent on rows that
+        // predate it, where `scriptName` serves.
+        resourceRef: v.optional(v.string()),
+        // `cloudflare-wfp` encoding: the dispatch-namespace script this
+        // deployment was provisioned onto — the alias. One script per alias,
+        // not per release: a Durable Object namespace belongs to the script
+        // defining its class, so a script per release would start every release
+        // on an empty database (GAPS.md A1).
         scriptName: v.string(),
         status: deploymentStatus,
+        // The target this release was converged on, copied from the project when
+        // the row is created — so a later change of the project's target never
+        // sends a teardown or a rollback to the wrong driver. Absent on rows
+        // that predate it, which are `cloudflare-wfp`.
+        target: v.optional(deployTarget),
         updatedAt: v.number(),
         url: v.optional(v.string()),
         // Monotonic release number per (project, kind).

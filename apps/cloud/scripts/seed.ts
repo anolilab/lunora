@@ -56,7 +56,11 @@ const DEV_EMAIL = process.env["LUNORA_SEED_EMAIL"] ?? "dev@lunora.local";
 const DEV_PASSWORD = process.env["LUNORA_SEED_PASSWORD"] ?? "dev-password-1234"; // gitleaks:allow -- local seed fallback, overridden by LUNORA_SEED_PASSWORD; never a deployed credential
 const DEV_NAME = "Dev User";
 
-const CELL_NAME = "dev-cell";
+// Must equal the `LUNORA_CELL` local dev runs with (`wrangler.jsonc`'s top-level
+// `vars`): a project deploys only from the control plane of its organization's
+// cell (`src/targets/placement.ts`), so an org seeded on any other cell name
+// could never deploy locally.
+const CELL_NAME = "default";
 const ORG_NAME = "Acme Dev";
 const ORG_SLUG = "acme-dev";
 const PROJECT_NAME = "Web";

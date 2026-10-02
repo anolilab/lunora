@@ -56,12 +56,13 @@ const request = (body: unknown): Request =>
     });
 
 const releaseTarget = (overrides: Partial<ReleaseTarget> = {}): ReleaseTarget => {
-    return { adminToken: "admin-prev", alias: "app", kind: "production", organizationId: "org_1", projectId: "proj_1", ...overrides };
+    return { adminToken: "admin-prev", alias: "app", kind: "production", organizationId: "org_1", projectId: "proj_1", target: "cloudflare-wfp", ...overrides };
 };
 
 const backendWith = (overrides: Partial<DeployBackend>): DeployBackend => {
     return {
         createDeployment: () => Promise.resolve({ deploymentId: "dep_new", version: 2 }),
+        placement: () => Promise.resolve({ target: "cloudflare-wfp" }),
         releaseTarget: () => Promise.resolve(releaseTarget()),
         rollbackDeployment: () => Promise.resolve({ scriptName: "app", version: 1 }),
         updateStatus: () => Promise.resolve(),
@@ -332,6 +333,25 @@ describe(rollbackRelease, () => {
         });
 
         await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, release)).rejects.toThrow(/Room/u);
+        expect(deployed).toHaveLength(0);
+    });
+
+    it("refuses to roll back onto a target the project no longer deploys to", async () => {
+        const { deployed, deps: release, rollbackDeployment } = await setup({ target: "celld-vps" });
+
+        await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, release)).rejects.toThrow(
+            /deployed to celld-vps, but the project now deploys to cloudflare-wfp/u,
+        );
+        expect(deployed).toHaveLength(0);
+        expect(rollbackDeployment).not.toHaveBeenCalled();
+    });
+
+    it("refuses a rollback the placement refuses (a project placed on another cell)", async () => {
+        const { deployed, deps: release } = await setup();
+
+        release.backend = { ...release.backend, placement: () => Promise.reject(new Error('placed on cell "eu-1"')) };
+
+        await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, release)).rejects.toThrow(/eu-1/u);
         expect(deployed).toHaveLength(0);
     });
 

@@ -26,11 +26,13 @@ export interface Doc_cells {
     _id: Id<"cells">;
     _creationTime: number;
     cloudflareAccountId: string;
+    config?: Record<string, string>;
     createdAt: number;
     dispatchNamespacePrefix: string;
     jurisdiction?: string;
     name: string;
     status: "active" | "draining" | "suspended";
+    target?: "celld-vps" | "cloudflare-wfp";
     usageReadAtMs?: number;
 }
 
@@ -73,6 +75,7 @@ export interface Doc_projects {
     previewPasswordSalt?: string;
     rootDirectory?: string;
     slug: string;
+    target?: "celld-vps" | "cloudflare-wfp";
     watchPaths?: Array<string>;
 }
 
@@ -93,8 +96,10 @@ export interface Doc_deployments {
     kind: "production" | "preview" | "dev";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+    resourceRef?: string;
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
+    target?: "celld-vps" | "cloudflare-wfp";
     updatedAt: number;
     url?: string;
     version?: number;
@@ -744,11 +749,13 @@ export interface Insert_cells {
     _id?: Id<"cells">;
     _creationTime?: number;
     cloudflareAccountId: string;
+    config?: Record<string, string>;
     createdAt: number;
     dispatchNamespacePrefix: string;
     jurisdiction?: string;
     name: string;
     status: "active" | "draining" | "suspended";
+    target?: "celld-vps" | "cloudflare-wfp";
     usageReadAtMs?: number;
 }
 
@@ -791,6 +798,7 @@ export interface Insert_projects {
     previewPasswordSalt?: string;
     rootDirectory?: string;
     slug: string;
+    target?: "celld-vps" | "cloudflare-wfp";
     watchPaths?: Array<string>;
 }
 
@@ -811,8 +819,10 @@ export interface Insert_deployments {
     kind: "production" | "preview" | "dev";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+    resourceRef?: string;
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
+    target?: "celld-vps" | "cloudflare-wfp";
     updatedAt: number;
     url?: string;
     version?: number;
