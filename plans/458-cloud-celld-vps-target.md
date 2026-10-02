@@ -472,6 +472,24 @@ executable, and once as root in a user namespace with a real fleet uid (node as
 that uid, the nftables table loaded, the fleet directories owned as designed);
 the systemd unit, `Delegate=yes` and the probe suite run only in CI.
 
+**Landed (2026-10-03, review round 2, `fix/hostd-round2`):** the conformance
+run through a real `hostd` — the target-driver legs of
+`apps/cloud/__tests__/support/target-conformance.ts`, reimplemented in
+`apps/hostd/__tests__/integration/lane.test.ts` (hostd never depends on
+`apps/cloud`): the same release twice converges on one fleet at one URL, a
+new release lands on the same fleet and URL and is served once the node
+adopts it, each alias gets its own URL, destroy is idempotent and tolerates a
+fleet that never existed, a destroyed fleet is re-created at the same URL;
+"running" is what the host reports (`state.json`). Ran green locally in an
+unprivileged network namespace, from `dist/bin.mjs` and from the single
+executable; the systemd variant runs in CI. Code-quality fixes from the same
+review: one `runChild` for every one-shot child (the isolation probe, `find`,
+`celld deploy`/`diagnose`, `nft`, `--version`), the fleet-directory helpers in
+`fleet-directories.ts`, exhaustive job switches, one bucket-credentials reader,
+`releaseArtifactFor` / `isReleasePlatform` / `values.ts` instead of copies, and
+`enrol --force` keeps `box.key` until the control plane accepts the new one.
+Nothing of W4 is open on the box side.
+
 ### W5 — Routing, DNS and TLS (M)
 
 - At enrolment, create `*.<boxSlug>.boxes.lunora.app` A/AAAA records via the
@@ -568,6 +586,28 @@ window — requests, errors (status ≥ 500), median latency, at most 500
 aliases — queueing up to a day of windows while offline and draining five per
 ten seconds, well under `MAX_REPORTS_PER_MINUTE`. A real report reached the
 fake control plane in the smoke run. hostd's own log forwarding is still open.
+
+**Landed (2026-10-03, on-box log forwarding, `fix/hostd-round2`):**
+`apps/hostd/src/daemon/log-forwarder.ts` forwards hostd's warnings and errors,
+each celld node's stderr (`RUST_LOG=error,celld=warn`; a fleet's stdout stays
+on the box) and Caddy's warnings and errors as OTLP/JSON logs to
+`{endpoint}/v1/logs` with the organization's ingest key, tagged `box:<slug>`,
+`source` and `alias:<alias>` (`service.name`: the alias for a fleet's lines,
+`lunora-hostd` otherwise); a bounded drop-oldest buffer (1 000 records, the
+drops counted), retries with backoff, the key in memory only and never sent
+to a plain-`http:` endpoint from an `https:` box, every record redacted (the
+key, the bucket credentials, bearer tokens, `AWS_*=`, enrolment tokens,
+private keys). The box had no way to learn the key, so the protocol gained a
+cloud → box frame, `config {telemetry?: {endpoint, token}}`, sent after `auth`
+and on every change (protocol §5.2; joined version 1 before any box shipped).
+The lane asserts a refused release reaching the fake control plane as a log.
+
+Still open — **`apps/cloud` branch:** `BoxSessionDO` must send the `config`
+frame after `auth` (after `routes`) and on change, with `LUNORA_OTLP_ENDPOINT`
+and the box organization's ingest key from `resolveTelemetryConfig` (minting
+one with `recordIngestKey` when the org has none; `{"type":"config"}` when the
+cell has no telemetry) — the exact frame is in `apps/hostd/README.md` ("What
+the `apps/cloud` branch must send"). Then the studio Logs panel gate (W6).
 
 ### W7 — Install, upgrades and supply chain (M)
 
@@ -710,6 +750,47 @@ installing it (enrol runs as `lunora-hostd`), since that directory is
   no esbuild on `PATH` (real S3 deploy + node, not only `--dry-run`); without
   `no_bundle` the same deploy fails with "esbuild not found".
 
+**Landed (2026-10-03, review round 2, `fix/hostd-round2`):**
+
+- **The N → N+1 gate.** `apps/hostd/__tests__/integration/upgrade.test.ts`:
+  release N installed by its own `lunora-hostd install-release`, an alias
+  deployed and served, an `upgrade` job to N+1 (signed manifest from the
+  control plane, artifacts over HTTPS, celld gzipped), the daemon installs N+1
+  beside N, switches `current`, exits and is started again on N+1 (systemd in
+  CI, the lane standing in for it locally), and the alias answers before and
+  after. Both releases are builds of the source trusting a key the test
+  generates (an esbuild plugin swaps `trusted-release-keys.ts` in the test
+  helper only; no shipped build takes a key from anywhere else). Green locally
+  in a network namespace; the systemd variant runs in CI.
+- **One install path.** `install.sh`'s copy of staging, the `current` swap and
+  pruning is gone: `lunora-hostd install-release <manifest> --from <dir>` runs
+  the upgrade job's `installRelease` (`src/daemon/release-install.ts`), as
+  `lunora-hostd`, from a root-owned directory beside `/opt/lunora-hostd`. The
+  script keeps the trust bootstrap (OpenSSL signature check, the hostd hash),
+  the users and the unit. `verify-release` is replaced by `install-release`.
+- **Anti-rollback.** A release whose `lunora-hostd` is older (semver
+  precedence, pre-releases included) than the installed one is refused unless
+  the `upgrade` job carries `allowDowngrade: true` (new optional protocol
+  field) or `install.sh --allow-downgrade`.
+- **"Re-run to upgrade" resolves.** The release workflow keeps `latest.json`
+  on the GitHub Release `hostd-latest` (`{stable, prerelease}`, each only moving
+  forward, one concurrency group); `install.sh` without `--version` reads it
+  for the box's channel (pre-release on a box that runs one, or with
+  `--prerelease`) instead of one page of the repository's release list.
+- **Secrets off the command line.** `install.sh` asks for the enrolment token
+  and the bucket key at a hidden prompt (`--token-file` / `--credentials-file`,
+  root-owned 0600, for automation); `--token` is refused, also by
+  `lunora-hostd enrol`, which reads `LUNORA_HOSTD_ENROL_TOKEN` only.
+- **OpenSSL 3.** `install.sh` refuses Debian < 12 and Ubuntu < 22.04 by name
+  and checks `openssl version`, instead of failing as a bad signature.
+
+Cross-branch — **`apps/cloud`:** the studio's install command becomes
+`sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <v>`
+plus "paste the token when prompted", the token shown in a copy field of its
+own and never in the command (`apps/hostd/README.md`, "What the studio's
+install command must say"); a rollback rollout sets `allowDowngrade: true`
+on its `upgrade` jobs. Still open: a pinned release key.
+
 ### W8 — Hardening on the box (M)
 
 The box is single-customer, but the customer's apps still run third-party npm
@@ -766,6 +847,17 @@ IP and a sibling fleet; every attempt must fail.
   in the CI lane. Known limits (one fleet uid per box, the box's bucket key in
   every fleet, open public egress, memory-only limits, Caddy as
   `lunora-hostd`) are in `apps/hostd/README.md`.
+
+**Landed (2026-10-03, review round 2, `fix/hostd-round2`):** Caddy no longer
+runs as `lunora-hostd` (which reads `box.key` and `bucket.env`): it runs as
+`lunora-edge`, created by `install.sh`, started through `setpriv` with
+`net_bind_service` alone, in directories laid out so neither side writes the
+other's (`caddy/` hostd's, set-group-ID `lunora-edge`, with `caddy.json`;
+`caddy/state/` Caddy's own; `caddy/log/` Caddy's, set-group-ID to hostd's group,
+with the 0640 access log hostd reads without following links); the data
+directory becomes 0711. The self-check gains a fourth check, "edge user". The
+lane asserts Caddy's uid and that `lunora-edge` reads neither the key, the
+bucket credentials nor the state (CI, systemd variant).
 
 ### W9 — Studio (M)
 
