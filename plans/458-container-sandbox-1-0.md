@@ -1,7 +1,7 @@
 # Plan 458 — Container sandbox parity with Cloudflare Sandbox SDK 1.0
 
 **Baseline:** `f79680910` (2026-10-02)
-**Status:** IN PROGRESS (workstream A shipped)
+**Status:** DONE in code (A–H shipped); live deploy smoke outstanding (§7 phase 4)
 
 ## 0. Headline finding
 
@@ -192,6 +192,20 @@ becomes an `INTERNAL` error whose hint reads "image lacks
 /usr/local/bin/sandbox-shim — base it on cloudflare/sandbox". Add the
 `createContainerTestContext` fake.
 
+**Done.** The RPCs live on a new **`LunoraSandboxContainer`** subclass
+(`src/sandbox/container.ts`, exported from `@lunora/container/sandbox`), not on
+`LunoraContainer`. Codegen makes a `sandbox: true` container's generated class
+extend it. That is what keeps `@cloudflare/sandbox` out of every other app's
+bundle (verified in `dist/`), which methods on the base class could not have
+done. Each op is its own RPC (`lunoraReadFile`, `lunoraStat`, …) behind a
+shared `lunoraAcquire()` on the base, which applies the readiness gate,
+start-if-stopped (`start()`, so a container with no port starts too) and the
+in-flight count. `readFile` releases the in-flight count only once its body has
+been read. `EBUSY`/`ENOTEMPTY` also map to `CONFLICT`. Typing: codegen emits
+`SandboxContainerAccessor` for a sandbox container, whose `.get()` returns a
+`SandboxContainerInstanceHandle`. The double's `files` is an in-memory disk per
+instance (`src/test-files.ts`).
+
 **C. `backup` on the instance handle (M).**
 Add `defineContainer({ sandbox: true, backups: { bucket: "BINDING", prefix? } })`,
 with `bucket` checked against `r2_buckets` through the existing binding
@@ -206,6 +220,20 @@ into the `LunoraContainer` start path right after `start()` and before
 intercept-all. Write a test for each egress mode (none, per-host, intercept-all).
 Map `SandboxBackupError` codes to `NOT_FOUND`, `CONFLICT` or `INTERNAL`.
 
+**Done.** The ordering hook is a new protected `beforeContainerStart()` on
+`LunoraContainer`. Both start paths call it after env/image selection and
+before the base's start, and therefore before its outbound interception. The
+sandbox subclass calls `DirectoryBackup.intercept()` there whenever
+`usingInterception` is set, which covers both per-host and intercept-all mode.
+Calling it in per-host mode is harmless: it is only a deny-by-default route.
+Tests cover the no-policy and policy cases. The `@lunora/config` cross-check
+of `backups.bucket` against `r2_buckets` was **not** built, because there is no
+precedent for cross-checking a container definition against wrangler bindings.
+Instead the DO refuses a backup whose bucket is not an R2 binding on env, with
+the fix in the message. API naming: `backup(directory)` and
+`restore(record, { directory })`, which map to upstream's `dir`. The repo's
+lint forbids the abbreviation.
+
 **D. Streaming exec: `handle.spawn()` (M).**
 Return an `RpcTarget` (decision 4). Bound it with an optional `timeoutMs`
 (kill on deadline, using the `abortDeadline` pattern) and a required
@@ -214,12 +242,31 @@ process does **not** keep the container alive past `sleepAfter` once the
 caller drops the stub, and that detached background processes are out of scope
 (open question 3).
 
+**Done**, with one difference: the process **is** counted in flight until it
+exits, whether or not the caller still holds the stub. So `sleepAfter` cannot
+stop the container under a running process, which matches how `exec` already
+behaves. The RPC returns `{ control: RpcTarget, stdout, stderr, stdin, pid,
+isPty }`. The streams travel beside the control stub because a stream can
+cross RPC only once. The caller's `signal` stays caller-side and calls
+`kill()`. `spawn` sits on `LunoraContainer` itself, since it needs only native
+exec, not the shim.
+
 **E. Terminal: `handle.terminal(request, options)` (S, after D).**
 Use `spawn({ pty: { cols, rows }, env: { TERM: "xterm-256color" } })` with the
 `WebSocketPair` bridge from decision 5. Ship a docs page with the xterm.js
 client snippet and reconnect backoff, mirroring Cloudflare's terminal guide.
 **STOP check first:** confirm a `Response` carrying `webSocket` can be returned
 from a DO **RPC** method. If it can't, see §8.
+
+**Done, re-scoped so the STOP check never arises.** The bridge
+(`src/terminal.ts`) runs on the **caller's** side on top of `spawn`. The caller
+creates the `WebSocketPair` and pumps it against the process's streams, which
+do cross RPC, so no WebSocket ever crosses RPC. Browser routes have no
+`ctx.containers`, so a new **`getContainer(env, exportName, name)`** reaches a
+named instance off the Worker env (`c.env` in an `httpRouter` route). Wire
+protocol: binary frames are stdin, a text `{cols, rows}` frame resizes, and
+the socket closes with 1000 on exit. The xterm.js client snippet is in the
+docs.
 
 **F. Previews (S, docs + one test).**
 Write a workerd test that a WebSocket upgrade survives
@@ -228,12 +275,27 @@ routing (relative links only, `Host: container`), wildcard-hostname routing for
 dev servers with HMR, and DO-stored expiring share tokens. Any gap the test
 finds becomes its own fix inside this workstream.
 
+**Done as docs only.** There is no workerd WebSocket test: the workerd suite
+has no container runtime, so a container port cannot answer in it. The path
+is by reading: `handle.port(n).fetch(request)` keeps the upgrade headers →
+`stub.fetch` → `LunoraContainer.fetch` → the base `Container.fetch`, which
+forwards HTTP and WebSocket alike. The docs cover path-prefix routing,
+wildcard hostnames and share tokens. That leaves the live smoke as the only
+check.
+
 **G. `mount` on the instance handle (M, lowest priority).**
 Wrap `S3Mount` with `ctx.exports.S3Gateway` and expose
 `handle.mount({ path, endpoint, region, bucket, keyPrefix?, access, credentials })`,
 `handle.inspectMount(path)` and `handle.unmount(path)`. Take credentials only
 as secret names resolved in the DO, never as literals in config. R2 needs S3 API
 keys here, not an R2 binding; say so in the docs.
+
+**Done**, with one restriction found while building it: `mount()` **refuses**
+(`BAD_REQUEST`) on a container with an egress policy. A mount registers its
+intercept after the container is up, and the policy's catch-all takes every
+hostname registered after it, so the mount's storage traffic would hit the
+egress policy. Unlike a backup, a mount's route cannot be pre-registered
+before start, because it is per mount.
 
 **H. Agent: a container-disk fs tool (S, after B).**
 Add `containerFsTool(name, options)` to `@lunora/agent/sandbox` with the same
@@ -242,7 +304,22 @@ Add `containerFsTool(name, options)` to `@lunora/agent/sandbox` with the same
 agent's `exec` and its file ops the **same disk**. Today they don't share one:
 exec runs in the container while `fsTool` reads and writes R2.
 
+**Done.** The new dispatch kind is `containerFs`, addressed to the same
+thread-pinned instance as `containerTool` (a shared `threadInstance` helper).
+Paths are scoped under `root` (default `/workspace`) with the same `..` guard
+as `fsTool`. `write` creates parent directories, and `rm` is `force` so a
+retried step converges. Codegen treats a `containerFsTool` import like
+`containerTool`.
+
 ## 6. Platform parity
+
+**As shipped:** only `containerSandboxTools` became a key. `spawn` / `terminal`
+were folded into the existing `containers` notes on each target. The reason is
+the one `PlatformCapabilities.containers` already documents for `exec`: they
+are methods on an accessor that key gates, with no usage signal codegen could
+gate on independently, so a second rating would be read by nothing. On a host
+without native exec they refuse with `NOT_IMPLEMENTED`. The table below is
+the original proposal.
 
 Add two new `PlatformCapabilities` keys, because the surfaces have different
 host requirements:
@@ -319,3 +396,17 @@ handle types on a target that rates them unsupported, and emits
 5. Does celld's container adapter implement native `exec` with stdio/PTY? If a
    TCK run proves it does, raise `containerExecStream` and `files` to `native`
    on celld.
+
+**Answers recorded while shipping:**
+
+1. No. `files` exists on the DO only for a `sandbox: true` container, since it
+   lives on `LunoraSandboxContainer`. Any other container answers with a
+   directed `BAD_REQUEST`.
+2. Not exposed. Still open, pending a user who needs Cloudflare-managed
+   directory snapshots over `DirectoryBackup`.
+3. Out of scope. A `spawn` lives as long as its process, and the container
+   stays awake for it, but nothing re-attaches to a process after the DO
+   restarts.
+4. No work needed: `jsCodeTool` already runs JS on a worker loader.
+5. Still open; celld rates `containerSandboxTools` unsupported, and
+   `spawn`/`terminal` refuse there until a TCK run proves native exec.
