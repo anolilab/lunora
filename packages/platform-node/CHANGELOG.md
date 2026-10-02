@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.111...@lunora/platform-node@1.0.0-alpha.112) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.156
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/queue:** upgraded to 1.0.0-alpha.84
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.157
+* **@lunora/do:** upgraded to 1.0.0-alpha.186
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.67
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.169
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+* **@lunora/storage:** upgraded to 1.0.0-alpha.96
+
 ## @lunora/platform-node [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.110...@lunora/platform-node@1.0.0-alpha.111) (2026-10-01)
 
 
