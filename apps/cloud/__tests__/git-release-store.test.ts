@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { releaseTarget } from "../lunora/builds";
+import { releaseTarget, reusableRelease } from "../lunora/builds";
 import { recordReleaseKey, removeReleaseKey } from "../lunora/deploy-keys";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx } from "./_helpers/fake-ctx";
@@ -48,6 +48,44 @@ describe("builds.releaseTarget", () => {
         const { ctx } = makeCtx(world({ project: { organizationId: "org_other" } }));
 
         await expect(releaseTarget.handler(ctx, { buildId: "bld_1" as never })).resolves.toBeNull();
+    });
+});
+
+describe("builds.reusableRelease", () => {
+    const reusing = (earlier: Row, deployment: Row): Record<string, Row[]> => {
+        return {
+            builds: [
+                { _id: "bld_2", branch: "main", commitSha: "abc", organizationId: ORG, projectId: "prj_1", reusesBuildId: "bld_1", status: "building" },
+                {
+                    _id: "bld_1",
+                    branch: "main",
+                    bundleHash: "h1",
+                    commitSha: "abc",
+                    deploymentId: "dep_1",
+                    organizationId: ORG,
+                    projectId: "prj_1",
+                    ...earlier,
+                },
+            ],
+            deployments: [{ _id: "dep_1", cronSpecs: ["*/5 * * * *"], projectId: "prj_1", status: "superseded", ...deployment }],
+        };
+    };
+
+    it("names the earlier build's deployment, bundle hash and crons", async () => {
+        const { ctx } = makeCtx(reusing({}, {}));
+
+        await expect(reusableRelease.handler(ctx, { buildId: "bld_2" as never })).resolves.toStrictEqual({
+            bundleHash: "h1",
+            cronSpecs: ["*/5 * * * *"],
+            deploymentId: "dep_1",
+        });
+    });
+
+    it("answers null for a build that reuses nothing, or reuses another project's build or deployment", async () => {
+        await expect(reusableRelease.handler(makeCtx(world()).ctx, { buildId: "bld_1" as never })).resolves.toBeNull();
+        await expect(reusableRelease.handler(makeCtx(reusing({ projectId: "prj_other" }, {})).ctx, { buildId: "bld_2" as never })).resolves.toBeNull();
+        await expect(reusableRelease.handler(makeCtx(reusing({}, { projectId: "prj_other" })).ctx, { buildId: "bld_2" as never })).resolves.toBeNull();
+        await expect(reusableRelease.handler(makeCtx(reusing({ deploymentId: undefined }, {})).ctx, { buildId: "bld_2" as never })).resolves.toBeNull();
     });
 });
 

@@ -488,9 +488,15 @@ GitHub webhook only parses PR events into preview _intents_.
 > pushed. Known limits: the release payload rides one NDJSON line and is
 > parsed in the Worker, so a release near the 100 MiB cap will exceed Worker
 > memory exactly as a `POST /v1/deploy` of that size would; a build plus its
-> release must finish inside the 30-minute lease; and a reused build (same
-> commit, root directory and trigger) does not re-release, because its bundle
-> was never stored.
+> release must finish inside the 30-minute lease.
+>
+> - A push of a commit already built (same commit, root directory and
+>   trigger) whose release no longer serves (superseded, failed or torn
+>   down) re-releases: the new build names the earlier one
+>   (`builds.reusesBuildId`) and the runner releases that build's stored
+>   release (`releases/<deploymentId>.json`) without rebuilding; once the
+>   release was pruned with the rollback window, it builds from source. A
+>   build whose release still serves is reused as is (`feat/cloud-followups`).
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 
@@ -504,7 +510,7 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 
 ## B. Traffic layer
 
-### B1. Custom domains (✅ model/flow shipped, 🌐 cert issuance)
+### B1. Custom domains (✅ model/flow shipped, ✅ cert issuance wired; 🌐 SaaS zone setup)
 
 **Today:** `customDomains` is a plan _feature flag_ that nothing implements.
 
@@ -522,6 +528,21 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
   flooding).
 - Dispatcher: hostname → `domains` → project → active deployment (A1 pointer),
   with the same cached lookup pattern as the plan resolver.
+
+**Shipped (`feat/cloud-followups`):** certificate issuance on `cloudflare-wfp`
+through the target seam, not a target branch. The driver's `domains.onVerified`
+creates (or finds) the Cloudflare-for-SaaS custom hostname on
+`LUNORA_SAAS_ZONE_ID` for a domain that just verified, and the verify route
+records `customHostnameId` / `certificateStatus` / `certificateError`; the hourly
+certificate sweep re-reads each certificate until it is `active`;
+`POST /v1/domains/remove` has `domains.onRemoved` delete the custom hostname
+before the row goes (`domains.remove` is internal). The Domains tab shows the
+certificate state. Tested against a fake REST port and a stubbed fetch only.
+
+**Still 🌐:** SSL for SaaS enabled on the zone with a fallback origin the
+dispatcher serves, `LUNORA_SAAS_ZONE_ID` set, and Zone → SSL and
+Certificates:Edit on the cell token (`RUNBOOK.md` step 6a) — never run against
+a real zone.
 
 ### B2. Tenant runtime logs — full log management (✅ shipped incl. tail-consumer wiring; 🌐 live end-to-end run)
 

@@ -2,17 +2,20 @@ import type { ReactElement, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 
-import type { BoxView } from "./boxes";
-import { BOX_STATUS, boxHostname, formatMegabytes, OUTDATED_EXPLANATION, SINGLE_TRUST_EXPLANATION } from "./boxes";
+import type { BoxFleet, BoxView } from "./boxes";
+import { BOX_STATUS, boxHostname, FLEET_STATE, formatMegabytes, OUTDATED_EXPLANATION, SINGLE_TRUST_EXPLANATION } from "./boxes";
 import { COLUMN_LABEL } from "./section-styles";
 import { RelativeTime, StatusBadge } from "./section-ui";
 
 interface BoxListItemProps {
     box: BoxView;
+    /** Owner/admin, on a connected box: show Diagnose. */
+    diagnose: boolean;
     /** The apex hostnames live under; `undefined` until known, when only the slug is shown. */
     domain?: string;
     /** Owner/admin: show rename and revoke. */
     manage: boolean;
+    onDiagnose: () => void;
     onRename: () => void;
     onRevoke: () => void;
     /** Names of the projects placed on this box. */
@@ -28,7 +31,14 @@ const Fact = ({ children, label }: { children: ReactNode; label: string }): Reac
 );
 
 /** Name, state chips and — for an owner/admin, on a box not yet revoked — its actions. */
-const BoxHeading = ({ box, manage, onRename, onRevoke }: Pick<BoxListItemProps, "box" | "manage" | "onRename" | "onRevoke">): ReactElement => {
+const BoxHeading = ({
+    box,
+    diagnose,
+    manage,
+    onDiagnose,
+    onRename,
+    onRevoke,
+}: Pick<BoxListItemProps, "box" | "diagnose" | "manage" | "onDiagnose" | "onRename" | "onRevoke">): ReactElement => {
     const status = BOX_STATUS[box.status];
 
     return (
@@ -39,6 +49,11 @@ const BoxHeading = ({ box, manage, onRename, onRevoke }: Pick<BoxListItemProps, 
             {box.singleTrust ? <StatusBadge tone="warning">single trust</StatusBadge> : null}
             {manage && box.status !== "revoked" ? (
                 <span className="ml-auto flex items-center gap-1">
+                    {diagnose ? (
+                        <Button aria-label={`Diagnose ${box.name}`} onClick={onDiagnose} size="sm" type="button" variant="ghost">
+                            Diagnose
+                        </Button>
+                    ) : null}
                     <Button aria-label={`Rename ${box.name}`} onClick={onRename} size="sm" type="button" variant="ghost">
                         Rename
                     </Button>
@@ -72,6 +87,37 @@ const BoxFacts = ({ box, projects }: Pick<BoxListItemProps, "box" | "projects">)
     </dl>
 );
 
+/** One fleet: its alias, the deployment it runs and its state. */
+const FleetRow = ({ fleet }: { fleet: BoxFleet }): ReactElement => {
+    const state = FLEET_STATE[fleet.state];
+
+    return (
+        <li className="flex flex-wrap items-center gap-2 text-sm">
+            <code className="font-mono">{fleet.alias}</code>
+            <StatusBadge tone={state.tone}>{state.label}</StatusBadge>
+            <span className="truncate font-mono text-xs text-muted-foreground">{fleet.deploymentId ?? "nothing deployed"}</span>
+        </li>
+    );
+};
+
+/** The celld fleets the box runs, as it last reported them; nothing until it has reported any. */
+const BoxFleets = ({ box }: Pick<BoxListItemProps, "box">): ReactElement | null => {
+    if (box.fleets === undefined || box.fleets.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="grid gap-1.5">
+            <p className={`${COLUMN_LABEL} m-0 text-muted-foreground`}>Fleets</p>
+            <ul className="m-0 grid list-none gap-1 p-0">
+                {box.fleets.map((fleet) => (
+                    <FleetRow fleet={fleet} key={fleet.alias} />
+                ))}
+            </ul>
+        </div>
+    );
+};
+
 /** The findings that need a sentence: outdated, single trust, a DNS failure. */
 const BoxFindings = ({ box }: Pick<BoxListItemProps, "box">): ReactElement => (
     <>
@@ -86,19 +132,20 @@ const BoxFindings = ({ box }: Pick<BoxListItemProps, "box">): ReactElement => (
 );
 
 /**
- * One box: name and state chips, its hostname, what it runs, and what it has to
- * spare. A revoked box keeps its row (its history is the point) but loses its
+ * One box: name and state chips, its hostname, what it runs, what it has to
+ * spare, and the celld fleets it reported. A revoked box keeps its row (its history is the point) but loses its
  * actions. The outdated, single-trust and DNS findings each carry their own
  * sentence rather than a tooltip, so they are read rather than hovered.
  */
-export const BoxListItem = ({ box, domain, manage, onRename, onRevoke, projects }: BoxListItemProps): ReactElement => (
+export const BoxListItem = ({ box, diagnose, domain, manage, onDiagnose, onRename, onRevoke, projects }: BoxListItemProps): ReactElement => (
     <li className="grid gap-3 border-b border-border py-4 last:border-b-0">
-        <BoxHeading box={box} manage={manage} onRename={onRename} onRevoke={onRevoke} />
+        <BoxHeading box={box} diagnose={diagnose} manage={manage} onDiagnose={onDiagnose} onRename={onRename} onRevoke={onRevoke} />
         <div className="grid gap-1">
             <code className="font-mono text-sm break-all">{domain === undefined ? box.slug : boxHostname(box.slug, domain)}</code>
             <p className="m-0 text-xs text-muted-foreground">{BOX_STATUS[box.status].description}</p>
         </div>
         <BoxFacts box={box} projects={projects} />
+        <BoxFleets box={box} />
         <BoxFindings box={box} />
     </li>
 );

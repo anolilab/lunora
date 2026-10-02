@@ -52,8 +52,10 @@ export const buildBox = defineContainer({
 
 /**
  * The provision box: Alchemy 2 converging tenant Workers and their per-project
- * resources into this cell's account. The `cloudflare-wfp` target driver drives
- * it (`src/targets/cloudflare-wfp/provision-box.ts`).
+ * resources — into this cell's account for `cloudflare-wfp`, into a customer's
+ * connected account for `cloudflare-workers`, with the Alchemy state kept in
+ * this cell's account either way. Both Cloudflare target drivers drive it
+ * (`src/targets/provision-box/client.ts`).
  *
  * Not in the Worker because Alchemy wants a Node process with a filesystem for
  * its state and the full SDK surface; not in the build box because that one

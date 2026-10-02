@@ -26,6 +26,7 @@ import { resolveAdminToken } from "../deploy/admin-token";
 import { createReleaseStore } from "../deploy/release-store";
 import { teardownPorts, usageRollbackPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
+import { runCertificateSweep } from "../domains/certificate-sweep";
 import type { CronTarget, CronTick } from "../fanout/cron";
 import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
@@ -36,7 +37,7 @@ import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
 import type { TargetFleet } from "../targets/driver";
-import { boxLookupsIn } from "../targets/placement";
+import { accountLookupIn, boxLookupsIn } from "../targets/placement";
 import { registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
@@ -107,6 +108,7 @@ const sweepTeardown = async (env: ControlPlaneEnv): Promise<void> => {
         teardownPorts(
             database,
             {
+                accounts: accountLookupIn(database),
                 boxes: boxLookupsIn(database),
                 deleteRelease: createReleaseStore(env.RELEASES).delete,
                 driverFor: (placement) => resolveTargetDriver(placement, env),
@@ -131,10 +133,12 @@ const currentPeriodStart = (): number => {
 /**
  * Fold tenant request counts into the `platformUsage` ledger (§4) so spend caps,
  * the usage summary, and the usage chart have data to read — for every
- * `metering: "readback"` target whose fleet reads usage here (`cloudflare-wfp`:
- * Analytics Engine, and only with account credentials configured). Delta-read
- * off this cell's `usageReadAtMs` checkpoint (no double counting); a second
- * readback target needs a checkpoint of its own first (`usageRollbackPorts`).
+ * `metering: "readback"` target whose fleet reads usage here, and every scope
+ * of it (`cloudflare-wfp`: this cell's Analytics Engine dataset, and only with
+ * account credentials configured). Each scope is delta-read off its own
+ * `usageCheckpoints` row (no double counting), and isolated from the others: a
+ * scope whose read throws keeps its checkpoint and is retried next hour, while
+ * the rest advance.
  */
 const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     if (!env.DB) {
@@ -142,21 +146,37 @@ const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     }
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const periodStart = currentPeriodStart();
 
-    await Promise.all(
+    const swept = await Promise.allSettled(
         registeredFleets(env, { metering: "readback" }).map(async ({ id: target, usage }) => {
-            if (usage) {
-                await runUsageRollback(
-                    await usageRollbackPorts(database, usage, {
-                        cellName: env.LUNORA_CELL ?? "default",
-                        now: Date.now(),
-                        periodStart: currentPeriodStart(),
-                        target,
-                    }),
-                );
+            if (!usage) {
+                return;
+            }
+
+            const scopes = await usage.scopes();
+            const results = await Promise.allSettled(
+                scopes.map(async (scope) => {
+                    await runUsageRollback(await usageRollbackPorts(database, (sinceMs) => usage.read(scope, sinceMs), { now, periodStart, scope, target }));
+                }),
+            );
+
+            for (const result of results) {
+                if (result.status === "rejected") {
+                    // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
+                    console.error(`[usage] ${target} readback failed for one scope`, result.reason);
+                }
             }
         }),
     );
+
+    for (const result of swept) {
+        if (result.status === "rejected") {
+            // eslint-disable-next-line no-console -- see above
+            console.error("[usage] readback failed", result.reason);
+        }
+    }
 };
 
 /**
@@ -403,6 +423,32 @@ const sweepOutdatedBoxes = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Follow custom-domain certificates until they are issued (GAPS.md B1,
+ * `src/domains/certificate-sweep.ts`), through the fleet that issues them —
+ * `cloudflare-wfp`'s, when this cell has a SaaS zone. No-ops otherwise.
+ */
+const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
+    const refresh = registeredFleets(env).find((fleet) => fleet.refreshCertificate !== undefined)?.refreshCertificate;
+
+    if (!env.DB || refresh === undefined) {
+        return;
+    }
+
+    const result = await runCertificateSweep({
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        log: (line) => {
+            // eslint-disable-next-line no-console -- a failed certificate read is only visible here, in Workers Logs
+            console.warn(line);
+        },
+        now: Date.now(),
+        refresh,
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[certificates]", JSON.stringify(result));
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -440,6 +486,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_HOUR, run: sweepHostdRollouts },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
     { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
+    // Custom-domain certificates still validating or deploying (GAPS.md B1).
+    { cron: EVERY_HOUR, run: sweepCertificates },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

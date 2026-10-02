@@ -57,14 +57,47 @@ export interface TenantHandle {
     url: string;
 }
 
-/** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`). */
+/** A custom domain as the domain hooks see it. */
+export interface CustomDomain {
+    /** The certificate the target issued for it earlier, when it issues any (`domains.customHostnameId`). */
+    customHostnameId?: string;
+    hostname: string;
+}
+
+/** A custom domain's certificate, as the target that issues it reports it (`cloudflare-wfp`: a Cloudflare-for-SaaS custom hostname). */
+export interface DomainCertificate {
+    /** The issuer's handle on it; absent when none could be requested (`sslStatus: "unconfigured"`). */
+    customHostnameId?: string;
+    /** Why the certificate is not issued yet, as the issuer says it. */
+    error?: string;
+    /** The issuer's certificate status (`initializing`, `pending_validation`, …, `active`), or `unconfigured`. */
+    sslStatus: string;
+}
+
+/** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`, `POST /v1/domains/remove`). */
 export interface DomainOps {
+    /**
+     * Run after a domain's row is deleted, best-effort. `celld-vps` pushes the
+     * box's routing table, which is built from the remaining rows, so a removed
+     * domain stops being served at once rather than at the next push. A failure
+     * is logged, never surfaced: the row is already gone.
+     */
+    afterRemoved?: () => Promise<void>;
+
+    /**
+     * Release what {@link onVerified} set up for a domain being removed.
+     * `cloudflare-wfp` deletes its custom hostname (and certificate); absent
+     * where a domain holds nothing outside the control plane.
+     */
+    onRemoved?: (domain: CustomDomain) => Promise<void>;
+
     /**
      * Run once a hostname of this placement's project verifies. `celld-vps`
      * pushes the box's routing table, since a box serves a custom domain only
-     * once its table names it; absent where serving needs nothing more.
+     * once its table names it; `cloudflare-wfp` requests the hostname's
+     * certificate and answers it. Absent where serving needs nothing more.
      */
-    onVerified?: () => Promise<void>;
+    onVerified?: (domain: CustomDomain) => Promise<DomainCertificate | undefined>;
     /** The CNAME targets a custom hostname must point at to count as routed here (`verifyDomain`'s `platformTargets`). */
     platformTargets: () => string[];
 }
@@ -107,9 +140,37 @@ export interface TargetFleet {
     reach: (tenant: TenantHandle) => TenantSend;
 
     /**
-     * Requests per resource with a timestamp strictly after `sinceMs` — the
-     * metering readback of a `metering: "readback"` target, when this deployment
-     * is configured to read it (`cloudflare-wfp/analytics.ts`).
+     * Re-read a custom domain certificate this target issued (`onVerified`), for
+     * the hourly certificate sweep: its status, or `null` once it is gone.
+     * Absent on a target that issues none, or a deployment not configured to.
      */
-    usage?: (sinceMs: number) => Promise<UsageRow[]>;
+    refreshCertificate?: (customHostnameId: string) => Promise<DomainCertificate | null>;
+
+    /**
+     * The metering readback of a `metering: "readback"` target, when this
+     * deployment is configured to read it (`cloudflare-wfp/analytics.ts`,
+     * `cloudflare-workers/analytics.ts`).
+     */
+    usage?: UsageReadback;
+}
+
+/**
+ * A readback target's request-count source, split into SCOPES: one per
+ * independent metering source, each with its own checkpoint
+ * (`usageCheckpoints`, keyed by target and scope). `cloudflare-wfp` has one —
+ * this control plane's cell, whose Analytics Engine dataset counts every
+ * tenant. `cloudflare-workers` has one per connected Cloudflare account, each
+ * read with that account's own token. Two sources sharing one checkpoint would
+ * advance one boundary and each skip the other's window.
+ */
+export interface UsageReadback {
+    /**
+     * Requests per resource in `scope` with a timestamp strictly after
+     * `sinceMs`. A row's `resourceRef` must be one only `scope`'s deployments
+     * carry, so a source can never attribute requests to a tenant it does not
+     * hold.
+     */
+    read: (scope: string, sinceMs: number) => Promise<UsageRow[]>;
+    /** Every scope this deployment reads right now. */
+    scopes: () => Promise<string[]>;
 }

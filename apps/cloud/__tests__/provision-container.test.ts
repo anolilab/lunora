@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { ProvisionEvent } from "../src/targets/cloudflare-wfp/box-contract";
+import type { ProvisionEvent } from "../src/targets/provision-box/contract";
 
 /**
  * The provision box's HTTP contract, with Alchemy stubbed.
@@ -30,14 +30,15 @@ const deployJob = (dispatchNamespace = "lunora-production") => {
             alias: "acme",
             assets: { files: [{ content: Buffer.from("<h1>hi</h1>").toString("base64"), path: "/index.html" }] },
             bundle: Buffer.from("export default { fetch() {} }").toString("base64"),
-            cell: "cell-1",
-            dispatchNamespace,
             manifest: { bindings: [{ binding: "DB", resourceName: "acme-db", type: "d1" }] },
             secrets: { API_KEY: "s3cret-value" },
             tags: ["org:o1"],
+            target: { cell: "cell-1", dispatchNamespace, kind: "dispatch-namespace" } as Record<string, string>,
         },
     };
 };
+
+const ACCOUNT = "a".repeat(32);
 
 const post = (body: unknown): Promise<Response> =>
     fetch(`${origin}/__lunora/provision`, {
@@ -62,7 +63,14 @@ const reports = (stream: ProvisionEvent[]) =>
 describe("provision box", { timeout: 20_000 }, () => {
     beforeAll(async () => {
         child = spawn(process.execPath, [SERVER], {
-            env: { ...process.env, CLOUDFLARE_API_TOKEN: "cf-token-value", LUNORA_ALCHEMY_CLI: STUB, LUNORA_CONTROL_PLANE_SCRIPT: "lunora-cloud", PORT: "0" },
+            env: {
+                ...process.env,
+                CLOUDFLARE_ACCOUNT_ID: "cell-account",
+                CLOUDFLARE_API_TOKEN: "cf-token-value",
+                LUNORA_ALCHEMY_CLI: STUB,
+                LUNORA_CONTROL_PLANE_SCRIPT: "lunora-cloud",
+                PORT: "0",
+            },
             stdio: ["ignore", "pipe", "inherit"],
         });
 
@@ -110,18 +118,44 @@ describe("provision box", { timeout: 20_000 }, () => {
     });
 
     it("never lets a secret value or the API token out in a log line", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const text = JSON.stringify(await events(await post(deployJob())));
 
         expect(text).not.toContain("s3cret-value");
+        expect(text).not.toContain("cf-token-value");
         expect(text).toContain("echoing [redacted]");
+    });
+
+    it("converges a customer-account job with the job's credentials, keeping the state in the platform's store", async () => {
+        expect.assertions(5);
+
+        const job = deployJob();
+
+        job.spec.target = {
+            accountId: ACCOUNT,
+            apiToken: "customer-token-value",
+            kind: "account",
+            state: { token: "state-store-token", url: "https://alchemy-state-store.cell.workers.dev" },
+        } as unknown as Record<string, string>;
+
+        const stream = await events(await post(job));
+        const [project, worker] = reports(stream);
+
+        expect([project?.account, worker?.account]).toStrictEqual([ACCOUNT, ACCOUNT]);
+        expect(worker?.stateStore).toBe("https://alchemy-state-store.cell.workers.dev");
+        // The customer's token is scrubbed exactly like the cell's, and so is the store's bearer.
+        expect(JSON.stringify(stream)).not.toContain("customer-token-value");
+        expect(JSON.stringify(stream)).not.toContain("state-store-token");
+        expect(stream.at(-1)).toStrictEqual({ type: "result" });
     });
 
     it("destroys the Worker, then the project", async () => {
         expect.assertions(2);
 
-        const stream = await events(await post({ action: "destroy", alias: "acme", dispatchNamespace: "lunora-production" }));
+        const stream = await events(
+            await post({ action: "destroy", alias: "acme", target: { cell: "cell-1", dispatchNamespace: "lunora-production", kind: "dispatch-namespace" } }),
+        );
 
         expect(reports(stream).map((report) => [(report.args as string[])[0], report.stack])).toStrictEqual([
             ["destroy", "worker"],
@@ -148,7 +182,7 @@ describe("provision box", { timeout: 20_000 }, () => {
         job.spec.manifest.bindings = [{ binding: "FLOW", resourceName: "x", type: "workflow" }];
 
         await expect(events(await post(job))).resolves.toStrictEqual([
-            { message: "workflow binding FLOW: Workflows cannot be registered for a Workers for Platforms script yet", type: "error" },
+            { message: "workflow binding FLOW: Workflows cannot be registered for a prebuilt Worker yet", type: "error" },
         ]);
     });
 

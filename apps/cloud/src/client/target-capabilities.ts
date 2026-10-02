@@ -77,10 +77,23 @@ export const refusedBindings = (target: TargetId): { label: string; reason: stri
         .toSorted((a, b) => a.label.localeCompare(b.label, "en"));
 
 /**
- * Properties of running on your own server that are not bugs, and that an
- * operator should know before choosing it (plan 458 §8, D10).
+ * What an operator should know about a target before choosing it that is not a
+ * bug and not a refused binding (plan 458 §8, D10; MULTIPLATFORM.md Phase 3).
  */
-export const OWN_SERVER_PROPERTIES: ReadonlyArray<string> = [
-    "Secrets are delivered as celld vars and persist in your bucket: anyone with read access to that bucket can read them.",
-    "A box is a single machine. Upgrades cost a few seconds of downtime, and there is no failover to a second node.",
-];
+export const TARGET_PROPERTIES: Readonly<Partial<Record<TargetId, ReadonlyArray<string>>>> = {
+    "celld-vps": [
+        "Secrets are delivered as celld vars and persist in your bucket: anyone with read access to that bucket can read them.",
+        "A box is a single machine. Upgrades cost a few seconds of downtime, and there is no failover to a second node.",
+    ],
+    "cloudflare-workers": [
+        "Requests, storage and Durable Objects run on your Cloudflare account and appear on your Cloudflare bill. The Usage tab shows the requests, and Lunora Cloud never bills for them.",
+        "The project's Alchemy convergence state stays with Lunora Cloud, not in your account, so nothing you change there can corrupt it — but resources you edit by hand may be converged back on the next deploy.",
+        "Disconnecting the account is refused while a project deploys into it; after disconnecting, revoke the token in your Cloudflare dashboard.",
+    ],
+};
+
+/** How the capabilities card introduces a target's refusals. */
+export const TARGET_CAPABILITIES_INTRO: Readonly<Partial<Record<TargetId, string>>> = {
+    "celld-vps": "This project runs on celld on your own box.",
+    "cloudflare-workers": "This project runs as a plain Worker in your own Cloudflare account, outside Lunora Cloud's dispatcher.",
+};

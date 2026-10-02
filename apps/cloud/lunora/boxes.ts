@@ -1,4 +1,4 @@
-import type { BoxVersions } from "@lunora/hostd/protocol";
+import type { BoxVersions, FleetSummary } from "@lunora/hostd/protocol";
 import { isVersion } from "@lunora/hostd/protocol";
 import { LunoraError } from "@lunora/server";
 
@@ -9,15 +9,13 @@ import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
-import { DEFAULT_TARGET, isBoxTarget, storedTarget } from "../src/provision-contract";
-import { revokedBoxError } from "../src/targets/placement";
+import { isBoxTarget, storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
-import { deployTarget } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -44,6 +42,7 @@ interface BoxRow {
     desiredReleaseId?: null | string;
     dnsError?: null | string;
     enrolledAt?: null | number;
+    fleets?: FleetSummary[] | null;
     ipv4?: null | string;
     ipv6?: null | string;
     lastSeenAt?: null | number;
@@ -73,6 +72,8 @@ export interface BoxView {
     /** Why the box's DNS records could not be written, when they could not. */
     dnsError?: string;
     enrolledAt?: number;
+    /** The celld fleets the box runs, as it last reported them (one per alias). Absent until it has. */
+    fleets?: FleetSummary[];
     ipv4?: string;
     ipv6?: string;
     lastSeenAt?: number;
@@ -119,6 +120,7 @@ export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxVi
         ...present("desiredReleaseId", row.desiredReleaseId),
         ...present("dnsError", row.dnsError),
         ...present("enrolledAt", row.enrolledAt),
+        ...present("fleets", row.fleets),
         ...present("ipv4", row.ipv4),
         ...present("ipv6", row.ipv6),
         ...present("lastSeenAt", row.lastSeenAt),
@@ -132,15 +134,31 @@ export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxVi
  * Mint a one-time enrolment token for a new box (owner/admin). The plaintext
  * token is returned ONCE, with the command that uses it; only its SHA-256 is
  * stored, and it expires after 15 minutes (plan 458 D4).
+ *
+ * An action because the command names this control plane's public origin
+ * (`--control-plane`, which `lunora-hostd enrol` requires), and only actions
+ * carry `ctx.env`. Not being a transaction costs nothing here: two tokens
+ * minted at once past the plan's limit are refused when the second one is
+ * consumed — `enrol` re-checks the limit.
  */
-export const createEnrolment = mutation
+export const createEnrolment = action
     .use(rateLimit("sensitive"))
     .input({ name: boundedString(LIMITS.name), organizationId: v.id("organizations") })
-    .mutation(async ({ ctx: context, args: { name, organizationId } }): Promise<{ expiresAt: number; installCommand: string; token: string }> => {
+    .action(async ({ ctx: context, args: { name, organizationId } }): Promise<{ expiresAt: number; installCommand: string; token: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
         if (name.trim() === "") {
             throw new LunoraError("BAD_REQUEST", "a box needs a name");
+        }
+
+        const origin = context.env?.LUNORA_ORIGIN_URL;
+
+        // Without its own origin the control plane cannot tell a box where to enrol.
+        if (origin === undefined || origin === "") {
+            throw new LunoraError(
+                "SERVICE_UNAVAILABLE",
+                "this control plane has no public origin configured (LUNORA_ORIGIN_URL), so boxes cannot enrol with it",
+            );
         }
 
         // An unused, unexpired token is a box on its way: counting it stops an owner
@@ -151,6 +169,15 @@ export const createEnrolment = mutation
         ).length;
 
         await assertWithinQuota(context, organizationId, "boxes", (await activeBoxCount(context, organizationId)) + pending);
+
+        const stable = await latestStableVersions(context);
+        const hostdVersion = stable?.hostd;
+
+        // Nothing to install yet: a release is stored only once it verifies
+        // against the pinned release keys (`POST /v1/hostd/releases`).
+        if (hostdVersion === undefined) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", "this control plane offers no lunora-hostd release yet, so there is nothing for a box to install");
+        }
 
         const token = mintEnrolmentToken();
         const expiresAt = context.now + ENROLMENT_TTL_MS;
@@ -171,7 +198,7 @@ export const createEnrolment = mutation
             target: name.trim(),
         });
 
-        return { expiresAt, installCommand: installCommandFor(token), token };
+        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion, token }), token };
     });
 
 /** An organization's boxes, revoked ones included (members). */
@@ -261,71 +288,31 @@ export const revoke = internalMutation
     });
 
 /**
- * Point a project at a deploy target (owner/admin) — the one writer of
- * `projects.target` and `projects.boxId`. A `celld-vps` project names a box of
- * the same organization that is not revoked; any other target clears the box.
+ * Clear a diagnose of box `id` (owner/admin, checked against the caller's
+ * session; plan 458 W9) and audit it. The `diagnose` job runs code on the
+ * customer's machine and its output describes the machine, so it is a manager's
+ * act, rate-limited like any other credential-shaped write.
  *
- * Refused while the project still has a deployment the teardown sweep has not
- * reclaimed: its tenant (and its data) lives on the CURRENT target, and the
- * sweep would send that teardown — keyed by alias — to the new one.
+ * Internal: only `POST /v1/boxes/diagnose` calls it, right before it hands the
+ * job to the box's session — a mutation cannot reach the session itself.
  */
-export const setProjectTarget = mutation
+export const authorizeDiagnose = internalMutation
     .use(rateLimit("sensitive"))
-    .input({
-        boxId: v.optional(v.id("boxes")),
-        organizationId: v.id("organizations"),
-        projectId: v.id("projects"),
-        target: deployTarget,
-    })
-    .mutation(async ({ ctx: context, args: { boxId, organizationId, projectId, target } }): Promise<void> => {
+    .input({ id: v.id("boxes"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ slug: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, projectId, organizationId, "project");
+        await assertRowInOrg(context, id, organizationId, "box");
 
-        if (isBoxTarget(target)) {
-            if (boxId === undefined) {
-                throw new LunoraError("BAD_REQUEST", `a ${target} project needs a box (boxId)`);
-            }
+        const row = (await context.db.get(id)) as BoxRow;
 
-            const box = (await context.db.get(boxId)) as BoxRow | null;
-
-            if (box?.organizationId !== organizationId) {
-                throw new LunoraError("NOT_FOUND", "box not found in this organization");
-            }
-
-            if (box.status === "revoked") {
-                throw revokedBoxError(box.name);
-            }
-        } else if (boxId !== undefined) {
-            throw new LunoraError("BAD_REQUEST", `a ${target} project has no box`);
+        if (row.status === "revoked") {
+            throw new LunoraError("CONFLICT", "this box is revoked; it takes no more jobs");
         }
 
-        const project = (await context.db.get(projectId)) as { boxId?: null | string; target?: null | string };
-        const currentTarget = storedTarget(project.target) ?? DEFAULT_TARGET;
-        const currentBox = project.boxId ?? undefined;
+        await context.db.insert("auditLog", { action: "box.diagnose", actorUserId: member.userId, createdAt: context.now, organizationId, target: row.slug });
 
-        if (currentTarget === target && currentBox === boxId) {
-            return;
-        }
-
-        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId } });
-        const pending = (deployments as { status: string; teardownAt?: null | number }[]).filter((row) => row.status !== "destroyed" || row.teardownAt == null);
-
-        if (pending.length > 0) {
-            throw new LunoraError(
-                "CONFLICT",
-                `this project still has ${String(pending.length)} deployment(s) on ${currentTarget}; delete the project's deployments and wait for teardown before moving it`,
-            );
-        }
-
-        await context.db.patch(projectId, { boxId: boxId ?? null, target });
-        await context.db.insert("auditLog", {
-            action: "project.target.set",
-            actorUserId: member.userId,
-            createdAt: context.now,
-            organizationId,
-            target: boxId === undefined ? target : `${target}:${boxId}`,
-        });
+        return { slug: row.slug };
     });
 
 /** Refuse an enrolment whose key, addresses or versions are malformed — before the token is touched. */

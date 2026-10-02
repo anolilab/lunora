@@ -9,17 +9,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { api } from "../../lunora/_generated/api.js";
 import type { TargetId } from "../provision-contract";
-import { isBoxTarget, isTargetId } from "../provision-contract";
+import { isAccountTarget, isBoxTarget, isTargetId } from "../provision-contract";
 import type { BoxView } from "./boxes";
 import { assessTargetDraft, assignableBoxes, BOX_STATUS, canManage } from "./boxes";
+import type { CloudflareAccountView } from "./cloudflare-accounts";
+import { accountTitle } from "./cloudflare-accounts";
 import { Field, FormError } from "./section-ui";
 import { TARGET_OPTIONS, targetLabel } from "./target-capabilities";
-import type { BoxId, OrgId, ProjectId } from "./types";
+import type { BoxId, CloudflareAccountId, OrgId, ProjectId } from "./types";
 import { useMyRole } from "./use-boxes";
 
 interface ProjectTargetCardProps {
     /** The box the project is on now, for a `celld-vps` project. */
     boxId?: string;
+    /** The connected account the project deploys into now, for a `cloudflare-workers` project. */
+    cloudflareAccountId?: string;
     organizationId: OrgId;
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     target: TargetId;
@@ -85,8 +89,66 @@ const BoxPicker = ({
 };
 
 /**
- * Project settings → Deploy target (plan 458 W9): Lunora Cloud's Cloudflare
- * target, or one of the org's own boxes, through `boxes.setProjectTarget`.
+ * The account half of the form: a picker over the org's connected Cloudflare
+ * accounts, or — with none — a pointer to the Cloudflare accounts tab.
+ */
+const AccountPicker = ({
+    accounts,
+    disabled,
+    onChange,
+    organizationId,
+    value,
+}: {
+    accounts: ReadonlyArray<CloudflareAccountView> | undefined;
+    disabled: boolean;
+    onChange: (value: string) => void;
+    organizationId: OrgId;
+    value: string;
+}): null | ReactElement => {
+    if (accounts === undefined) {
+        return null;
+    }
+
+    if (accounts.length === 0) {
+        return (
+            <p className="m-0 text-sm text-muted-foreground">
+                This organization has no Cloudflare account connected.{" "}
+                <Link className="underline-offset-2 hover:underline" params={{ organizationId }} to="/orgs/$organizationId/cloudflare-accounts">
+                    Connect one on the Cloudflare accounts tab
+                </Link>
+                .
+            </p>
+        );
+    }
+
+    return (
+        <Field htmlFor="project-cloudflare-account" label="Cloudflare account">
+            <Select
+                disabled={disabled}
+                onValueChange={(next) => {
+                    onChange(next ?? "");
+                }}
+                value={value}
+            >
+                <SelectTrigger className="w-full" id="project-cloudflare-account">
+                    <SelectValue placeholder="Select an account…" />
+                </SelectTrigger>
+                <SelectContent>
+                    {accounts.map((account) => (
+                        <SelectItem key={account._id} value={account._id}>
+                            {accountTitle(account)} — {account.workersSubdomain}.workers.dev
+                        </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
+        </Field>
+    );
+};
+
+/**
+ * Project settings → Deploy target (plan 458 W9, MULTIPLATFORM.md Phase 3):
+ * Lunora Cloud's Cloudflare target, one of the org's own boxes, or one of its
+ * connected Cloudflare accounts, through `projects.setTarget`.
  *
  * Owner/admin only, like the mutation. The copy is explicit that a switch moves
  * no data: the server refuses it while the project still has deployments on its
@@ -95,11 +157,12 @@ const BoxPicker = ({
  * The draft starts from the saved target and box; the parent keys this card on
  * both, so a save (or a change made elsewhere) remounts it from the new values.
  */
-export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: ProjectTargetCardProps): ReactElement => {
+export const ProjectTargetCard = ({ boxId, cloudflareAccountId, organizationId, projectId, target }: ProjectTargetCardProps): ReactElement => {
     const boxes = useQuery(api.boxes.list, { organizationId });
+    const accounts = useQuery(api.cloudflare_accounts.list, { organizationId });
     const manage = canManage(useMyRole(organizationId));
-    const setTarget = useMutation(api.boxes.setProjectTarget);
-    const saved = { boxId: boxId ?? "", target };
+    const setTarget = useMutation(api.projects.setTarget);
+    const saved = { boxId: boxId ?? "", cloudflareAccountId: cloudflareAccountId ?? "", target };
 
     // Plain strings: Base UI's Select is generic over its value, and a branded id
     // collapses that inference. The brands are reapplied at the mutation boundary.
@@ -107,8 +170,16 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
     const [draft, setDraft] = useState(saved);
     const [error, setError] = useState<null | string>(null);
 
-    const { changed, complete, needsBox } = assessTargetDraft(draft, saved);
+    const { changed, complete, needsAccount, needsBox } = assessTargetDraft(draft, saved);
     const currentBox = boxes?.find((box) => box._id === boxId)?.name ?? "a box";
+    const currentAccount = accounts?.find((account) => account._id === cloudflareAccountId);
+    let now = targetLabel(target);
+
+    if (isBoxTarget(target)) {
+        now = `${now} — ${currentBox}`;
+    } else if (isAccountTarget(target)) {
+        now = `${now} — ${currentAccount === undefined ? "an account" : accountTitle(currentAccount)}`;
+    }
 
     const save = (): void => {
         if (!isTargetId(draft.target)) {
@@ -120,7 +191,13 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
         setError(null);
         void (async () => {
             try {
-                await setTarget.mutate({ ...(isBoxTarget(next) ? { boxId: draft.boxId as BoxId } : {}), organizationId, projectId, target: next });
+                await setTarget.mutate({
+                    ...(isBoxTarget(next) ? { boxId: draft.boxId as BoxId } : {}),
+                    ...(isAccountTarget(next) ? { cloudflareAccountId: draft.cloudflareAccountId as CloudflareAccountId } : {}),
+                    organizationId,
+                    projectId,
+                    target: next,
+                });
             } catch (error_: unknown) {
                 setError(error_ instanceof Error ? error_.message : "could not change the deploy target");
             }
@@ -132,8 +209,8 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
             <CardHeader>
                 <CardTitle>Deploy target</CardTitle>
                 <CardDescription>
-                    Now: {isBoxTarget(target) ? `${targetLabel(target)} — ${currentBox}` : targetLabel(target)}. Switching the target does not move data: the
-                    move is refused while this project still has deployments on its current target, so delete them and wait for teardown first.
+                    Now: {now}. Switching the target does not move data: the move is refused while this project still has deployments on its current target, so
+                    delete them and wait for teardown first.
                 </CardDescription>
             </CardHeader>
             <CardContent className="grid max-w-md gap-4">
@@ -174,6 +251,21 @@ export const ProjectTargetCard = ({ boxId, organizationId, projectId, target }: 
                         }}
                         organizationId={organizationId}
                         value={draft.boxId}
+                    />
+                ) : null}
+
+                {needsAccount ? (
+                    <AccountPicker
+                        accounts={accounts}
+                        disabled={!manage}
+                        onChange={(value) => {
+                            setDraft((current) => {
+                                return { ...current, cloudflareAccountId: value };
+                            });
+                            setError(null);
+                        }}
+                        organizationId={organizationId}
+                        value={draft.cloudflareAccountId}
                     />
                 ) : null}
 

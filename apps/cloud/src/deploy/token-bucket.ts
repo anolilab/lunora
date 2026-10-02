@@ -1,8 +1,8 @@
 /**
- * Token bucket — the per-cell API budget primitive. Every
- * Cloudflare API call a cell makes (provisioning, script upload, secrets) is
- * gated through one of these so a cell never exceeds the account limit of
- * **1,200 requests / 5 minutes**. Deterministic and clock-injectable so the
+ * Token bucket — the per-account API budget primitive. Every converge that
+ * spends a Cloudflare account's API calls (provisioning, script upload, secrets)
+ * is gated through that account's bucket (`src/deploy/pacing.ts`) so the
+ * account never exceeds its limit of **1,200 requests / 5 minutes**. Deterministic and clock-injectable so the
  * rate logic is unit-testable without timers.
  */
 
@@ -41,6 +41,13 @@ export class TokenBucket {
         this.refill(at);
 
         return Math.floor(this.tokens);
+    }
+
+    /** Whether the bucket holds its whole burst capacity again. */
+    public isFull(at: number = this.now()): boolean {
+        this.refill(at);
+
+        return this.tokens >= this.capacity;
     }
 
     /** Milliseconds until at least one token is available (0 if one is ready now). */

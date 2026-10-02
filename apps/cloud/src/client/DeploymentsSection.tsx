@@ -35,6 +35,8 @@ import type { OrgId, ProjectId } from "./types";
 interface DeploymentsSectionProps {
     /** The box a `celld-vps` project deploys to. */
     boxId?: string;
+    /** The connected account a `cloudflare-workers` project deploys into. */
+    cloudflareAccountId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
@@ -484,6 +486,7 @@ const requestRollback = async (deploymentId: string, organizationId: OrgId): Pro
 
 export const DeploymentsSection = ({
     boxId,
+    cloudflareAccountId,
     gitProvider,
     githubRepo,
     onBack,
@@ -521,7 +524,14 @@ export const DeploymentsSection = ({
     // deploy too, since the target is chosen before anything is deployed.
     const targetSettings = (
         <>
-            <ProjectTargetCard boxId={boxId} key={`${target}|${boxId ?? ""}`} organizationId={organizationId} projectId={projectId} target={target} />
+            <ProjectTargetCard
+                boxId={boxId}
+                cloudflareAccountId={cloudflareAccountId}
+                key={`${target}|${boxId ?? ""}|${cloudflareAccountId ?? ""}`}
+                organizationId={organizationId}
+                projectId={projectId}
+                target={target}
+            />
             <TargetCapabilitiesCard target={target} />
         </>
     );

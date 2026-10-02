@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleDeployRequest } from "../src/deploy/handler";
 import { runDeployment } from "../src/deploy/orchestrator";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { ReleaseTarget } from "../src/deploy/release";
 import { rollbackRelease } from "../src/deploy/release";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import type { StoredRelease } from "../src/deploy/release-store";
-import { CellScheduler } from "../src/deploy/scheduler";
-import { TokenBucket } from "../src/deploy/token-bucket";
+import { ConvergeScheduler } from "../src/deploy/scheduler";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import { resolveTenant } from "../src/targets/cloudflare-wfp/route";
 import type { TargetDriver } from "../src/targets/driver";
@@ -28,8 +28,6 @@ const PREVIOUS: StoredRelease = {
     bundle: btoa("export default { v: 1 }"),
     manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" }] },
 };
-
-const scheduler = (): CellScheduler => new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) });
 
 /** A converge half that records every spec, with its bundle decoded. */
 const capture = (): { deployed: { bundle: string; spec: TenantDeploymentSpec }[]; provisioner: Provisioner } => {
@@ -80,7 +78,7 @@ const deps = (
         backend,
         driverFor: () => fakeDriver(provisioner),
         releases: memoryReleaseStore().store,
-        scheduler: scheduler(),
+        pacer: createDeployPacer(),
         ...overrides,
     };
 };
@@ -113,7 +111,7 @@ describe("orchestrator verify phase", () => {
                 phases.push(progress.phase);
             },
             driver: capture().provisioner,
-            scheduler: scheduler(),
+            scheduler: new ConvergeScheduler({}),
             verify: () => Promise.resolve(false),
         });
 
@@ -128,7 +126,7 @@ describe("orchestrator verify phase", () => {
                 phases.push(progress.phase);
             },
             driver: capture().provisioner,
-            scheduler: scheduler(),
+            scheduler: new ConvergeScheduler({}),
             verify: () => Promise.resolve(true),
         });
 

@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, query, v } from "./_generated/server.js";
+import { deployTarget } from "./tables/shared";
 
 /**
  * The cell fields safe to expose to any signed-in user (the org-create picker).
@@ -56,17 +57,22 @@ export const list = query.query(async ({ ctx: context }): Promise<CellSummary[]>
 export const register = internalMutation
     .input({
         cloudflareAccountId: v.string(),
+        config: v.optional(v.record(v.string(), v.string())),
         dispatchNamespacePrefix: v.string(),
         jurisdiction: v.optional(v.string()),
         name: v.string(),
+        // Validated at the route against the targets placed in a cell (`POST /v1/cells`).
+        target: v.optional(deployTarget),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> =>
         context.db.insert("cells", {
             cloudflareAccountId: arguments_.cloudflareAccountId,
+            ...(arguments_.config === undefined ? {} : { config: arguments_.config }),
             createdAt: context.now,
             dispatchNamespacePrefix: arguments_.dispatchNamespacePrefix,
             jurisdiction: arguments_.jurisdiction,
             name: arguments_.name,
             status: "active",
+            ...(arguments_.target === undefined ? {} : { target: arguments_.target }),
         }),
     );

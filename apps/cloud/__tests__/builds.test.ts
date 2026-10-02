@@ -145,6 +145,35 @@ describe(runBuild, () => {
         expect(logs).toContain("info:compiling");
     });
 
+    it("re-releases a commit already built from its stored release, without fetching or building", async () => {
+        const stored = { bundle: "BB==", bundleHash: "hash-old", cronSpecs: ["0 * * * *"], manifest: {} };
+        const released: unknown[] = [];
+        const { logs, ports, terminal } = portsWith({
+            execute: () => Promise.reject(new Error("must not build")),
+            fetchSource: () => Promise.reject(new Error("must not fetch")),
+            release: (_build, execution) => {
+                released.push(execution);
+
+                return Promise.resolve({ deploymentId: "dep_new", kind: "production" });
+            },
+            storedRelease: () => Promise.resolve({ deploymentId: "dep_old", execution: stored }),
+        });
+
+        await expect(runBuild(build, ports)).resolves.toStrictEqual({ bundleHash: "hash-old", deploymentId: "dep_new", status: "successful" });
+        expect(released).toStrictEqual([stored]);
+        expect(terminal).toStrictEqual(["complete:hash-old"]);
+        expect(logs).toContain("info:abc is already built: re-releasing deployment dep_old's stored release");
+    });
+
+    it("builds the commit again once the stored release it would re-release was pruned", async () => {
+        const { logs, ports, terminal } = portsWith({ storedRelease: () => Promise.resolve({ deploymentId: "dep_old", execution: null }) });
+
+        await expect(runBuild(build, ports)).resolves.toStrictEqual({ bundleHash: "hash-1", status: "successful" });
+        expect(terminal).toStrictEqual(["complete:hash-1"]);
+        expect(logs).toContain("info:deployment dep_old's stored release is no longer kept; building abc again");
+        expect(logs).toContain("info:compiling");
+    });
+
     it("fails the build when the source fetch throws — never completes", async () => {
         const { ports, terminal } = portsWith({ fetchSource: () => Promise.reject(new Error("tarball 404")) });
         const outcome = await runBuild(build, ports);

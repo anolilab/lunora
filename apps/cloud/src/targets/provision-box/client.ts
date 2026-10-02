@@ -1,7 +1,8 @@
 /**
- * The `cloudflare-wfp` driver's converge half: posts a {@link ProvisionJob} to
- * the provision box (`lunora/containers.ts`), which runs Alchemy 2 with the
- * cell's Cloudflare token, and reads its {@link ProvisionEvent} NDJSON back.
+ * The Cloudflare drivers' converge half (`cloudflare-wfp`, `cloudflare-workers`):
+ * posts a {@link ProvisionJob} to the provision box (`lunora/containers.ts`),
+ * which runs Alchemy 2 against the job's account, and reads its
+ * {@link ProvisionEvent} NDJSON back.
  *
  * The box is reached through a container handle, so the orchestration is
  * unit-testable with a fake `fetch` and no Cloudflare credentials.
@@ -14,19 +15,11 @@ import { provisionBox } from "../../../lunora/containers";
 import readNdjson from "../../lib/read-ndjson";
 import type { BindingSupportTable, TenantDeploymentSpec } from "../../provision-contract";
 import { tenantResourceName } from "../../provision-contract";
-import type { ProvisionDeploySpec, ProvisionEvent, ProvisionJob } from "./box-contract";
+import type { ProvisionDeploySpec, ProvisionEvent, ProvisionJob, ProvisionTarget } from "./contract";
 
 /** The provision box: one instance per project (`.get(alias)`) serializes a project's jobs. */
 export interface ProvisionBox {
     get: (name: string) => Pick<ContainerHandle, "fetch">;
-}
-
-/** Where a deploy job lands, and what it wires — the Cloudflare half the neutral spec does not carry. */
-export interface ProvisionPlacement {
-    cell: string;
-    dispatchNamespace: string;
-    /** The tail-consumer service attached when the spec asks for logs. */
-    tailConsumer: string;
 }
 
 /** The provision box accessor off a Worker env that carries its `CONTAINER_PROVISION_BOX` binding. */
@@ -46,18 +39,26 @@ const toBase64 = (data: ArrayBuffer): string => {
     return btoa(binary);
 };
 
+/** What a driver adds to the neutral spec: where the job lands, and the platform wiring that target takes. */
+export interface ProvisionPlacement {
+    /** Fire the spec's crons from the Worker itself — a target with `fanout: "native"`. */
+    nativeCrons: boolean;
+    /** The tail-consumer service attached when the spec asks for logs; absent where none is wired. */
+    tailConsumer?: string;
+    target: ProvisionTarget;
+}
+
 /**
  * The box's deploy spec for a release: the neutral spec, every provisioned
  * binding's resource name attached (the box never derives names itself), and
- * the cell, namespace and tail consumer this driver was configured with.
+ * the target and wiring the driver chose.
  */
 export const deployJobSpec = (spec: TenantDeploymentSpec, support: BindingSupportTable, placement: ProvisionPlacement): ProvisionDeploySpec => {
     return {
         alias: spec.alias,
         ...(spec.assets ? { assets: spec.assets } : {}),
         bundle: toBase64(spec.bundle),
-        cell: placement.cell,
-        dispatchNamespace: placement.dispatchNamespace,
+        ...(placement.nativeCrons && spec.crons !== undefined && spec.crons.length > 0 ? { crons: spec.crons } : {}),
         manifest: {
             ...spec.manifest,
             bindings: spec.manifest.bindings.map((requirement) =>
@@ -66,7 +67,8 @@ export const deployJobSpec = (spec: TenantDeploymentSpec, support: BindingSuppor
         },
         secrets: spec.secrets,
         tags: spec.tags,
-        ...(spec.collectLogs ? { tailConsumers: [placement.tailConsumer] } : {}),
+        ...(spec.collectLogs && placement.tailConsumer !== undefined ? { tailConsumers: [placement.tailConsumer] } : {}),
+        target: placement.target,
         ...(spec.vars ? { vars: spec.vars } : {}),
     };
 };

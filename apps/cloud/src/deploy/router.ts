@@ -22,21 +22,21 @@ import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
+import { createDeployPacer } from "./pacing";
 import type { DeployTarget } from "./release-core";
 import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
-import { handleBoxConnectRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
+import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
-import { handleDomainAddRoute, handleDomainVerifyRoute } from "./routes/domains";
+import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
 import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
-import { CellScheduler } from "./scheduler";
-import { cloudflareAccountBudget } from "./token-bucket";
 
 interface HttpRouterLike {
     fetch: (request: Request, environment?: unknown, context?: ExecutionContextLike) => Promise<Response>;
@@ -681,9 +681,10 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
  * abuse on the `/v1/*` surface (§7).
  */
 export const createDeployRouter = (): HttpRouterLike => {
-    // One scheduler per worker instance (≈ per cell): paces all Cloudflare API
-    // work against the account's 1,200-req/5-min budget (§2.5).
-    const scheduler = new CellScheduler({ bucket: cloudflareAccountBudget() });
+    // One pacer per worker instance (≈ per cell): paces each converge against the
+    // budget it spends — the cell's Cloudflare account (1,200 req / 5 min, §2.5),
+    // a connected account's own, or a box's job slots (`src/deploy/pacing.ts`).
+    const pacer = createDeployPacer();
 
     // Per-instance, per-IP request cap on the control-plane API. The in-memory
     // store is per-isolate (an acceptable first abuse control); a durable store
@@ -708,7 +709,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    const { handleBuildDispatchRoute, handleBuildRunRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(scheduler);
+    const { handleBuildDispatchRoute, handleBuildRunRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(pacer);
 
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can
@@ -749,6 +750,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDownloadRoute, method: "POST", path: "/v1/backups/download", spec: { auth: "session" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
+        // session — the removal query asserts owner/admin before the target releases the certificate.
+        { handler: handleDomainRemoveRoute, method: "POST", path: "/v1/domains/remove", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
         { handler: handleCloudflareBillingRoute, method: "POST", path: "/v1/cloudflare-billing", spec: { auth: "session" } },
@@ -793,6 +796,10 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxReleaseRoute, method: "GET", path: BOX_RELEASE_PATH, spec: { auth: "boxKey" } },
         // session — the revoke mutation asserts owner/admin of the box's org.
         { handler: handleBoxRevokeRoute, method: "POST", path: "/v1/boxes/revoke", spec: { auth: "session" } },
+        // session — the authorize mutation asserts owner/admin of the box's org; the job runs over the box's session.
+        { handler: handleBoxDiagnoseRoute, method: "POST", path: "/v1/boxes/diagnose", spec: { auth: "session" } },
+        // session — a customer's own Cloudflare account (cloudflare-workers); the connect mutation asserts owner/admin.
+        { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
         // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator, fetched by boxes.
         { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
         { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },

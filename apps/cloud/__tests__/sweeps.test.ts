@@ -8,6 +8,7 @@ import { fakeDriver } from "./support/memory-driver";
 
 describe(teardownPorts, () => {
     const noop = {
+        accounts: () => Promise.resolve(null),
         boxes: { byId: () => Promise.resolve(null), forAlias: () => Promise.resolve(null) },
         deleteRelease: () => Promise.resolve(),
         driverFor: () => fakeDriver(),
@@ -113,6 +114,71 @@ describe(teardownPorts, () => {
         ]);
     });
 
+    it("tears a cloudflare-workers alias down in the account its newest deployment names", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                {
+                    _id: "byo",
+                    alias: "web",
+                    cloudflareAccountId: "cfa_1",
+                    createdAt: 1,
+                    kind: "production",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "cloudflare-workers",
+                },
+            ],
+        });
+        const destroyed: unknown[] = [];
+        const account = { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" };
+        const ports = teardownPorts(
+            database,
+            {
+                ...noop,
+                accounts: (id) => Promise.resolve(id === "cfa_1" ? account : null),
+                driverFor: (placement) =>
+                    fakeDriver({
+                        destroy: (alias) => {
+                            destroyed.push({ alias, placement });
+
+                            return Promise.resolve();
+                        },
+                    }),
+            },
+            1000,
+            everyTarget,
+        );
+        const [pending] = await ports.listPending();
+
+        expect(pending).toStrictEqual({ alias: "web", cloudflareAccountId: "cfa_1", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+
+        await ports.destroy(pending);
+
+        expect(destroyed).toStrictEqual([{ alias: "web", placement: { account, target: "cloudflare-workers" } }]);
+    });
+
+    it("releases a cloudflare-workers alias whose account is gone — its Worker and data stay in the customer's account", async () => {
+        const log: string[] = [];
+        const ports = teardownPorts(
+            fakeControlPlaneDb({ deployments: [] }),
+            {
+                ...noop,
+                driverFor: () => {
+                    throw new Error("nothing to reach");
+                },
+                log: (line) => log.push(line),
+            },
+            1000,
+            everyTarget,
+        );
+
+        await ports.destroy({ alias: "web", cloudflareAccountId: "cfa_gone", destroyWorker: true, id: "byo", target: "cloudflare-workers" });
+
+        expect(log).toStrictEqual([
+            'alias "web": its Cloudflare account is no longer connected; the Worker and its data stay in that account, releasing the alias',
+        ]);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
@@ -160,7 +226,7 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 500, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 500, scope: "default", target: "cloudflare-wfp" });
 
         // Every release shares the alias's script; its usage lands on the live one.
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
@@ -177,7 +243,7 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
 
         expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_wfp", organizationId: "org_a" });
         // Another target's resource never lands on this target's bill.
@@ -189,7 +255,7 @@ describe(usageRollbackPorts, () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { insert });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 777, target: "cloudflare-wfp" });
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "default", target: "cloudflare-wfp" });
         await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, quantity: 12 });
 
         expect(insert).toHaveBeenCalledWith("platformUsage", {
@@ -202,25 +268,88 @@ describe(usageRollbackPorts, () => {
         });
     });
 
-    it("advances the cell's usageReadAtMs on setCheckpoint", async () => {
-        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default" }], deployments: [] }, { patch });
+    it("records a cloudflare-workers tenant's requests against its account, which keeps them off the bill", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
+        const database = fakeControlPlaneDb(
+            {
+                deployments: [
+                    {
+                        _id: "dep_byo",
+                        cloudflareAccountId: "cfa_1",
+                        organizationId: "org_a",
+                        resourceRef: "cfa_1/web",
+                        scriptName: "web",
+                        status: "live",
+                        target: "cloudflare-workers",
+                    },
+                ],
+                usageCheckpoints: [],
+            },
+            { insert },
+        );
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 777, scope: "cfa_1", target: "cloudflare-workers" });
+        const attribution = ports.resolveResource("cfa_1/web");
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
-        await ports.setCheckpoint(4242);
+        // A same-named script in another account is never this tenant's.
+        expect(ports.resolveResource("cfa_2/web")).toBeUndefined();
 
-        expect(patch).toHaveBeenCalledWith("cell_1", { usageReadAtMs: 4242 }, "cells");
+        await ports.record({ attribution: attribution as NonNullable<typeof attribution>, quantity: 5 });
+
+        expect(insert).toHaveBeenCalledWith("platformUsage", expect.objectContaining({ cloudflareAccountId: "cfa_1", deploymentId: "dep_byo", quantity: 5 }));
     });
 
-    it("no-ops setCheckpoint when the cell row is missing (unregistered cell)", async () => {
-        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const database = fakeControlPlaneDb({ cells: [], deployments: [] }, { patch });
+    it("seeds a cloudflare-wfp cell's first checkpoint from its old cells.usageReadAtMs", async () => {
+        const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }], deployments: [], usageCheckpoints: [] });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
-        await ports.setCheckpoint(4242);
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+
+        await expect(ports.getCheckpoint()).resolves.toBe(999);
+    });
+
+    it("reads the scope's own checkpoint row, never the old column, once one exists", async () => {
+        const database = fakeControlPlaneDb({
+            cells: [{ _id: "cell_1", name: "default", usageReadAtMs: 999 }],
+            deployments: [],
+            usageCheckpoints: [
+                { _id: "cp_other", readAtMs: 7, scopeKey: "eu-1", target: "cloudflare-wfp" },
+                { _id: "cp_1", readAtMs: 5000, scopeKey: "default", target: "cloudflare-wfp" },
+            ],
+        });
+
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "default", target: "cloudflare-wfp" });
+
+        await expect(ports.getCheckpoint()).resolves.toBe(5000);
+    });
+
+    it("inserts the scope's checkpoint row on its first advance and patches it after", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("cp_new"));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const first = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] }, { insert, patch });
+
+        const firstPorts = await usageRollbackPorts(first, reader([]), { now: 1000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+
+        await firstPorts.setCheckpoint(4242);
+
+        expect(insert).toHaveBeenCalledWith("usageCheckpoints", { readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp", updatedAt: 1000 });
+        expect(patch).not.toHaveBeenCalled();
+
+        const later = fakeControlPlaneDb(
+            { cells: [], deployments: [], usageCheckpoints: [{ _id: "cp_1", readAtMs: 4242, scopeKey: "acct_1", target: "cloudflare-wfp" }] },
+            { insert, patch },
+        );
+
+        const laterPorts = await usageRollbackPorts(later, reader([]), { now: 2000, periodStart: 0, scope: "acct_1", target: "cloudflare-wfp" });
+
+        await laterPorts.setCheckpoint(5000);
+
+        expect(patch).toHaveBeenCalledWith("cp_1", { readAtMs: 5000, updatedAt: 2000 }, "usageCheckpoints");
+    });
+
+    it("starts a scope with no checkpoint and no old cell column from nothing (the bootstrap window applies)", async () => {
+        const database = fakeControlPlaneDb({ cells: [], deployments: [], usageCheckpoints: [] });
+
+        const ports = await usageRollbackPorts(database, reader([]), { now: 1000, periodStart: 0, scope: "ghost", target: "cloudflare-wfp" });
 
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();
-
-        expect(patch).not.toHaveBeenCalled();
     });
 });

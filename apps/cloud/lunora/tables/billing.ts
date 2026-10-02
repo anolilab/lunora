@@ -6,7 +6,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { usageMeter } from "./shared";
+import { deployTarget, usageMeter } from "./shared";
 
 export const billingTables = {
     // Overage-debit watermarks (GAPS.md C3 follow-up): cumulative credits
@@ -36,6 +36,10 @@ export const billingTables = {
         // the customer has root on the box, so its counts are not billing
         // evidence. `src/billing/usage.ts` `isBillableUsage` is the one test.
         boxId: v.optional(v.id("boxes")),
+        // Set on rows read back from a customer's own Cloudflare account
+        // (`cloudflare-workers`): displayed, NEVER billed — Cloudflare bills those
+        // requests to the customer, and Lunora Cloud charges for the control plane.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
         kind: usageMeter,
@@ -49,6 +53,23 @@ export const billingTables = {
         .global()
         .index("by_org", ["organizationId"])
         .index("by_box_window", ["boxId", "windowStart"]),
+
+    // Metering readback checkpoints (§4), one per (target, scope): the epoch-ms
+    // boundary a `metering: "readback"` target's source has been folded into
+    // `platformUsage` through. The rollback reads `timestamp > readAtMs` and
+    // advances it after, so repeated runs never double-count. A scope is one
+    // independent source (`TargetFleet.usage.scopes()`): the cell's name for
+    // `cloudflare-wfp`, a connected account's row id for `cloudflare-workers`.
+    // Replaces `cells.usageReadAtMs`, which seeds a `cloudflare-wfp` cell's row
+    // the first time it is swept.
+    usageCheckpoints: defineTable({
+        readAtMs: v.number(),
+        scopeKey: v.string(),
+        target: deployTarget,
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_target_scope", ["target", "scopeKey"], { unique: true }),
 
     // Per-org BYO Cloudflare billing connection (Billable Usage API). Stores the
     // org's *own* Cloudflare account id + an AES-256-GCM-encrypted API token with

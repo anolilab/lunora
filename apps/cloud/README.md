@@ -7,7 +7,7 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > Status: **Phases 1–4 implemented as code**, verified by codegen, tsc, eslint,
 > and unit tests; end-to-end runs need live Cloudflare and provider keys. In
 > place: the data model, CRUD functions, org/deploy-key authorization, the deploy
-> orchestration core (token bucket, per-cell scheduler, state machine) and the
+> orchestration core (token bucket, per-budget converge pacing, state machine) and the
 > `POST /v1/deploy` streaming endpoint, a **real Cloudflare REST provisioner**
 > (`src/cloudflare/api.ts` — D1/R2 create, dispatch-script upload, secrets), the
 > dispatcher Worker with **per-plan runtime limits**, the server-rendered
@@ -17,8 +17,9 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > entitlements, metering ingestion), and **hardened better-auth** (mail-backed
 > verification/reset, optional OAuth, 2FA/passkeys, rate limiting). Still open
 > (needs live infra/services): end-to-end deploy validation, the billing-provider
-> charge wiring against a real Creem account, cell bring-up IaC, custom domains,
-> and the items still marked infrastructure-blocked in [`GAPS.md`](./GAPS.md).
+> charge wiring against a real Creem account, cell bring-up IaC, custom-domain
+> certificates against a real Cloudflare-for-SaaS zone, and the items still
+> marked infrastructure-blocked in [`GAPS.md`](./GAPS.md).
 
 ## Layout
 
@@ -65,11 +66,14 @@ src/
   targets/
     driver.ts        TargetDriver (one placement) + TargetFleet (every tenant of a target)
     registry.ts      placement → driver, target → fleet, built over the Worker env
-    placement.ts     a project's placement (its org's cell, or its box), and a
-                     deployment's, for the sweeps
-    cloudflare-wfp/  the Workers-for-Platforms driver: provision-box client + job
-                     contract, dispatch-namespace sender, hostname grammar,
-                     Analytics Engine writer/reader
+    placement.ts     a project's placement (its org's cell, its box, or its connected
+                     Cloudflare account), and a deployment's, for the sweeps
+    provision-box/   the Alchemy provision box's client + job contract, shared by
+                     both Cloudflare drivers
+    cloudflare-wfp/  the Workers-for-Platforms driver: dispatch-namespace sender,
+                     hostname grammar, Analytics Engine writer/reader
+    cloudflare-workers/ the bring-your-own-Cloudflare driver: a plain Worker in a
+                     connected account, token checks, GraphQL Analytics readback
     celld-vps/       the customer-box driver (plan 458): jobs over the box's session,
                      box DNS in the platform's own zone
   boxes/             customer boxes: the BoxSessionDO (session-do.ts, native RPC) and
@@ -77,7 +81,8 @@ src/
                      usage reports, hostd releases + rollout, urls.ts (box domain + paths)
   cloudflare/
     api.ts           Cloudflare REST port: D1 export (the control plane's own
-                     backup), custom hostnames, and the box zone's DNS records
+                     backup), custom hostnames (create / find / read / delete), and
+                     the box zone's DNS records
     billable-usage.ts an org's own Cloudflare billing, for the cost overview
   secrets/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
@@ -92,8 +97,9 @@ src/
     scheduled.ts     every scheduled sweep, its cron bucket, the build drain and the
                      tenant cron fan-out (`runScheduled`)
   deploy/
-    token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
-    scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
+    token-bucket.ts  per-account API budget (CF 1,200/5min, §2.5)
+    scheduler.ts     ConvergeScheduler — paces one budget's converges, priority + concurrency
+    pacing.ts        DeployPacer — one scheduler per budget a converge spends (per target)
     orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
     keys.ts          deploy-key format / parse / hash helpers
     preview.ts       preview script-name + TTL helpers (§2.3)
@@ -164,8 +170,13 @@ Mounted as the worker's `httpRouter` (lowest-priority matcher). Flow: read the
 `Authorization: Bearer <deployKey>`, `deploy_keys:verify` it, `deployments:create`
 a queued record, then drive `runDeployment` while streaming **NDJSON progress**
 (`accepted` → `queued` → `provisioning` → `live`/`failed` → `done`), patching
-status via `deployments:updateStatus` per phase. All Cloudflare work is paced by
-the per-cell `CellScheduler`. The route reaches these mutations through the Lunora
+status via `deployments:updateStatus` per phase. Each converge is paced by the
+scheduler of the budget it spends (`src/deploy/pacing.ts`, from the target's
+`TARGETS[target].convergeBudget`): `cloudflare-wfp` by the cell's Cloudflare
+account (1,200 requests / 5 minutes, six at a time — as before targets),
+`cloudflare-workers` by the connected account's own budget (one scheduler per
+Cloudflare account; it spends none of ours), and `celld-vps` by its box alone,
+four converges at a time and no API budget. The route reaches these mutations through the Lunora
 action context (`env.__lunoraCtx.runMutation`); they stay **public** (not
 `internalMutation`) because that dispatch carries no system flag — an internal
 function would 404 at the RPC visibility gate — so authorization is enforced
@@ -179,19 +190,22 @@ placement — `deploy`, `destroy`, and the custom-domain hooks (`platformTargets
 `onVerified`) — and is built per placement (`resolveTargetDriver`). A
 `TargetFleet` reaches any tenant of a target — admin `reach`, the in-network
 `dispatch` the cron and queue fan-out use, and the request-count readback
-(`usage`). What a target is — placed in a cell or on a box, who fires its
-crons, how it is metered, which bindings it refuses — is static: `TARGETS`,
+(`usage`, split into scopes — one metering source each, with its own
+`usageCheckpoints` row). What a target is — placed in a cell, on a box or in
+a connected account, who fires its crons, how it is metered, which bindings it
+refuses — is static: `TARGETS`,
 `BINDING_SUPPORT` and `UNSUPPORTED_REASONS` in `src/provision-contract.ts`,
 read by the server and the studio alike. A project's target comes from its
-`target` column (absent means `cloudflare-wfp`), and a cell-placed project
-deploys only from the control plane of its organization's cell
+`target` column (absent means `cloudflare-wfp`), and a cell- or
+account-placed project deploys only from the control plane of its
+organization's cell
 (`src/targets/placement.ts`). Every driver must pass the conformance suite in
 `__tests__/support/target-conformance.ts`; ESLint fences the Cloudflare-specific
 modules so nothing else imports them.
 
-The one driver today, `cloudflare-wfp` (`src/targets/cloudflare-wfp/`),
-converges by posting a `ProvisionJob` (`box-contract.ts`) to the **provision
-box** — a trusted container declared in `lunora/containers.ts` running
+`cloudflare-wfp` (`src/targets/cloudflare-wfp/`), the managed tier,
+converges by posting a `ProvisionJob` (`src/targets/provision-box/contract.ts`)
+to the **provision box** — a trusted container declared in `lunora/containers.ts` running
 **Alchemy 2** — and reading its NDJSON reply: `log` lines go to Workers Logs,
 and exactly one `result` or `error` ends the job. `deploy` converges the
 project's resources and uploads the release into the dispatch namespace;
@@ -212,8 +226,9 @@ Secrets Store edit and Workers subdomain read for Alchemy's state store. Run
 `alchemy provider cloudflare bootstrap` once per new cell so two first deploys
 do not race to create that store (details in `containers/provision/README.md`).
 
-The second driver, `celld-vps` (`src/targets/celld-vps/`), is described under
-"Customer boxes" below.
+`cloudflare-workers` (`src/targets/cloudflare-workers/`) is bring-your-own
+Cloudflare, described under "Customer Cloudflare accounts" below; `celld-vps`
+(`src/targets/celld-vps/`) under "Customer boxes".
 
 What each binding type gets (provisioned, bound, routed or refused) is
 `BINDING_SUPPORT` in the contract, one table per target; GAPS.md has the
@@ -222,6 +237,49 @@ routed: the box attaches this Worker as the consumer of each per-project queue,
 and `queue()` in `src/server.ts` forwards the batch to the owning project's live
 release.
 
+### Customer Cloudflare accounts (`cloudflare-workers`, MULTIPLATFORM.md Phase 3)
+
+An organization connects its own Cloudflare account (Cloudflare accounts tab →
+`POST /v1/cloudflare-accounts`) with a scoped API token, and a project set to
+"Your Cloudflare account" deploys into it as a **plain Worker** — no dispatch
+namespace — at `https://{alias}.{account subdomain}.workers.dev`.
+
+- **Credential.** The route checks the token before storing anything: it must
+  verify as active (`/user/tokens/verify`, or `/accounts/{id}/tokens/verify`
+  for an account-owned token), reach the account with Workers Scripts, and the
+  account must have a workers.dev subdomain. D1, KV, R2, Queues and Account
+  Analytics are probed with read-only calls and recorded on the row. The token
+  is then sealed with `SECRET_ENCRYPTION_KEY` like a tenant secret
+  (`cloudflareAccounts`, `lunora/cloudflare-accounts.ts`); rotate replaces it
+  for the same account only; disconnect deletes it, and is refused while a
+  project or an un-torn-down deployment still uses the account. Cloudflare's
+  OAuth for third-party clients would replace the paste — a follow-up.
+- **Token permissions** (account-scoped, least privilege, listed in
+  `CLOUDFLARE_TOKEN_PERMISSIONS`): Workers Scripts: Edit (required); D1: Edit,
+  Workers KV Storage: Edit, Workers R2 Storage: Edit, Queues: Edit as the app's
+  bindings need them; Account Analytics: Read for the usage chart. No zone
+  permission: custom routes on the customer's zone are not wired yet.
+- **Converge.** The same provision box and Alchemy program as `cloudflare-wfp`,
+  with an `account` job target carrying the account id and the unsealed token
+  (as process env to the Alchemy child, scrubbed from every log line). The
+  Worker carries its own cron triggers and consumes its own queues. Alchemy's
+  **state stays in the platform's account**: the job also carries the cell's
+  `alchemy-state-store` URL and bearer (`LUNORA_STATE_STORE_URL`,
+  `LUNORA_STATE_STORE_TOKEN`, control-plane secrets), and the box reaches it
+  over HTTP. Without them this control plane cannot converge the target, and
+  the box refuses an account job that names no store.
+- **Usage.** The hourly rollback reads each connected account's GraphQL
+  Analytics API (`workersInvocationsAdaptive`, requests per script) — one usage
+  scope, and checkpoint, per account, only for accounts of this cell's
+  organizations whose token holds Account Analytics. The rows carry
+  `cloudflareAccountId` and are shown, never billed: Cloudflare bills the
+  customer, and Lunora Cloud charges for the control plane
+  (`limits.cloudflareAccounts` caps connections per plan).
+- **Not yet:** custom domains on the customer's zone, platform runtime logs
+  (the tail consumer lives in the platform's account), per-plan runtime limits
+  (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,
+  Pipelines, Stream, Media and VPC bindings — each refused with its reason.
+
 ### Customer boxes (`celld-vps`, plan 458)
 
 A project whose `target` is `celld-vps` runs as a celld fleet on a machine its
@@ -229,13 +287,19 @@ organization enrolled — a **box** running `lunora-hostd` (`apps/hostd`). The
 control plane never holds a credential for the box; it holds the box's Ed25519
 public key and nothing else (plan 458 §3).
 
-- **Enrolment.** `boxes.createEnrolment` (owner/admin) mints a one-time token
-  (15 minutes, stored hashed, counted against the plan's `boxes` limit) and
-  shows `sudo lunora-hostd enrol --token …`. `hostd` generates its key and calls
+- **Enrolment.** `boxes.createEnrolment` (owner/admin; an action, because it
+  reads `LUNORA_ORIGIN_URL`) mints a one-time token (15 minutes, stored hashed,
+  counted against the plan's `boxes` limit) and shows the three-line install
+  from `apps/hostd/README.md` § Install: download `install.sh` of the newest
+  **stable** stored hostd release, compare its hash, and run it as root with
+  `--control-plane <LUNORA_ORIGIN_URL>`, the token in `LUNORA_HOSTD_ENROL_TOKEN`
+  and the customer's own bucket and key as placeholders. A control plane
+  without `LUNORA_ORIGIN_URL`, or with no stored release yet, mints nothing
+  (`SERVICE_UNAVAILABLE`). `hostd` generates its key and calls
   `POST /v1/boxes/enrol` with the token, its raw public key (base64url), its
   public IPs and versions; the box gets a random DNS label (`slug`) and A/AAAA
   records `*.<slug>.<LUNORA_BOX_DOMAIN>` and `<slug>.<LUNORA_BOX_DOMAIN>` in the
-  box zone. `boxes.setProjectTarget` places a project on a box.
+  box zone. `projects.setTarget` places a project on a box.
 - **Session.** `hostd` dials `GET /v1/boxes/connect?box=<id>`, forwarded to the
   box's `BoxSessionDO` (binding `BOX_SESSION`, named by box id — the first
   Durable Object of this app's own). Handshake: `hello` → `challenge` (a
@@ -254,6 +318,17 @@ public key and nothing else (plan 458 §3).
   offline box fails the deploy at once (`BOX_OFFLINE`). The box's progress
   appears in the deploy stream as `{ deploymentId, log }` frames; its routing
   table is pushed after every job and on every connect.
+- **Fleets.** `boxes.fleets` holds the celld fleets the box runs (alias,
+  deployment, state; at most 500, one per alias): written from every `hello`,
+  and moved on by each `deploy` / `reload` / `destroy` job the session sees
+  succeed (`src/boxes/fleets.ts`). Box-reported, so displayed, never trusted.
+- **Diagnose.** `POST /v1/boxes/diagnose` (owner/admin session; the internal
+  `boxes.authorizeDiagnose` asserts the role, refuses a revoked box, takes the
+  `sensitive` rate-limit bucket and audits `box.diagnose`) runs the `diagnose`
+  job over the box's session with a 60-second timeout and answers
+  `{ ok, output, truncated, error? }`. The output is the box's `progress`
+  lines, capped at 4 000 lines and 256 KiB (one frame's worth); a job that
+  failed still answers 200 with what arrived before it.
 - **Usage.** Box `report` frames become `platformUsage` request rows tagged
   with the box — shown in the studio, never billed. Billing is per box per
   month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
@@ -294,9 +369,10 @@ public key and nothing else (plan 458 §3).
   already gone. Without `LUNORA_BOX_ZONE_ID` and a token it skips the zone with
   a log line.
 - **Studio.** The org's **Boxes** tab (`src/client/BoxesSection.tsx`) lists
-  boxes and lets owners/admins enrol, rename and revoke (through the revoke
-  route above); hostnames come from `boxes.domain`. A project's **Deploy
-  target** card calls `boxes.setProjectTarget`, and a `celld-vps` project's
+  boxes and their fleets and lets owners/admins enrol, rename, diagnose a
+  connected box (the route above; JSON output is pretty-printed) and revoke
+  (through the revoke route above); hostnames come from `boxes.domain`. A project's **Deploy
+  target** card calls `projects.setTarget`, and a `celld-vps` project's
   view marks what that target refuses, with the reason, from
   `src/client/target-capabilities.ts` (the contract's `UNSUPPORTED_REASONS` and
   the target's `TARGETS` limitations, which quote celld's capability notes).
@@ -308,6 +384,7 @@ public key and nothing else (plan 458 §3).
 | `GET /v1/boxes/releases/:deploymentId`       | `boxKey`         |
 | `GET /v1/hostd/releases/:releaseId/manifest` | `boxKey`         |
 | `POST /v1/boxes/revoke`                      | `session`        |
+| `POST /v1/boxes/diagnose`                    | `session`        |
 | `POST /v1/hostd/releases`                    | `adminToken`     |
 | `POST /v1/hostd/rollout`                     | `adminToken`     |
 
@@ -321,7 +398,45 @@ The node suite drives the session with fakes; a `workerd` vitest project boots
 the real object over a real socket:
 `LUNORA_WORKERD_TESTS=1 pnpm exec vitest run --project workerd --no-coverage`.
 CI runs it in the `Workerd integration (apps/cloud)` leg of `test.yml`, whose
-drift guard covers `apps/*` as well as `packages/*`.
+drift guard covers `apps/*` as well as `packages/*`. The session's hot paths —
+frame decode, `receiveFrame`, job correlation, a liveness tick over 1,000
+attachments — are benched in plain node (`__bench__/box-session.bench.ts`,
+`pnpm run test:bench`; CodSpeed runs it with every package's benches).
+
+### Custom domains (`lunora/domains.ts`, GAPS.md B1)
+
+A project's own hostname: `POST /v1/domains` adds it (minting the
+`_lunora.<hostname>` TXT token), `POST /v1/domains/verify` checks the TXT record
+and that the hostname CNAMEs at the project's placement
+(`domains.platformTargets()`: the app apex on `cloudflare-wfp`, the box's own
+hostname on `celld-vps`), and the dispatcher (or the box's routing table) serves
+it once verified.
+
+- **Certificates (`cloudflare-wfp`).** Once a domain verifies, the driver's
+  `domains.onVerified` creates a Cloudflare-for-SaaS custom hostname for it on
+  the SaaS zone — the zone of `LUNORA_APP_DOMAIN`, `LUNORA_SAAS_ZONE_ID` — with
+  a DV certificate over HTTP validation
+  (`src/targets/cloudflare-wfp/certificates.ts`). It is never requested before
+  the domain verified, and never twice: an existing hostname is found by id or
+  by name. The row keeps `customHostnameId`, `certificateStatus` (the
+  hostname's `ssl.status`) and `certificateError`; the hourly certificate sweep
+  (`src/domains/certificate-sweep.ts`, at most 50 a tick) re-reads each one
+  until it is `active`. Without `LUNORA_SAAS_ZONE_ID` a verified domain records
+  `unconfigured` and says why. A box terminates its own TLS (Caddy), so a
+  `celld-vps` domain records no certificate.
+- **Removal.** `POST /v1/domains/remove` (owner/admin; `domains.removalTarget`
+  asserts it before anything is touched) has the driver delete the custom
+  hostname (`domains.onRemoved`) and only then deletes the row — a failure
+  answers 502 and keeps the domain, so no certificate outlives it.
+- **Studio.** The Domains tab shows each verified domain's certificate state
+  and, while it is pending or failed, what the issuer said; Verify re-requests
+  a certificate that failed.
+
+| Route                     | Auth      |
+| ------------------------- | --------- |
+| `POST /v1/domains`        | `session` |
+| `POST /v1/domains/verify` | `session` |
+| `POST /v1/domains/remove` | `session` |
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 
@@ -466,7 +581,8 @@ Then sign in at `/login` with:
 | **Email**    | `dev@lunora.local`  |
 | **Password** | `dev-password-1234` |
 
-What it creates — a `dev-cell` fleet cell, the **Acme Dev** organization
+What it creates — a `default` fleet cell (the `LUNORA_CELL` local dev runs as,
+so the seeded project can deploy), the **Acme Dev** organization
 (`/acme-dev`, pro plan) owned by that user, a **Web** project, a live production
 deployment (`acme-dev-web`), an ingest deploy key, and telemetry: 24 log lines at
 mixed levels, two 24-point hourly metric series, six trace spans, and two error
@@ -484,6 +600,14 @@ against a real control plane and is authorized with whatever credentials you hav
 it creates an account with a published password, sends your `LUNORA_ADMIN_TOKEN`
 to the target, force-activates the project's newest deployment, and revokes any
 `dev-seed` key. Set `LUNORA_SEED_ALLOW_REMOTE=1` to override, deliberately.
+
+**A database seeded before the cell rename heals itself.** Those hold one cell
+named `dev-cell`, and every deploy from them was refused (a project deploys only
+from its organization's cell). The seed renames a lone `dev-cell` to `default` in
+the dev server's **local** D1 file (`wrangler d1 execute --local`, loopback
+targets only) and says so; a database with any other mix of cells is refused with
+the exact reseed steps — stop `pnpm run dev`, delete `apps/cloud/.wrangler/state`,
+start it again, rerun the seed. Production cells are never touched.
 
 **Re-running is safe.** Every stage looks for what it would create first, because
 none of the underlying mutations dedupe — `cells:register` inserts blindly, so an
@@ -538,7 +662,12 @@ A connected repository deploys without the CLI. The flow, end to end:
 1. **Webhook.** `POST /v1/github/webhook` (HMAC-verified) records a `builds` row
    through `builds.recordPush`: a push to the default branch with
    `trigger: "push"`, a pull-request upsert with `trigger: "pull_request"`. A
-   successful build of the same commit, root directory and trigger is reused.
+   successful build of the same commit, root directory and trigger is reused
+   while its release still serves; when it no longer does (a later push
+   superseded it, it failed or it was torn down), the push queues a build that
+   re-releases that build's stored release (`reusesBuildId`) — no rebuild —
+   or, once the stored release was pruned with the rollback window, builds it
+   again from source.
 2. **Drain.** Every minute the Worker's own `scheduled()` calls
    `POST /v1/builds/dispatch` in-process (admin-token gated), which claims up to
    five builds under a lease and hands each to its own `BuildRunnerDO`
@@ -558,8 +687,14 @@ A connected repository deploys without the CLI. The flow, end to end:
 4. **Release.** `src/builds/release.ts` hands it to `startRelease`, the same
    deploy core `POST /v1/deploy` runs: validation, the stored release in
    `RELEASES`, provisioning, the health check with automatic revert, and
-   activation. A push releases to **production** on the project's existing alias
-   (or its wrangler `name`, then its slug); a pull request to a **preview**,
+   activation. A push releases to **production** on the project's existing alias,
+   or — for its first release — the **production alias** reserved when the
+   project was created (`projects.productionAlias`: the slug, or
+   `<slug>-<first 8 characters of the org id>` when another organization owns
+   the slug, claimed in `aliasOwnership` so the release cannot collide; the
+   projects list shows it, and a CLI deploy whose wrangler `name` someone else
+   owns is told to deploy as it). Only a project created before reservations
+   falls back to its wrangler `name`, then its slug. A pull request releases to a **preview**,
    `<alias>-pr-<branch>`, with the usual 5-day TTL. The core authorizes by deploy
    key, so each release gets one: minted for that build's project with the
    release's kind as its ceiling, and deleted when the release ends. A pull
@@ -833,7 +968,10 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
   Platforms:Edit, Account Analytics:Read, and Zone → Workers Routes:Edit for the
   routed zone. The cell's own `CLOUDFLARE_API_TOKEN` secret additionally needs
   Zone → DNS:Edit on the box zone (`LUNORA_BOX_ZONE_ID`) once boxes are enrolled
-  there: every box gets its A/AAAA records at enrolment (plan 458 G13). Scoping them per environment is what lets production carry a
+  there: every box gets its A/AAAA records at enrolment (plan 458 G13), and
+  Zone → SSL and Certificates:Edit on the SaaS zone (`LUNORA_SAAS_ZONE_ID`, the
+  zone of `LUNORA_APP_DOMAIN`) to create, read and delete the custom hostnames
+  that carry custom-domain certificates (GAPS.md B1). Scoping them per environment is what lets production carry a
   required reviewer.
 - The gates run as `lunora verify` (wrangler validation, codegen dry-run, the
   ERROR-advisory gate, the schema-drift gate, `tsc --noEmit`) before anything is

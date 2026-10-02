@@ -1,15 +1,22 @@
 /* eslint-disable sonarjs/no-hardcoded-ip -- the subject under test is which IP addresses a box may publish; every literal is a fixture */
 import { describe, expect, it } from "vitest";
 
-import { createEnrolment, enrol, get, list, rename, revoke, setProjectTarget } from "../lunora/boxes";
+import { authorizeDiagnose, createEnrolment, enrol, get, list, rename, revoke } from "../lunora/boxes";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { fromBase64Url, isBoxPublicKey, toBase64Url, verifyBoxSignature } from "../src/boxes/encoding";
 import { isEnrolmentTokenShape, mintBoxSlug } from "../src/boxes/enrolment";
 import { sha256Hex } from "../src/deploy/keys";
-import type { Row } from "./_helpers/fake-ctx";
+import type { FakeCtx, Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
 const NOW = 1_700_000_000_000;
+
+/** Stored hostd releases: an older and a newer stable one, and a newer canary that enrolment must skip. */
+const RELEASES = [
+    { _id: "rel_1", channel: "stable", createdAt: 1, releaseId: "hostd-v1_1_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.1.0" } },
+    { _id: "rel_2", createdAt: 2, releaseId: "hostd-v1_2_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.2.0" } },
+    { _id: "rel_3", channel: "canary", createdAt: 3, releaseId: "hostd-v1_3_0", versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.3.0" } },
+];
 
 /** A real Ed25519 key pair, the way `hostd enrol` makes one. */
 const keyPair = async (): Promise<{ privateKey: CryptoKey; publicKey: string }> => {
@@ -112,13 +119,28 @@ describe("box addresses", () => {
 });
 
 describe("boxes.createEnrolment", () => {
+    /** The action's ctx: the mutation double plus the env it reads its origin from. */
+    const withOrigin = ({ ctx, ops }: FakeCtx, origin: null | string = "https://cloud.lunora.test/"): FakeCtx => {
+        return { ctx: { ...ctx, env: origin === null ? {} : { LUNORA_ORIGIN_URL: origin } }, ops };
+    };
+
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
-        const { ctx, ops } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
+        const { ctx, ops } = withOrigin(
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: RELEASES, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+        );
 
         const result = await createEnrolment.handler(ctx, { name: " edge ", organizationId: "org_1" as never });
 
         expect(isEnrolmentTokenShape(result.token)).toBe(true);
-        expect(result.installCommand).toBe(`sudo lunora-hostd enrol --token ${result.token}`);
+        // install.sh of the newest STABLE release (not the newer canary), enrolling with this control
+        // plane's own origin; the token rides in the environment, the bucket stays the customer's.
+        expect(result.installCommand.split("\n")).toStrictEqual([
+            "curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v1.2.0/install.sh",
+            "sha256sum install.sh   # compare with the release notes",
+            // eslint-disable-next-line no-secrets/no-secrets -- env-var NAMES and placeholders, not a credential
+            `sudo LUNORA_HOSTD_ENROL_TOKEN=${result.token} AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \\`,
+            "    bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0",
+        ]);
         expect(result.expiresAt).toBe(NOW + 15 * 60 * 1000);
 
         const stored = ops.find((op) => op.kind === "insert" && op.table === "boxEnrolments");
@@ -132,7 +154,7 @@ describe("boxes.createEnrolment", () => {
         const live = [box({ _id: "b1" }), box({ _id: "b2" }), box({ _id: "b3", status: "revoked" })];
         const unused = { _id: "e1", expiresAt: NOW + 60_000, organizationId: "org_1" };
         const expired = { _id: "e2", expiresAt: NOW - 1, organizationId: "org_1" };
-        const { ctx } = makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW });
+        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [unused, expired], boxes: live, members: [owner("org_1")], subscriptions: PRO }, { now: NOW }));
 
         await expect(createEnrolment.handler(ctx, { name: "fourth", organizationId: "org_1" as never })).rejects.toThrow(
             "boxes quota reached for this plan (limit 3)",
@@ -140,15 +162,67 @@ describe("boxes.createEnrolment", () => {
     });
 
     it("gives the free plan no boxes", async () => {
-        const { ctx } = makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW });
+        const { ctx } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: [] }, { now: NOW }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toThrow("(limit 0)");
     });
 
     it("refuses a plain member", async () => {
-        const { ctx } = makeCtx({ members: [{ ...owner("org_1"), role: "member" }] });
+        const { ctx } = withOrigin(makeCtx({ members: [{ ...owner("org_1"), role: "member" }] }));
 
         await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("mints nothing while the control plane offers no hostd release to install", async () => {
+        const { ctx, ops } = withOrigin(
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }),
+        );
+
+        await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
+            code: "SERVICE_UNAVAILABLE",
+            message: expect.stringContaining("no lunora-hostd release") as unknown,
+        });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "boxEnrolments")).toStrictEqual([]);
+    });
+
+    it("mints nothing on a control plane that does not know its own origin", async () => {
+        const { ctx, ops } = withOrigin(makeCtx({ boxEnrolments: [], boxes: [], members: [owner("org_1")], subscriptions: PRO }, { now: NOW }), null);
+
+        await expect(createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never })).rejects.toMatchObject({
+            code: "SERVICE_UNAVAILABLE",
+            message: expect.stringContaining("LUNORA_ORIGIN_URL") as unknown,
+        });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "boxEnrolments")).toStrictEqual([]);
+    });
+});
+
+describe("boxes.authorizeDiagnose", () => {
+    it("clears an owner's diagnose of a live box, audited", async () => {
+        const { ctx, ops } = makeCtx({ boxes: [box()], members: [owner("org_1")] }, { now: NOW });
+
+        await expect(authorizeDiagnose.handler(ctx, { id: "box_1" as never, organizationId: "org_1" as never })).resolves.toStrictEqual({
+            slug: "babcdefghij",
+        });
+        expect(ops).toContainEqual({
+            document: { action: "box.diagnose", actorUserId: "usr_1", createdAt: NOW, organizationId: "org_1", target: "babcdefghij" },
+            kind: "insert",
+            table: "auditLog",
+        });
+    });
+
+    it("refuses a plain member, another org's box and a revoked box", async () => {
+        const member = makeCtx({ boxes: [box()], members: [{ ...owner("org_1"), role: "member" }] }).ctx;
+        const stranger = makeCtx({ boxes: [box({ organizationId: "org_2" })], members: [owner("org_1")] }).ctx;
+        const revoked = makeCtx({ boxes: [box({ status: "revoked" })], members: [owner("org_1")] }).ctx;
+        const args = { id: "box_1" as never, organizationId: "org_1" as never };
+
+        await expect(authorizeDiagnose.handler(member, args)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(authorizeDiagnose.handler(stranger, args)).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(authorizeDiagnose.handler(revoked, args)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("is internal: only POST /v1/boxes/diagnose, which holds the box's session, may call it", () => {
+        expect(authorizeDiagnose.visibility).toBe("internal");
     });
 });
 
@@ -276,66 +350,5 @@ describe("boxes reads and writes are org-scoped", () => {
         await revoke.handler(ctx, { id: "box_1" as never, organizationId: "org_1" as never });
 
         expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
-    });
-});
-
-describe("boxes.setProjectTarget", () => {
-    const project = (overrides: Row = {}): Row => {
-        return { _id: "proj_1", name: "web", organizationId: "org_1", slug: "web", ...overrides };
-    };
-
-    const call = (tables: Record<string, Row[]>, args: Record<string, unknown>) => {
-        const fake = makeCtx({ members: [owner("org_1")], projects: [project()], ...tables }, { now: NOW });
-
-        return {
-            ops: fake.ops,
-            run: () => setProjectTarget.handler(fake.ctx, { organizationId: "org_1" as never, projectId: "proj_1" as never, ...args } as never),
-        };
-    };
-
-    it("places a project on a box of its own org", async () => {
-        const { ops, run } = call({ boxes: [box()], deployments: [] }, { boxId: "box_1", target: "celld-vps" });
-
-        await run();
-
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: "box_1", target: "celld-vps" } });
-    });
-
-    it("requires a box for celld-vps and refuses one for cloudflare-wfp", async () => {
-        await expect(call({ boxes: [box()] }, { target: "celld-vps" }).run()).rejects.toThrow("needs a box");
-        await expect(call({ boxes: [box()] }, { boxId: "box_1", target: "cloudflare-wfp" }).run()).rejects.toThrow("has no box");
-    });
-
-    it("refuses another org's box and a revoked box", async () => {
-        await expect(call({ boxes: [box({ organizationId: "org_2" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
-            code: "NOT_FOUND",
-        });
-        await expect(call({ boxes: [box({ status: "revoked" })] }, { boxId: "box_1", target: "celld-vps" }).run()).rejects.toMatchObject({
-            code: "CONFLICT",
-        });
-    });
-
-    it("refuses to move a project whose deployments are not torn down yet", async () => {
-        const { ops, run } = call(
-            { boxes: [box()], deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: null }] },
-            { boxId: "box_1", target: "celld-vps" },
-        );
-
-        await expect(run()).rejects.toMatchObject({ code: "CONFLICT" });
-        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
-    });
-
-    it("moves a project back to cloudflare-wfp and clears its box", async () => {
-        const { ops, run } = call(
-            {
-                deployments: [{ _id: "dep_1", projectId: "proj_1", status: "destroyed", teardownAt: NOW }],
-                projects: [project({ boxId: "box_1", target: "celld-vps" })],
-            },
-            { target: "cloudflare-wfp" },
-        );
-
-        await run();
-
-        expect(ops).toContainEqual({ id: "proj_1", kind: "patch", patch: { boxId: null, target: "cloudflare-wfp" } });
     });
 });

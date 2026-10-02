@@ -82,19 +82,97 @@ describe("builds.recordPush path filter", () => {
         });
     });
 
-    it("reuses a bundle built from the same root directory", async () => {
+    it("reuses a bundle built from the same root directory while its release still serves", async () => {
         const previous = {
             _id: "bld_old",
             bundleHash: "h",
             commitSha: "abc123",
+            createdAt: 1,
+            deploymentId: "dep_old",
             projectId: "prj_1",
             rootDirectory: "apps/web",
             status: "successful",
             trigger: "push",
         };
-        const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web" }), [previous]));
+        const { ctx, ops } = makeCtx({
+            ...world(project({ rootDirectory: "apps/web" }), [previous]),
+            deployments: [{ _id: "dep_old", projectId: "prj_1", status: "live" }],
+        });
 
         await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({ buildId: "bld_old", reused: true });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "builds")).toStrictEqual([]);
+    });
+
+    it.each(["superseded", "failed", "destroyed"])("re-releases a commit already built whose release is %s, naming the build it reuses", async (status) => {
+        const builds = [
+            {
+                _id: "bld_first",
+                bundleHash: "h",
+                commitSha: "abc123",
+                createdAt: 1,
+                deploymentId: "dep_first",
+                projectId: "prj_1",
+                status: "successful",
+                trigger: "push",
+            },
+            // The newest build of the commit is the one whose release is re-released.
+            {
+                _id: "bld_newest",
+                bundleHash: "h",
+                commitSha: "abc123",
+                createdAt: 2,
+                deploymentId: "dep_newest",
+                projectId: "prj_1",
+                status: "successful",
+                trigger: "push",
+            },
+        ];
+        const { ctx, ops } = makeCtx({
+            ...world(project(), builds),
+            deployments: [
+                { _id: "dep_first", projectId: "prj_1", status: "live" },
+                { _id: "dep_newest", projectId: "prj_1", status },
+            ],
+        });
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
+            buildId: "builds_new",
+            reused: false,
+        });
+        expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { reusesBuildId: "bld_newest", status: "pending" } });
+    });
+
+    it("rebuilds a commit whose earlier build never recorded a deployment", async () => {
+        const previous = { _id: "bld_old", bundleHash: "h", commitSha: "abc123", createdAt: 1, projectId: "prj_1", status: "successful", trigger: "push" };
+        const { ctx, ops } = makeCtx(world(project(), [previous]));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
+            buildId: "builds_new",
+            reused: false,
+        });
+
+        const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds") as { document: Row } | undefined;
+
+        expect(inserted?.document).toMatchObject({ status: "pending" });
+        expect(inserted?.document).not.toHaveProperty("reusesBuildId");
+    });
+
+    it("never re-releases a fork's build: it was never released", async () => {
+        const previous = {
+            _id: "bld_fork",
+            bundleHash: "h",
+            commitSha: "abc123",
+            createdAt: 1,
+            fromFork: true,
+            projectId: "prj_1",
+            status: "successful",
+            trigger: "pull_request",
+        };
+        const { ctx } = makeCtx(world(project(), [previous]));
+
+        await expect(
+            recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, fromFork: true, pullRequest: 9, trigger: "pull_request" }),
+        ).resolves.toStrictEqual({ buildId: "bld_fork", reused: true });
     });
 
     it("records what triggered the build — it decides production versus preview", async () => {

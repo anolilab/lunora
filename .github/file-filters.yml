@@ -229,6 +229,9 @@ e2e:
 # docs-only PRs skip the install+build entirely.
 benchmarks:
     - "packages/**"
+    # apps/cloud's box-session benches, and the hostd wire protocol they decode with.
+    - "apps/cloud/**"
+    - "apps/hostd/**"
     - "shared/**"
     - "**/tsconfig*.json"
     - "pnpm-lock.yaml"

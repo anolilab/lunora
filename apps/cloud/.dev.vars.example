@@ -25,6 +25,14 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # in its `dnsError`.
 # LUNORA_BOX_ZONE_ID=replace-with-the-box-zone-id
 
+# ── Custom-domain certificates (GAPS.md B1, cloudflare-wfp) ──────────────────
+# A verified custom domain gets a Cloudflare-for-SaaS custom hostname (and a DV
+# certificate) on the zone of LUNORA_APP_DOMAIN. Set that zone's id;
+# CLOUDFLARE_API_TOKEN above then also needs Zone → SSL and Certificates:Edit on
+# it. Unset → domains still verify and route, and each records that no
+# certificate could be requested (`certificateStatus: "unconfigured"`).
+# LUNORA_SAAS_ZONE_ID=replace-with-the-saas-zone-id
+
 # Control-plane backups (GAPS.md D1). The export REST call addresses the database
 # by uuid, and a binding cannot answer its own id, so it is configured here.
 # Unset -> the six-hourly backup sweep no-ops. Pair with a PRIVATE R2 bucket
@@ -37,6 +45,18 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # Cloudflare costs tab. That token is encrypted at the edge with
 # SECRET_ENCRYPTION_KEY (below) before storage, so no extra env var is needed —
 # only that SECRET_ENCRYPTION_KEY is set, which the summary read reuses to decrypt.
+
+# ── Customer Cloudflare accounts (cloudflare-workers, MULTIPLATFORM.md Phase 3) ─
+# An org connects its own account from the Cloudflare accounts tab; its token is
+# sealed with SECRET_ENCRYPTION_KEY, so it needs no env var. Converging into such
+# an account needs this cell's Alchemy state store, because that state stays in
+# the PLATFORM's account, never the customer's: the URL of the cell's
+# `alchemy-state-store` Worker and its bearer token (created by
+# `alchemy provider cloudflare bootstrap`, kept in the cell's Secrets Store).
+# They travel to the provision box in each job. Unset -> projects cannot deploy
+# into a connected account here, and their teardowns wait.
+# LUNORA_STATE_STORE_URL=https://alchemy-state-store.<cell-subdomain>.workers.dev
+# LUNORA_STATE_STORE_TOKEN=replace-with-the-state-store-bearer
 
 # Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
 # Generate with: openssl rand -hex 32

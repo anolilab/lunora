@@ -93,6 +93,14 @@ export interface BuildRunnerPorts {
      * absent App credential must never change a build's outcome.
      */
     reportStatus?: (build: ClaimedBuild, state: "failure" | "pending" | "success", description: string, targetUrl?: string) => Promise<void>;
+
+    /**
+     * A build that re-releases an earlier build of the same commit (`builds.recordPush`):
+     * that build's deployment and its stored release as an execution, or
+     * `execution: null` once the release was pruned (the build then runs from
+     * source). `null` — or the port absent — for a build that reuses nothing.
+     */
+    storedRelease?: (build: ClaimedBuild) => Promise<null | { deploymentId: string; execution: BuildExecution | null }>;
 }
 
 /**
@@ -208,12 +216,34 @@ const failBuild = async (build: ClaimedBuild, error: unknown, ports: BuildRunner
 };
 
 /**
- * The first half: report the build pending, fetch its source and execute it.
- * Answers the execution, or — having failed the build — its outcome. Never throws.
+ * The first half: report the build pending, fetch its source and execute it —
+ * or, for a commit already built whose stored release is still kept, take that
+ * release as the execution instead of building it again. Answers the
+ * execution, or — having failed the build — its outcome. Never throws.
  */
 export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Promise<{ execution: BuildExecution } | { outcome: BuildOutcome }> => {
     try {
         await report(ports, build, "pending", "Building on Lunora Cloud…");
+
+        const stored = await ports.storedRelease?.(build);
+
+        if (stored?.execution != null) {
+            await ports.appendLog(
+                build.buildId,
+                "info",
+                `${build.commitSha} is already built: re-releasing deployment ${stored.deploymentId}'s stored release`,
+            );
+
+            return { execution: stored.execution };
+        }
+
+        if (stored != null) {
+            await ports.appendLog(
+                build.buildId,
+                "info",
+                `deployment ${stored.deploymentId}'s stored release is no longer kept; building ${build.commitSha} again`,
+            );
+        }
         await ports.appendLog(build.buildId, "info", `fetching source at ${build.commitSha}`);
 
         const source = await ports.fetchSource(build);

@@ -24,6 +24,8 @@ export interface TeardownTarget {
     alias: string;
     /** The box the alias runs on (`celld-vps`), from its deployment rows — the project may be gone. */
     boxId?: string;
+    /** The connected Cloudflare account the alias runs in (`cloudflare-workers`), from its deployment rows. */
+    cloudflareAccountId?: string;
 
     /**
      * Whether to destroy the alias's tenant and its resources (D1, R2, KV,

@@ -67,25 +67,25 @@ outbound-dialing host daemon, `lunora-hostd`.
 | Spec           | `release.ts:96-124`                                 | `TenantDeploymentSpec` adds `LUNORA_ADMIN_TOKEN`, `LUNORA_OTLP_TOKEN` and `LUNORA_OTLP_ENDPOINT`. `cell`, `dispatchNamespace` and `tailConsumers` are Cloudflare nouns (`provision-contract.ts:147-166`) | **partly**                      |
 | Cell choice    | `router.ts:805`                                     | `cell = env.LUNORA_CELL ?? "default"`. `organizations.cellId` is **never read on the deploy path**                                                                                                       | yes (process-global)            |
 | Provision      | `provision.ts:33-162`                               | `Provisioner { deploy, destroy }`, one implementation (`createAlchemyProvisioner` → `CONTAINER_PROVISION_BOX`)                                                                                           | **yes**                         |
-| Scheduler      | `scheduler.ts:40-131`, `token-bucket.ts:83-84`      | per-cell priority queue, gated by Cloudflare's API budget (1200 per 5 min)                                                                                                                               | budget is CF's                  |
+| Scheduler      | `scheduler.ts:40-131`, `token-bucket.ts:83-84`      | per-cell priority queue, gated by Cloudflare's API budget (1200 per 5 min). _Since `feat/cloud-followups`: per budget (`pacing.ts`) — a box converge spends none of it_                                  | budget is CF's                  |
 | Verify         | `router.ts:944-952`                                 | `fetch(url)`, healthy if status < 500                                                                                                                                                                    | no (URL-based)                  |
 | Rollback       | `release.ts:149-231`                                | re-provisions a stored release; refuses to drop a DO class                                                                                                                                               | no (goes through `Provisioner`) |
 | Teardown       | `teardown.ts:21-94`, `sweeps.ts:43`                 | hourly sweep, `TeardownTarget {alias, destroyWorker, dispatchNamespace}`                                                                                                                                 | **yes**                         |
 
 ### 1.2 Everything else that reaches a tenant
 
-| Concern          | Where                                                                                 | Mechanism                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Routing          | `src/dispatcher/{route,worker}.ts`                                                    | separate Worker; subdomain → `scriptName`, custom domain via `/v1/tenants/custom-domain`; `env.DISPATCHER.get(scriptName, …, {limits})`     |
-| Cron             | `src/fanout/cron.ts`, `server.ts:838-847`                                             | fan-out through `DISPATCHER` to `/_lunora/scheduled`, because WfP drops cron triggers                                                       |
-| Queues           | `server.ts:722-752`                                                                   | `handleQueueBatch` through `DISPATCHER` to `/_lunora/queue`                                                                                 |
-| Requests metered | `src/metering/analytics.ts:87,160`, `metering/rollback.ts:59-96`, `sweeps.ts:124-166` | dispatcher → Analytics Engine `lunora_tenant_usage` → hourly readback into `platformUsage{kind:"requests"}`                                 |
-| Logs             | `src/tail/worker.ts`, `router.ts:477-525`                                             | tail consumer → `/v1/logs/tail`                                                                                                             |
-| OTLP             | `routes/otlp.ts:117-263`, `src/telemetry/ingest-key.ts:48-89`                         | standard `/v1/{traces,logs,metrics}`, deploy or ingest key; one ingest key minted per org                                                   |
-| Admin / backups  | `src/admin/proxy.ts:71-104`, `src/backup/tenant-transport.ts:76-90`                   | `fetch(${url}/_lunora/admin/…)`; `tenantSender` falls back to `fetch(url)` when no dispatcher is bound                                      |
-| Domains          | `lunora/domains.ts:52-217`, `src/domains/verify.ts:26-83`, `router.ts:726-755`        | TXT + CNAME check against `platformTargets: [LUNORA_APP_DOMAIN]`; certificate issuance **not wired** (`createCustomHostname` has no caller) |
-| Secrets          | `src/secrets/crypto.ts:56-65`, `router.ts:833-867`                                    | AES-256-GCM under `SECRET_ENCRYPTION_KEY`, decrypted at the edge into `spec.secrets`                                                        |
-| Fleet upgrade    | `src/fleet/upgrade.ts:38-98`                                                          | canary + batches of 25 over a `release` port; **no production caller**                                                                      |
+| Concern          | Where                                                                                 | Mechanism                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Routing          | `src/dispatcher/{route,worker}.ts`                                                    | separate Worker; subdomain → `scriptName`, custom domain via `/v1/tenants/custom-domain`; `env.DISPATCHER.get(scriptName, …, {limits})`                                                                  |
+| Cron             | `src/fanout/cron.ts`, `server.ts:838-847`                                             | fan-out through `DISPATCHER` to `/_lunora/scheduled`, because WfP drops cron triggers                                                                                                                    |
+| Queues           | `server.ts:722-752`                                                                   | `handleQueueBatch` through `DISPATCHER` to `/_lunora/queue`                                                                                                                                              |
+| Requests metered | `src/metering/analytics.ts:87,160`, `metering/rollback.ts:59-96`, `sweeps.ts:124-166` | dispatcher → Analytics Engine `lunora_tenant_usage` → hourly readback into `platformUsage{kind:"requests"}`                                                                                              |
+| Logs             | `src/tail/worker.ts`, `router.ts:477-525`                                             | tail consumer → `/v1/logs/tail`                                                                                                                                                                          |
+| OTLP             | `routes/otlp.ts:117-263`, `src/telemetry/ingest-key.ts:48-89`                         | standard `/v1/{traces,logs,metrics}`, deploy or ingest key; one ingest key minted per org                                                                                                                |
+| Admin / backups  | `src/admin/proxy.ts:71-104`, `src/backup/tenant-transport.ts:76-90`                   | `fetch(${url}/_lunora/admin/…)`; `tenantSender` falls back to `fetch(url)` when no dispatcher is bound                                                                                                   |
+| Domains          | `lunora/domains.ts:52-217`, `src/domains/verify.ts:26-83`, `router.ts:726-755`        | TXT + CNAME check against `platformTargets: [LUNORA_APP_DOMAIN]`; certificate issuance **not wired** (`createCustomHostname` has no caller) — _wired on `feat/cloud-followups` via `domains.onVerified`_ |
+| Secrets          | `src/secrets/crypto.ts:56-65`, `router.ts:833-867`                                    | AES-256-GCM under `SECRET_ENCRYPTION_KEY`, decrypted at the edge into `spec.secrets`                                                                                                                     |
+| Fleet upgrade    | `src/fleet/upgrade.ts:38-98`                                                          | canary + batches of 25 over a `release` port; **no production caller**                                                                                                                                   |
 
 ### 1.3 Schema (`apps/cloud/lunora/schema.ts`)
 
@@ -152,7 +152,7 @@ for this plan.
 | G15 | No usage write path for a box: `usage.ingest` requires an org-wide deploy key (`lunora/usage.ts:96`), so `BoxSessionDO` needs an internal mutation                                                                                            | W6 — ✅ `f87b67285` (the session writes the ledger directly, as the sweeps do) |
 | G16 | No per-box line item or entitlement (`src/billing/plans.ts`, `lunora/entitlements.ts`)                                                                                                                                                        | W6 — ✅ `ed8b6b8ce`                                                            |
 | G17 | No store or CI workflow for signed `hostd` releases; `deploy-cloud.yml` publishes Workers only                                                                                                                                                | W7 — ✅ pipeline (part a); store + rollout `85c5f6c91`, `653804c89`            |
-| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9 — ✅ `325453eb7`, `115a677e9` (no Diagnose yet)                             |
+| G18 | The studio has no target selector and no Boxes pages                                                                                                                                                                                          | W9 — ✅ `325453eb7`, `115a677e9`; Diagnose + fleets on `feat/cloud-followups`  |
 
 **Already target-neutral (no gap):**
 
@@ -326,7 +326,9 @@ included). As built:
   revoke through the bare RPC mutation left the box's DNS records behind.
 - The liveness tick closes the session of a box whose row is gone (its
   organization was purged), as it does a revoked one.
-- Not yet: the `__bench__` for 1,000 hibernated sockets (§8 perf watch).
+- The `__bench__` for the session (§8 perf watch) landed on
+  `feat/cloud-followups`: `apps/cloud/__bench__/box-session.bench.ts`, run by
+  `pnpm --filter @lunora/cloud run test:bench` and by the CodSpeed job.
 
 ### W3 — Per-target binding support and celld config from a manifest (S–M)
 
@@ -617,9 +619,20 @@ The per-state decisions (status → chip, role gating, target draft, refusal
 wording, capability lists) are node-tested as pure modules
 (`__tests__/studio-boxes.test.ts`, `target-capabilities.test.ts`); `apps/cloud`
 has no DOM test environment, so the components are verified with tsc, eslint,
-react-doctor and `vite build`. **Not built:** the Diagnose button, because no
-route or job runs `celld diagnose` on a box yet, and the box's fleets list
-(the box row does not carry them; the tab shows the projects placed on it).
+react-doctor and `vite build`.
+
+**Follow-ups landed (`feat/cloud-followups`):** the Diagnose button and the
+box's fleets. `POST /v1/boxes/diagnose` (owner/admin session, through the
+internal `boxes.authorizeDiagnose`: refuses a revoked box, `sensitive` rate
+limit, audited) dispatches the `diagnose` job over `BoxSessionDO.dispatch`
+with a 60 s timeout and answers the box's `progress` lines, capped at 4 000
+lines / 256 KiB (`src/boxes/diagnose.ts`); the studio's dialog pretty-prints
+JSON output. `boxes.fleets` is written from every `hello` and moved on by each
+successful `deploy` / `reload` / `destroy` result (`src/boxes/fleets.ts`), and
+each box lists its fleets (alias, deployment, state). The enrol dialog's
+command now names this control plane (`--control-plane <LUNORA_ORIGIN_URL>`),
+which `lunora-hostd enrol` requires; `boxes.createEnrolment` became an action
+to read the var.
 
 ### W10 — Docs and positioning (S)
 
@@ -702,6 +715,22 @@ the interface in two directions:
   staffed, `celld-vps` Phases 1–2 go first, because they need no customer
   Cloudflare account to test against.
 
+**The parallel driver landed (2026-10-02).** `cloudflare-workers` is on
+`feat/byo-cloudflare` (`MULTIPLATFORM.md` Phase 3 status). What it means here:
+
+- It changed the interface once: `TargetFleet.usage` is a `UsageReadback` of
+  scopes, each with its own `usageCheckpoints` row (the cell-wide checkpoint
+  could not serve a second readback target). `celld-vps` is untouched — its
+  fleet has no `usage` (`metering: "pushed"`) — but the change is its own
+  commit, to be split into its own PR per the first rule above.
+- Shared work it did: `projects.setTarget` (moved from
+  `boxes.setProjectTarget`, now also writing `projects.cloudflareAccountId`),
+  a third `Placement` member, the deploy-target card's account picker, and a
+  capabilities card that states each target's limitations, not only celld's.
+- It passes the same `describeTargetConformance` legs, plus the per-scope
+  readback legs, over a fake provision box and a fake GraphQL source — not yet
+  against a real account.
+
 ## 8. Risks & STOP conditions
 
 - **STOP** if Phase 1 (`TargetDriver`) has not landed. Building `celld-vps` as a
@@ -737,7 +766,15 @@ the interface in two directions:
     - deploy latency from `accepted` to `released` for a 5 MiB release on a
       2 GB box, measured in `test:hostd`. Budget: under 30 s, matching WfP;
     - `BoxSessionDO` memory with 1,000 hibernated sockets. Add a `__bench__`
-      suite in W2.
+      suite in W2. _Landed (`feat/cloud-followups`):_ frame decode, `receiveFrame`
+      (decode + token bucket + effect), job correlation and a liveness tick over
+      1,000 attachments are benched in plain node; locally a `progress` frame
+      costs ~1.8 µs end to end, a 500-alias `report` ~150 µs to decode, a tick
+      over 1,000 sockets ~4 ms. Memory is held by a test: a ready attachment is
+      under 256 bytes (1,000 under 256 KiB). Measuring it found the `hello`
+      fleets riding the attachment — up to ~100 KB against workerd's 16 KiB
+      attachment cap — so they now wait in the session's memory between `hello`
+      and `auth` instead.
 
 ## 9. Open questions (answer during execution)
 
@@ -771,3 +808,35 @@ the interface in two directions:
 9. **Preview deployments on a box:** they share the box's resources with
    production. Offer them, cap them per box, or route previews to WfP while
    production runs on the box?
+
+## 10. Follow-ups (`feat/cloud-followups`, 2026-10-02)
+
+Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
+
+- **Box diagnostics and fleets** (W9) — `192929f02`: `POST /v1/boxes/diagnose`
+  (owner/admin, `sensitive` bucket, audited) runs the `diagnose` job over
+  `BoxSessionDO.dispatch`, output capped at 4 000 lines / 256 KiB; the Boxes tab
+  has a Diagnose dialog and lists each box's fleets (`boxes.fleets`, written from
+  `hello` and moved on by successful deploy / reload / destroy results). The
+  install command names `--control-plane <LUNORA_ORIGIN_URL>`, which
+  `lunora-hostd enrol` requires (`boxes.createEnrolment` is now an action).
+  `1dea0abe8` keeps the `hello` fleets out of the socket attachment (up to
+  ~100 KB against workerd's 16 KiB cap), found while measuring for the bench.
+- **Deploy pacing per target** — `58cc121af`: `TARGETS[target].convergeBudget`
+  and `src/deploy/pacing.ts`; `cloudflare-wfp` keeps the platform account's
+  1,200 / 5 min budget, `cloudflare-workers` spends the connected account's,
+  `celld-vps` only its box's four converge slots.
+- **Re-releasing a commit already built** — `9333ea9a5`: a push whose build
+  exists but no longer serves re-releases that build's stored release
+  (`builds.reusesBuildId`), or rebuilds once it was pruned.
+- **First production alias** — `937f26fd5`: `projects.create` claims
+  `projects.productionAlias` (slug, then `<slug>-<org id prefix>`), which a git
+  build's first production release uses.
+- **Perf bench** (§8) — `adbfcdf4e`: `apps/cloud/__bench__/box-session.bench.ts`
+  in CodSpeed's `vis run test:bench`.
+- **Custom-domain certificates on `cloudflare-wfp`** — `a904654eb`: the
+  driver's `domains.onVerified` / `onRemoved` create and delete
+  Cloudflare-for-SaaS custom hostnames on `LUNORA_SAAS_ZONE_ID`; an hourly sweep
+  follows them to `active` (GAPS.md B1; zone setup is 🌐, RUNBOOK step 6a).
+- **Pre-rename dev databases** — `bf8515923`: the seed renames a lone
+  `dev-cell` to `default` in the local D1 file, or prints the reseed steps.

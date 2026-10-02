@@ -8,7 +8,7 @@
  * `POST /v1/usage`, so in practice it stays empty and spend enforcement has
  * nothing to evaluate.
  *
- * Pure over injected ports (the driver's reader, the ledger writer, the per-cell
+ * Pure over injected ports (the driver's reader, the ledger writer, the per-scope
  * checkpoint). Delta-based: it reads only `timestamp > checkpoint` and advances
  * the checkpoint after, so repeated runs never double count. Per-row failure is
  * swallowed and the checkpoint still advances — the same fail-safe direction as
@@ -16,17 +16,19 @@
  */
 import type { UsageRow } from "../targets/driver";
 
-/** First-run window when the cell has no checkpoint yet — bounds the initial backfill. */
+/** First-run window when the scope has no checkpoint yet — bounds the initial backfill. */
 export const BOOTSTRAP_WINDOW_MS = 60 * 60 * 1000;
 
 /** Which org (and deployment) a resource's request counts belong to. */
 export interface UsageAttribution {
+    /** The connected account a `cloudflare-workers` tenant runs in — its usage is recorded, never billed. */
+    cloudflareAccountId?: string;
     deploymentId?: string;
     organizationId: string;
 }
 
 export interface UsageRollbackPorts {
-    /** The cell's last readback boundary (epoch ms), or undefined on first run. */
+    /** The scope's last readback boundary (epoch ms), or undefined on first run. */
     getCheckpoint: () => Promise<number | undefined>;
     /** Current wall clock (epoch ms) — injected for determinism. */
     now: number;
@@ -52,7 +54,7 @@ export interface UsageRollbackResult {
 }
 
 /**
- * Fold the request-count delta since the cell's checkpoint into the ledger,
+ * Fold the request-count delta since the scope's checkpoint into the ledger,
  * then advance the checkpoint. Idempotent across runs (delta-read); a per-row
  * ledger failure is dropped rather than retried so the checkpoint can always
  * advance (under-count, never double-bill). Re-throws only if the read
@@ -81,7 +83,7 @@ export const runUsageRollback = async (ports: UsageRollbackPorts): Promise<Usage
         }
 
         try {
-            // eslint-disable-next-line no-await-in-loop -- sequential ledger writes; per-cell resource counts are small
+            // eslint-disable-next-line no-await-in-loop -- sequential ledger writes; per-scope resource counts are small
             await ports.record({ attribution, quantity: row.requests });
             attributed += 1;
             requests += row.requests;

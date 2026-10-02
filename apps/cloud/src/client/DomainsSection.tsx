@@ -1,5 +1,5 @@
 import type { ReturnOf } from "@lunora/client";
-import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
+import { usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "../../lunora/_generated/api.js";
 import readJson from "../read-json";
 import { AsyncList } from "./AsyncList";
+import { certificateBadge } from "./domains";
 import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
@@ -24,8 +25,10 @@ interface TxtRecord {
 /**
  * Domains tab (GAPS.md B1). Add a hostname to a project (the response carries
  * the `_lunora.&lt;host>` TXT record to create), then verify — the edge route
- * runs the DNS checks and records the outcome; the list is live, so the
- * verified badge flips on its own. Removing is a direct mutation.
+ * runs the DNS checks, records the outcome and requests the domain's
+ * certificate; the list is live, so the verified and certificate badges move on
+ * their own (the hourly sweep follows a certificate until it is active).
+ * Removing goes through the edge route too, which releases the certificate first.
  *
  * Hierarchy: the HOSTNAME is what this screen exists to show, so it is the one
  * value rendered at size and in mono — an address is data, and data is the
@@ -72,13 +75,37 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
     // The brand is reapplied at the query boundary, which is where it means something.
     const [projectId, setProjectId] = useState("");
     const domains = useQuery(api.domains.list, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a Lunora row id from app state; matches the Cypress project-id shape
-    const removeDomain = useMutation(api.domains.remove);
 
     const [hostname, setHostname] = useState("");
     const [txtRecord, setTxtRecord] = useState<TxtRecord | null>(null);
     const [pending, setPending] = useState(false);
     const [verifying, setVerifying] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    const remove = (id: string): void => {
+        setError(null);
+
+        const run = async (): Promise<void> => {
+            // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check -- `response.ok` IS checked, just after the body is read: reading first is what lets the server's own error message surface instead of a bare status code.
+            const response = await fetch("/v1/domains/remove", {
+                body: JSON.stringify({ id, organizationId }),
+                credentials: "include",
+                headers: { "content-type": "application/json" },
+                method: "POST",
+                signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            });
+
+            if (!response.ok) {
+                const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+                setError(payload?.error ?? `remove failed (${String(response.status)})`);
+            }
+        };
+
+        void run().catch((error_: unknown) => {
+            setError(error_ instanceof Error ? error_.message : "remove failed");
+        });
+    };
 
     const verify = (id: string): void => {
         setError(null);
@@ -147,42 +174,53 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                             empty="No custom domains for this project."
                             render={(rows) => (
                                 <RowList>
-                                    {rows.map((domain) => (
-                                        <Row key={domain._id}>
-                                            {/* The one value shown at size: the hostname is what this screen answers. */}
-                                            <span className="shrink-0 font-mono text-base">{domain.hostname}</span>
-                                            {domain.redirectTo ? (
-                                                <span className="text-muted-foreground truncate font-mono text-xs">→ {domain.redirectTo}</span>
-                                            ) : null}
-                                            <StatusBadge tone={domain.verifiedAt ? "success" : "warning"}>
-                                                {domain.verifiedAt ? "verified" : "pending"}
-                                            </StatusBadge>
-                                            <RowActions>
-                                                {domain.verifiedAt ? null : (
+                                    {rows.map((domain) => {
+                                        const certificate = certificateBadge(domain);
+
+                                        return (
+                                            <Row className={certificate?.detail ? "flex-wrap" : undefined} key={domain._id}>
+                                                {/* The one value shown at size: the hostname is what this screen answers. */}
+                                                <span className="shrink-0 font-mono text-base">{domain.hostname}</span>
+                                                {domain.redirectTo ? (
+                                                    <span className="text-muted-foreground truncate font-mono text-xs">→ {domain.redirectTo}</span>
+                                                ) : null}
+                                                <StatusBadge tone={domain.verifiedAt ? "success" : "warning"}>
+                                                    {domain.verifiedAt ? "verified" : "pending"}
+                                                </StatusBadge>
+                                                {certificate ? <StatusBadge tone={certificate.tone}>{certificate.label}</StatusBadge> : null}
+                                                <RowActions>
+                                                    {/* Verifying again also re-requests a certificate the issuer refused. */}
+                                                    {domain.verifiedAt && certificate?.tone !== "danger" ? null : (
+                                                        <Button
+                                                            disabled={verifying === domain._id}
+                                                            onClick={() => {
+                                                                verify(domain._id);
+                                                            }}
+                                                            size="sm"
+                                                            variant="ghost"
+                                                        >
+                                                            {verifying === domain._id ? "Verifying…" : "Verify"}
+                                                        </Button>
+                                                    )}
                                                     <Button
-                                                        disabled={verifying === domain._id}
+                                                        className="text-destructive hover:text-destructive"
                                                         onClick={() => {
-                                                            verify(domain._id);
+                                                            remove(domain._id);
                                                         }}
                                                         size="sm"
                                                         variant="ghost"
                                                     >
-                                                        {verifying === domain._id ? "Verifying…" : "Verify"}
+                                                        Remove
                                                     </Button>
-                                                )}
-                                                <Button
-                                                    className="text-destructive hover:text-destructive"
-                                                    onClick={() => {
-                                                        void removeDomain.mutate({ id: domain._id, organizationId });
-                                                    }}
-                                                    size="sm"
-                                                    variant="ghost"
-                                                >
-                                                    Remove
-                                                </Button>
-                                            </RowActions>
-                                        </Row>
-                                    ))}
+                                                </RowActions>
+                                                {certificate?.detail ? (
+                                                    <p className="m-0 basis-full text-xs text-muted-foreground" role="status">
+                                                        {certificate.detail}
+                                                    </p>
+                                                ) : null}
+                                            </Row>
+                                        );
+                                    })}
                                 </RowList>
                             )}
                             rows={domains}

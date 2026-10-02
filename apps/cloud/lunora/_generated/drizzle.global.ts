@@ -14,7 +14,7 @@ export const cells = sqliteTable("cells", {
     jurisdiction: text("jurisdiction"),
     name: text("name").notNull(),
     status: text("status", { mode: "json" }).$type<"active" | "draining" | "suspended">().notNull(),
-    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
     usageReadAtMs: real("usageReadAtMs"),
 }, (t) => ({
     by_name: uniqueIndex("by_name").on(t.name),
@@ -62,15 +62,18 @@ export const projects = sqliteTable("projects", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     previewPasswordHash: text("previewPasswordHash"),
     previewPasswordSalt: text("previewPasswordSalt"),
+    productionAlias: text("productionAlias"),
     rootDirectory: text("rootDirectory"),
     slug: text("slug").notNull(),
-    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
     boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
     by_github_repo: index("by_github_repo").on(t.githubRepo),
     by_box: index("by_box").on(t.boxId),
+    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
 }));
 
 export const invitations = sqliteTable("invitations", {
@@ -122,6 +125,7 @@ export const deployments = sqliteTable("deployments", {
     adminTokenIv: text("adminTokenIv"),
     alias: text("alias"),
     boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
     bindings: text("bindings", { mode: "json" }).$type<Array<{ name: string; target?: string; type: string }>>(),
@@ -135,7 +139,7 @@ export const deployments = sqliteTable("deployments", {
     resourceRef: text("resourceRef"),
     scriptName: text("scriptName").notNull(),
     status: text("status", { mode: "json" }).$type<"queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed">().notNull(),
-    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp">(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
     updatedAt: real("updatedAt").notNull(),
     url: text("url"),
     version: real("version"),
@@ -154,6 +158,7 @@ export const deployments = sqliteTable("deployments", {
     by_project: index("by_project").on(t.projectId),
     by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
     by_kind: index("by_kind").on(t.kind),
+    by_cloudflare_account: index("by_cloudflare_account").on(t.cloudflareAccountId),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {
@@ -202,6 +207,7 @@ export const builds = sqliteTable("builds", {
     processingStartedAt: real("processingStartedAt"),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     pullRequest: real("pullRequest"),
+    reusesBuildId: text("reusesBuildId").references((): AnySQLiteColumn => builds._id),
     rootDirectory: text("rootDirectory"),
     skipReason: text("skipReason"),
     status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
@@ -231,6 +237,8 @@ export const buildLogs = sqliteTable("buildLogs", {
 export const domains = sqliteTable("domains", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    certificateError: text("certificateError"),
+    certificateStatus: text("certificateStatus"),
     customHostnameId: text("customHostnameId"),
     createdAt: real("createdAt").notNull(),
     hostname: text("hostname").notNull(),
@@ -292,6 +300,7 @@ export const boxes = sqliteTable("boxes", {
     desiredReleaseId: text("desiredReleaseId"),
     dnsError: text("dnsError"),
     enrolledAt: real("enrolledAt"),
+    fleets: text("fleets", { mode: "json" }).$type<Array<{ alias: string; deploymentId?: string; state: "running" | "stopped" | "starting" | "failed" }>>(),
     ipv4: text("ipv4"),
     ipv6: text("ipv6"),
     lastSeenAt: real("lastSeenAt"),
@@ -336,6 +345,27 @@ export const hostdReleases = sqliteTable("hostdReleases", {
     versions: text("versions", { mode: "json" }).$type<{ caddy: string; celld: string; hostd: string }>().notNull(),
 }, (t) => ({
     by_release: uniqueIndex("by_release").on(t.releaseId),
+}));
+
+export const cloudflareAccounts = sqliteTable("cloudflareAccounts", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    accountId: text("accountId").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    createdAt: real("createdAt").notNull(),
+    createdBy: text("createdBy").notNull(),
+    displayName: text("displayName"),
+    iv: text("iv").notNull(),
+    label: text("label").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    permissions: text("permissions", { mode: "json" }).$type<Array<string>>().notNull(),
+    tokenExpiresAt: real("tokenExpiresAt"),
+    updatedAt: real("updatedAt").notNull(),
+    verifiedAt: real("verifiedAt").notNull(),
+    workersSubdomain: text("workersSubdomain").notNull(),
+}, (t) => ({
+    by_org_account: uniqueIndex("by_org_account").on(t.organizationId, t.accountId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const metricPoints = sqliteTable("metricPoints", {
@@ -563,6 +593,7 @@ export const platformUsage = sqliteTable("platformUsage", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
+    cloudflareAccountId: text("cloudflareAccountId").references((): AnySQLiteColumn => cloudflareAccounts._id),
     createdAt: real("createdAt").notNull(),
     deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id),
     kind: text("kind", { mode: "json" }).$type<"aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths">().notNull(),
@@ -573,6 +604,17 @@ export const platformUsage = sqliteTable("platformUsage", {
 }, (t) => ({
     by_box_window: index("by_box_window").on(t.boxId, t.windowStart),
     by_org: index("by_org").on(t.organizationId),
+}));
+
+export const usageCheckpoints = sqliteTable("usageCheckpoints", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    readAtMs: real("readAtMs").notNull(),
+    scopeKey: text("scopeKey").notNull(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_target_scope: uniqueIndex("by_target_scope").on(t.target, t.scopeKey),
 }));
 
 export const cloudflareBilling = sqliteTable("cloudflareBilling", {

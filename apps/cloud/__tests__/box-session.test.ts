@@ -1,3 +1,4 @@
+import type { DeployJob } from "@lunora/hostd/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";
@@ -39,20 +40,35 @@ describe("the box handshake", () => {
         const key = await boxKey();
         const hello = await receiveFrame(openSession("box_1", NOW), helloFrame("box_1"), NOW, portsFor(key));
 
-        expect(hello.effects).toStrictEqual([{ kind: "send", message: { nonce: NONCE, type: "challenge" } }]);
+        expect(hello.effects).toStrictEqual([
+            { fleets: [], kind: "hello", nonce: NONCE },
+            { kind: "send", message: { nonce: NONCE, type: "challenge" } },
+        ]);
         expect(hello.attachment.phase).toBe("awaiting-auth");
 
         const auth = await receiveFrame(hello.attachment, await authFrame(key, "box_1", NONCE), NOW + 1, portsFor(key));
 
         expect(auth.effects).toStrictEqual([
             {
-                hello: { fleets: [], resources: { diskFreeMb: 40_960, memMb: 3891 }, versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" } },
+                hello: { resources: { diskFreeMb: 40_960, memMb: 3891 }, versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" } },
                 kind: "authenticated",
+                nonce: NONCE,
             },
         ]);
         expect(auth.attachment).toMatchObject({ phase: "ready", seenAt: NOW + 1 });
         expect(auth.attachment).not.toHaveProperty("nonce");
         expect(auth.attachment).not.toHaveProperty("hello");
+    });
+
+    it("holds a hello's fleets outside the attachment between hello and auth", async () => {
+        const key = await boxKey();
+        const fleets = Array.from({ length: 500 }, (_, index) => {
+            return { alias: `web-${String(index)}`, deploymentId: "d".repeat(128), state: "running" as const };
+        });
+        const hello = await receiveFrame(openSession("box_1", NOW), helloFrame("box_1", { fleets }), NOW, portsFor(key));
+
+        expect(hello.effects[0]).toStrictEqual({ fleets, kind: "hello", nonce: NONCE });
+        expect(new TextEncoder().encode(JSON.stringify(hello.attachment)).length).toBeLessThan(1024);
     });
 
     it("refuses a signature by another key", async () => {
@@ -250,6 +266,100 @@ describe("boxSessionDO", () => {
             ],
             type: "routes",
         });
+    });
+
+    it("records the fleets a box reports in hello, one per alias, sorted", async () => {
+        const { key, session, state, store } = await setup();
+
+        await handshake(session, state, key, "box_1", {
+            hello: {
+                fleets: [
+                    { alias: "web", deploymentId: "dep_2", state: "running" },
+                    { alias: "api", state: "stopped" },
+                ],
+            },
+        });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([
+            { alias: "api", state: "stopped" },
+            { alias: "web", deploymentId: "dep_2", state: "running" },
+        ]);
+    });
+
+    it("keeps a full fleet list out of the socket attachment, which workerd caps at 16 KiB, and still records it", async () => {
+        const { key, session, state, store } = await setup();
+        // The protocol's maximum: 500 fleets, each with a 63-character alias and a 128-character deployment id.
+        const fleets = Array.from({ length: 500 }, (_, index) => {
+            return { alias: `${"a".repeat(59)}${String(index).padStart(4, "0")}`, deploymentId: "d".repeat(128), state: "running" };
+        });
+        const socket = await handshake(session, state, key, "box_1", { hello: { fleets } });
+
+        expect(new TextEncoder().encode(JSON.stringify(socket.attachment)).length).toBeLessThan(1024);
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toHaveLength(500);
+    });
+
+    it("keeps 1,000 hibernated sockets' attachments small: the memory a fleet of sessions holds (§8 perf watch)", () => {
+        const attachments = Array.from({ length: 1000 }, (_, index) => {
+            return { ...openSession(`box_${String(index).padStart(26, "0")}`, NOW), phase: "ready" as const };
+        });
+        const sizes = attachments.map((attachment) => new TextEncoder().encode(JSON.stringify(attachment)).length);
+
+        expect(Math.max(...sizes)).toBeLessThan(256);
+        expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThan(256 * 1024);
+    });
+
+    it("moves the stored fleets on as deploy and destroy jobs succeed, and leaves them on a failure", async () => {
+        const { key, session, state, store } = await setup();
+        const socket = await handshake(session, state, key, "box_1", { hello: { fleets: [{ alias: "old", deploymentId: "dep_0", state: "running" }] } });
+        const client = boxSession(namespaceOver(session), "box_1");
+        let answered = 0;
+        const answer = async (ok: boolean): Promise<void> => {
+            await vi.waitFor(() => {
+                expect(socket.received().filter((frame) => frame.type === "job").length).toBeGreaterThan(answered);
+            });
+
+            const job = socket.received().filter((frame) => frame.type === "job")[answered];
+
+            answered += 1;
+            await session.webSocketMessage(
+                socket,
+                JSON.stringify(
+                    ok
+                        ? { jobId: job?.type === "job" ? job.jobId : "", ok: true, type: "result" }
+                        : { error: { code: "DEPLOY_FAILED", message: "no" }, jobId: job?.type === "job" ? job.jobId : "", ok: false, type: "result" },
+                ),
+            );
+        };
+        const deploy = (deploymentId: string): DeployJob => {
+            return { alias: "web", crons: [], deploymentId, kind: "deploy", releaseUrl: "https://cloud.test/v1/boxes/releases/x", vars: {} };
+        };
+
+        const first = client.dispatch(deploy("dep_1"));
+
+        await answer(true);
+
+        await expect(first).resolves.toStrictEqual({ ok: true });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([
+            { alias: "old", deploymentId: "dep_0", state: "running" },
+            { alias: "web", deploymentId: "dep_1", state: "running" },
+        ]);
+
+        const failed = client.dispatch(deploy("dep_2"));
+
+        await answer(false);
+
+        await expect(failed).resolves.toMatchObject({ ok: false });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toContainEqual({ alias: "web", deploymentId: "dep_1", state: "running" });
+
+        const destroyed = client.dispatch({ alias: "old", deleteData: false, kind: "destroy" });
+
+        await answer(true);
+
+        await expect(destroyed).resolves.toStrictEqual({ ok: true });
+
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toStrictEqual([{ alias: "web", deploymentId: "dep_1", state: "running" }]);
     });
 
     it("refuses a wrong signature with one error frame and a close, and leaves the box as it was", async () => {

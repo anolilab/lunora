@@ -26,19 +26,22 @@ export interface ApiTypes {
         subscription: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
     boxes: {
-        createEnrolment: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations"> }, { expiresAt: number; installCommand: string; token: string; }>;
+        createEnrolment: FunctionReference<"action", { name: unknown; organizationId: Id<"organizations"> }, { expiresAt: number; installCommand: string; token: string; }>;
         domain: FunctionReference<"action", { organizationId: Id<"organizations"> }, string>;
-        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
         rename: FunctionReference<"mutation", { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }, void>;
-        setProjectTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }, void>;
     };
     builds: {
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: FunctionReference<"query", { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }, { createdAt: number; level: "error" | "info"; line: string; }[]>;
     };
     cells: {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
+    };
+    cloudflare_accounts: {
+        disconnect: FunctionReference<"mutation", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, void>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
     cloudflare_billing: {
         disconnect: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { removed: boolean; }>;
@@ -64,15 +67,14 @@ export interface ApiTypes {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         adminTarget: FunctionReference<"query", { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
-        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; projectId: Id<"projects">; branch?: string; bundleHash?: string; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
+        listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
     domains: {
         add: FunctionReference<"mutation", { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
-        remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
+        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         routeForHostname: FunctionReference<"query", { hostname: unknown }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
     github_installations: {
@@ -124,10 +126,11 @@ export interface ApiTypes {
     };
     projects: {
         create: FunctionReference<"mutation", { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }, Id<"projects">>;
-        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp"; watchPaths?: string[] }[]>;
+        listByOrg: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
         remove: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations"> }, { destroyed: number; }>;
         rename: FunctionReference<"mutation", { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }, void>;
         setPreviewProtection: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }, { protected: boolean; }>;
+        setTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }, void>;
         updateBuildSettings: FunctionReference<"mutation", { id: Id<"projects">; organizationId: Id<"organizations">; rootDirectory: unknown; watchPaths: Array<unknown> }, { rootDirectory: string; watchPaths: string[]; }>;
     };
     rollouts: {
@@ -149,7 +152,7 @@ export interface ApiTypes {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }, { alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
     };
     tenant_backups: {
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; projectId: Id<"projects">; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: FunctionReference<"query", { organizationId: Id<"organizations">; traceId: unknown }, { attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -183,6 +186,7 @@ export interface InternalApiTypes {
         enforceDunning: FunctionReference<"mutation", {}, { graced: number; recovered: number; suspended: number; }>;
     };
     boxes: {
+        authorizeDiagnose: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { slug: string; }>;
         enrol: FunctionReference<"mutation", { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }, { boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
         identity: FunctionReference<"query", { boxId: Id<"boxes"> }, { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
         ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
@@ -199,9 +203,13 @@ export interface InternalApiTypes {
         recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
         releaseTarget: FunctionReference<"query", { buildId: Id<"builds"> }, null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: FunctionReference<"query", { buildId: Id<"builds"> }, { commitSha: string; installationId: number; repository: string; } | null>;
+        reusableRelease: FunctionReference<"query", { buildId: Id<"builds"> }, null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
     };
     cells: {
-        register: FunctionReference<"mutation", { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }, Id<"cells">>;
+        register: FunctionReference<"mutation", { cloudflareAccountId: string; config?: Record<string, string>; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }, Id<"cells">>;
+    };
+    cloudflare_accounts: {
+        connect: FunctionReference<"mutation", { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareAccounts">>;
     };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
@@ -218,6 +226,9 @@ export interface InternalApiTypes {
     };
     domains: {
         markVerified: FunctionReference<"mutation", { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
+        recordCertificate: FunctionReference<"mutation", { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; sslStatus: unknown }, void>;
+        removalTarget: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, { customHostnameId?: string; hostname: string; projectId: Id<"projects">; }>;
+        remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;
@@ -245,7 +256,7 @@ export interface InternalApiTypes {
     };
     projects: {
         byGithubRepo: FunctionReference<"query", { repository: unknown }, { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
-        placement: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
+        placement: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { account?: { accountId: string; id: string; workersSubdomain: string; }; box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
         verifyPreviewPassword: FunctionReference<"query", { password: unknown; scriptName: unknown }, { ok: boolean; }>;
     };
     telemetry: {

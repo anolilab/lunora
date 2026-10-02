@@ -16,15 +16,21 @@
  *    nothing routes to it.
  * 3. A target placed on a BOX ignores the cell: the project names its box
  *    (`projects.boxId`), which must exist and not be revoked.
+ * 4. A target placed in an ACCOUNT puts the tenant in a Cloudflare account its
+ *    organization connected (`projects.cloudflareAccountId`), and is still
+ *    converged by the organization's cell: that cell's provision box holds the
+ *    convergence state (MULTIPLATFORM.md §5.3), and its sweeps read the
+ *    account's usage — so rule 2's cell check applies to it too.
  *
  * The fleet-wide sweeps place a DEPLOYMENT rather than a project — its project
- * may be gone — through {@link placementOfDeployment}, off the box its row names.
+ * may be gone — through {@link placementOfDeployment}, off the box or account
+ * its row names.
  */
 import { LunoraError } from "@lunora/server";
 
 import type { ControlPlaneStore } from "../d1-store";
-import type { BoxTargetId, CellTargetId, TargetId } from "../provision-contract";
-import { isBoxTarget, storedTarget, TARGET_IDS } from "../provision-contract";
+import type { AccountTargetId, BoxTargetId, CellTargetId, TargetId } from "../provision-contract";
+import { isAccountTarget, isBoxTarget, storedTarget, TARGET_IDS } from "../provision-contract";
 
 /** A box as placement reads it. `.global()` rows answer SQL NULL for an unset column. */
 export interface StoredBox {
@@ -33,8 +39,21 @@ export interface StoredBox {
     slug: string;
 }
 
+/**
+ * A connected Cloudflare account as placement reads it: the row id (what the
+ * driver unseals the token by), the account's own id, and its `workers.dev`
+ * subdomain. Never the token.
+ */
+export interface AccountPlacement {
+    accountId: string;
+    id: string;
+    workersSubdomain: string;
+}
+
 /** A project's placement as stored (`internal.projects.placement`). */
 export interface StoredPlacement {
+    /** The connected account an account-placed project names, when it names one of its organization's. */
+    account?: AccountPlacement | null;
     /** The box a box-placed project names, when it names one that exists. */
     box?: null | StoredBox;
     /** The name of the cell the project's organization is placed on. */
@@ -49,7 +68,7 @@ export interface BoxPlacement {
 }
 
 /** Where a release converges: in this control plane's cell, or on the project's box. */
-export type Placement = { box: BoxPlacement; target: BoxTargetId } | { target: CellTargetId };
+export type Placement = { account: AccountPlacement; target: AccountTargetId } | { box: BoxPlacement; target: BoxTargetId } | { target: CellTargetId };
 
 /** The refusal for a revoked box, whoever meets it first: choosing a target, or deploying to it. */
 export const revokedBoxError = (box: string): LunoraError =>
@@ -71,7 +90,7 @@ export const targetOf = (stored: null | string | undefined): TargetId => {
 
 /**
  * Resolve a stored placement against the cell this control plane serves.
- * @throws {LunoraError} `CONFLICT` for an unknown target, a cell-placed project whose organization is on another cell (or on no registered cell), or a box-placed project without a usable box.
+ * @throws {LunoraError} `CONFLICT` for an unknown target, a cell- or account-placed project whose organization is on another cell (or on no registered cell), a box-placed project without a usable box, or an account-placed project without a connected account.
  */
 export const resolvePlacement = (stored: StoredPlacement, thisCell: string): Placement => {
     const target = targetOf(stored.target);
@@ -97,6 +116,14 @@ export const resolvePlacement = (stored: StoredPlacement, thisCell: string): Pla
             "CONFLICT",
             `this project's organization is placed on cell "${stored.cellName}", but this control plane serves cell "${thisCell}" — deploy through that cell's control plane`,
         );
+    }
+
+    if (isAccountTarget(target)) {
+        if (stored.account == null) {
+            throw new LunoraError("CONFLICT", `this project deploys to ${target} but names no connected Cloudflare account; choose one in its settings`);
+        }
+
+        return { account: { accountId: stored.account.accountId, id: stored.account.id, workersSubdomain: stored.account.workersSubdomain }, target };
     }
 
     return { target };
@@ -133,6 +160,18 @@ export const boxLookupsIn = (database: ControlPlaneStore): BoxLookups => {
     };
 };
 
+/** The account read {@link placementOfDeployment} needs: the connection row `id`, or `null` once it is disconnected (or erased with its organization). */
+export type AccountLookup = (id: string) => Promise<AccountPlacement | null>;
+
+/** The {@link AccountLookup} over the control-plane store. */
+export const accountLookupIn =
+    (database: ControlPlaneStore): AccountLookup =>
+    async (id) => {
+        const row = (await database.get(id, "cloudflareAccounts")) as null | { _id: string; accountId: string; workersSubdomain: string };
+
+        return row ? { accountId: row.accountId, id: row._id, workersSubdomain: row.workersSubdomain } : null;
+    };
+
 /**
  * Where a deployment's tenant lives, or why it lives nowhere this control plane
  * can reach. `settled` says whether that is final — the tenant is beyond reach
@@ -144,13 +183,26 @@ export type DeploymentPlacement = { placement: Placement } | { settled: boolean;
 /**
  * Place one deployment for a fleet-wide sweep, off the box its row names
  * (`deployments.boxId`), falling back to its owning project's box for a row that
- * predates the column.
+ * predates the column — or off the connected account it names
+ * (`deployments.cloudflareAccountId`).
  */
 export const placementOfDeployment = async (
-    deployment: { alias: string; boxId?: null | string; target: TargetId },
+    deployment: { alias: string; boxId?: null | string; cloudflareAccountId?: null | string; target: TargetId },
     boxes: BoxLookups,
+    accounts: AccountLookup,
 ): Promise<DeploymentPlacement> => {
-    const { alias, boxId, target } = deployment;
+    const { alias, boxId, cloudflareAccountId, target } = deployment;
+
+    if (isAccountTarget(target)) {
+        const account = cloudflareAccountId == null ? null : await accounts(cloudflareAccountId);
+
+        // Disconnecting is refused while a deployment is pending, so a missing
+        // row means the organization was erased with it: the Worker and its data
+        // are in the customer's own account, which nothing here can reach any more.
+        return account === null
+            ? { settled: true, unplaced: "its Cloudflare account is no longer connected; the Worker and its data stay in that account" }
+            : { placement: { account, target } };
+    }
 
     if (!isBoxTarget(target)) {
         return { placement: { target } };

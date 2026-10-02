@@ -37,7 +37,7 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
 
 let worker: LunoraWorker | null = null;
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
-// Created once so its per-cell scheduler persists across requests.
+// Created once so its deploy pacer persists across requests.
 const deployRouter = createDeployRouter();
 
 /**

@@ -53,12 +53,20 @@ export const aggregateUsage = (events: ReadonlyArray<UsageEvent>, periodStart: n
 
 /**
  * Whether a `platformUsage` row counts toward what an organization is billed —
- * its spend cap, its overage debit and its invoice summary. A row a customer
- * box reported (`boxId` set) never does (plan 458 D12): the customer has root
- * on the box, so its counts are display only. NULL off a `.global()` row and
- * `undefined` both mean "not a box row".
+ * its spend cap, its overage debit and its invoice summary. Two kinds of row
+ * never do, and are display only:
+ *
+ * - a row a customer box reported (`boxId` set, plan 458 D12): the customer
+ *   has root on the box, so its counts are not billing evidence;
+ * - a row read back from a customer's own Cloudflare account
+ *   (`cloudflareAccountId` set, `cloudflare-workers`): Cloudflare bills those
+ *   requests to the customer directly, and Lunora Cloud charges only for the
+ *   control plane.
+ *
+ * NULL off a `.global()` row and `undefined` both mean the column is unset.
  */
-export const isBillableUsage = (row: { boxId?: null | string }): boolean => row.boxId == null;
+export const isBillableUsage = (row: { boxId?: null | string; cloudflareAccountId?: null | string }): boolean =>
+    row.boxId == null && row.cloudflareAccountId == null;
 
 /** Drop the zero meters — the sparse form the cost model and breakdown take. */
 export const toPeriodUsage = (totals: UsageTotals): PeriodUsage => {

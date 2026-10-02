@@ -2,12 +2,11 @@ import type { HostdJob } from "@lunora/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
 import { teardownPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
-import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
 import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
@@ -114,9 +113,15 @@ describe("the celld-vps driver", () => {
 
         expect(driver.domains.platformTargets()).toStrictEqual(["bslug000001.boxes.test"]);
 
-        await driver.domains.onVerified?.();
+        // A box terminates its own TLS (Caddy), so there is no certificate for the control plane to record.
+        await expect(driver.domains.onVerified?.({ hostname: "www.example.com" })).resolves.toBeUndefined();
 
         expect(pushes()).toBe(1);
+
+        // Once a domain's row is gone, the table is pushed again so the box stops serving it.
+        await driver.domains.afterRemoved?.();
+
+        expect(pushes()).toBe(2);
     });
 
     it("reaches every tenant on its public hostname, with no in-network path or readback", () => {
@@ -167,6 +172,7 @@ describe("celld-vps teardown after the project is gone", () => {
             teardownPorts(
                 store,
                 {
+                    accounts: () => Promise.resolve(null),
                     boxes: boxLookupsIn(store),
                     deleteRelease: () => Promise.resolve(),
                     driverFor: (placement) =>
@@ -302,7 +308,7 @@ describe("the deploy stream", () => {
                 backend,
                 driverFor: (placement) => driverWith(session, "box" in placement ? { box: placement.box } : {}),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
         const frames: Record<string, unknown>[] = [];

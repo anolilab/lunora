@@ -1,4 +1,4 @@
-import { useMutation } from "@lunora/react";
+import { useAction } from "@lunora/react";
 import { Link } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useState } from "react";
@@ -33,7 +33,7 @@ interface Enrolment {
  * a previous token never reappears.
  */
 export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxDialogProps): ReactElement => {
-    const createEnrolment = useMutation(api.boxes.createEnrolment);
+    const { call: createEnrolment, pending } = useAction(api.boxes.createEnrolment);
     const [name, setName] = useState("");
     const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
     const [error, setError] = useState<{ message: string; quota: boolean } | null>(null);
@@ -70,7 +70,7 @@ export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxD
 
                             void (async () => {
                                 try {
-                                    const result = await createEnrolment.mutate({ name, organizationId });
+                                    const result = await createEnrolment({ name, organizationId });
 
                                     setEnrolment({ expiresAt: result.expiresAt, installCommand: result.installCommand });
                                 } catch (error_: unknown) {
@@ -95,8 +95,8 @@ export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxD
                         <p className="m-0 text-xs text-muted-foreground">
                             For you only. The box&apos;s public hostname uses a random label, so this name never appears in DNS.
                         </p>
-                        <Button className="justify-self-start" disabled={createEnrolment.pending || name.trim() === ""} type="submit">
-                            {createEnrolment.pending ? "Creating…" : "Create install command"}
+                        <Button className="justify-self-start" disabled={pending || name.trim() === ""} type="submit">
+                            {pending ? "Creating…" : "Create install command"}
                         </Button>
                         <FormError message={error?.message ?? null} />
                         {error?.quota ? (

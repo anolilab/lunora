@@ -25,11 +25,11 @@ import { resolveTelemetryConfig } from "../../telemetry/ingest-key";
 import type { StoredAdminToken } from "../admin-token";
 import { resolveAdminToken, sealAdminToken } from "../admin-token";
 import { handleDeployRequest } from "../handler";
+import type { DeployPacer } from "../pacing";
 import type { ReleaseDeps } from "../release";
 import { rollbackRelease } from "../release";
 import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../release-core";
 import { createReleaseStore } from "../release-store";
-import type { CellScheduler } from "../scheduler";
 import type { LunoraActionContext, RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext, strictBearer } from "./shared";
 import { requireAdminToken } from "./tenant-admin";
@@ -87,7 +87,7 @@ const resolveSecrets =
  * without stored releases there is nothing to roll back to, so a deploy is
  * refused rather than shipped unrecoverable.
  */
-const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, scheduler: CellScheduler): ReleaseDeps | undefined => {
+const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer: DeployPacer): ReleaseDeps | undefined => {
     if (!environment.RELEASES) {
         return undefined;
     }
@@ -129,8 +129,8 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, sched
         releases: createReleaseStore(environment.RELEASES),
         // Provision (once per org) the scoped ingest key + hand the tenant its
         // OTLP endpoint/token (src/telemetry/ingest-key).
+        pacer,
         resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
-        scheduler,
     };
 };
 
@@ -155,8 +155,8 @@ const healthCheck = async (url: string): Promise<boolean> => {
  * build's release. `undefined` without the `RELEASES` bucket, for the reason
  * {@link releaseDeps} gives.
  */
-export const deployDeps = (context: LunoraActionContext, environment: RouterEnv, scheduler: CellScheduler): DeployHandlerDeps | undefined => {
-    const release = releaseDeps(context, environment, scheduler);
+export const deployDeps = (context: LunoraActionContext, environment: RouterEnv, pacer: DeployPacer): DeployHandlerDeps | undefined => {
+    const release = releaseDeps(context, environment, pacer);
 
     if (!release) {
         return undefined;
@@ -207,9 +207,9 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
 
 type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;
 
-/** The deploy, rollback and build-dispatch routes over one scheduler. */
+/** The deploy, rollback and build-dispatch routes over one pacer. */
 export const createDeployRoutes = (
-    scheduler: CellScheduler,
+    pacer: DeployPacer,
 ): {
     handleBuildDispatchRoute: RouteHandler;
     handleBuildRunRoute: RouteHandler;
@@ -218,7 +218,7 @@ export const createDeployRoutes = (
     handleSessionRollbackRoute: RouteHandler;
 } => {
     const handleDeployRoute: RouteHandler = async (request, environment) => {
-        const deps = deployDeps(requireContext(environment), environment, scheduler);
+        const deps = deployDeps(requireContext(environment), environment, pacer);
 
         if (!deps) {
             return jsonError(500, "the RELEASES bucket is not configured; a deploy without a stored release could never be rolled back");
@@ -233,7 +233,7 @@ export const createDeployRoutes = (
      * deploy key, or `undefined` for the studio, whose member session authorizes.
      */
     const rollback = async (request: Request, environment: RouterEnv, key: string | undefined): Promise<Response> => {
-        const release = releaseDeps(requireContext(environment), environment, scheduler);
+        const release = releaseDeps(requireContext(environment), environment, pacer);
 
         if (!release) {
             return jsonError(500, "the RELEASES bucket is not configured");
@@ -301,7 +301,7 @@ export const createDeployRoutes = (
 
             const context = requireContext(environment);
 
-            return Response.json(await runBuildStage({ context, deploy: deployDeps(context, environment, scheduler), environment }, body.job, body.stage));
+            return Response.json(await runBuildStage({ context, deploy: deployDeps(context, environment, pacer), environment }, body.job, body.stage));
         },
         handleDeployRoute,
         // POST /v1/deployments/rollback — the CLI's rollback, deploy-key authorized.

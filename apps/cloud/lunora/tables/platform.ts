@@ -32,10 +32,9 @@ export const platformTables = {
         // The target this cell's capacity serves; absent → `cloudflare-wfp`,
         // which every cell registered before targets is.
         target: v.optional(deployTarget),
-        // Metering readback checkpoint (§4): the epoch-ms boundary this cell has
-        // folded Analytics-Engine request counts into `platformUsage` through.
-        // The rollback reads AE for `timestamp > usageReadAtMs`, so repeated runs
-        // never double-count the same requests.
+        // The metering readback checkpoint from before `usageCheckpoints`:
+        // read once, as the initial value of this cell's `cloudflare-wfp` row
+        // there, and never written again. Drop it once every cell has swept.
         usageReadAtMs: v.optional(v.number()),
     })
         .global()
@@ -109,6 +108,12 @@ export const platformTables = {
         // browser that set it.
         previewPasswordHash: v.optional(v.string()),
         previewPasswordSalt: v.optional(v.string()),
+        // The alias the project's first production release takes, claimed in
+        // `aliasOwnership` when the project was created
+        // (`src/deploy/production-alias.ts`), so it cannot collide with another
+        // organization's. Absent on projects that predate it, which keep the
+        // alias they deploy to (`activeScriptName`).
+        productionAlias: v.optional(v.string()),
         // Monorepo support: the directory the build runs in, repo-relative and
         // normalized (absent = repo root), and the globs a push must touch to
         // rebuild (absent = everything under rootDirectory). See src/builds/paths.ts.
@@ -120,11 +125,17 @@ export const platformTables = {
         target: v.optional(deployTarget),
         // The customer box a `celld-vps` project deploys to (plan 458 G12).
         // Required when `target` is `celld-vps` and absent otherwise — enforced
-        // by `boxes.setProjectTarget`, the one writer of either column.
+        // by `projects.setTarget`, the one writer of the placement columns.
         boxId: v.optional(v.id("boxes")),
+        // The connected Cloudflare account a `cloudflare-workers` project deploys
+        // into. Required for that target and absent otherwise — enforced by
+        // `projects.setTarget`, the one writer of the placement columns.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         watchPaths: v.optional(v.array(v.string())),
     })
         .global()
+        // A connected account's projects: disconnecting it reads them.
+        .index("by_cloudflare_account", ["cloudflareAccountId"])
         // A box's projects: its routing table and every usage report it sends
         // read them, so neither may scan the whole table.
         .index("by_box", ["boxId"])

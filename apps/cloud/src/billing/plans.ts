@@ -18,6 +18,14 @@ import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
  * ten; enterprise's 50 sits where its 1000-project ceiling would spread over
  * dedicated machines, and is a support conversation past that.
  *
+ * `limits.cloudflareAccounts` caps the Cloudflare accounts an org may connect
+ * for `cloudflare-workers` (MULTIPLATFORM.md Phase 3). Unlike a box it carries
+ * no per-account charge: the tenant's compute is billed to the customer's own
+ * Cloudflare account, so what Lunora Cloud charges for is the control plane —
+ * the plan itself. Free gets one, enough to deploy its one project there; pro's
+ * five cover production plus staging accounts for a team; enterprise's hundred
+ * is an account per business unit, and a support conversation past that.
+ *
  * `priceIds` are placeholders here; Creem is product-based, so these map to
  * real Creem product ids configured per environment when the provider (Creem
  * via `@lunora/payment/creem`) is wired.
@@ -26,17 +34,17 @@ export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
     plans: {
         enterprise: {
             features: ["customDomains", "logStreams", "sso", "dedicatedCell"],
-            limits: { backupRetention: 30, boxes: 50, members: 1000, previewDeployments: 1000, projects: 1000 },
+            limits: { backupRetention: 30, boxes: 50, cloudflareAccounts: 100, members: 1000, previewDeployments: 1000, projects: 1000 },
             priceIds: ["price_enterprise"],
         },
         free: {
             features: [],
-            limits: { backupRetention: 3, boxes: 0, members: 1, previewDeployments: 1, projects: 1 },
+            limits: { backupRetention: 3, boxes: 0, cloudflareAccounts: 1, members: 1, previewDeployments: 1, projects: 1 },
             priceIds: ["price_free"],
         },
         pro: {
             features: ["customDomains", "logStreams"],
-            limits: { backupRetention: 14, boxes: 3, members: 10, previewDeployments: 50, projects: 20 },
+            limits: { backupRetention: 14, boxes: 3, cloudflareAccounts: 5, members: 10, previewDeployments: 50, projects: 20 },
             priceIds: ["price_pro_monthly", "price_pro_yearly"],
         },
     },
@@ -45,7 +53,7 @@ export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
 /** Baseline limits for an org with no active subscription. */
 export const FREE_LIMITS: Record<string, number> = LUNORA_CLOUD_PLANS.plans["free"]?.limits ?? {};
 
-export type QuotaResource = "boxes" | "members" | "previewDeployments" | "projects";
+export type QuotaResource = "boxes" | "cloudflareAccounts" | "members" | "previewDeployments" | "projects";
 
 /**
  * Effective limit for a resource under the resolved entitlements — the granted

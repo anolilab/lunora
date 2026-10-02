@@ -40,6 +40,10 @@ export const deployTables = {
         // not through the project: deleting a project removes the row that
         // would have named the box, while its fleet and data still run on it.
         boxId: v.optional(v.id("boxes")),
+        // The connected Cloudflare account a `cloudflare-workers` release was
+        // converged into, copied from the project like `boxId`: teardown and
+        // usage readback reach the account through it after the project is gone.
+        cloudflareAccountId: v.optional(v.id("cloudflareAccounts")),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP
@@ -101,6 +105,8 @@ export const deployTables = {
         teardownAt: v.optional(v.number()),
     })
         .global()
+        // A connected account's deployments: disconnecting it reads them.
+        .index("by_cloudflare_account", ["cloudflareAccountId"])
         .index("by_kind", ["kind"])
         // Every read that scopes deployments to an ORG went unindexed: the Traffic
         // tab, the onboarding checklist and the org purge all filtered on
@@ -188,6 +194,11 @@ export const deployTables = {
         projectId: v.id("projects"),
         // The pull request number, for `pull_request` builds.
         pullRequest: v.optional(v.number()),
+        // An earlier successful build of the same commit, root directory and
+        // trigger whose release is no longer serving: this build re-releases
+        // that build's stored release (`releases/<deploymentId>.json`) instead
+        // of rebuilding, or rebuilds once the release was pruned.
+        reusesBuildId: v.optional(v.id("builds")),
         // The project's rootDirectory when the push was recorded, so a settings
         // change mid-queue cannot build a commit from a directory it was not
         // pushed for, and dedup never reuses a bundle built from another root.
@@ -230,7 +241,15 @@ export const deployTables = {
     // deployment once DNS-verified; cert issuance (Cloudflare for SaaS) is only
     // requested for verified rows — DB-gated on-demand TLS.
     domains: defineTable({
-        // Cloudflare for SaaS custom-hostname id, once provisioned (🌐 path).
+        // Why the certificate is not issued, as the issuer last said it.
+        certificateError: v.optional(v.string()),
+        // The certificate's status as last read (`cloudflare-wfp`: the custom
+        // hostname's `ssl.status` — `pending_validation`, …, `active` — or
+        // `unconfigured` when this control plane has no SaaS zone). Refreshed by
+        // the hourly certificate sweep until `active`.
+        certificateStatus: v.optional(v.string()),
+        // Cloudflare-for-SaaS custom-hostname id, once the driver's `onVerified`
+        // requested it (`src/targets/cloudflare-wfp/certificates.ts`).
         customHostnameId: v.optional(v.string()),
         createdAt: v.number(),
         hostname: v.string(),

@@ -2,7 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
-import { DEFAULT_TARGET, isBoxTarget, storedTarget } from "../src/provision-contract";
+import type { TargetId } from "../src/provision-contract";
+import { DEFAULT_TARGET, isAccountTarget, isBoxTarget, storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -103,6 +104,63 @@ export const claimAlias = async (context: MutationContext, alias: string, organi
 
         if (winner) {
             throw new LunoraError("FORBIDDEN", "deployment alias is already in use by another project");
+        }
+
+        throw error;
+    }
+};
+
+/** Whether `error` is {@link claimAlias}'s refusal of an alias another project owns. */
+const isAliasTaken = (error: unknown): boolean => error instanceof LunoraError && error.code === "FORBIDDEN";
+
+/**
+ * Claim the first of `candidates` no other project owns, for `projectId`, and
+ * answer it — a new project's production alias (`src/deploy/production-alias.ts`).
+ * @throws {LunoraError} `CONFLICT` when every candidate is taken.
+ */
+export const claimFirstFreeAlias = async (
+    context: MutationContext,
+    candidates: ReadonlyArray<string>,
+    organizationId: Id<"organizations">,
+    projectId: Id<"projects">,
+): Promise<string> => {
+    for (const alias of candidates) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- candidates are tried in order; the first free one wins
+            await claimAlias(context, alias, organizationId, projectId);
+
+            return alias;
+        } catch (error) {
+            if (!isAliasTaken(error)) {
+                throw error;
+            }
+        }
+    }
+
+    throw new LunoraError("CONFLICT", "every production alias tried for this project is taken; create it with another slug");
+};
+
+/**
+ * Claim a deployment's alias for `project` ({@link claimAlias}). A refusal names the alias the
+ * project reserved when it was created, so a CLI deploy whose wrangler `name`
+ * someone else owns says what to deploy as instead.
+ */
+const claimDeploymentAlias = async (
+    context: MutationContext,
+    alias: string,
+    organizationId: Id<"organizations">,
+    project: { _id: Id<"projects">; productionAlias?: null | string },
+): Promise<void> => {
+    try {
+        await claimAlias(context, alias, organizationId, project._id);
+    } catch (error) {
+        const reserved = project.productionAlias;
+
+        if (isAliasTaken(error) && reserved != null && reserved !== alias) {
+            throw new LunoraError(
+                "FORBIDDEN",
+                `deployment alias "${alias}" is already in use by another project; this project's production alias is "${reserved}" — deploy as it: lunora cloud deploy --name ${reserved}`,
+            );
         }
 
         throw error;
@@ -261,6 +319,31 @@ export const listByProject = query
         return page.map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
+/**
+ * Where a release's tenant lives, copied from its project when the row is
+ * created — so its teardown and usage readback still reach it once the project
+ * (and with it the placement) is gone — and the tenant's handle there
+ * (`resourceRef`): the alias, which is its script name, qualified by the
+ * account on `cloudflare-workers`, where the usage readback reads a whole
+ * customer account and must attribute a script only to a deployment placed in
+ * THAT account.
+ */
+const placementColumns = (
+    target: TargetId,
+    project: { boxId?: Id<"boxes"> | null; cloudflareAccountId?: Id<"cloudflareAccounts"> | null },
+    alias: string,
+): { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; resourceRef: string } => {
+    if (isBoxTarget(target) && project.boxId != null) {
+        return { boxId: project.boxId, resourceRef: alias };
+    }
+
+    if (isAccountTarget(target) && project.cloudflareAccountId != null) {
+        return { cloudflareAccountId: project.cloudflareAccountId, resourceRef: `${project.cloudflareAccountId}/${alias}` };
+    }
+
+    return { resourceRef: alias };
+};
+
 /** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
 interface CreatedDeployment {
     deploymentId: Id<"deployments">;
@@ -331,7 +414,7 @@ export const create = mutation
         // the alias through the `aliasOwnership` ledger, whose `by_alias` unique index
         // makes the claim atomic (closing the check-then-insert race): a concurrent
         // first claim by a different project loses on the unique constraint.
-        await claimAlias(context, arguments_.scriptName, arguments_.organizationId, arguments_.projectId);
+        await claimDeploymentAlias(context, arguments_.scriptName, arguments_.organizationId, project);
 
         // One Worker per alias: the script name IS the alias, and every release
         // updates it in place so its Durable Object data persists. `version`
@@ -350,9 +433,7 @@ export const create = mutation
                 ? { adminTokenCiphertext: arguments_.adminTokenCiphertext, adminTokenIv: arguments_.adminTokenIv }
                 : {}),
             alias: arguments_.scriptName,
-            // The box a `celld-vps` release runs on — what its teardown reaches
-            // once the project (and with it the placement) is gone.
-            ...(isBoxTarget(target) && project.boxId != null ? { boxId: project.boxId } : {}),
+            ...placementColumns(target, project, arguments_.scriptName),
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,
@@ -364,9 +445,6 @@ export const create = mutation
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
-            // Every target names its tenant by the alias today; a driver whose
-            // handle differs would report its own here.
-            resourceRef: arguments_.scriptName,
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: arguments_.scriptName,
             status: "queued",

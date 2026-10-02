@@ -21,6 +21,7 @@ interface OrgRow {
 
 interface UsageRow {
     boxId?: null | string;
+    cloudflareAccountId?: null | string;
     kind: string;
     organizationId: string;
     periodStart: number;

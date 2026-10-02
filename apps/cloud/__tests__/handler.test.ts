@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { handleDeployRequest } from "../src/deploy/handler";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
-import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingRequirement, TenantDeploymentSpec } from "../src/provision-contract";
 import readJson from "../src/read-json";
 import type { TargetDriver } from "../src/targets/driver";
@@ -35,7 +34,7 @@ const deps = (backend: DeployBackend, provisioner: Provisioner): DeployHandlerDe
         backend,
         driverFor: () => fakeDriver(provisioner),
         releases: memoryReleaseStore().store,
-        scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
+        pacer: createDeployPacer(),
     };
 };
 

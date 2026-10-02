@@ -141,6 +141,7 @@ interface PlatformUsageRow {
     _id: Id<"platformUsage">;
     /** Set on box-reported rows — display only, never billed (plan 458 D12). */
     boxId?: Id<"boxes"> | null;
+    cloudflareAccountId?: Id<"cloudflareAccounts"> | null;
     createdAt: number;
     kind: UsageMeter;
     organizationId: Id<"organizations">;
@@ -192,9 +193,10 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
     const groups = new Map<string, PlatformUsageRow[]>();
 
     for (const row of closed) {
-        // Box rows compact among themselves, per box: folding one into a billable
-        // row would bill it, and folding it away would lose what the studio shows.
-        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}|${row.boxId ?? ""}`;
+        // Box and connected-account rows compact among themselves, per box or
+        // account: folding one into a billable row would bill it, and folding it
+        // away would lose what the studio shows.
+        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}|${row.boxId ?? ""}|${row.cloudflareAccountId ?? ""}`;
         const group = groups.get(groupKey) ?? [];
 
         group.push(row);
@@ -375,7 +377,7 @@ export const series = query
         const { page } = await context.db.platformUsage.findMany({ where: { organizationId, periodStart } });
         const dayMs = 24 * 60 * 60 * 1000;
         const buckets = new Map<number, PeriodUsage>();
-        // Requests a customer box reported: plotted, never priced (plan 458 D12).
+        // Requests a customer box reported, or read back from a connected account: plotted, never priced.
         const boxRequests = new Map<number, number>();
 
         for (const row of page as PlatformUsageRow[]) {

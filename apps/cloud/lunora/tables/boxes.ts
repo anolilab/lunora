@@ -1,6 +1,7 @@
 /**
- * Customer boxes (plan 458): enrolled machines, their one-time enrolment
- * tokens, and signed `lunora-hostd` releases.
+ * Customer infrastructure the control plane deploys onto: boxes (plan 458) —
+ * enrolled machines, their one-time enrolment tokens and signed `lunora-hostd`
+ * releases — and connected Cloudflare accounts (the `cloudflare-workers` target).
  *
  * Composed into the schema by `lunora/schema.ts`.
  */
@@ -17,6 +18,13 @@ const boxStatus = v.union(v.literal("pending"), v.literal("online"), v.literal("
 /** The three binaries on a box, as its `hostd` reports them (`@lunora/hostd/protocol` `BoxVersions`). Displayed, never parsed. */
 const boxVersions = v.object({ caddy: v.string(), celld: v.string(), hostd: v.string() });
 
+/** One celld fleet on a box, as its `hostd` reports it (`@lunora/hostd/protocol` `FleetSummary`). */
+const boxFleet = v.object({
+    alias: v.string(),
+    deploymentId: v.optional(v.string()),
+    state: v.union(v.literal("running"), v.literal("stopped"), v.literal("starting"), v.literal("failed")),
+});
+
 export const boxesTables = {
     // A machine a customer runs `lunora-hostd` on (plan 458 D13, G12): org-owned,
     // never shared, and its `organizationId` never changes (§3 rule 6). The
@@ -31,6 +39,10 @@ export const boxesTables = {
         // could not — surfaced on the row rather than failing the enrolment.
         dnsError: v.optional(v.string()),
         enrolledAt: v.optional(v.number()),
+        // The celld fleets the box runs (one per alias, at most 500): what its
+        // `hello` reported, moved on by each deploy / reload / destroy the
+        // session sees succeed (`src/boxes/fleets.ts`). Displayed, never trusted.
+        fleets: v.optional(v.array(boxFleet)),
         ipv4: v.optional(v.string()),
         ipv6: v.optional(v.string()),
         lastSeenAt: v.optional(v.number()),
@@ -91,4 +103,39 @@ export const boxesTables = {
     })
         .global()
         .index("by_release", ["releaseId"], { unique: true }),
+
+    // A Cloudflare account an organization connected for the `cloudflare-workers`
+    // target (MULTIPLATFORM.md Phase 3): its projects deploy as plain Workers
+    // into it. The scoped API token is AES-256-GCM encrypted at the edge
+    // (`POST /v1/cloudflare-accounts` → `src/secrets/crypto.ts`) after it was
+    // verified against the account, so only ciphertext + IV live here — never
+    // the token. Disconnecting deletes the row (and with it the credential);
+    // `cloudflareAccounts.disconnect` refuses while a project or an un-torn-down
+    // deployment still names it.
+    cloudflareAccounts: defineTable({
+        // The Cloudflare account id (32 hex) — the account's own, not this row's.
+        accountId: v.string(),
+        ciphertext: v.string(),
+        createdAt: v.number(),
+        createdBy: v.string(),
+        // The account's display name, when the token may read it (Account Settings Read is optional).
+        displayName: v.optional(v.string()),
+        iv: v.string(),
+        // The organization's own name for the connection.
+        label: v.string(),
+        organizationId: v.id("organizations"),
+        // The permission groups the token was seen to hold when last verified
+        // (`CLOUDFLARE_TOKEN_PERMISSIONS` in `src/provision-contract.ts`).
+        permissions: v.array(v.string()),
+        // When the token stops working, if it was created with an expiry.
+        tokenExpiresAt: v.optional(v.number()),
+        updatedAt: v.number(),
+        verifiedAt: v.number(),
+        // The account's `workers.dev` subdomain: tenants answer at `<alias>.<subdomain>.workers.dev`.
+        workersSubdomain: v.string(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        // One connection per account per organization: a second token for the same account is a rotation.
+        .index("by_org_account", ["organizationId", "accountId"], { unique: true }),
 };

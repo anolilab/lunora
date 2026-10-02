@@ -7,16 +7,18 @@
  * the scheduled sweeps write from (`src/server.ts`). A revoked row is never
  * moved back to `online` or `offline` — revocation is final.
  */
-import type { BoxResources, BoxVersions, RouteEntry } from "@lunora/hostd/protocol";
+import type { BoxResources, BoxVersions, FleetSummary, RouteEntry } from "@lunora/hostd/protocol";
 import { HOSTD_PROTOCOL_LIMITS, isAlias, isHostname } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
+import { normaliseFleets } from "./fleets";
 import type { SessionBox } from "./session";
 
 /** The `boxes` columns a session reads. `.global()` rows answer SQL NULL for an unset column. */
 export interface StoredBox {
     _id: string;
     desiredReleaseId?: null | string;
+    fleets?: FleetSummary[] | null;
     organizationId: string;
     publicKey: string;
     slug: string;
@@ -33,11 +35,16 @@ export const loadBox = async (database: ControlPlaneStore, boxId: string): Promi
 export const sessionBoxOf = (box: null | StoredBox): null | SessionBox =>
     box === null ? null : { publicKey: box.publicKey, revoked: box.status === "revoked" };
 
-/** Record an authenticated `hello`: the box is online and runs these versions with this much room. */
+/**
+ * Record an authenticated `hello`: the box is online, runs these versions with
+ * this much room — and these fleets, when the session still held them (it holds
+ * them in memory between `hello` and `auth`, so an eviction in between loses
+ * them; the stored list then stays until the next job or `hello` moves it).
+ */
 export const recordHello = async (
     database: ControlPlaneStore,
     boxId: string,
-    hello: { resources: BoxResources; versions: BoxVersions },
+    hello: { fleets?: FleetSummary[]; resources: BoxResources; versions: BoxVersions },
     now: number,
 ): Promise<void> => {
     const box = await loadBox(database, boxId);
@@ -46,7 +53,40 @@ export const recordHello = async (
         return;
     }
 
-    await database.patch(boxId, { lastSeenAt: now, resources: hello.resources, status: "online", versions: hello.versions }, "boxes");
+    await database.patch(
+        boxId,
+        {
+            ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
+            lastSeenAt: now,
+            resources: hello.resources,
+            status: "online",
+            versions: hello.versions,
+        },
+        "boxes",
+    );
+};
+
+/**
+ * Move a box's stored fleets on after a job finished (`fleetsAfterJob`):
+ * `update` maps what is stored to what should be, or `undefined` to leave it.
+ * A revoked or vanished box is not written to.
+ */
+export const updateFleets = async (
+    database: ControlPlaneStore,
+    boxId: string,
+    update: (fleets: FleetSummary[]) => FleetSummary[] | undefined,
+): Promise<void> => {
+    const box = await loadBox(database, boxId);
+
+    if (box === null || box.status === "revoked") {
+        return;
+    }
+
+    const next = update(box.fleets ?? []);
+
+    if (next !== undefined) {
+        await database.patch(boxId, { fleets: next }, "boxes");
+    }
 };
 
 /** Record that an authenticated box is still there. */

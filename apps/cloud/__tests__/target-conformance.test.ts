@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { BoxSession } from "../src/boxes/session-client";
 import { boxSession } from "../src/boxes/session-client";
 import { createCelldVpsDriver } from "../src/targets/celld-vps/driver";
-import type { ProvisionJob } from "../src/targets/cloudflare-wfp/box-contract";
 import { createCloudflareWfpDriver, createCloudflareWfpFleet } from "../src/targets/cloudflare-wfp/driver";
-import type { ProvisionBox } from "../src/targets/cloudflare-wfp/provision-box";
+import { createCloudflareWorkersDriver, createCloudflareWorkersFleet } from "../src/targets/cloudflare-workers/driver";
+import type { ProvisionBox } from "../src/targets/provision-box/client";
+import type { ProvisionJob } from "../src/targets/provision-box/contract";
 import { registeredTargets } from "../src/targets/registry";
 import { boxKey, boxRow, fakeHostd, fakeState, handshake, namespaceOver, TestBoxSession } from "./support/box-session-fakes";
 import { createMemoryTarget } from "./support/memory-driver";
@@ -27,7 +28,11 @@ describeTargetConformance("memory (reference)", () => {
 describeUsageReadbackConformance("memory (reference)", () => {
     const { fleet, serve } = createMemoryTarget();
 
-    return { read: fleet.usage ?? (() => Promise.reject(new Error("the memory fleet reads usage back"))), serve };
+    if (fleet.usage === undefined) {
+        throw new Error("the memory fleet reads usage back");
+    }
+
+    return { read: fleet.usage, serve };
 });
 
 /**
@@ -65,6 +70,7 @@ describeTargetConformance("cloudflare-wfp", () => {
 describeUsageReadbackConformance("cloudflare-wfp", () => {
     const dataPoints: { atMs: number; requests: number; scriptName: string }[] = [];
     const { usage } = createCloudflareWfpFleet({
+        cell: "default",
         usage: {
             readRequestUsage: (sinceMs) => {
                 // `timestamp > since`, summed per script — the SQL `createHttpAnalyticsReader` runs.
@@ -83,10 +89,89 @@ describeUsageReadbackConformance("cloudflare-wfp", () => {
         },
     });
 
+    if (usage === undefined) {
+        throw new Error("the fleet was built with a usage reader");
+    }
+
     return {
-        read: usage ?? (() => Promise.reject(new Error("the fleet was built with a usage reader"))),
-        serve: (scriptName, requests, atMs) => {
+        read: usage,
+        // One scope, the cell: the dispatcher writes every tenant's requests to its one dataset.
+        serve: (_scope, scriptName, requests, atMs) => {
             dataPoints.push({ atMs, requests, scriptName });
+        },
+    };
+});
+
+/**
+ * `cloudflare-workers` over its real ports with the customer's account faked:
+ * the same provision-box fake (keyed by the job's account, which must be the
+ * placement's), credentials unsealed per call, and the GraphQL Analytics API
+ * modelled as per-script invocation counts per account.
+ */
+const BYO_ACCOUNT = { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" };
+
+describeTargetConformance("cloudflare-workers", () => {
+    const workers = new Map<string, string>();
+    const box: ProvisionBox = {
+        get: () => {
+            return {
+                fetch: (_path, init) => {
+                    const job = JSON.parse(init?.body as string) as ProvisionJob;
+                    const target = job.action === "deploy" ? job.spec.target : job.target;
+
+                    if (target.kind !== "account" || target.accountId !== BYO_ACCOUNT.accountId || target.apiToken !== "customer-token") {
+                        return Promise.resolve(new Response('{"type":"error","message":"wrong account"}\n'));
+                    }
+
+                    if (job.action === "deploy") {
+                        workers.set(job.spec.alias, job.spec.bundle);
+                    } else {
+                        workers.delete(job.alias);
+                    }
+
+                    return Promise.resolve(new Response('{"type":"result"}\n'));
+                },
+            };
+        },
+    };
+
+    return {
+        driver: createCloudflareWorkersDriver({
+            account: BYO_ACCOUNT,
+            box: () => box,
+            credentials: () => Promise.resolve({ accountId: BYO_ACCOUNT.accountId, apiToken: "customer-token" }),
+            state: { token: "state-token", url: "https://alchemy-state-store.cell.workers.dev" },
+        }),
+        running: () => [...workers.keys()],
+    };
+});
+
+describeUsageReadbackConformance("cloudflare-workers", () => {
+    // Two connected accounts, each its own scope; tokens map back to their account.
+    const invocations: { accountId: string; atMs: number; requests: number; scriptName: string }[] = [];
+    const accounts: Record<string, string> = { cfa_1: "a".repeat(32), cfa_2: "b".repeat(32) };
+
+    return {
+        read: createCloudflareWorkersFleet({
+            accounts: () => Promise.resolve(Object.keys(accounts)),
+            credentials: (id) => Promise.resolve({ accountId: accounts[id] ?? "", apiToken: `token-${id}` }),
+            // `datetime_gt: since`, summed per script — the query `readScriptRequests` sends.
+            read: (access, sinceMs) => {
+                const totals = new Map<string, number>();
+
+                for (const row of invocations.filter((candidate) => candidate.accountId === access.accountId && candidate.atMs > sinceMs)) {
+                    totals.set(row.scriptName, (totals.get(row.scriptName) ?? 0) + row.requests);
+                }
+
+                return Promise.resolve(
+                    [...totals].map(([scriptName, requests]) => {
+                        return { requests, scriptName };
+                    }),
+                );
+            },
+        }).usage as NonNullable<ReturnType<typeof createCloudflareWorkersFleet>["usage"]>,
+        serve: (scope, alias, requests, atMs) => {
+            invocations.push({ accountId: accounts[scope] ?? "", atMs, requests, scriptName: alias });
         },
     };
 });
@@ -154,6 +239,6 @@ describe("the conformance run", () => {
     // Registering a driver without adding it above fails here: a target ships
     // only once it passes the same legs as every other.
     it("covers every registered target", () => {
-        expect(registeredTargets()).toStrictEqual(["cloudflare-wfp", "celld-vps"]);
+        expect(registeredTargets()).toStrictEqual(["cloudflare-wfp", "cloudflare-workers", "celld-vps"]);
     });
 });

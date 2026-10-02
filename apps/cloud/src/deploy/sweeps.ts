@@ -4,7 +4,7 @@
  * each expressed as a pure function over injected ports (`runTeardownSweep`,
  * `runUsageRollback`). These builders wire those ports to the control-plane D1,
  * so the row→target mapping, the `teardownAt` marker, the ledger insert, and the
- * per-cell checkpoint are testable against a fake store (server.ts just supplies
+ * per-scope checkpoint are testable against a fake store (server.ts just supplies
  * the real ctx-db and the target drivers).
  *
  * Every row is read with its `target` (absent on rows that predate it, which
@@ -16,7 +16,7 @@ import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { ProgressLine, TargetDriver, UsageRow } from "../targets/driver";
-import type { BoxLookups, Placement } from "../targets/placement";
+import type { AccountLookup, BoxLookups, Placement } from "../targets/placement";
 import { placementOfDeployment } from "../targets/placement";
 import type { TeardownPorts, TeardownTarget } from "./teardown";
 
@@ -24,6 +24,7 @@ interface TeardownRow {
     _id: string;
     alias?: string;
     boxId?: null | string;
+    cloudflareAccountId?: null | string;
     createdAt?: number;
     kind: string;
     scriptName: string;
@@ -56,14 +57,19 @@ interface TeardownRow {
  */
 export const teardownPorts = (
     database: ControlPlaneDatabase,
-    ports: Pick<TeardownPorts, "deleteRelease"> & { boxes: BoxLookups; driverFor: (placement: Placement) => TargetDriver; log: ProgressLine },
+    ports: Pick<TeardownPorts, "deleteRelease"> & {
+        accounts: AccountLookup;
+        boxes: BoxLookups;
+        driverFor: (placement: Placement) => TargetDriver;
+        log: ProgressLine;
+    },
     now: number,
     canConverge: (target: TargetId) => boolean,
 ): TeardownPorts => {
     return {
         deleteRelease: ports.deleteRelease,
         destroy: async (target) => {
-            const placed = await placementOfDeployment(target, ports.boxes);
+            const placed = await placementOfDeployment(target, ports.boxes, ports.accounts);
 
             if ("unplaced" in placed) {
                 if (!placed.settled) {
@@ -99,19 +105,27 @@ export const teardownPorts = (
                 }
             }
 
-            // The box each alias was last converged on: its newest row that names
-            // one. A project that moved boxes leaves older rows naming the old one.
-            const boxes = new Map<string, { at: number; boxId: string }>();
+            // The box (or connected account) each alias was last converged on: its
+            // newest row that names one. A project that moved leaves older rows
+            // naming the old one.
+            const newestNaming = (column: "boxId" | "cloudflareAccountId"): Map<string, string> => {
+                const newest = new Map<string, { at: number; value: string }>();
 
-            for (const row of rows) {
-                const alias = row.alias ?? row.scriptName;
-                const at = row.createdAt ?? 0;
-                const known = boxes.get(alias);
+                for (const row of rows) {
+                    const alias = row.alias ?? row.scriptName;
+                    const at = row.createdAt ?? 0;
+                    const known = newest.get(alias);
+                    const value = row[column];
 
-                if (row.boxId != null && (known === undefined || at >= known.at)) {
-                    boxes.set(alias, { at, boxId: row.boxId });
+                    if (value != null && (known === undefined || at >= known.at)) {
+                        newest.set(alias, { at, value });
+                    }
                 }
-            }
+
+                return new Map([...newest].map(([alias, { value }]) => [alias, value]));
+            };
+            const boxes = newestNaming("boxId");
+            const accounts = newestNaming("cloudflareAccountId");
 
             const elected = new Set<string>();
 
@@ -126,9 +140,17 @@ export const teardownPorts = (
                             elected.add(alias);
                         }
 
-                        const boxId = boxes.get(alias)?.boxId;
+                        const boxId = boxes.get(alias);
+                        const cloudflareAccountId = accounts.get(alias);
 
-                        return { alias, ...(boxId === undefined ? {} : { boxId }), destroyWorker, id: row._id, target: storedTarget(row.target) };
+                        return {
+                            alias,
+                            ...(boxId === undefined ? {} : { boxId }),
+                            ...(cloudflareAccountId === undefined ? {} : { cloudflareAccountId }),
+                            destroyWorker,
+                            id: row._id,
+                            target: storedTarget(row.target),
+                        };
                     })
                     // A row whose target is unknown, or cannot converge here, waits.
                     .filter((target): target is TeardownTarget => target.target !== undefined && canConverge(target.target))
@@ -153,6 +175,7 @@ export const teardownPorts = (
 
 interface AttributionRow {
     _id: string;
+    cloudflareAccountId?: null | string;
     organizationId: string;
     resourceRef?: string;
     scriptName: string;
@@ -162,26 +185,56 @@ interface AttributionRow {
 
 interface CellRow {
     _id: string;
-    usageReadAtMs?: number;
+    usageReadAtMs?: null | number;
+}
+
+interface CheckpointRow {
+    _id: string;
+    readAtMs: number;
 }
 
 /**
- * Build the {@link runUsageRollback} ports against the control-plane D1 for one
- * `readback` target. Reads that target's deployment attribution map and this
- * cell's checkpoint up front, then returns ports that resolve a resource →
- * org/deployment, append `requests` rows, and advance the cell's
- * `usageReadAtMs`. No cell row (unregistered cell) → the checkpoint can't
- * persist and the bootstrap window applies each run.
- *
- * The checkpoint is the CELL's, which is `cloudflare-wfp`'s unit of placement
- * and today the only `readback` target. A second readback target needs a
- * checkpoint of its own before it is swept here, or the two would advance one
- * boundary and each skip the other's window.
+ * The checkpoint of one (target, scope), and how to advance it. A
+ * `cloudflare-wfp` cell swept for the first time since checkpoints moved to
+ * `usageCheckpoints` starts from its old `cells.usageReadAtMs`, so the move
+ * neither re-reads nor skips a window.
+ */
+const checkpointPorts = async (
+    database: ControlPlaneDatabase,
+    options: { now: number; scope: string; target: TargetId },
+): Promise<Pick<UsageRollbackPorts, "getCheckpoint" | "setCheckpoint">> => {
+    const { page } = await database.findMany("usageCheckpoints", { where: { scopeKey: options.scope, target: options.target } });
+    const row = (page as CheckpointRow[]).at(0);
+    let seed: number | undefined;
+
+    if (row === undefined && options.target === "cloudflare-wfp") {
+        const { page: cells } = await database.findMany("cells", { where: { name: options.scope } });
+
+        seed = (cells as CellRow[])[0]?.usageReadAtMs ?? undefined;
+    }
+
+    return {
+        getCheckpoint: () => Promise.resolve(row?.readAtMs ?? seed),
+        setCheckpoint: async (ms) => {
+            await (row === undefined
+                ? database.insert("usageCheckpoints", { readAtMs: ms, scopeKey: options.scope, target: options.target, updatedAt: options.now })
+                : database.patch(row._id, { readAtMs: ms, updatedAt: options.now }, "usageCheckpoints"));
+        },
+    };
+};
+
+/**
+ * Build the {@link runUsageRollback} ports against the control-plane D1 for
+ * one scope of one `readback` target. Reads that target's deployment
+ * attribution map and the scope's checkpoint (`usageCheckpoints`) up front,
+ * then returns ports that resolve a resource → org/deployment, append
+ * `requests` rows, and advance the scope's checkpoint — never another
+ * scope's, so two sources of one target never skip each other's windows.
  */
 export const usageRollbackPorts = async (
     database: ControlPlaneDatabase,
     read: (sinceMs: number) => Promise<UsageRow[]>,
-    options: { cellName: string; now: number; periodStart: number; target: TargetId },
+    options: { now: number; periodStart: number; scope: string; target: TargetId },
 ): Promise<UsageRollbackPorts> => {
     // Drained: this map attributes metered usage to a deployment, so a resource
     // missing from it is usage that lands on nobody's bill.
@@ -199,19 +252,23 @@ export const usageRollbackPorts = async (
         const resourceRef = row.resourceRef ?? row.scriptName;
 
         if (!byResource.has(resourceRef) || row.status === "live") {
-            byResource.set(resourceRef, { deploymentId: row._id, organizationId: row.organizationId });
+            byResource.set(resourceRef, {
+                ...(row.cloudflareAccountId == null ? {} : { cloudflareAccountId: row.cloudflareAccountId }),
+                deploymentId: row._id,
+                organizationId: row.organizationId,
+            });
         }
     }
 
-    const { page: cellPage } = await database.findMany("cells", { where: { name: options.cellName } });
-    const cell = (cellPage as CellRow[])[0];
-
     return {
-        getCheckpoint: () => Promise.resolve(cell?.usageReadAtMs),
+        ...(await checkpointPorts(database, options)),
         now: options.now,
         read,
         record: async ({ attribution, quantity }) => {
             await database.insert("platformUsage", {
+                // A tenant in the customer's own account: its requests are on the
+                // customer's Cloudflare bill, so the row is shown and never billed.
+                ...(attribution.cloudflareAccountId === undefined ? {} : { cloudflareAccountId: attribution.cloudflareAccountId }),
                 createdAt: options.now,
                 deploymentId: attribution.deploymentId,
                 kind: "requests",
@@ -221,10 +278,5 @@ export const usageRollbackPorts = async (
             });
         },
         resolveResource: (resourceRef) => byResource.get(resourceRef),
-        setCheckpoint: async (ms) => {
-            if (cell) {
-                await database.patch(cell._id, { usageReadAtMs: ms }, "cells");
-            }
-        },
     };
 };

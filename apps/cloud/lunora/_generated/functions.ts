@@ -7,32 +7,33 @@ import * as lunora_billing_2 from "../billing.js";
 import * as lunora_boxes_3 from "../boxes.js";
 import * as lunora_builds_4 from "../builds.js";
 import * as lunora_cells_5 from "../cells.js";
-import * as lunora_cloudflare_billing_6 from "../cloudflare-billing.js";
-import * as lunora_dashboards_7 from "../dashboards.js";
-import * as lunora_deploy_keys_8 from "../deploy-keys.js";
-import * as lunora_deployments_9 from "../deployments.js";
-import * as lunora_domains_10 from "../domains.js";
-import * as lunora_fanout_11 from "../fanout.js";
-import * as lunora_github_installations_12 from "../github-installations.js";
-import * as lunora_hostd_releases_13 from "../hostd-releases.js";
-import * as lunora_incidents_14 from "../incidents.js";
-import * as lunora_invitations_15 from "../invitations.js";
-import * as lunora_issues_16 from "../issues.js";
-import * as lunora_logs_17 from "../logs.js";
-import * as lunora_members_18 from "../members.js";
-import * as lunora_metrics_19 from "../metrics.js";
-import * as lunora_onboarding_20 from "../onboarding.js";
-import * as lunora_organizations_21 from "../organizations.js";
-import * as lunora_projects_22 from "../projects.js";
-import * as lunora_rollouts_23 from "../rollouts.js";
-import * as lunora_secrets_24 from "../secrets.js";
-import * as lunora_sessions_25 from "../sessions.js";
-import * as lunora_telemetry_26 from "../telemetry.js";
-import * as lunora_tenant_backups_27 from "../tenant-backups.js";
-import * as lunora_traces_28 from "../traces.js";
-import * as lunora_traffic_29 from "../traffic.js";
-import * as lunora_uptime_30 from "../uptime.js";
-import * as lunora_usage_31 from "../usage.js";
+import * as lunora_cloudflare_accounts_6 from "../cloudflare-accounts.js";
+import * as lunora_cloudflare_billing_7 from "../cloudflare-billing.js";
+import * as lunora_dashboards_8 from "../dashboards.js";
+import * as lunora_deploy_keys_9 from "../deploy-keys.js";
+import * as lunora_deployments_10 from "../deployments.js";
+import * as lunora_domains_11 from "../domains.js";
+import * as lunora_fanout_12 from "../fanout.js";
+import * as lunora_github_installations_13 from "../github-installations.js";
+import * as lunora_hostd_releases_14 from "../hostd-releases.js";
+import * as lunora_incidents_15 from "../incidents.js";
+import * as lunora_invitations_16 from "../invitations.js";
+import * as lunora_issues_17 from "../issues.js";
+import * as lunora_logs_18 from "../logs.js";
+import * as lunora_members_19 from "../members.js";
+import * as lunora_metrics_20 from "../metrics.js";
+import * as lunora_onboarding_21 from "../onboarding.js";
+import * as lunora_organizations_22 from "../organizations.js";
+import * as lunora_projects_23 from "../projects.js";
+import * as lunora_rollouts_24 from "../rollouts.js";
+import * as lunora_secrets_25 from "../secrets.js";
+import * as lunora_sessions_26 from "../sessions.js";
+import * as lunora_telemetry_27 from "../telemetry.js";
+import * as lunora_tenant_backups_28 from "../tenant-backups.js";
+import * as lunora_traces_29 from "../traces.js";
+import * as lunora_traffic_30 from "../traffic.js";
+import * as lunora_uptime_31 from "../uptime.js";
+import * as lunora_usage_32 from "../usage.js";
 
 import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "@lunora/values";
 import { LunoraError } from "@lunora/server";
@@ -104,6 +105,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "billing:portal": lunora_billing_2.portal as unknown as RegisteredLunoraFunction,
     "billing:processWebhook": lunora_billing_2.processWebhook as unknown as RegisteredLunoraFunction,
     "billing:subscription": lunora_billing_2.subscription as unknown as RegisteredLunoraFunction,
+    "boxes:authorizeDiagnose": lunora_boxes_3.authorizeDiagnose as unknown as RegisteredLunoraFunction,
     "boxes:createEnrolment": lunora_boxes_3.createEnrolment as unknown as RegisteredLunoraFunction,
     "boxes:domain": lunora_boxes_3.domain as unknown as RegisteredLunoraFunction,
     "boxes:enrol": lunora_boxes_3.enrol as unknown as RegisteredLunoraFunction,
@@ -115,7 +117,6 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "boxes:rename": lunora_boxes_3.rename as unknown as RegisteredLunoraFunction,
     "boxes:revoke": lunora_boxes_3.revoke as unknown as RegisteredLunoraFunction,
     "boxes:setDesiredRelease": lunora_boxes_3.setDesiredRelease as unknown as RegisteredLunoraFunction,
-    "boxes:setProjectTarget": lunora_boxes_3.setProjectTarget as unknown as RegisteredLunoraFunction,
     "builds:appendLog": lunora_builds_4.appendLog as unknown as RegisteredLunoraFunction,
     "builds:claimNext": lunora_builds_4.claimNext as unknown as RegisteredLunoraFunction,
     "builds:complete": lunora_builds_4.complete as unknown as RegisteredLunoraFunction,
@@ -126,127 +127,134 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:recordPush": lunora_builds_4.recordPush as unknown as RegisteredLunoraFunction,
     "builds:releaseTarget": lunora_builds_4.releaseTarget as unknown as RegisteredLunoraFunction,
     "builds:reportTarget": lunora_builds_4.reportTarget as unknown as RegisteredLunoraFunction,
+    "builds:reusableRelease": lunora_builds_4.reusableRelease as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_5.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_5.register as unknown as RegisteredLunoraFunction,
-    "cloudflare_billing:disconnect": lunora_cloudflare_billing_6.disconnect as unknown as RegisteredLunoraFunction,
-    "cloudflare_billing:status": lunora_cloudflare_billing_6.status as unknown as RegisteredLunoraFunction,
-    "cloudflare_billing:store": lunora_cloudflare_billing_6.store as unknown as RegisteredLunoraFunction,
-    "cloudflare_billing:summary": lunora_cloudflare_billing_6.summary as unknown as RegisteredLunoraFunction,
-    "dashboards:create": lunora_dashboards_7.create as unknown as RegisteredLunoraFunction,
-    "dashboards:get": lunora_dashboards_7.get as unknown as RegisteredLunoraFunction,
-    "dashboards:list": lunora_dashboards_7.list as unknown as RegisteredLunoraFunction,
-    "dashboards:remove": lunora_dashboards_7.remove as unknown as RegisteredLunoraFunction,
-    "dashboards:update": lunora_dashboards_7.update as unknown as RegisteredLunoraFunction,
-    "deploy_keys:ingestKeyCipher": lunora_deploy_keys_8.ingestKeyCipher as unknown as RegisteredLunoraFunction,
-    "deploy_keys:issue": lunora_deploy_keys_8.issue as unknown as RegisteredLunoraFunction,
-    "deploy_keys:list": lunora_deploy_keys_8.list as unknown as RegisteredLunoraFunction,
-    "deploy_keys:recordIngestKey": lunora_deploy_keys_8.recordIngestKey as unknown as RegisteredLunoraFunction,
-    "deploy_keys:recordReleaseKey": lunora_deploy_keys_8.recordReleaseKey as unknown as RegisteredLunoraFunction,
-    "deploy_keys:removeReleaseKey": lunora_deploy_keys_8.removeReleaseKey as unknown as RegisteredLunoraFunction,
-    "deploy_keys:revoke": lunora_deploy_keys_8.revoke as unknown as RegisteredLunoraFunction,
-    "deploy_keys:roll": lunora_deploy_keys_8.roll as unknown as RegisteredLunoraFunction,
-    "deploy_keys:verify": lunora_deploy_keys_8.verify as unknown as RegisteredLunoraFunction,
-    "deployments:activate": lunora_deployments_9.activate as unknown as RegisteredLunoraFunction,
-    "deployments:adminTarget": lunora_deployments_9.adminTarget as unknown as RegisteredLunoraFunction,
-    "deployments:cleanupExpiredPreviews": lunora_deployments_9.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
-    "deployments:create": lunora_deployments_9.create as unknown as RegisteredLunoraFunction,
-    "deployments:ejectTarget": lunora_deployments_9.ejectTarget as unknown as RegisteredLunoraFunction,
-    "deployments:listByProject": lunora_deployments_9.listByProject as unknown as RegisteredLunoraFunction,
-    "deployments:planForScript": lunora_deployments_9.planForScript as unknown as RegisteredLunoraFunction,
-    "deployments:pruneSuperseded": lunora_deployments_9.pruneSuperseded as unknown as RegisteredLunoraFunction,
-    "deployments:releaseTarget": lunora_deployments_9.releaseTarget as unknown as RegisteredLunoraFunction,
-    "deployments:rollback": lunora_deployments_9.rollback as unknown as RegisteredLunoraFunction,
-    "deployments:updateStatus": lunora_deployments_9.updateStatus as unknown as RegisteredLunoraFunction,
-    "domains:add": lunora_domains_10.add as unknown as RegisteredLunoraFunction,
-    "domains:get": lunora_domains_10.get as unknown as RegisteredLunoraFunction,
-    "domains:list": lunora_domains_10.list as unknown as RegisteredLunoraFunction,
-    "domains:markVerified": lunora_domains_10.markVerified as unknown as RegisteredLunoraFunction,
-    "domains:remove": lunora_domains_10.remove as unknown as RegisteredLunoraFunction,
-    "domains:routeForHostname": lunora_domains_10.routeForHostname as unknown as RegisteredLunoraFunction,
-    "fanout:tick": lunora_fanout_11.tick as unknown as RegisteredLunoraFunction,
-    "github_installations:claim": lunora_github_installations_12.claim as unknown as RegisteredLunoraFunction,
-    "github_installations:list": lunora_github_installations_12.list as unknown as RegisteredLunoraFunction,
-    "github_installations:record": lunora_github_installations_12.record as unknown as RegisteredLunoraFunction,
-    "github_installations:remove": lunora_github_installations_12.remove as unknown as RegisteredLunoraFunction,
-    "github_installations:unclaim": lunora_github_installations_12.unclaim as unknown as RegisteredLunoraFunction,
-    "hostd_releases:envelope": lunora_hostd_releases_13.envelope as unknown as RegisteredLunoraFunction,
-    "hostd_releases:get": lunora_hostd_releases_13.get as unknown as RegisteredLunoraFunction,
-    "hostd_releases:store": lunora_hostd_releases_13.store as unknown as RegisteredLunoraFunction,
-    "incidents:investigate": lunora_incidents_14.investigate as unknown as RegisteredLunoraFunction,
-    "incidents:list": lunora_incidents_14.list as unknown as RegisteredLunoraFunction,
-    "incidents:setStatus": lunora_incidents_14.setStatus as unknown as RegisteredLunoraFunction,
-    "incidents:triage": lunora_incidents_14.triage as unknown as RegisteredLunoraFunction,
-    "invitations:accept": lunora_invitations_15.accept as unknown as RegisteredLunoraFunction,
-    "invitations:invite": lunora_invitations_15.invite as unknown as RegisteredLunoraFunction,
-    "invitations:list": lunora_invitations_15.list as unknown as RegisteredLunoraFunction,
-    "invitations:revoke": lunora_invitations_15.revoke as unknown as RegisteredLunoraFunction,
-    "issues:list": lunora_issues_16.list as unknown as RegisteredLunoraFunction,
-    "issues:setStatus": lunora_issues_16.setStatus as unknown as RegisteredLunoraFunction,
-    "logs:ingest": lunora_logs_17.ingest as unknown as RegisteredLunoraFunction,
-    "logs:ingestInternal": lunora_logs_17.ingestInternal as unknown as RegisteredLunoraFunction,
-    "logs:list": lunora_logs_17.list as unknown as RegisteredLunoraFunction,
-    "logs:orgForScript": lunora_logs_17.orgForScript as unknown as RegisteredLunoraFunction,
-    "logs:prune": lunora_logs_17.prune as unknown as RegisteredLunoraFunction,
-    "members:add": lunora_members_18.add as unknown as RegisteredLunoraFunction,
-    "members:list": lunora_members_18.list as unknown as RegisteredLunoraFunction,
-    "members:remove": lunora_members_18.remove as unknown as RegisteredLunoraFunction,
-    "members:setRole": lunora_members_18.setRole as unknown as RegisteredLunoraFunction,
-    "metrics:ingest": lunora_metrics_19.ingest as unknown as RegisteredLunoraFunction,
-    "metrics:list": lunora_metrics_19.list as unknown as RegisteredLunoraFunction,
-    "metrics:prune": lunora_metrics_19.prune as unknown as RegisteredLunoraFunction,
-    "metrics:series": lunora_metrics_19.series as unknown as RegisteredLunoraFunction,
-    "onboarding:checklist": lunora_onboarding_20.checklist as unknown as RegisteredLunoraFunction,
-    "organizations:cancelDeletion": lunora_organizations_21.cancelDeletion as unknown as RegisteredLunoraFunction,
-    "organizations:create": lunora_organizations_21.create as unknown as RegisteredLunoraFunction,
-    "organizations:getBySlug": lunora_organizations_21.getBySlug as unknown as RegisteredLunoraFunction,
-    "organizations:linkCreditsAccount": lunora_organizations_21.linkCreditsAccount as unknown as RegisteredLunoraFunction,
-    "organizations:list": lunora_organizations_21.list as unknown as RegisteredLunoraFunction,
-    "organizations:purgeDeleted": lunora_organizations_21.purgeDeleted as unknown as RegisteredLunoraFunction,
-    "organizations:rename": lunora_organizations_21.rename as unknown as RegisteredLunoraFunction,
-    "organizations:requestDeletion": lunora_organizations_21.requestDeletion as unknown as RegisteredLunoraFunction,
-    "projects:byGithubRepo": lunora_projects_22.byGithubRepo as unknown as RegisteredLunoraFunction,
-    "projects:create": lunora_projects_22.create as unknown as RegisteredLunoraFunction,
-    "projects:listByOrg": lunora_projects_22.listByOrg as unknown as RegisteredLunoraFunction,
-    "projects:placement": lunora_projects_22.placement as unknown as RegisteredLunoraFunction,
-    "projects:remove": lunora_projects_22.remove as unknown as RegisteredLunoraFunction,
-    "projects:rename": lunora_projects_22.rename as unknown as RegisteredLunoraFunction,
-    "projects:setPreviewProtection": lunora_projects_22.setPreviewProtection as unknown as RegisteredLunoraFunction,
-    "projects:updateBuildSettings": lunora_projects_22.updateBuildSettings as unknown as RegisteredLunoraFunction,
-    "projects:verifyPreviewPassword": lunora_projects_22.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
-    "rollouts:abortRollout": lunora_rollouts_23.abortRollout as unknown as RegisteredLunoraFunction,
-    "rollouts:promoteRollout": lunora_rollouts_23.promoteRollout as unknown as RegisteredLunoraFunction,
-    "rollouts:setRollout": lunora_rollouts_23.setRollout as unknown as RegisteredLunoraFunction,
-    "secrets:list": lunora_secrets_24.list as unknown as RegisteredLunoraFunction,
-    "secrets:listEncrypted": lunora_secrets_24.listEncrypted as unknown as RegisteredLunoraFunction,
-    "secrets:remove": lunora_secrets_24.remove as unknown as RegisteredLunoraFunction,
-    "secrets:store": lunora_secrets_24.store as unknown as RegisteredLunoraFunction,
-    "sessions:get": lunora_sessions_25.get as unknown as RegisteredLunoraFunction,
-    "sessions:list": lunora_sessions_25.list as unknown as RegisteredLunoraFunction,
-    "telemetry:ingest": lunora_telemetry_26.ingest as unknown as RegisteredLunoraFunction,
-    "telemetry:orgForDeployKey": lunora_telemetry_26.orgForDeployKey as unknown as RegisteredLunoraFunction,
-    "telemetry:pruneObservations": lunora_telemetry_26.pruneObservations as unknown as RegisteredLunoraFunction,
-    "tenant_backups:authorizeDownload": lunora_tenant_backups_27.authorizeDownload as unknown as RegisteredLunoraFunction,
-    "tenant_backups:beginBackup": lunora_tenant_backups_27.beginBackup as unknown as RegisteredLunoraFunction,
-    "tenant_backups:beginRestore": lunora_tenant_backups_27.beginRestore as unknown as RegisteredLunoraFunction,
-    "tenant_backups:finish": lunora_tenant_backups_27.finish as unknown as RegisteredLunoraFunction,
-    "tenant_backups:list": lunora_tenant_backups_27.list as unknown as RegisteredLunoraFunction,
-    "traces:get": lunora_traces_28.get as unknown as RegisteredLunoraFunction,
-    "traces:getArchived": lunora_traces_28.getArchived as unknown as RegisteredLunoraFunction,
-    "traces:list": lunora_traces_28.list as unknown as RegisteredLunoraFunction,
-    "traces:listArchived": lunora_traces_28.listArchived as unknown as RegisteredLunoraFunction,
-    "traffic:live": lunora_traffic_29.live as unknown as RegisteredLunoraFunction,
-    "traffic:snapshot": lunora_traffic_29.snapshot as unknown as RegisteredLunoraFunction,
-    "uptime:prune": lunora_uptime_30.prune as unknown as RegisteredLunoraFunction,
-    "uptime:recent": lunora_uptime_30.recent as unknown as RegisteredLunoraFunction,
-    "uptime:summary": lunora_uptime_30.summary as unknown as RegisteredLunoraFunction,
-    "usage:enforceSpendCaps": lunora_usage_31.enforceSpendCaps as unknown as RegisteredLunoraFunction,
-    "usage:ingest": lunora_usage_31.ingest as unknown as RegisteredLunoraFunction,
-    "usage:overageWatermark": lunora_usage_31.overageWatermark as unknown as RegisteredLunoraFunction,
-    "usage:record": lunora_usage_31.record as unknown as RegisteredLunoraFunction,
-    "usage:recordOverageDebit": lunora_usage_31.recordOverageDebit as unknown as RegisteredLunoraFunction,
-    "usage:rollup": lunora_usage_31.rollup as unknown as RegisteredLunoraFunction,
-    "usage:series": lunora_usage_31.series as unknown as RegisteredLunoraFunction,
-    "usage:summary": lunora_usage_31.summary as unknown as RegisteredLunoraFunction,
+    "cloudflare_accounts:connect": lunora_cloudflare_accounts_6.connect as unknown as RegisteredLunoraFunction,
+    "cloudflare_accounts:disconnect": lunora_cloudflare_accounts_6.disconnect as unknown as RegisteredLunoraFunction,
+    "cloudflare_accounts:list": lunora_cloudflare_accounts_6.list as unknown as RegisteredLunoraFunction,
+    "cloudflare_billing:disconnect": lunora_cloudflare_billing_7.disconnect as unknown as RegisteredLunoraFunction,
+    "cloudflare_billing:status": lunora_cloudflare_billing_7.status as unknown as RegisteredLunoraFunction,
+    "cloudflare_billing:store": lunora_cloudflare_billing_7.store as unknown as RegisteredLunoraFunction,
+    "cloudflare_billing:summary": lunora_cloudflare_billing_7.summary as unknown as RegisteredLunoraFunction,
+    "dashboards:create": lunora_dashboards_8.create as unknown as RegisteredLunoraFunction,
+    "dashboards:get": lunora_dashboards_8.get as unknown as RegisteredLunoraFunction,
+    "dashboards:list": lunora_dashboards_8.list as unknown as RegisteredLunoraFunction,
+    "dashboards:remove": lunora_dashboards_8.remove as unknown as RegisteredLunoraFunction,
+    "dashboards:update": lunora_dashboards_8.update as unknown as RegisteredLunoraFunction,
+    "deploy_keys:ingestKeyCipher": lunora_deploy_keys_9.ingestKeyCipher as unknown as RegisteredLunoraFunction,
+    "deploy_keys:issue": lunora_deploy_keys_9.issue as unknown as RegisteredLunoraFunction,
+    "deploy_keys:list": lunora_deploy_keys_9.list as unknown as RegisteredLunoraFunction,
+    "deploy_keys:recordIngestKey": lunora_deploy_keys_9.recordIngestKey as unknown as RegisteredLunoraFunction,
+    "deploy_keys:recordReleaseKey": lunora_deploy_keys_9.recordReleaseKey as unknown as RegisteredLunoraFunction,
+    "deploy_keys:removeReleaseKey": lunora_deploy_keys_9.removeReleaseKey as unknown as RegisteredLunoraFunction,
+    "deploy_keys:revoke": lunora_deploy_keys_9.revoke as unknown as RegisteredLunoraFunction,
+    "deploy_keys:roll": lunora_deploy_keys_9.roll as unknown as RegisteredLunoraFunction,
+    "deploy_keys:verify": lunora_deploy_keys_9.verify as unknown as RegisteredLunoraFunction,
+    "deployments:activate": lunora_deployments_10.activate as unknown as RegisteredLunoraFunction,
+    "deployments:adminTarget": lunora_deployments_10.adminTarget as unknown as RegisteredLunoraFunction,
+    "deployments:cleanupExpiredPreviews": lunora_deployments_10.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
+    "deployments:create": lunora_deployments_10.create as unknown as RegisteredLunoraFunction,
+    "deployments:ejectTarget": lunora_deployments_10.ejectTarget as unknown as RegisteredLunoraFunction,
+    "deployments:listByProject": lunora_deployments_10.listByProject as unknown as RegisteredLunoraFunction,
+    "deployments:planForScript": lunora_deployments_10.planForScript as unknown as RegisteredLunoraFunction,
+    "deployments:pruneSuperseded": lunora_deployments_10.pruneSuperseded as unknown as RegisteredLunoraFunction,
+    "deployments:releaseTarget": lunora_deployments_10.releaseTarget as unknown as RegisteredLunoraFunction,
+    "deployments:rollback": lunora_deployments_10.rollback as unknown as RegisteredLunoraFunction,
+    "deployments:updateStatus": lunora_deployments_10.updateStatus as unknown as RegisteredLunoraFunction,
+    "domains:add": lunora_domains_11.add as unknown as RegisteredLunoraFunction,
+    "domains:get": lunora_domains_11.get as unknown as RegisteredLunoraFunction,
+    "domains:list": lunora_domains_11.list as unknown as RegisteredLunoraFunction,
+    "domains:markVerified": lunora_domains_11.markVerified as unknown as RegisteredLunoraFunction,
+    "domains:recordCertificate": lunora_domains_11.recordCertificate as unknown as RegisteredLunoraFunction,
+    "domains:removalTarget": lunora_domains_11.removalTarget as unknown as RegisteredLunoraFunction,
+    "domains:remove": lunora_domains_11.remove as unknown as RegisteredLunoraFunction,
+    "domains:routeForHostname": lunora_domains_11.routeForHostname as unknown as RegisteredLunoraFunction,
+    "fanout:tick": lunora_fanout_12.tick as unknown as RegisteredLunoraFunction,
+    "github_installations:claim": lunora_github_installations_13.claim as unknown as RegisteredLunoraFunction,
+    "github_installations:list": lunora_github_installations_13.list as unknown as RegisteredLunoraFunction,
+    "github_installations:record": lunora_github_installations_13.record as unknown as RegisteredLunoraFunction,
+    "github_installations:remove": lunora_github_installations_13.remove as unknown as RegisteredLunoraFunction,
+    "github_installations:unclaim": lunora_github_installations_13.unclaim as unknown as RegisteredLunoraFunction,
+    "hostd_releases:envelope": lunora_hostd_releases_14.envelope as unknown as RegisteredLunoraFunction,
+    "hostd_releases:get": lunora_hostd_releases_14.get as unknown as RegisteredLunoraFunction,
+    "hostd_releases:store": lunora_hostd_releases_14.store as unknown as RegisteredLunoraFunction,
+    "incidents:investigate": lunora_incidents_15.investigate as unknown as RegisteredLunoraFunction,
+    "incidents:list": lunora_incidents_15.list as unknown as RegisteredLunoraFunction,
+    "incidents:setStatus": lunora_incidents_15.setStatus as unknown as RegisteredLunoraFunction,
+    "incidents:triage": lunora_incidents_15.triage as unknown as RegisteredLunoraFunction,
+    "invitations:accept": lunora_invitations_16.accept as unknown as RegisteredLunoraFunction,
+    "invitations:invite": lunora_invitations_16.invite as unknown as RegisteredLunoraFunction,
+    "invitations:list": lunora_invitations_16.list as unknown as RegisteredLunoraFunction,
+    "invitations:revoke": lunora_invitations_16.revoke as unknown as RegisteredLunoraFunction,
+    "issues:list": lunora_issues_17.list as unknown as RegisteredLunoraFunction,
+    "issues:setStatus": lunora_issues_17.setStatus as unknown as RegisteredLunoraFunction,
+    "logs:ingest": lunora_logs_18.ingest as unknown as RegisteredLunoraFunction,
+    "logs:ingestInternal": lunora_logs_18.ingestInternal as unknown as RegisteredLunoraFunction,
+    "logs:list": lunora_logs_18.list as unknown as RegisteredLunoraFunction,
+    "logs:orgForScript": lunora_logs_18.orgForScript as unknown as RegisteredLunoraFunction,
+    "logs:prune": lunora_logs_18.prune as unknown as RegisteredLunoraFunction,
+    "members:add": lunora_members_19.add as unknown as RegisteredLunoraFunction,
+    "members:list": lunora_members_19.list as unknown as RegisteredLunoraFunction,
+    "members:remove": lunora_members_19.remove as unknown as RegisteredLunoraFunction,
+    "members:setRole": lunora_members_19.setRole as unknown as RegisteredLunoraFunction,
+    "metrics:ingest": lunora_metrics_20.ingest as unknown as RegisteredLunoraFunction,
+    "metrics:list": lunora_metrics_20.list as unknown as RegisteredLunoraFunction,
+    "metrics:prune": lunora_metrics_20.prune as unknown as RegisteredLunoraFunction,
+    "metrics:series": lunora_metrics_20.series as unknown as RegisteredLunoraFunction,
+    "onboarding:checklist": lunora_onboarding_21.checklist as unknown as RegisteredLunoraFunction,
+    "organizations:cancelDeletion": lunora_organizations_22.cancelDeletion as unknown as RegisteredLunoraFunction,
+    "organizations:create": lunora_organizations_22.create as unknown as RegisteredLunoraFunction,
+    "organizations:getBySlug": lunora_organizations_22.getBySlug as unknown as RegisteredLunoraFunction,
+    "organizations:linkCreditsAccount": lunora_organizations_22.linkCreditsAccount as unknown as RegisteredLunoraFunction,
+    "organizations:list": lunora_organizations_22.list as unknown as RegisteredLunoraFunction,
+    "organizations:purgeDeleted": lunora_organizations_22.purgeDeleted as unknown as RegisteredLunoraFunction,
+    "organizations:rename": lunora_organizations_22.rename as unknown as RegisteredLunoraFunction,
+    "organizations:requestDeletion": lunora_organizations_22.requestDeletion as unknown as RegisteredLunoraFunction,
+    "projects:byGithubRepo": lunora_projects_23.byGithubRepo as unknown as RegisteredLunoraFunction,
+    "projects:create": lunora_projects_23.create as unknown as RegisteredLunoraFunction,
+    "projects:listByOrg": lunora_projects_23.listByOrg as unknown as RegisteredLunoraFunction,
+    "projects:placement": lunora_projects_23.placement as unknown as RegisteredLunoraFunction,
+    "projects:remove": lunora_projects_23.remove as unknown as RegisteredLunoraFunction,
+    "projects:rename": lunora_projects_23.rename as unknown as RegisteredLunoraFunction,
+    "projects:setPreviewProtection": lunora_projects_23.setPreviewProtection as unknown as RegisteredLunoraFunction,
+    "projects:setTarget": lunora_projects_23.setTarget as unknown as RegisteredLunoraFunction,
+    "projects:updateBuildSettings": lunora_projects_23.updateBuildSettings as unknown as RegisteredLunoraFunction,
+    "projects:verifyPreviewPassword": lunora_projects_23.verifyPreviewPassword as unknown as RegisteredLunoraFunction,
+    "rollouts:abortRollout": lunora_rollouts_24.abortRollout as unknown as RegisteredLunoraFunction,
+    "rollouts:promoteRollout": lunora_rollouts_24.promoteRollout as unknown as RegisteredLunoraFunction,
+    "rollouts:setRollout": lunora_rollouts_24.setRollout as unknown as RegisteredLunoraFunction,
+    "secrets:list": lunora_secrets_25.list as unknown as RegisteredLunoraFunction,
+    "secrets:listEncrypted": lunora_secrets_25.listEncrypted as unknown as RegisteredLunoraFunction,
+    "secrets:remove": lunora_secrets_25.remove as unknown as RegisteredLunoraFunction,
+    "secrets:store": lunora_secrets_25.store as unknown as RegisteredLunoraFunction,
+    "sessions:get": lunora_sessions_26.get as unknown as RegisteredLunoraFunction,
+    "sessions:list": lunora_sessions_26.list as unknown as RegisteredLunoraFunction,
+    "telemetry:ingest": lunora_telemetry_27.ingest as unknown as RegisteredLunoraFunction,
+    "telemetry:orgForDeployKey": lunora_telemetry_27.orgForDeployKey as unknown as RegisteredLunoraFunction,
+    "telemetry:pruneObservations": lunora_telemetry_27.pruneObservations as unknown as RegisteredLunoraFunction,
+    "tenant_backups:authorizeDownload": lunora_tenant_backups_28.authorizeDownload as unknown as RegisteredLunoraFunction,
+    "tenant_backups:beginBackup": lunora_tenant_backups_28.beginBackup as unknown as RegisteredLunoraFunction,
+    "tenant_backups:beginRestore": lunora_tenant_backups_28.beginRestore as unknown as RegisteredLunoraFunction,
+    "tenant_backups:finish": lunora_tenant_backups_28.finish as unknown as RegisteredLunoraFunction,
+    "tenant_backups:list": lunora_tenant_backups_28.list as unknown as RegisteredLunoraFunction,
+    "traces:get": lunora_traces_29.get as unknown as RegisteredLunoraFunction,
+    "traces:getArchived": lunora_traces_29.getArchived as unknown as RegisteredLunoraFunction,
+    "traces:list": lunora_traces_29.list as unknown as RegisteredLunoraFunction,
+    "traces:listArchived": lunora_traces_29.listArchived as unknown as RegisteredLunoraFunction,
+    "traffic:live": lunora_traffic_30.live as unknown as RegisteredLunoraFunction,
+    "traffic:snapshot": lunora_traffic_30.snapshot as unknown as RegisteredLunoraFunction,
+    "uptime:prune": lunora_uptime_31.prune as unknown as RegisteredLunoraFunction,
+    "uptime:recent": lunora_uptime_31.recent as unknown as RegisteredLunoraFunction,
+    "uptime:summary": lunora_uptime_31.summary as unknown as RegisteredLunoraFunction,
+    "usage:enforceSpendCaps": lunora_usage_32.enforceSpendCaps as unknown as RegisteredLunoraFunction,
+    "usage:ingest": lunora_usage_32.ingest as unknown as RegisteredLunoraFunction,
+    "usage:overageWatermark": lunora_usage_32.overageWatermark as unknown as RegisteredLunoraFunction,
+    "usage:record": lunora_usage_32.record as unknown as RegisteredLunoraFunction,
+    "usage:recordOverageDebit": lunora_usage_32.recordOverageDebit as unknown as RegisteredLunoraFunction,
+    "usage:rollup": lunora_usage_32.rollup as unknown as RegisteredLunoraFunction,
+    "usage:series": lunora_usage_32.series as unknown as RegisteredLunoraFunction,
+    "usage:summary": lunora_usage_32.summary as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -298,6 +306,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_boxes_3.authorizeDiagnose.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_boxes_3.domain.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -400,207 +415,218 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["buildId"] !== "string") return DEFER;
 return { "buildId": source["buildId"] };
 });
-installCompiledValidatorMap(lunora_cells_5.register.args, (source) => {
+installCompiledValidatorMap(lunora_builds_4.reusableRelease.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["cloudflareAccountId"] !== "string") return DEFER;
-if (typeof source["dispatchNamespacePrefix"] !== "string") return DEFER;
-let __has1 = false;
-let __val1;
-if (source["jurisdiction"] !== undefined) {
-if (typeof source["jurisdiction"] !== "string") return DEFER;
-__val1 = source["jurisdiction"];
-__has1 = true;
-}
-if (typeof source["name"] !== "string") return DEFER;
-return { "cloudflareAccountId": source["cloudflareAccountId"], "dispatchNamespacePrefix": source["dispatchNamespacePrefix"], ...(__has1 ? { "jurisdiction": __val1 } : {}), "name": source["name"] };
+if (typeof source["buildId"] !== "string") return DEFER;
+return { "buildId": source["buildId"] };
 });
-installCompiledValidatorMap(lunora_cloudflare_billing_6.disconnect.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-return { "organizationId": source["organizationId"] };
-});
-installCompiledValidatorMap(lunora_cloudflare_billing_6.status.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-return { "organizationId": source["organizationId"] };
-});
-installCompiledValidatorMap(lunora_cloudflare_billing_6.summary.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["organizationId"] !== "string") return DEFER;
-return { "organizationId": source["organizationId"] };
-});
-installCompiledValidatorMap(lunora_dashboards_7.get.args, (source) => {
+installCompiledValidatorMap(lunora_cloudflare_accounts_6.disconnect.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_dashboards_7.list.args, (source) => {
+installCompiledValidatorMap(lunora_cloudflare_accounts_6.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_dashboards_7.remove.args, (source) => {
+installCompiledValidatorMap(lunora_cloudflare_billing_7.disconnect.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_cloudflare_billing_7.status.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_cloudflare_billing_7.summary.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_dashboards_8.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deploy_keys_8.list.args, (source) => {
+installCompiledValidatorMap(lunora_dashboards_8.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deploy_keys_8.removeReleaseKey.args, (source) => {
+installCompiledValidatorMap(lunora_dashboards_8.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_9.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_9.removeReleaseKey.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["buildId"] !== "string") return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 return { "buildId": source["buildId"], "id": source["id"] };
 });
-installCompiledValidatorMap(lunora_deploy_keys_8.revoke.args, (source) => {
+installCompiledValidatorMap(lunora_deploy_keys_9.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deploy_keys_8.roll.args, (source) => {
+installCompiledValidatorMap(lunora_deploy_keys_9.roll.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deployments_9.adminTarget.args, (source) => {
+installCompiledValidatorMap(lunora_deployments_10.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_deployments_9.listByProject.args, (source) => {
+installCompiledValidatorMap(lunora_deployments_10.listByProject.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_domains_10.get.args, (source) => {
+installCompiledValidatorMap(lunora_domains_11.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_domains_10.list.args, (source) => {
+installCompiledValidatorMap(lunora_domains_11.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_domains_10.remove.args, (source) => {
+installCompiledValidatorMap(lunora_domains_11.removalTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_12.claim.args, (source) => {
+installCompiledValidatorMap(lunora_domains_11.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_github_installations_13.claim.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "installationId": source["installationId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_12.list.args, (source) => {
+installCompiledValidatorMap(lunora_github_installations_13.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_12.record.args, (source) => {
+installCompiledValidatorMap(lunora_github_installations_13.record.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["accountLogin"] !== "string") return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 return { "accountLogin": source["accountLogin"], "installationId": source["installationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_12.remove.args, (source) => {
+installCompiledValidatorMap(lunora_github_installations_13.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 return { "installationId": source["installationId"] };
 });
-installCompiledValidatorMap(lunora_github_installations_12.unclaim.args, (source) => {
+installCompiledValidatorMap(lunora_github_installations_13.unclaim.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["installationId"] !== "number" || !Number.isFinite(source["installationId"])) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "installationId": source["installationId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_incidents_14.investigate.args, (source) => {
+installCompiledValidatorMap(lunora_incidents_15.investigate.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_incidents_14.list.args, (source) => {
+installCompiledValidatorMap(lunora_incidents_15.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_incidents_14.triage.args, (source) => {
+installCompiledValidatorMap(lunora_incidents_15.triage.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_invitations_15.list.args, (source) => {
+installCompiledValidatorMap(lunora_invitations_16.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_invitations_15.revoke.args, (source) => {
+installCompiledValidatorMap(lunora_invitations_16.revoke.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_issues_16.list.args, (source) => {
+installCompiledValidatorMap(lunora_issues_17.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_members_18.list.args, (source) => {
+installCompiledValidatorMap(lunora_members_19.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_members_18.remove.args, (source) => {
+installCompiledValidatorMap(lunora_members_19.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_metrics_19.list.args, (source) => {
+installCompiledValidatorMap(lunora_metrics_20.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
@@ -620,7 +646,7 @@ __has2 = true;
 }
 return { ...(__has1 ? { "from": __val1 } : {}), "organizationId": source["organizationId"], ...(__has2 ? { "to": __val2 } : {}) };
 });
-installCompiledValidatorMap(lunora_metrics_19.series.args, (source) => {
+installCompiledValidatorMap(lunora_metrics_20.series.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
@@ -640,66 +666,66 @@ __has2 = true;
 }
 return { ...(__has1 ? { "from": __val1 } : {}), "organizationId": source["organizationId"], ...(__has2 ? { "to": __val2 } : {}) };
 });
-installCompiledValidatorMap(lunora_onboarding_20.checklist.args, (source) => {
+installCompiledValidatorMap(lunora_onboarding_21.checklist.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_organizations_21.cancelDeletion.args, (source) => {
+installCompiledValidatorMap(lunora_organizations_22.cancelDeletion.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_organizations_21.linkCreditsAccount.args, (source) => {
+installCompiledValidatorMap(lunora_organizations_22.linkCreditsAccount.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["creditsAccountId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "creditsAccountId": source["creditsAccountId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_organizations_21.requestDeletion.args, (source) => {
+installCompiledValidatorMap(lunora_organizations_22.requestDeletion.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_projects_22.listByOrg.args, (source) => {
+installCompiledValidatorMap(lunora_projects_23.listByOrg.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_projects_22.placement.args, (source) => {
+installCompiledValidatorMap(lunora_projects_23.placement.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_projects_22.remove.args, (source) => {
+installCompiledValidatorMap(lunora_projects_23.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_rollouts_23.abortRollout.args, (source) => {
+installCompiledValidatorMap(lunora_rollouts_24.abortRollout.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_rollouts_23.promoteRollout.args, (source) => {
+installCompiledValidatorMap(lunora_rollouts_24.promoteRollout.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_rollouts_23.setRollout.args, (source) => {
+installCompiledValidatorMap(lunora_rollouts_24.setRollout.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
@@ -707,21 +733,21 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["percent"] !== "number" || !Number.isFinite(source["percent"])) return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"], "percent": source["percent"] };
 });
-installCompiledValidatorMap(lunora_secrets_24.list.args, (source) => {
+installCompiledValidatorMap(lunora_secrets_25.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_secrets_24.remove.args, (source) => {
+installCompiledValidatorMap(lunora_secrets_25.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_sessions_25.list.args, (source) => {
+installCompiledValidatorMap(lunora_sessions_26.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
@@ -734,35 +760,35 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_tenant_backups_27.authorizeDownload.args, (source) => {
+installCompiledValidatorMap(lunora_tenant_backups_28.authorizeDownload.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["backupId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "backupId": source["backupId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_tenant_backups_27.beginBackup.args, (source) => {
+installCompiledValidatorMap(lunora_tenant_backups_28.beginBackup.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_tenant_backups_27.beginRestore.args, (source) => {
+installCompiledValidatorMap(lunora_tenant_backups_28.beginRestore.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["backupId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "backupId": source["backupId"], "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_tenant_backups_27.list.args, (source) => {
+installCompiledValidatorMap(lunora_tenant_backups_28.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
-installCompiledValidatorMap(lunora_traces_28.listArchived.args, (source) => {
+installCompiledValidatorMap(lunora_traces_29.listArchived.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["from"] !== "number" || !Number.isFinite(source["from"])) return DEFER;
@@ -777,7 +803,7 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["to"] !== "number" || !Number.isFinite(source["to"])) return DEFER;
 return { "from": source["from"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"], "to": source["to"] };
 });
-installCompiledValidatorMap(lunora_traffic_29.live.args, (source) => {
+installCompiledValidatorMap(lunora_traffic_30.live.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 let __has1 = false;
@@ -790,7 +816,7 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_uptime_30.recent.args, (source) => {
+installCompiledValidatorMap(lunora_uptime_31.recent.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
@@ -804,20 +830,20 @@ __has1 = true;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "deploymentId": source["deploymentId"], ...(__has1 ? { "limit": __val1 } : {}), "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_uptime_30.summary.args, (source) => {
+installCompiledValidatorMap(lunora_uptime_31.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
-installCompiledValidatorMap(lunora_usage_31.overageWatermark.args, (source) => {
+installCompiledValidatorMap(lunora_usage_32.overageWatermark.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_31.recordOverageDebit.args, (source) => {
+installCompiledValidatorMap(lunora_usage_32.recordOverageDebit.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["debitedCredits"] !== "number" || !Number.isFinite(source["debitedCredits"])) return DEFER;
@@ -825,14 +851,14 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "debitedCredits": source["debitedCredits"], "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_31.series.args, (source) => {
+installCompiledValidatorMap(lunora_usage_32.series.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
-installCompiledValidatorMap(lunora_usage_31.summary.args, (source) => {
+installCompiledValidatorMap(lunora_usage_32.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -914,18 +940,18 @@ export interface Caller {
         subscription: (args: { organizationId: Id<"organizations"> }) => Promise<{ cancelAtPeriodEnd?: false | true; currentPeriodEnd?: number; priceId: string; provider: string; referenceId: string; state: string }[]>;
     };
     boxes: {
+        authorizeDiagnose: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ slug: string; }>;
         createEnrolment: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<{ expiresAt: number; installCommand: string; token: string; }>;
         domain: (args: { organizationId: Id<"organizations"> }) => Promise<string>;
         enrol: (args: { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }) => Promise<{ boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
-        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
+        get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }>;
         identity: (args: { boxId: Id<"boxes"> }) => Promise<{ organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
-        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; fleets?: import("@lunora/hostd/protocol").FleetSummary[]; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
         ownsDeployment: (args: { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }) => Promise<boolean>;
         recordDns: (args: { boxId: Id<"boxes">; dnsError: null | unknown }) => Promise<void>;
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         revoke: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ ipv4?: string; ipv6?: string; slug: string; }>;
         setDesiredRelease: (args: { boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
-        setProjectTarget: (args: { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }) => Promise<void>;
     };
     builds: {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
@@ -933,15 +959,21 @@ export interface Caller {
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
         recordPush: (args: { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
+        reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
-        register: (args: { cloudflareAccountId: string; dispatchNamespacePrefix: string; jurisdiction?: string; name: string }) => Promise<Id<"cells">>;
+        register: (args: { cloudflareAccountId: string; config?: Record<string, string>; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<Id<"cells">>;
+    };
+    cloudflare_accounts: {
+        connect: (args: { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }) => Promise<Id<"cloudflareAccounts">>;
+        disconnect: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<void>;
+        list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
     cloudflare_billing: {
         disconnect: (args: { organizationId: Id<"organizations"> }) => Promise<{ removed: boolean; }>;
@@ -973,7 +1005,7 @@ export interface Caller {
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; projectId: Id<"projects">; branch?: string; bundleHash?: string; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         releaseTarget: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; target?: string }>;
@@ -982,9 +1014,11 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: (args: { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
+        recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; sslStatus: unknown }) => Promise<void>;
+        removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ customHostnameId?: string; hostname: string; projectId: Id<"projects">; }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
         routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
@@ -1054,11 +1088,12 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp"; watchPaths?: string[] }[]>;
-        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
+        placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ account?: { accountId: string; id: string; workersSubdomain: string; }; box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         setPreviewProtection: (args: { id: Id<"projects">; organizationId: Id<"organizations">; password: null | unknown }) => Promise<{ protected: boolean; }>;
+        setTarget: (args: { boxId?: Id<"boxes">; cloudflareAccountId?: Id<"cloudflareAccounts">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }) => Promise<void>;
         updateBuildSettings: (args: { id: Id<"projects">; organizationId: Id<"organizations">; rootDirectory: unknown; watchPaths: Array<unknown> }) => Promise<{ rootDirectory: string; watchPaths: string[]; }>;
         verifyPreviewPassword: (args: { password: unknown; scriptName: unknown }) => Promise<{ ok: boolean; }>;
     };
@@ -1087,7 +1122,7 @@ export interface Caller {
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; organizationId: Id<"organizations">; restoreConflicts?: number; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; projectId: Id<"projects">; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1174,6 +1209,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         subscription: (args) => callRegistered(context, "billing:subscription", args),
     },
     boxes: {
+        authorizeDiagnose: (args) => callRegistered(context, "boxes:authorizeDiagnose", args),
         createEnrolment: (args) => callRegistered(context, "boxes:createEnrolment", args),
         domain: (args) => callRegistered(context, "boxes:domain", args),
         enrol: (args) => callRegistered(context, "boxes:enrol", args),
@@ -1185,7 +1221,6 @@ export const createCaller = (context: CallerCtx): Caller => ({
         rename: (args) => callRegistered(context, "boxes:rename", args),
         revoke: (args) => callRegistered(context, "boxes:revoke", args),
         setDesiredRelease: (args) => callRegistered(context, "boxes:setDesiredRelease", args),
-        setProjectTarget: (args) => callRegistered(context, "boxes:setProjectTarget", args),
     },
     builds: {
         appendLog: (args) => callRegistered(context, "builds:appendLog", args),
@@ -1198,10 +1233,16 @@ export const createCaller = (context: CallerCtx): Caller => ({
         recordPush: (args) => callRegistered(context, "builds:recordPush", args),
         releaseTarget: (args) => callRegistered(context, "builds:releaseTarget", args),
         reportTarget: (args) => callRegistered(context, "builds:reportTarget", args),
+        reusableRelease: (args) => callRegistered(context, "builds:reusableRelease", args),
     },
     cells: {
         list: (args) => callRegistered(context, "cells:list", args),
         register: (args) => callRegistered(context, "cells:register", args),
+    },
+    cloudflare_accounts: {
+        connect: (args) => callRegistered(context, "cloudflare_accounts:connect", args),
+        disconnect: (args) => callRegistered(context, "cloudflare_accounts:disconnect", args),
+        list: (args) => callRegistered(context, "cloudflare_accounts:list", args),
     },
     cloudflare_billing: {
         disconnect: (args) => callRegistered(context, "cloudflare_billing:disconnect", args),
@@ -1245,6 +1286,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),
         markVerified: (args) => callRegistered(context, "domains:markVerified", args),
+        recordCertificate: (args) => callRegistered(context, "domains:recordCertificate", args),
+        removalTarget: (args) => callRegistered(context, "domains:removalTarget", args),
         remove: (args) => callRegistered(context, "domains:remove", args),
         routeForHostname: (args) => callRegistered(context, "domains:routeForHostname", args),
     },
@@ -1319,6 +1362,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         remove: (args) => callRegistered(context, "projects:remove", args),
         rename: (args) => callRegistered(context, "projects:rename", args),
         setPreviewProtection: (args) => callRegistered(context, "projects:setPreviewProtection", args),
+        setTarget: (args) => callRegistered(context, "projects:setTarget", args),
         updateBuildSettings: (args) => callRegistered(context, "projects:updateBuildSettings", args),
         verifyPreviewPassword: (args) => callRegistered(context, "projects:verifyPreviewPassword", args),
     },

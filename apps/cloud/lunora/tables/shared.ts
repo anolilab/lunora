@@ -1,6 +1,6 @@
 /**
  * Validators more than one group of tables shares (`lunora/tables/*.ts`) — and
- * `deployTarget`, which `boxes.setProjectTarget` validates its argument with too.
+ * `deployTarget`, which `projects.setTarget` validates its argument with too.
  *
  * Spelled out rather than computed: codegen reads the schema statically, and a
  * computed union would type as `unknown`.
@@ -69,4 +69,4 @@ export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.lite
  * A deploy target: `TARGET_IDS` in `src/provision-contract.ts`, as a validator.
  * `__tests__/placement.test.ts` fails the type check when the two drift.
  */
-export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"));
+export const deployTarget = v.union(v.literal("celld-vps"), v.literal("cloudflare-wfp"), v.literal("cloudflare-workers"));

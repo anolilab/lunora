@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import type { BoxView } from "../src/client/boxes";
-import { assessTargetDraft, assignableBoxes, BOX_STATUS, boxHostname, canManage, describeEnrolError, formatMegabytes, roleOf } from "../src/client/boxes";
+import {
+    assessTargetDraft,
+    assignableBoxes,
+    BOX_STATUS,
+    boxHostname,
+    canDiagnose,
+    canManage,
+    describeDiagnose,
+    describeEnrolError,
+    FLEET_STATE,
+    formatDiagnoseOutput,
+    formatMegabytes,
+    projectNamesByBox,
+    roleOf,
+} from "../src/client/boxes";
 import { formatRelativeTime } from "../src/client/format";
 
 /**
@@ -125,27 +139,122 @@ describe(formatRelativeTime, () => {
 });
 
 describe(assessTargetDraft, () => {
-    const saved = { boxId: "", target: "cloudflare-wfp" };
+    const saved = { boxId: "", cloudflareAccountId: "", target: "cloudflare-wfp" };
 
     it("needs a box for celld-vps, and is incomplete without one", () => {
-        expect(assessTargetDraft({ boxId: "", target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: false, needsBox: true });
-        expect(assessTargetDraft({ boxId: "box_1", target: "celld-vps" }, saved)).toStrictEqual({ changed: true, complete: true, needsBox: true });
+        expect(assessTargetDraft({ ...saved, target: "celld-vps" }, saved)).toStrictEqual({
+            changed: true,
+            complete: false,
+            needsAccount: false,
+            needsBox: true,
+        });
+        expect(assessTargetDraft({ ...saved, boxId: "box_1", target: "celld-vps" }, saved)).toStrictEqual({
+            changed: true,
+            complete: true,
+            needsAccount: false,
+            needsBox: true,
+        });
     });
 
-    it("treats the saved value as unchanged, and a different box as a change", () => {
+    it("needs a connected account for cloudflare-workers, and is incomplete without one", () => {
+        expect(assessTargetDraft({ ...saved, target: "cloudflare-workers" }, saved)).toStrictEqual({
+            changed: true,
+            complete: false,
+            needsAccount: true,
+            needsBox: false,
+        });
+        expect(assessTargetDraft({ ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" }, saved).complete).toBe(true);
+    });
+
+    it("treats the saved value as unchanged, and a different box or account as a change", () => {
         expect(assessTargetDraft(saved, saved).changed).toBe(false);
 
-        const onBox = { boxId: "box_1", target: "celld-vps" };
+        const onBox = { ...saved, boxId: "box_1", target: "celld-vps" };
 
         expect(assessTargetDraft(onBox, onBox).changed).toBe(false);
-        expect(assessTargetDraft({ boxId: "box_2", target: "celld-vps" }, onBox).changed).toBe(true);
+        expect(assessTargetDraft({ ...onBox, boxId: "box_2" }, onBox).changed).toBe(true);
+
+        const inAccount = { ...saved, cloudflareAccountId: "cfa_1", target: "cloudflare-workers" };
+
+        expect(assessTargetDraft({ ...inAccount, cloudflareAccountId: "cfa_2" }, inAccount).changed).toBe(true);
     });
 
-    it("ignores a stale box once the target is back on Cloudflare", () => {
-        expect(assessTargetDraft({ boxId: "box_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({ changed: false, complete: true, needsBox: false });
+    it("ignores a stale box or account once the target is back on Lunora Cloud", () => {
+        expect(assessTargetDraft({ boxId: "box_1", cloudflareAccountId: "cfa_1", target: "cloudflare-wfp" }, saved)).toStrictEqual({
+            changed: false,
+            complete: true,
+            needsAccount: false,
+            needsBox: false,
+        });
     });
 
     it("never calls an unknown target complete", () => {
-        expect(assessTargetDraft({ boxId: "", target: "aws" }, saved).complete).toBe(false);
+        expect(assessTargetDraft({ ...saved, target: "aws" }, saved).complete).toBe(false);
+    });
+});
+
+describe(canDiagnose, () => {
+    it("offers Diagnose to a manager on a connected box only", () => {
+        expect(canDiagnose("owner", box({ status: "online" }))).toBe(true);
+        expect(canDiagnose("admin", box({ status: "online" }))).toBe(true);
+        expect(canDiagnose("member", box({ status: "online" }))).toBe(false);
+        expect(canDiagnose(undefined, box({ status: "online" }))).toBe(false);
+        expect(canDiagnose("owner", box({ status: "offline" }))).toBe(false);
+        expect(canDiagnose("owner", box({ status: "pending" }))).toBe(false);
+        expect(canDiagnose("owner", box({ status: "revoked" }))).toBe(false);
+    });
+});
+
+describe("fleet state chips", () => {
+    it.each([
+        ["running", "success"],
+        ["starting", "warning"],
+        ["failed", "danger"],
+        ["stopped", "neutral"],
+    ] as const)("renders %s with the %s tone", (state, tone) => {
+        expect(FLEET_STATE[state]).toStrictEqual({ label: state, tone });
+    });
+});
+
+describe(formatDiagnoseOutput, () => {
+    it("pretty-prints output that is one JSON document, however the box split it into lines", () => {
+        expect(formatDiagnoseOutput(['{"fleets":[{"alias":"web"', ',"state":"running"}]}'])).toBe(
+            JSON.stringify({ fleets: [{ alias: "web", state: "running" }] }, null, 2),
+        );
+    });
+
+    it("shows anything else as it came", () => {
+        expect(formatDiagnoseOutput(["celld: ok", "caddy: config rejected"])).toBe("celld: ok\ncaddy: config rejected");
+        expect(formatDiagnoseOutput([])).toBe("");
+    });
+});
+
+describe(describeDiagnose, () => {
+    it("says a diagnose finished, and when its output was cut short", () => {
+        expect(describeDiagnose({ ok: true, output: ["{}"], truncated: false })).toBe("The box finished diagnosing itself.");
+        expect(describeDiagnose({ ok: true, output: ["{}"], truncated: true })).toMatch(/cut short at the size limit/u);
+    });
+
+    it("names why a diagnose did not finish, and points at what arrived before", () => {
+        expect(describeDiagnose({ error: { code: "BOX_OFFLINE", message: "the box is not connected" }, ok: false, output: [], truncated: false })).toBe(
+            "The diagnose did not finish: the box is not connected (BOX_OFFLINE).",
+        );
+        expect(describeDiagnose({ error: { code: "JOB_TIMEOUT", message: "too slow" }, ok: false, output: ["partial"], truncated: false })).toMatch(
+            /What the box printed before that is below\./u,
+        );
+    });
+});
+
+describe(projectNamesByBox, () => {
+    it("groups project names under the box each is placed on, and skips projects on no box", () => {
+        expect(
+            projectNamesByBox([{ boxId: "box_1", name: "web" }, { name: "cloud-only" }, { boxId: "box_1", name: "api" }, { boxId: "box_2", name: "docs" }]),
+        ).toStrictEqual(
+            new Map([
+                ["box_1", ["web", "api"]],
+                ["box_2", ["docs"]],
+            ]),
+        );
+        expect(projectNamesByBox(undefined)).toStrictEqual(new Map());
     });
 });

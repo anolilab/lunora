@@ -16,6 +16,7 @@ import { containerBindingName, createContainerContext } from "@lunora/container"
 import { LunoraError } from "@lunora/server";
 
 import { internal } from "../../lunora/_generated/api.js";
+import type { ReusableRelease } from "../../lunora/builds";
 import { buildBox } from "../../lunora/containers";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../deploy/keys";
 import type { DeployHandlerDeps } from "../deploy/release-core";
@@ -135,6 +136,34 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
                           start: (request, caller) => startRelease(request, caller, deploy),
                           target: (buildId) => context.runQuery<BuildReleaseTarget | null>(internal.builds.releaseTarget, { buildId }),
                       }),
+        ...(deploy === undefined
+            ? {}
+            : {
+                  storedRelease: async (build) => {
+                      const reusable = await context.runQuery<null | ReusableRelease>(internal.builds.reusableRelease, { buildId: build.buildId });
+
+                      if (reusable === null) {
+                          return null;
+                      }
+
+                      // Kept for the rollback window and pruned with it (the teardown sweep) — the retention bound.
+                      const stored = await deploy.releases.get(reusable.deploymentId);
+
+                      return {
+                          deploymentId: reusable.deploymentId,
+                          execution:
+                              stored === null
+                                  ? null
+                                  : {
+                                        ...(stored.assets === undefined ? {} : { assets: stored.assets }),
+                                        bundle: stored.bundle,
+                                        bundleHash: reusable.bundleHash,
+                                        ...(reusable.cronSpecs === undefined ? {} : { cronSpecs: reusable.cronSpecs }),
+                                        manifest: stored.manifest as unknown as Record<string, unknown>,
+                                    },
+                      };
+                  },
+              }),
         ...(app === null
             ? {}
             : {

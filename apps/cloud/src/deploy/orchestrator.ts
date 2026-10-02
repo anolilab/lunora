@@ -1,7 +1,7 @@
 import type { TenantDeploymentSpec } from "../provision-contract";
 import type { ProgressLine, TargetDriver } from "../targets/driver";
 import { sha256HexBytes } from "./keys";
-import type { CellScheduler } from "./scheduler";
+import type { ConvergeScheduler } from "./scheduler";
 
 /**
  * Deploy orchestrator. Drives a single tenant deployment
@@ -10,7 +10,7 @@ import type { CellScheduler } from "./scheduler";
  * bundle is prebuilt by the app's Vite pipeline, so "building" is the client's
  * concern; the platform's phases are queued → provisioning → live / failed.
  *
- * The converge is paced through the cell's {@link CellScheduler} and executed by
+ * The converge is paced through its budget's {@link ConvergeScheduler} and executed by
  * the project's {@link TargetDriver}. Both are injected, so a deployment can be
  * driven end-to-end in tests with a fake driver.
  */
@@ -38,9 +38,10 @@ export interface RunDeploymentOptions {
     onLine?: ProgressLine;
     /** Reports each phase transition (NDJSON event / status patch). */
     onProgress?: (progress: DeployProgress) => Promise<void> | void;
-    /** Priority for the cell scheduler (interactive deploy > preview > cleanup). */
+    /** Priority on the scheduler (interactive deploy > preview > cleanup). */
     priority?: number;
-    scheduler: CellScheduler;
+    /** The scheduler of the budget this converge spends (`DeployPacer.schedulerFor`). */
+    scheduler: ConvergeScheduler;
 
     /**
      * Health check the project's Worker once the release is on it (GAPS.md A1).

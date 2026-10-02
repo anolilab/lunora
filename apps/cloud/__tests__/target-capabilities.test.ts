@@ -68,9 +68,10 @@ describe("target limitations", () => {
 });
 
 describe(targetLabel, () => {
-    it("names both targets as the selector does, the default first", () => {
+    it("names every target as the selector does, the default first", () => {
         expect(targetLabel("cloudflare-wfp")).toBe("Lunora Cloud (Cloudflare)");
+        expect(targetLabel("cloudflare-workers")).toBe("Your Cloudflare account");
         expect(targetLabel("celld-vps")).toBe("Your own server");
-        expect(TARGET_OPTIONS.map((option) => option.id)).toStrictEqual(["cloudflare-wfp", "celld-vps"]);
+        expect(TARGET_OPTIONS.map((option) => option.id)).toStrictEqual(["cloudflare-wfp", "cloudflare-workers", "celld-vps"]);
     });
 });

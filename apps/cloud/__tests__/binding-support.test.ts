@@ -2,10 +2,9 @@ import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
 
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
-import { TokenBucket } from "../src/deploy/token-bucket";
 import type { BindingType, TargetId } from "../src/provision-contract";
 import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
 import type { Placement } from "../src/targets/placement";
@@ -81,6 +80,28 @@ describe("bINDING_SUPPORT", () => {
     });
 });
 
+describe("cloudflare-workers against cloudflare-wfp", () => {
+    const byo = BINDING_SUPPORT["cloudflare-workers"];
+    const wfp = BINDING_SUPPORT["cloudflare-wfp"];
+
+    it("binds everything Workers for Platforms does — a plain Worker in an account can take any binding a namespaced one can", () => {
+        const wfpRuns = (Object.keys(wfp) as BindingType[]).filter((type) => wfp[type] !== "unsupported");
+
+        expect(wfpRuns.filter((type) => byo[type] === "unsupported")).toStrictEqual([]);
+    });
+
+    it("consumes its own queues, so nothing is routed through the control plane", () => {
+        expect(byo.queue_consumer).toBe("bound");
+        expect(Object.values(byo)).not.toContain("routed");
+    });
+
+    it("words each refusal for the provision box or the manifest, never for Workers for Platforms", () => {
+        for (const reason of Object.values(UNSUPPORTED_REASONS["cloudflare-workers"])) {
+            expect(reason).not.toContain("Workers for Platforms");
+        }
+    });
+});
+
 describe("celld-vps agrees with celld's capability matrix", () => {
     const table = BINDING_SUPPORT["celld-vps"];
     const rated = Object.entries(FEATURE_OF) as [BindingType, CapabilityKey][];
@@ -121,6 +142,10 @@ describe("the registry", () => {
         expect(resolveTargetDriver({ box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" }, {}).id).toBe("celld-vps");
         expect(targetFleet("cloudflare-wfp", {}).id).toBe("cloudflare-wfp");
         expect(targetFleet("celld-vps", {}).id).toBe("celld-vps");
+        expect(
+            resolveTargetDriver({ account: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" }, {}).id,
+        ).toBe("cloudflare-workers");
+        expect(targetFleet("cloudflare-workers", {}).id).toBe("cloudflare-workers");
     });
 });
 
@@ -137,6 +162,7 @@ describe("the deploy handler validates against the project's target", () => {
     const placements: Record<TargetId, Placement> = {
         "celld-vps": { box: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" },
         "cloudflare-wfp": { target: "cloudflare-wfp" },
+        "cloudflare-workers": { account: { accountId: "a".repeat(32), id: "cfa_1", workersSubdomain: "acme" }, target: "cloudflare-workers" },
     };
 
     const startOn = (target: TargetId, bindings: unknown[]) =>
@@ -147,7 +173,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.resolve(placements[target]) },
                 driverFor: () => fakeDriver(),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
@@ -173,11 +199,33 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ target: "celld-vps" }, "default")) },
                 driverFor: (placement) => resolveTargetDriver(placement, {}),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
         expect(started).toStrictEqual({ error: expect.stringContaining("names no box") as string, status: 409 });
+    });
+
+    it("refuses on cloudflare-workers what the provision box cannot bind, with its own reason", async () => {
+        await expect(startOn("cloudflare-workers", [{ binding: "FLOW", className: "OrderFlow", type: "workflow" }])).resolves.toMatchObject({
+            error: expect.stringContaining("on the cloudflare-workers target — workflow (FLOW): a plain Worker can run Workflows") as string,
+            status: 400,
+        });
+    });
+
+    it("refuses a cloudflare-workers project that names no connected account before recording anything", async () => {
+        const started = await startRelease(
+            { bundle: btoa("export default {}"), kind: "production", projectId: "proj_1", scriptName: "app" },
+            { key: "k", organizationId: "org_1" },
+            {
+                backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ cellName: "default", target: "cloudflare-workers" }, "default")) },
+                driverFor: (placement) => resolveTargetDriver(placement, {}),
+                releases: memoryReleaseStore().store,
+                pacer: createDeployPacer(),
+            },
+        );
+
+        expect(started).toStrictEqual({ error: expect.stringContaining("names no connected Cloudflare account") as string, status: 409 });
     });
 
     it("refuses a project placed on another cell before recording anything", async () => {
@@ -188,7 +236,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.reject(new LunoraError("CONFLICT", 'placed on cell "eu-1"')) },
                 driverFor: () => fakeDriver(),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
