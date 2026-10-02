@@ -65,16 +65,11 @@ export const summarise = action.input({ url: v.string() }).action(async ({ ctx, 
     // RPC service: methods and return types come from the `Gateway` class
     return ctx.services.llmGateway.complete(`Summarise: ${text}`);
 });
-        const { text } = (await response.json()) as { text: string };
-
-        // RPC service: methods and return types come from the `Gateway` class
-        return ctx.services.llmGateway.complete(`Summarise: ${text}`);
-    },
-});
 ```
 
 An existing generated client keeps working: pass `fetch: ctx.services.documentParser.fetch`
-where it took a base URL. The hostname does not route anywhere: the binding
+where it took a base URL. `fetch` is bound on an RPC service too, so this works
+for either kind. The hostname does not route anywhere: the binding
 delivers the request to the service as given.
 
 Queries and mutations have no `ctx.services`. A call to another Worker cannot be
@@ -87,7 +82,7 @@ an action or send a queue message. From an HTTP action, call an action with
 | Step                | What happens                                                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wrangler.jsonc`    | A `services[]` entry per service (`SERVICE_<KEY>` → the Worker name, plus `entrypoint`), top level and in each `env.<name>` block (with the service's env Worker name, by default `<name>-<env>`). |
-| `lunora dev`        | The services run in the same `wrangler dev` session (one `--config` each), so bindings resolve locally.                                                                                            |
+| `lunora dev`        | The services run in the same `wrangler dev` session (one `--config` each), so bindings resolve locally. A service's `build.command` runs in the service's own folder.                              |
 | `vite dev`          | Each service is an `auxiliaryWorkers` entry of `@cloudflare/vite-plugin`.                                                                                                                          |
 | `lunora deploy`     | Each service deploys first (`wrangler deploy --config <dir>/wrangler.jsonc`, with `--env` and `--dry-run` passed through), then the app. `--skip-services` deploys only the app.                   |
 | `lunora doctor`     | `service-workers-dev` warns about a service still public on `workers.dev` with no route.                                                                                                           |
@@ -97,6 +92,12 @@ Services run only in dev sessions: `vite build` does not build them, since
 `lunora deploy` deploys each one from its own folder. The SvelteKit / Nuxt dev
 flavor gets them too: reconcile writes the bindings into `wrangler.dev.jsonc`,
 and the `wrangler dev` sidecar runs each service beside the app.
+
+A service in the dev session has no HTTP port of its own: only the app does. Its
+bindings are part of the session too, so one that has no local mode (`ai`)
+makes `wrangler dev` open a remote proxy session, which needs Cloudflare
+credentials. In CI or another shell without them, run `lunora dev --local`: the
+session then starts without the proxy, and a call to that binding fails instead.
 
 Lunora records the `services[]` entries it wrote in `package.json`
 (`lunora.services`), so it updates and removes only its own. An entry you wrote
@@ -120,6 +121,11 @@ You can then delete the internal auth (HMAC signing secrets) and the `*_URL`
 variables the app used to reach it. A service that must also be public, such as a
 gateway with its own route, keeps that route and its own auth for it. The binding
 is the internal path only.
+
+In dev, such a service is reachable only through the binding (see above). If the
+browser or another client also calls it, start it on its own as well
+(`wrangler dev` in its folder). That is a second copy with its own local state
+(D1, KV, Durable Objects), so apply its migrations to both.
 
 ## Platforms
 

@@ -55,7 +55,7 @@ interface BindingRequirement {
      * exports it before publishing.
      */
     className?: string;
-    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`). */
+    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`), Worker name (`service`). */
     resource?: string;
     /** Remote resource id, when the config declares one (`d1`, `kv`, `hyperdrive`, `vpc_service`, `vpc_network`). */
     resourceId?: string;
@@ -79,6 +79,7 @@ interface BindingRequirement {
         | "queue_consumer"
         | "queue_producer"
         | "r2"
+        | "service"
         | "stream"
         | "vectorize"
         | "vpc_network"
@@ -161,6 +162,8 @@ interface ManifestConfigShape extends WranglerConfigShape {
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     /** Adds `consumers` — the Alchemy translation models producers only. */
     queues?: { consumers?: ReadonlyArray<{ queue?: string }>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
+    /** Service bindings to sibling Workers; `service` is the Worker name. */
+    services?: ReadonlyArray<{ binding?: string; entrypoint?: string; service?: string }>;
     stream?: { binding?: string };
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
     vpc_networks?: ReadonlyArray<{ binding?: string; network_id?: string; tunnel_id?: string }>;
@@ -204,6 +207,7 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     { bindingKey: "binding", field: "kv_namespaces", resourceIdKey: "id", type: "kv" },
     { bindingKey: "binding", field: "pipelines", resourceKey: ["stream", "pipeline"], type: "pipeline" },
     { bindingKey: "binding", field: "r2_buckets", resourceKey: "bucket_name", type: "r2" },
+    { bindingKey: "binding", field: "services", resourceKey: "service", type: "service" },
     { bindingKey: "binding", field: "vectorize", resourceKey: "index_name", type: "vectorize" },
     { bindingKey: "binding", field: "vpc_networks", resourceIdKey: ["tunnel_id", "network_id"], type: "vpc_network" },
     { bindingKey: "binding", field: "vpc_services", resourceIdKey: "service_id", type: "vpc_service" },

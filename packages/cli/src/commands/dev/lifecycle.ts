@@ -542,6 +542,10 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--remote");
     }
 
+    if (options.local === true) {
+        args.push("--local");
+    }
+
     return args;
 };
 
